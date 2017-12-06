@@ -25,29 +25,74 @@ pub enum Schema {
 }
 
 #[derive(Debug)]
+pub struct Name {
+    pub name: String,
+    pub namespace: Option<String>,
+    pub aliases: Option<Vec<String>>,
+}
+
+impl Name {
+    fn parse(complex: &Map<String, Value>) -> Result<Self, Error> {
+        let name = complex.name()
+            .ok_or_else(|| err_msg("No `name` field"))?;
+
+        let namespace = complex.string("namespace");
+
+        let aliases: Option<Vec<String>> = complex.get("aliases")
+            .and_then(|aliases| aliases.as_array())
+            .and_then(|aliases| {
+                aliases.iter()
+                    .map(|alias| alias.as_str())
+                    .map(|alias| alias.map(|a| a.to_string()))
+                    .collect::<Option<_>>()
+            });
+
+        Ok(Name {
+            name: name,
+            namespace: namespace,
+            aliases: aliases,
+        })
+    }
+
+    /*
+    fn fullname(&self) -> String {
+        if self.name.contains(".") {
+            self.name.clone()
+        } else {
+            match self.namespace {
+                Some(ref namespace) => format!("{}.{}", namespace, self.name),
+                None => self.name.clone(),
+            }
+        }
+    }
+    */
+}
+
+#[derive(Debug)]
 pub struct RecordField {
     pub name: String,
     pub doc: Option<String>,
     pub schema: Schema,
+    pub default: Option<Value>,
 }
 
 #[derive(Debug)]
 pub struct RecordSchema {
-    pub name: String,
+    pub name: Name,
     pub doc: Option<String>,
     pub fields: Vec<RecordField>,
 }
 
 #[derive(Debug)]
 pub struct EnumSchema {
-    pub name: String,
+    pub name: Name,
     pub doc: Option<String>,
     pub symbols: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct FixedSchema {
-    pub name: String,
+    pub name: Name,
     pub size: i32,
 }
 
@@ -61,12 +106,14 @@ impl RecordField {
             .ok_or_else(|| err_msg("No `type` in record field"))
             .and_then(|type_| Schema::parse(type_))?;
 
-        // TODO: default
+        let default = field.get("default")
+            .map(|f| f.clone());
 
         Ok(RecordField {
             name: name,
             doc: field.doc(),
             schema: schema,
+            default: default,
         })
     }
 }
@@ -110,8 +157,7 @@ impl Schema {
     }
 
     fn parse_record(complex: &Map<String, Value>) -> Result<Self, Error> {
-        let name = complex.name()
-            .ok_or_else(|| err_msg("No `name` in record"))?;
+        let name = Name::parse(complex)?;
 
         let fields = complex.get("fields")
             .and_then(|fields| fields.as_array())
@@ -131,9 +177,7 @@ impl Schema {
     }
 
     fn parse_enum(complex: &Map<String, Value>) -> Result<Self, Error> {
-        // TODO: better?
-        let name = complex.name()
-            .ok_or_else(|| err_msg("No `name` in enum"))?;
+        let name = Name::parse(complex)?;
 
         let symbols = complex.get("symbols")
             .and_then(|v| v.as_array())
@@ -174,8 +218,7 @@ impl Schema {
     }
 
     fn parse_fixed(complex: &Map<String, Value>) -> Result<Self, Error> {
-        let name = complex.name()
-            .ok_or_else(|| err_msg("No `name` in fixed"))?;
+        let name = Name::parse(complex)?;
 
         let size = complex.get("size")
             .and_then(|v| v.as_i64())

@@ -26,11 +26,23 @@ fn main() {
         },
         {
             "type": "record",
+            "namespace": "example.avro",
             "name": "User",
             "fields": [
-                {"name": "name", "type": "string"},
+                {"name": "name", "type": "string", "default": "Bob"},
                 {"name": "favorite_number",  "type": ["int", "null"]},
                 {"name": "favorite_color", "type": ["string", "null"]}
+            ]
+        },
+        {
+            "type": "record",
+            "namespace": "test_namespace",
+            "source": "test_source",
+            "name": "test_name",
+            "doc": "test_doc",
+            "fields": [
+                {"type": "string", "doc": "test_doc1", "name": "key1"},
+                {"type": "string", "doc": "test_doc2", "name": "key2"}
             ]
         }
     ]"#;
