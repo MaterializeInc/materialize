@@ -42,6 +42,12 @@ to_avro!(f32, Value::Float);
 to_avro!(f64, Value::Double);
 to_avro!(String, Value::String);
 
+impl ToAvro for () {
+    fn avro(self) -> Value {
+        Value::Null
+    }
+}
+
 impl<'a> ToAvro for &'a str {
     fn avro(self) -> Value {
         Value::String(self.to_owned())
@@ -57,6 +63,24 @@ impl<'a> ToAvro for &'a [u8] {
 impl<T> ToAvro for Option<T> where T: ToAvro {
     fn avro(self) -> Value {
         Value::Union(self.map(|v| Box::new(v.avro())))
+    }
+}
+
+impl<T> ToAvro for HashMap<String, T> where T: ToAvro {
+    fn avro(self) -> Value {
+        Value::Map(self
+            .into_iter()
+            .map(|(key, value)| (key, value.avro()))
+            .collect::<_>())
+    }
+}
+
+impl<'a, T> ToAvro for HashMap<&'a str, T> where T: ToAvro {
+    fn avro(self) -> Value {
+        Value::Map(self
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.avro()))
+            .collect::<_>())
     }
 }
 
