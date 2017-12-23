@@ -9,7 +9,6 @@ use avro::encode::EncodeAvro;
 use avro::schema::{Name, RecordField, Schema};
 use avro::types::{Record, ToAvro, Value};
 
-
 struct TestRecord<'a> {
     key1: &'a str,
     key2: &'a str,
@@ -169,11 +168,11 @@ fn main() {
     record.put("b", "foo");
     record.put("c", "word".as_bytes());
 
-    display(record.avro().encode().0);
+    display(record.avro().encode());
 
-    display(Value::Int(27).encode().0);
+    display(Value::Int(27).encode());
 
-    display("foo".avro().encode().0);
+    display("foo".avro().encode());
 
     /*
     if let Ok(res) = BinarySerializer::serialize(&schema, &record.avro()) {

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use serde_json::Value as JsonValue;
 
@@ -147,6 +148,39 @@ impl ToAvro for JsonValue {
                 Value::Map(items.into_iter()
                     .map(|(key, value)| (key, value.avro()))
                     .collect::<_>()),
+        }
+    }
+}
+
+pub trait HasSchema {
+    fn schema(&self) -> Schema;
+}
+
+impl HasSchema for Value {
+    fn schema(&self) -> Schema {
+        match *self {
+            Value::Null => Schema::Null,
+            Value::Boolean(_) => Schema::Boolean,
+            Value::Int(_) => Schema::Int,
+            Value::Long(_) => Schema::Long,
+            Value::Float(_) => Schema::Float,
+            Value::Double(_) => Schema::Double,
+            Value::Bytes(_) => Schema::Bytes,
+            Value::String(_) => Schema::String,
+            Value::Fixed(_) => Schema::Bytes,  // hehehe
+            Value::Array(ref items) => Schema::Array(Rc::new(
+                match items.get(0) {
+                    Some(item) => item.schema(),
+                    None => Schema::Null,
+                })),
+            Value::Map(ref items) => Schema::Map(Rc::new(
+                match items.iter().nth(0) {
+                    Some((_, value)) => value.schema(),
+                    None => Schema::Null,
+                })),
+            Value::Record(ref schema, _) => schema.clone(),
+            Value::Union(None) => Schema::Union(Rc::new(Schema::Null)),
+            Value::Union(Some(ref item)) => Schema::Union(Rc::new(item.schema())),
         }
     }
 }

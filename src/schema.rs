@@ -159,13 +159,6 @@ impl RecordField {
 }
 
 impl Schema {
-    pub fn unwind(&self) -> &Schema {
-        match self {
-            &Schema::Union(ref s) => &s,
-            schema => schema,
-        }
-    }
-
     pub fn parse(value: &Value) -> Result<Self, Error> {
         match *value {
             Value::String(ref t) => Schema::parse_primitive(t.as_str()),
