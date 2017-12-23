@@ -3,11 +3,14 @@
 extern crate avro;
 extern crate serde_json;
 
+use std::io::Cursor;
+
 use serde_json::Value as JsonValue;
 
 use avro::encode::EncodeAvro;
 use avro::schema::{Name, RecordField, Schema};
 use avro::types::{Record, ToAvro, Value};
+use avro::writer::Writer;
 
 struct TestRecord<'a> {
     key1: &'a str,
@@ -173,6 +176,17 @@ fn main() {
     display(Value::Int(27).encode());
 
     display("foo".avro().encode());
+
+    let mut s = Cursor::new(Vec::new());
+    let sc = Schema::String;
+
+    {
+        let mut writer = Writer::new(&sc, &mut s);
+        writer.append("foo".avro());
+    }
+
+    let a = s.get_ref().clone();
+    display(a);
 
     /*
     if let Ok(res) = BinarySerializer::serialize(&schema, &record.avro()) {
