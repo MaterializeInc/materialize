@@ -152,7 +152,8 @@ fn main() {
             "fields": [
                 {"type": "long", "name": "a"},
                 {"type": "string", "name": "b"},
-                {"type": {"type": "fixed", "name": "magic", "size": 4}, "doc": "test_doc2", "name": "c"}
+                {"type": {"type": "fixed", "name": "magic", "size": 4}, "doc": "test_doc2", "name": "c"},
+                {"type": "float", "name": "d"}
             ]
         }
     "#;
@@ -172,6 +173,7 @@ fn main() {
     record.put("a", 27);
     record.put("b", "foo");
     record.put("c", "word".as_bytes());
+    record.put("d", 3.14f32);
 
     // display(record.avro().encode());
 

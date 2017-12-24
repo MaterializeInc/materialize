@@ -118,7 +118,9 @@ impl Record {
 
     pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
         if let Some(_) = self.schema.fields_lookup.get(field) {
+            // if let Some(value) = value.avro().with_schema(&self.schema.fields[index].schema.clone()) {
             self.fields.insert(field.to_owned(), value.avro());
+            // }
         }
     }
 }

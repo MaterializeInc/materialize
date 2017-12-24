@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::mem::transmute;
 
 use types::Value;
 use util::zigzag;
@@ -51,14 +52,13 @@ impl<'a> EncodeAvro for usize {
 
 impl EncodeAvro for f32 {
     fn encode(self) -> Output {
-        format!("{:08X}", self.to_bits()).into_bytes()
+        unsafe { transmute::<Self, [u8; 4]>(self) }.to_vec()
     }
 }
 
 impl EncodeAvro for f64 {
     fn encode(self) -> Output {
-        format!("{:016X}", self.to_bits()).into_bytes()
-        // TODO: something faster than format!?
+        unsafe { transmute::<Self, [u8; 8]>(self) }.to_vec()
     }
 }
 
