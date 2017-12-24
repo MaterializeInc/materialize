@@ -24,7 +24,7 @@ pub fn zigzag(mut z: i64) -> Vec<u8> {
     let mut result = Vec::new();
 
     loop {
-        if (z & !0x7F) == 0 {
+        if z <= 0x7F {
             result.push((z & 0x7F) as u8);
             break
         } else {

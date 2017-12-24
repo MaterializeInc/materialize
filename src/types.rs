@@ -236,24 +236,24 @@ impl Value {
         }
     }
 
-    fn with_fixed(self, size: i32) -> Option<Value> {
+    fn with_fixed(self, size: usize) -> Option<Value> {
         match self {
             Value::Fixed(s, bytes) => {
-                if s == (size as usize) {
+                if s == size {
                     Some(Value::Fixed(s, bytes))
                 } else {
                     None
                 }
             },
             Value::Bytes(bytes) => {
-                if bytes.len() == (size as usize) {
+                if bytes.len() == size {
                     Some(Value::Fixed(bytes.len(), bytes))
                 } else {
                     None
                 }
             },
             Value::String(s) => {
-                if s.len() == (size as usize) {
+                if s.len() == size {
                     Some(Value::Fixed(s.len(), s.into_bytes()))
                 } else {
                     None

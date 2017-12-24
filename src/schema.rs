@@ -35,7 +35,7 @@ pub enum Schema {
     },
     Fixed {
         name: Name,
-        size: i32,
+        size: usize,
     }
 }
 
@@ -289,12 +289,11 @@ impl Schema {
 
         let size = complex.get("size")
             .and_then(|v| v.as_i64())
-            .map(|s| s as i32)
             .ok_or_else(|| err_msg("No `size` in fixed"))?;
 
         Ok(Schema::Fixed {
             name: name,
-            size: size,
+            size: size as usize,
         })
     }
 
