@@ -3,8 +3,13 @@ name = "avro"
 version = "0.1.0"
 authors = ["Flavien Raynaud <flavien.raynaud@gmail.com>"]
 
+[features]
+snappy = ["snap"]
+
 [dependencies]
 failure = "0.1.1"
+libflate = "0.1"
 rand = "0.3"
 serde = "1.0"
 serde_json = "1.0"
+snap = { version = "0.2.3", optional = true }

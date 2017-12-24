@@ -12,7 +12,7 @@ use serde_json::Value as JsonValue;
 use avro::encode::EncodeAvro;
 use avro::schema::{Name, RecordField, Schema};
 use avro::types::{Record, ToAvro, Value};
-use avro::writer::Writer;
+use avro::writer::{Codec, Writer};
 
 struct TestRecord<'a> {
     key1: &'a str,
@@ -181,24 +181,22 @@ fn main() {
 
     display("foo".avro().encode());
 
-    let mut s = Cursor::new(Vec::new());
-    // let mut s = File::create("test.avro").unwrap();
+    // let mut s = Cursor::new(Vec::new());
+    let mut s = File::create("test.avro").unwrap();
 
     {
-        let mut writer = Writer::new(&schema, &mut s);
+        let mut writer = Writer::with_codec(&schema, &mut s, Codec::Deflate);
         // writer.append("foo".avro());
-        writer.append(record);
+        writer.append(record).unwrap();
     }
 
-    let a = s.get_ref().clone();
-    display(a);
+    // let a = s.get_ref().clone();
+    // display(a);
 
-    /*
     let mut file = File::open("test.avro").unwrap();
     let mut contents = Vec::new();
     file.read_to_end(&mut contents).unwrap();
     display(contents);
-    */
 
 
     /*
