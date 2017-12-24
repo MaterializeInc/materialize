@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use failure::{Error, err_msg};
+use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::{Map, Value};
 
 use util::MapHelper;
@@ -312,83 +313,73 @@ impl Schema {
     }
 }
 
-impl Into<Map<String, Value>> for Name {
-    fn into(self) -> Map<String, Value> {
-        let mut object = Map::new();
-        object.insert("name".to_owned(), self.name.into());
-
-        if let Some(namespace) = self.namespace {
-            object.insert("namespace".to_owned(), namespace.into());
-        }
-
-        if let Some(aliases) = self.aliases {
-            object.insert("aliases".to_owned(), aliases.into());
-        }
-
-        object
-    }
-}
-
-impl Into<Value> for Schema {
-    fn into(self) -> Value {
-        match self {
-            Schema::Null => Value::String("null".to_owned()),
-            Schema::Boolean => Value::String("bool".to_owned()),
-            Schema::Int => Value::String("int".to_owned()),
-            Schema::Long => Value::String("long".to_owned()),
-            Schema::Float => Value::String("float".to_owned()),
-            Schema::Double => Value::String("double".to_owned()),
-            Schema::Bytes => Value::String("bytes".to_owned()),
-            Schema::String => Value::String("string".to_owned()),
-            Schema::Fixed { name, size } => {
-                let mut object: Map<String, Value> = name.into();
-                object.insert("type".to_owned(), "fixed".into());
-                object.insert("size".to_owned(), size.into());
-                Value::Object(object)
-            },
+impl Serialize for Schema {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
+        S: Serializer {
+        match *self {
+            Schema::Null => serializer.serialize_str("null"),
+            Schema::Boolean => serializer.serialize_str("boolean"),
+            Schema::Int => serializer.serialize_str("int"),
+            Schema::Long => serializer.serialize_str("long"),
+            Schema::Float => serializer.serialize_str("float"),
+            Schema::Double => serializer.serialize_str("double"),
+            Schema::Bytes => serializer.serialize_str("bytes"),
+            Schema::String => serializer.serialize_str("string"),
             Schema::Array(ref inner) => {
-                let mut object = Map::with_capacity(2);
-                object.insert("type".to_owned(), "array".into());
-                object.insert("items".to_owned(), (*inner.clone()).clone().into());
-                Value::Object(object)
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "array")?;
+                map.serialize_entry("items", &*inner.clone())?;
+                map.end()
             },
             Schema::Map(ref inner) => {
-                let mut object = Map::with_capacity(2);
-                object.insert("type".to_owned(), "array".into());
-                object.insert("values".to_owned(), (*inner.clone()).clone().into());
-                Value::Object(object)
-            },
-            Schema::Record(ref record_schema) => {
-                let mut object: Map<String, Value> = record_schema.name.clone().into();
-                object.insert("type".to_owned(), "record".into());
-                object.insert("fields".to_owned(), record_schema.fields.clone().into());
-                Value::Object(object)
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "map")?;
+                map.serialize_entry("values", &*inner.clone())?;
+                map.end()
             },
             Schema::Union(ref inner) => {
-                Value::Array(vec![
-                    Schema::Null.into(),
-                    (*inner.clone()).clone().into(),
-                ])
+                let mut seq = serializer.serialize_seq(Some(2))?;
+                seq.serialize_element("null")?;
+                seq.serialize_element(&*inner.clone())?;
+                seq.end()
             },
-            Schema::Enum { name, symbols, .. } => {
-                let mut object: Map<String, Value> = name.into();
-                object.insert("symbols".into(), symbols.into());
-                Value::Object(object)
+            Schema::Record(ref record_schema) => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("type", "record")?;
+                map.serialize_entry("name", &record_schema.name.name)?;
+                // TODO: namespace, etc...
+                map.serialize_entry("fields", &record_schema.fields)?;
+                map.end()
+            },
+            Schema::Enum { ref name, ref symbols, .. } => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("type", "enum")?;
+                map.serialize_entry("name", &name.name)?;
+                map.serialize_entry("symbols", symbols)?;
+                map.end()
+            },
+            Schema::Fixed { ref name, ref size } => {
+                let mut map = serializer.serialize_map(None)?;
+                map.serialize_entry("type", "fixed")?;
+                map.serialize_entry("name", &name.name)?;
+                map.serialize_entry("size", size)?;
+                map.end()
             }
         }
     }
 }
 
-impl Into<Value> for RecordField {
-    fn into(self) -> Value {
-        let mut object = Map::new();
-        object.insert("name".to_owned(), self.name.into());
-        object.insert("type".to_owned(), self.schema.into());
+impl Serialize for RecordField {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
+        S: Serializer {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("name", &self.name)?;
+        map.serialize_entry("type", &self.schema)?;
 
-        if let Some(default) = self.default {
-            object.insert("default".to_owned(), default);
+        if let Some(ref default) = self.default {
+            map.serialize_entry("default", default)?;
         }
 
-        Value::Object(object)
+        map.end()
     }
 }

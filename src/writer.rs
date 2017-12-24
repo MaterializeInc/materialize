@@ -35,10 +35,8 @@ impl<'a, 'b> Writer<'a, 'b> {
     pub fn header(&mut self) -> Result<usize, Error> {
         let mut n = self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))?;
 
-        let schema_value: serde_json::Value = (*self.schema).clone().into();
-
         let mut metadata = HashMap::new();
-        metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(&schema_value)?.into_bytes()));
+        metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()));
         metadata.insert("avro.codec", Value::Bytes("null".to_owned().into_bytes()));
 
         n += self.append_raw(metadata.avro())?;
