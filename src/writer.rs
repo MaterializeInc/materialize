@@ -76,8 +76,8 @@ impl<'a, 'b> Writer<'a, 'b> {
             });
 
         if !self.has_header {
-            self.has_header = true;
             self.header()?;
+            self.has_header = true;
         }
 
         Ok(self.append_raw(num_values)? +
