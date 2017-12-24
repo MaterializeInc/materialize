@@ -22,12 +22,15 @@ pub enum Schema {
     Array(Rc<Schema>),
     Map(Rc<Schema>),
     Union(Rc<Schema>),
-    Record {
+    Record(Rc<RecordSchema>),
+    /*
+    {
         name: Name,
         doc: Documentation,
         fields: Vec<RecordField>,
         fields_lookup: HashMap<String, usize>,
     },
+    */
     Enum {
         name: Name,
         doc: Documentation,
@@ -37,6 +40,14 @@ pub enum Schema {
         name: Name,
         size: i32,
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordSchema {
+    pub name: Name,
+    pub doc: Documentation,
+    pub fields: Vec<RecordField>,
+    pub fields_lookup: HashMap<String, usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -217,12 +228,12 @@ impl Schema {
             fields_lookup.insert(field.name.clone(), field.position); // TODO: clone
         }
 
-        Ok(Schema::Record {
+        Ok(Schema::Record(Rc::new(RecordSchema {
             name: name,
             doc: complex.doc(),
             fields: fields,
             fields_lookup: fields_lookup,
-        })
+        })))
     }
 
     fn parse_enum(complex: &Map<String, Value>) -> Result<Self, Error> {
@@ -296,11 +307,92 @@ impl Schema {
             fields_lookup.insert(field.name.clone(), field.position); // TODO: clone
         }
 
-        Schema::Record {
+        Schema::Record(Rc::new(RecordSchema {
             name: name,
             doc: None,
             fields: fields,
             fields_lookup: fields_lookup,
+        }))
+    }
+}
+
+impl Into<Map<String, Value>> for Name {
+    fn into(self) -> Map<String, Value> {
+        let mut object = Map::new();
+        object.insert("name".to_owned(), self.name.into());
+
+        if let Some(namespace) = self.namespace {
+            object.insert("namespace".to_owned(), namespace.into());
         }
+
+        if let Some(aliases) = self.aliases {
+            object.insert("aliases".to_owned(), aliases.into());
+        }
+
+        object
+    }
+}
+
+impl Into<Value> for Schema {
+    fn into(self) -> Value {
+        match self {
+            Schema::Null => Value::String("null".to_owned()),
+            Schema::Boolean => Value::String("bool".to_owned()),
+            Schema::Int => Value::String("int".to_owned()),
+            Schema::Long => Value::String("long".to_owned()),
+            Schema::Float => Value::String("float".to_owned()),
+            Schema::Double => Value::String("double".to_owned()),
+            Schema::Bytes => Value::String("bytes".to_owned()),
+            Schema::String => Value::String("string".to_owned()),
+            Schema::Fixed { name, size } => {
+                let mut object: Map<String, Value> = name.into();
+                object.insert("type".to_owned(), "fixed".into());
+                object.insert("size".to_owned(), size.into());
+                Value::Object(object)
+            },
+            Schema::Array(ref inner) => {
+                let mut object = Map::with_capacity(2);
+                object.insert("type".to_owned(), "array".into());
+                object.insert("items".to_owned(), (*inner.clone()).clone().into());
+                Value::Object(object)
+            },
+            Schema::Map(ref inner) => {
+                let mut object = Map::with_capacity(2);
+                object.insert("type".to_owned(), "array".into());
+                object.insert("values".to_owned(), (*inner.clone()).clone().into());
+                Value::Object(object)
+            },
+            Schema::Record(ref record_schema) => {
+                let mut object: Map<String, Value> = record_schema.name.clone().into();
+                object.insert("type".to_owned(), "record".into());
+                object.insert("fields".to_owned(), record_schema.fields.clone().into());
+                Value::Object(object)
+            },
+            Schema::Union(ref inner) => {
+                Value::Array(vec![
+                    Schema::Null.into(),
+                    (*inner.clone()).clone().into(),
+                ])
+            },
+            Schema::Enum { name, symbols, .. } => {
+                let mut object: Map<String, Value> = name.into();
+                object.insert("symbols".into(), symbols.into());
+                Value::Object(object)
+            }
+        }
+    }
+}
+
+impl Into<Value> for RecordField {
+    fn into(self) -> Value {
+        let mut object = Map::new();
+        object.insert("name".to_owned(), self.name.into());
+        object.insert("type".to_owned(), self.schema.into());
+
+        if let Some(default) = self.default {
+            // object.insert("default".to_owned(), default.into());
+        }
+
+        Value::Object(object)
     }
 }
