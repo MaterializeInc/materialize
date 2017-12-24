@@ -6,9 +6,6 @@ use serde_json::{Map, Value};
 
 use util::MapHelper;
 
-use types::ToAvro;
-use types::Value as AvroValue;
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Schema {
     Null,
@@ -110,7 +107,7 @@ impl Name {
 pub struct RecordField {
     pub name: String,
     pub doc: Option<String>,
-    pub default: Option<AvroValue>,
+    pub default: Option<Value>,
     pub schema: Schema,
     pub order: RecordFieldOrder,
     pub position: usize,
@@ -161,7 +158,7 @@ impl RecordField {
         Ok(RecordField {
             name: name,
             doc: field.doc(),
-            default: default.map(|d| d.avro()),
+            default: default,
             schema: schema,
             order: order,
             position: position,
@@ -390,7 +387,7 @@ impl Into<Value> for RecordField {
         object.insert("type".to_owned(), self.schema.into());
 
         if let Some(default) = self.default {
-            // object.insert("default".to_owned(), default.into());
+            object.insert("default".to_owned(), default);
         }
 
         Value::Object(object)

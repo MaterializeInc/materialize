@@ -3,7 +3,9 @@
 extern crate avro;
 extern crate serde_json;
 
+use std::fs::File;
 use std::io::Cursor;
+use std::io::Read;
 
 use serde_json::Value as JsonValue;
 
@@ -171,22 +173,31 @@ fn main() {
     record.put("b", "foo");
     record.put("c", "word".as_bytes());
 
-    display(record.avro().encode());
+    // display(record.avro().encode());
 
     display(Value::Int(27).encode());
 
     display("foo".avro().encode());
 
     let mut s = Cursor::new(Vec::new());
-    let sc = Schema::String;
+    // let mut s = File::create("test.avro").unwrap();
 
     {
-        let mut writer = Writer::new(&sc, &mut s);
-        writer.append("foo".avro());
+        let mut writer = Writer::new(&schema, &mut s);
+        // writer.append("foo".avro());
+        writer.append(record);
     }
 
     let a = s.get_ref().clone();
     display(a);
+
+    /*
+    let mut file = File::open("test.avro").unwrap();
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents).unwrap();
+    display(contents);
+    */
+
 
     /*
     if let Ok(res) = BinarySerializer::serialize(&schema, &record.avro()) {

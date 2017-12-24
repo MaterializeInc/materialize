@@ -1,8 +1,7 @@
 use std::collections::HashMap;
-use std::collections::LinkedList;
 
-use schema::Schema;
 use types::Value;
+use util::zigzag;
 
 pub type Output = Vec<u8>;
 
@@ -34,13 +33,13 @@ impl EncodeAvro for bool {
 
 impl EncodeAvro for i32 {
     fn encode(self) -> Output {
-        encode_i32(self)
+        zigzag(((self << 1) ^ (self >> 31)) as i64)
     }
 }
 
 impl EncodeAvro for i64 {
     fn encode(self) -> Output {
-        encode_i64(self)
+        zigzag((self << 1) ^ (self >> 63))
     }
 }
 
@@ -65,7 +64,6 @@ impl EncodeAvro for f64 {
 
 impl<'a> EncodeAvro for &'a str {
     fn encode(self) -> Output {
-        // (self.len().encode().0 + self.into(), Schema::String)
         self.to_owned().encode()
     }
 }
@@ -78,7 +76,7 @@ impl EncodeAvro for String {
 
 impl<'a> EncodeAvro for &'a [u8] {
     fn encode(self) -> Output {
-        self.to_vec()  // TODO: better than to_vec?
+        stream!(self.len().encode(), self.to_vec())  // TODO: better than to_vec?
     }
 }
 
@@ -95,10 +93,7 @@ impl<T> EncodeAvro for Vec<T> where T: EncodeAvro {
     fn encode(self) -> Output {
         stream!(
             self.into_iter()
-                .fold(Vec::new(), |mut acc, item| {
-                    acc.extend(item.encode());
-                    acc
-                }),
+                .fold(Vec::new(), |acc, item| stream!(acc, item.encode())),
             vec![0u8]
         )
     }
@@ -109,9 +104,10 @@ impl<T> EncodeAvro for HashMap<String, T> where T: EncodeAvro {
         stream!(
             self.len().encode(),
             self.into_iter()
-                .fold(Vec::new(), |acc, (key, value)| {
+                .fold(Vec::new(), |acc, (key, value)|
                     stream!(acc, key.encode(), value.encode())
-                })
+                ),
+            vec![0u8]
         )
     }
 }
@@ -132,50 +128,17 @@ impl EncodeAvro for Value {
             Value::Float(x) => x.encode(),
             Value::Double(x) => x.encode(),
             Value::Bytes(bytes) => (&bytes).encode(),
+            Value::Fixed(_, bytes) => bytes,
             Value::String(s) => s.encode(),
-            Value::Fixed(bytes) => (&bytes).encode(),  // TODO: check it works
             Value::Union(option) => option.encode(),
             Value::Array(items) => items.encode(),
             Value::Map(items) => items.encode(),
-            Value::Record(schema, mut items) => {
-                let result = match schema {
-                    Schema::Record { ref fields, .. } => {
-                        fields
-                            .into_iter()
-                            .filter_map(|field| items.remove(&field.name))
-                            .fold(Vec::new(), |acc, value| stream!(acc, value.encode()))
-                    },
-                    _ => Vec::new(),  // should not happen
-                };
-
-                result
+            Value::Record(record_schema, mut items) => {
+                record_schema.fields
+                    .iter()
+                    .filter_map(|ref field| items.remove(&field.name))
+                    .fold(Vec::new(), |acc, value| stream!(acc, value.encode()))
             }
         }
     }
-}
-
-fn encode_i32(z: i32) -> Vec<u8> {
-    zigzag((((z << 1) ^ (z >> 31)) as u32) as u64)
-}
-
-fn encode_i64(z: i64) -> Vec<u8> {
-    zigzag(((z << 1) ^ (z >> 63)) as u64)
-}
-
-fn zigzag(mut z: u64) -> Vec<u8> {
-    let mut result = LinkedList::new();
-
-    loop {
-        if z <= 0x7F {
-            result.push_front((z & 0x7F) as u8);
-            break
-        } else {
-            result.push_front((0x80 | (z & 0x7F)) as u8);
-            z >>= 7;
-        }
-    }
-
-    result
-        .into_iter()
-        .collect::<Vec<_>>()
 }

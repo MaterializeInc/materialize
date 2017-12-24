@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use std::io::Write;
+use std::iter::once;
 
 use failure::{Error, err_msg};
 use rand::random;
+use serde_json;
 
 use encode::EncodeAvro;
 use schema::Schema;
-use types::{HasSchema, ToAvro, Value};
+use types::{ToAvro, Value};
 
 pub struct Writer<'a, 'b> {
     schema: &'a Schema,
@@ -31,10 +33,12 @@ impl<'a, 'b> Writer<'a, 'b> {
     }
 
     pub fn header(&mut self) -> Result<usize, Error> {
-        let mut n = self.append_raw(Value::Bytes(vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))?;
+        let mut n = self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))?;
+
+        let schema_value: serde_json::Value = (*self.schema).clone().into();
 
         let mut metadata = HashMap::new();
-        metadata.insert("avro.schema", Value::Bytes(Vec::new())); // TODO
+        metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(&schema_value)?.into_bytes()));
         metadata.insert("avro.codec", Value::Bytes("null".to_owned().into_bytes()));
 
         n += self.append_raw(metadata.avro())?;
@@ -43,8 +47,8 @@ impl<'a, 'b> Writer<'a, 'b> {
         Ok(n)
     }
 
-    pub fn append<V>(&mut self, value: V) -> Result<usize, Error> where V: EncodeAvro + HasSchema {
-        self.extend(vec![value])
+    pub fn append<V>(&mut self, value: V) -> Result<usize, Error> where V: ToAvro {
+        self.extend(once(value))
     }
 
     fn append_marker(&mut self) -> Result<usize, Error> {
@@ -57,85 +61,28 @@ impl<'a, 'b> Writer<'a, 'b> {
         Ok(self.writer.write(value.encode().as_ref())?)  // TODO: really?
     }
 
-    // TODO: iterator
-    pub fn extend<V>(&mut self, values: Vec<V>) -> Result<usize, Error> where V: EncodeAvro + HasSchema {
-        // TODO: schema check?
-        let values_len = values.len();
-        let stream = values.into_iter()
-            .map(|value| deconflict(self.schema, value))  // TODO not filter
+    pub fn extend<I, V>(&mut self, values: I) -> Result<usize, Error>
+        where V: ToAvro, I: Iterator<Item=V>
+    {
+        let mut num_values = 0;
+        let stream = values
+            .map(|value| value.avro().with_schema(self.schema))
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| err_msg("Unable to deconflict schemas"))?
+            .ok_or_else(|| err_msg("value does not match given schema"))?
             .into_iter()
-            .fold(Vec::new(), |mut acc, stream| { acc.extend(stream); acc });
+            .fold(Vec::new(), |mut acc, value| {
+                num_values += 1;
+                acc.extend(value.encode()); acc
+            });
 
         if !self.has_header {
             self.has_header = true;
             self.header()?;
         }
 
-        Ok(self.append_raw(values_len)? +
+        Ok(self.append_raw(num_values)? +
             self.append_raw(stream.len())? +
             self.writer.write(stream.as_ref())? +
             self.append_marker()?)
     }
 }
-
-
-pub fn deconflict<V>(schema: &Schema, value: V) -> Option<Vec<u8>> where V: EncodeAvro + HasSchema {
-    deconflict_schemas(schema, &value.schema(), value)
-}
-
-pub fn deconflict_schemas<V>(schema: &Schema, other: &Schema, value: V) -> Option<Vec<u8>> where V: EncodeAvro + HasSchema {
-    if *schema == *other {
-        Some(value.encode())
-    } else {
-        match (schema, other) {
-            /*
-            (&Schema::Null, &Schema::Null) => Some(stream),
-            (&Schema::Boolean, &Schema::Boolean) => Some(stream),
-            (&Schema::Int, &Schema::Int) => Some(stream),
-            (&Schema::Long, &Schema::Long) => Some(stream),
-            (&Schema::Float, &Schema::Float) => Some(stream),
-            (&Schema::Double, &Schema::Double) => Some(stream),
-            (&Schema::String, &Schema::String) => Some(stream),
-            (&Schema::Bytes, &Schema::Bytes) => Some(stream),
-            */
-            (&Schema::Bytes, &Schema::Fixed { .. }) => Some(value.encode()),  // TODO maybe not great?
-            (&Schema::Fixed { size, .. }, &Schema::Bytes) => {
-                let stream = value.encode();
-                if stream.len() == (size as usize) {
-                    Some(stream)
-                } else {
-                    None
-                }
-            },
-            // (&Schema::Fixed { size, .. }, &Schema::Fixed { size: s, .. }) if size == s => Some(value.encode()),
-            (&Schema::Array(ref s), &Schema::Array(ref c)) => deconflict_schemas(s, c, value),
-            (&Schema::Map(ref s), &Schema::Map(ref c)) => deconflict_schemas(s, c, value),
-            (&Schema::Union(ref s), &Schema::Union(ref c)) => deconflict_schemas(s, c, value),
-            (
-                &Schema::Record { ref fields_lookup, .. },
-                &Schema::Record { fields_lookup: ref fls, .. }
-            ) if fields_lookup == fls => Some(value.encode()),
-            _ => None,
-        }
-    }
-}
-
-/*
-// maybe later :)
-fn deconflict_simple(schema: &Schema, other: &Schema, value: Value) -> Option<Vec<u8>> {
-    match (schema, other, value) {
-        (&Schema::Long, &Schema::Int, Value::Int(i)) => Some(Value::Long(i as i64).encode()),
-        (&Schema::Float, &Schema::Int, Value::Int(i)) => Some(Value::Float(i as f32).encode()),
-        (&Schema::Double, &Schema::Int, Value::Int(i)) => Some(Value::Double(i as f64).encode()),
-        (&Schema::Float, &Schema::Long, Value::Long(i)) => Some(Value::Float(i as f32).encode()),
-        (&Schema::Double, &Schema::Long, Value::Long(i)) => Some(Value::Double(i as f64).encode()),
-        (&Schema::Double, &Schema::Float, Value::Float(x)) => Some(Value::Double(x as f64).encode()),
-        (&Schema::String, &Schema::Bytes, Value::Bytes(bytes)) => String::from_utf8(bytes).ok().map(|s| Value::String(s).encode()),
-        (&Schema::Bytes, &Schema::String, Value::String(s)) => Some(Value::Bytes(s.into_bytes()).encode()),
-        _ => None,
-
-    }
-}
-*/

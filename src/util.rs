@@ -19,3 +19,19 @@ impl MapHelper for Map<String, Value> {
             .map(|v| v.to_string())
     }
 }
+
+pub fn zigzag(mut z: i64) -> Vec<u8> {
+    let mut result = Vec::new();
+
+    loop {
+        if (z & !0x7F) == 0 {
+            result.push((z & 0x7F) as u8);
+            break
+        } else {
+            result.push((0x80 | (z & 0x7F)) as u8);
+            z >>= 7;
+        }
+    }
+
+    result
+}
