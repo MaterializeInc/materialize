@@ -20,7 +20,15 @@ impl MapHelper for Map<String, Value> {
     }
 }
 
-pub fn zigzag(mut z: i64) -> Vec<u8> {
+pub fn zigzag_i32(n: i32) -> Vec<u8> {
+    variable_length(((n << 1) ^ (n >> 31)) as i64)
+}
+
+pub fn zigzag_i64(n: i64) -> Vec<u8> {
+    variable_length((n << 1) ^ (n >> 31))
+}
+
+fn variable_length(mut z: i64) -> Vec<u8> {
     let mut result = Vec::new();
 
     loop {
@@ -34,4 +42,14 @@ pub fn zigzag(mut z: i64) -> Vec<u8> {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zigzag() {
+        assert_eq!(zigzag_i32(42i32), zigzag_i64(42i64))
+    }
 }

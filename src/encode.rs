@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::mem::transmute;
 
 use types::Value;
-use util::zigzag;
+use util::{zigzag_i32, zigzag_i64};
 
 pub type Output = Vec<u8>;
 
@@ -34,13 +34,13 @@ impl EncodeAvro for bool {
 
 impl EncodeAvro for i32 {
     fn encode(self) -> Output {
-        zigzag(((self << 1) ^ (self >> 31)) as i64)
+        zigzag_i32(self)
     }
 }
 
 impl EncodeAvro for i64 {
     fn encode(self) -> Output {
-        zigzag((self << 1) ^ (self >> 63))
+        zigzag_i64(self)
     }
 }
 
