@@ -31,20 +31,20 @@ impl ToAvro for Codec {
     }
 }
 
-pub struct Writer<'a, 'b> {
+pub struct Writer<'a, W> {
     schema: &'a Schema,
-    writer: &'b mut Write,
+    writer: W,
     codec: Codec,
     marker: Vec<u8>,
     has_header: bool,
 }
 
-impl<'a, 'b> Writer<'a, 'b> {
-    pub fn new<W: Write>(schema: &'a Schema, writer: &'b mut W) -> Writer<'a, 'b> where W: Write {
+impl<'a, W: Write> Writer<'a, W> {
+    pub fn new(schema: &'a Schema, writer: W) -> Writer<'a, W> {
         Self::with_codec(schema, writer, Codec::Null)
     }
 
-    pub fn with_codec<W: Write>(schema: &'a Schema, writer: &'b mut W, codec: Codec) -> Writer<'a, 'b> where W: Write {
+    pub fn with_codec(schema: &'a Schema, writer: W, codec: Codec) -> Writer<'a, W> {
         let mut marker = Vec::with_capacity(16);
         for _ in 0..16 {
             marker.push(random::<u8>());
@@ -123,5 +123,9 @@ impl<'a, 'b> Writer<'a, 'b> {
             self.append_raw(stream.len())? +
             self.writer.write(stream.as_ref())? +
             self.append_marker()?)
+    }
+
+    pub fn into_inner(self) -> W {
+        self.writer
     }
 }
