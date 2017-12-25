@@ -3,8 +3,6 @@
 extern crate avro;
 extern crate serde_json;
 
-use serde_json::Value as JsonValue;
-
 use avro::schema::Schema;
 use avro::types::Record;
 use avro::writer::Writer;
@@ -28,8 +26,7 @@ fn main() {
         }
     "#;
 
-    let json_schema: JsonValue = serde_json::from_str(raw_schema).unwrap();
-    let schema = Schema::parse(&json_schema).unwrap();
+    let schema = Schema::parse_str(raw_schema).unwrap();
 
     println!("{:?}", schema);
 

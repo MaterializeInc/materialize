@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use failure::{Error, err_msg};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
-use serde_json::{Map, Value};
+use serde_json::{self, Map, Value};
 
 use util::MapHelper;
 
@@ -21,14 +21,6 @@ pub enum Schema {
     Map(Rc<Schema>),
     Union(Rc<Schema>),
     Record(Rc<RecordSchema>),
-    /*
-    {
-        name: Name,
-        doc: Documentation,
-        fields: Vec<RecordField>,
-        fields_lookup: HashMap<String, usize>,
-    },
-    */
     Enum {
         name: Name,
         doc: Documentation,
@@ -45,7 +37,7 @@ pub struct RecordSchema {
     pub name: Name,
     pub doc: Documentation,
     pub fields: Vec<RecordField>,
-    pub fields_lookup: HashMap<String, usize>,
+    pub lookup: HashMap<String, usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,17 +114,6 @@ pub enum RecordFieldOrder {
 }
 
 impl RecordField {
-    pub fn new(name: &str, schema: Schema, position: usize) -> RecordField {
-        RecordField {
-            name: name.to_owned(),
-            doc: None,
-            default: None,
-            schema: schema,
-            order: RecordFieldOrder::Ascending,
-            position: position,
-        }
-    }
-
     fn parse(field: &Map<String, Value>, position: usize) -> Result<Self, Error> {
         let name = field.name()
             .ok_or_else(|| err_msg("No `name` in record field"))?;
@@ -168,6 +149,11 @@ impl RecordField {
 }
 
 impl Schema {
+    pub fn parse_str(input: &str) -> Result<Self, Error> {
+        let value = serde_json::from_str(input)?;
+        Self::parse(&value)
+    }
+
     pub fn parse(value: &Value) -> Result<Self, Error> {
         match *value {
             Value::String(ref t) => Schema::parse_primitive(t.as_str()),
@@ -221,16 +207,16 @@ impl Schema {
                     .collect::<Result<_, _>>()
             })?;
 
-        let mut fields_lookup = HashMap::new();
+        let mut lookup = HashMap::new();
         for field in fields.iter() {
-            fields_lookup.insert(field.name.clone(), field.position); // TODO: clone
+            lookup.insert(field.name.clone(), field.position); // TODO: clone
         }
 
         Ok(Schema::Record(Rc::new(RecordSchema {
             name: name,
             doc: complex.doc(),
             fields: fields,
-            fields_lookup: fields_lookup,
+            lookup: lookup,
         })))
     }
 
@@ -296,20 +282,6 @@ impl Schema {
             name: name,
             size: size as usize,
         })
-    }
-
-    pub fn record(name: Name, fields: Vec<RecordField>) -> Schema {
-        let mut fields_lookup = HashMap::new();
-        for field in fields.iter() {
-            fields_lookup.insert(field.name.clone(), field.position); // TODO: clone
-        }
-
-        Schema::Record(Rc::new(RecordSchema {
-            name: name,
-            doc: None,
-            fields: fields,
-            fields_lookup: fields_lookup,
-        }))
     }
 }
 

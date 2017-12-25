@@ -117,7 +117,7 @@ impl Record {
     }
 
     pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
-        if let Some(_) = self.schema.fields_lookup.get(field) {
+        if let Some(_) = self.schema.lookup.get(field) {
             // if let Some(value) = value.avro().with_schema(&self.schema.fields[index].schema.clone()) {
             self.fields.insert(field.to_owned(), value.avro());
             // }
@@ -312,7 +312,7 @@ impl Value {
                 items
                     .into_iter()
                     .map(|(key, value)| {
-                        record_schema.fields_lookup.get(&key)
+                        record_schema.lookup.get(&key)
                             .and_then(|&index| record_schema.fields.get(index))
                             .map(|field| field.schema.clone())  // TODO: field Rc<Schema>
                             .and_then(|schema| value.with_schema(&schema))
