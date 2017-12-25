@@ -60,16 +60,13 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn header(&mut self) -> Result<usize, Error> {
-        let mut n = self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))?;
-
         let mut metadata = HashMap::new();
         metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()));
         metadata.insert("avro.codec", self.codec.avro());
 
-        n += self.append_raw(metadata.avro())?;
-        n += self.append_marker()?;
-
-        Ok(n)
+        Ok(self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))? +
+               self.append_raw(metadata.avro())? +
+               self.append_marker()?)
     }
 
     pub fn append<V>(&mut self, value: V) -> Result<usize, Error> where V: ToAvro {

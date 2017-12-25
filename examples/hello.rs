@@ -1,5 +1,3 @@
-#![feature(type_ascription)]
-
 extern crate avro;
 extern crate serde_json;
 
