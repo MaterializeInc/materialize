@@ -19,7 +19,7 @@ pub enum Value {
     Union(Option<Box<Value>>),
     Array(Vec<Value>),
     Map(HashMap<String, Value>),
-    Record(Rc<RecordSchema>, HashMap<String, Value>),
+    Record(HashMap<String, Value>),
 }
 
 pub trait ToAvro {
@@ -127,7 +127,7 @@ impl Record {
 
 impl ToAvro for Record {
     fn avro(self) -> Value {
-        Value::Record(self.schema.clone(), self.fields)
+        Value::Record(self.fields)
     }
 }
 
@@ -148,182 +148,6 @@ impl ToAvro for JsonValue {
                 Value::Map(items.into_iter()
                     .map(|(key, value)| (key, value.avro()))
                     .collect::<_>()),
-        }
-    }
-}
-
-impl Value {
-    pub fn with_schema(self, schema: &Schema) -> Option<Value> {
-        match schema {
-            &Schema::Null => self.with_null(),
-            &Schema::Boolean => self.with_boolean(),
-            &Schema::Int => self.with_int(),
-            &Schema::Long => self.with_long(),
-            &Schema::Float => self.with_float(),
-            &Schema::Double => self.with_double(),
-            &Schema::Bytes => self.with_bytes(),
-            &Schema::String => self.with_string(),
-            &Schema::Fixed { size, .. } => self.with_fixed(size),
-            &Schema::Array(ref inner) => self.with_array(inner.clone()),
-            &Schema::Map(ref inner) => self.with_map(inner.clone()),
-            &Schema::Union(ref inner) => self.with_union(inner.clone()),
-            &Schema::Record(ref record_schema) => self.with_record(record_schema.clone()),
-            _ => None,
-        }
-    }
-
-    fn with_null(self) -> Option<Value> {
-        match self {
-            Value::Null => Some(Value::Null),
-            _ => None,
-        }
-    }
-
-    fn with_boolean(self) -> Option<Value> {
-        match self {
-            Value::Boolean(b) => Some(Value::Boolean(b)),
-            _ => None,
-        }
-    }
-
-    fn with_int(self) -> Option<Value> {
-        match self {
-            Value::Int(i) => Some(Value::Int(i)),
-            _ => None,
-        }
-    }
-
-    fn with_long(self) -> Option<Value> {
-        match self {
-            Value::Int(i) => Some(Value::Long(i as i64)),
-            Value::Long(i) => Some(Value::Long(i)),
-            _ => None,
-        }
-    }
-
-    fn with_float(self) -> Option<Value> {
-        match self {
-            Value::Int(i) => Some(Value::Float(i as f32)),
-            Value::Long(i) => Some(Value::Float(i as f32)),
-            Value::Float(x) => Some(Value::Float(x)),
-            _ => None,
-        }
-    }
-
-    fn with_double(self) -> Option<Value> {
-        match self {
-            Value::Int(i) => Some(Value::Double(i as f64)),
-            Value::Long(i) => Some(Value::Double(i as f64)),
-            Value::Float(x) => Some(Value::Double(x as f64)),
-            Value::Double(x) => Some(Value::Double(x)),
-            _ => None,
-        }
-    }
-
-    fn with_bytes(self) -> Option<Value> {
-        match self {
-            Value::Bytes(bytes) => Some(Value::Bytes(bytes)),
-            Value::String(s) => Some(Value::Bytes(s.into_bytes())),
-            _ => None,
-        }
-    }
-
-    fn with_string(self) -> Option<Value> {
-        match self {
-            Value::String(s) => Some(Value::String(s)),
-            Value::Bytes(bytes) => String::from_utf8(bytes).ok().map(Value::String),
-            _ => None,
-        }
-    }
-
-    fn with_fixed(self, size: usize) -> Option<Value> {
-        match self {
-            Value::Fixed(s, bytes) => {
-                if s == size {
-                    Some(Value::Fixed(s, bytes))
-                } else {
-                    None
-                }
-            },
-            Value::Bytes(bytes) => {
-                if bytes.len() == size {
-                    Some(Value::Fixed(bytes.len(), bytes))
-                } else {
-                    None
-                }
-            },
-            Value::String(s) => {
-                if s.len() == size {
-                    Some(Value::Fixed(s.len(), s.into_bytes()))
-                } else {
-                    None
-                }
-            },
-            _ => None,
-        }
-    }
-
-    fn with_array(self, inner: Rc<Schema>) -> Option<Value> {
-        match self {
-            Value::Array(items) => {
-                items
-                    .into_iter()
-                    .map(|item| item.with_schema(&inner.clone()))
-                    .collect::<Option<_>>()
-                    .map(Value::Array)
-            },
-            _ => None,
-        }
-    }
-
-    fn with_map(self, inner: Rc<Schema>) -> Option<Value> {
-        match self {
-            Value::Map(items) => {
-                items
-                    .into_iter()
-                    .map(|(key, value)|
-                        value
-                            .with_schema(&inner.clone())
-                            .map(|v| (key, v)))
-                    .collect::<Option<_>>()
-                    .map(Value::Map)
-            },
-            _ => None,
-        }
-    }
-
-    fn with_union(self, inner: Rc<Schema>) -> Option<Value> {
-        match self {
-            Value::Union(None) => Some(Value::Union(None)),
-            Value::Union(Some(value)) =>
-                value
-                    .with_schema(&inner.clone())
-                    .map(|v| Value::Union(Some(Box::new(v)))),
-            Value::Null => Some(Value::Union(None)),
-            value => value
-                .with_schema(&inner.clone())
-                .map(|v| Value::Union(Some(Box::new(v)))),
-        }
-    }
-
-    fn with_record(self, record_schema: Rc<RecordSchema>) -> Option<Value> {
-        match self {
-            Value::Record(rc, items) => {
-                items
-                    .into_iter()
-                    .map(|(key, value)| {
-                        record_schema.lookup.get(&key)
-                            .and_then(|&index| record_schema.fields.get(index))
-                            .map(|field| field.schema.clone())  // TODO: field Rc<Schema>
-                            .and_then(|schema| value.with_schema(&schema))
-                            .map(|value| (key, value))
-                        // TODO: record_schema.field not in items
-                        // TODO: if items has extra fields, filter them
-                    })
-                    .collect::<Option<_>>()
-                    .map(|items| Value::Record(rc, items))
-            },
-            _ => None,
         }
     }
 }

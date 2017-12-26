@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::iter::once;
+use std::rc::Rc;
 
 use failure::{Error, err_msg};
 use libflate::deflate::Encoder;
@@ -9,7 +10,7 @@ use serde_json;
 #[cfg(feature = "snappy")] use snap::Writer as SnappyWriter;
 
 use encode::EncodeAvro;
-use schema::Schema;
+use schema::{Name, Schema};
 use types::{ToAvro, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,12 +61,14 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn header(&mut self) -> Result<usize, Error> {
+        let magic_schema = Schema::Fixed { name: Name::new("Magic"), size: 4 };
+        let meta_schema = &Schema::Map(Rc::new(Schema::Bytes));
         let mut metadata = HashMap::new();
         metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()));
         metadata.insert("avro.codec", self.codec.avro());
 
-        Ok(self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))? +
-               self.append_raw(metadata.avro())? +
+        Ok(self.append_raw(&magic_schema, &['O' as u8, 'b' as u8, 'j' as u8, 1u8][..])? +
+               self.append_raw(&meta_schema, metadata.avro())? +
                self.append_marker()?)
     }
 
@@ -79,8 +82,11 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(self.writer.write(&self.marker)?)
     }
 
-    fn append_raw<V>(&mut self, value: V) -> Result<usize, Error> where V: EncodeAvro {
-        Ok(self.writer.write(value.encode().as_ref())?)  // TODO: really?
+    fn append_raw<V>(&mut self, schema: &Schema, value: V) -> Result<usize, Error> where V: EncodeAvro {
+        match value.encode(schema) {
+            Some(stream) => Ok(self.writer.write(stream.as_ref())?),
+            None => Err(err_msg("value does not match given schema")),
+        }
     }
 
     pub fn extend<I, V>(&mut self, values: I) -> Result<usize, Error>
@@ -88,13 +94,13 @@ impl<'a, W: Write> Writer<'a, W> {
     {
         let mut num_values = 0;
         let mut stream = values
-            .map(|value| value.avro().with_schema(self.schema))
+            .map(|value| value.avro().encode(self.schema))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| err_msg("value does not match given schema"))?
             .into_iter()
-            .fold(Vec::new(), |mut acc, value| {
+            .fold(Vec::new(), |mut acc, stream| {
                 num_values += 1;
-                acc.extend(value.encode()); acc
+                acc.extend(stream); acc
             });
 
         stream = match self.codec {
@@ -116,8 +122,8 @@ impl<'a, W: Write> Writer<'a, W> {
             self.has_header = true;
         }
 
-        Ok(self.append_raw(num_values)? +
-            self.append_raw(stream.len())? +
+        Ok(self.append_raw(&Schema::Long, num_values)? +
+            self.append_raw(&Schema::Long, stream.len())? +
             self.writer.write(stream.as_ref())? +
             self.append_marker()?)
     }
