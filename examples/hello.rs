@@ -1,6 +1,7 @@
 extern crate avro;
 extern crate serde_json;
 
+use avro::reader::Reader;
 use avro::schema::Schema;
 use avro::types::{Record, ToAvro, Value};
 use avro::writer::Writer;
@@ -56,5 +57,10 @@ fn main() {
 
     writer.append(test.avro()).unwrap();
 
-    display(writer.into_inner());
+    let input = writer.into_inner();
+    let reader = Reader::new(&input[..]);
+
+    for record in reader {
+        println!("{:?}", record);
+    }
 }

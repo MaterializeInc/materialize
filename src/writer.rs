@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::iter::once;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use failure::{Error, err_msg};
 use libflate::deflate::Encoder;
@@ -9,16 +10,10 @@ use rand::random;
 use serde_json;
 #[cfg(feature = "snappy")] use snap::Writer as SnappyWriter;
 
+use Codec;
 use encode::EncodeAvro;
 use schema::{Name, Schema};
 use types::{ToAvro, Value};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Codec {
-    Null,
-    Deflate,
-    #[cfg(feature = "snappy")] Snappy,
-}
 
 impl ToAvro for Codec {
     fn avro(self) -> Value {
@@ -29,6 +24,19 @@ impl ToAvro for Codec {
                 #[cfg(feature = "snappy")] Codec::Snappy => "snappy",
             }
                 .to_owned().into_bytes())
+    }
+}
+
+impl FromStr for Codec {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "null" => Ok(Codec::Null),
+            "deflate" => Ok(Codec::Null),
+            #[cfg(feature = "snappy")] "snappy" => Ok(Codec::Snappy),
+            _ => Err(()),
+        }
     }
 }
 

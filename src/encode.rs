@@ -3,7 +3,7 @@ use std::mem::transmute;
 
 use schema::Schema;
 use types::{ToAvro, Value};
-use util::{zigzag_i32, zigzag_i64};
+use util::{zig_i32, zig_i64};
 
 pub type Output = Vec<u8>;
 
@@ -42,7 +42,7 @@ impl EncodeAvro for bool {
 impl EncodeAvro for i32 {
     fn encode(self, schema: &Schema) -> Option<Output> {
         match schema {
-            &Schema::Int => Some(zigzag_i32(self)),
+            &Schema::Int => Some(zig_i32(self)),
             &Schema::Long => (self as i64).encode(schema),
             &Schema::Float => (self as f32).encode(schema),
             &Schema::Double => (self as f64).encode(schema),
@@ -54,7 +54,7 @@ impl EncodeAvro for i32 {
 impl EncodeAvro for i64 {
     fn encode(self, schema: &Schema) -> Option<Output> {
         match schema {
-            &Schema::Long => Some(zigzag_i64(self)),
+            &Schema::Long => Some(zig_i64(self)),
             &Schema::Float => (self as f32).encode(schema),
             &Schema::Double => (self as f64).encode(schema),
             _ => None,

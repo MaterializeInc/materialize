@@ -11,10 +11,10 @@ use util::MapHelper;
 pub enum Schema {
     Null,
     Boolean,
-    Double,
-    Float,
-    Long,
     Int,
+    Long,
+    Float,
+    Double,
     Bytes,
     String,
     Array(Rc<Schema>),
@@ -176,10 +176,10 @@ impl Schema {
         match primitive {
             "null" => Ok(Schema::Null),
             "boolean" => Ok(Schema::Boolean),
+            "int" => Ok(Schema::Int),
+            "long" => Ok(Schema::Long),
             "double" => Ok(Schema::Double),
             "float" => Ok(Schema::Float),
-            "long" => Ok(Schema::Long),
-            "int" => Ok(Schema::Int),
             "bytes" => Ok(Schema::Bytes),
             "string" => Ok(Schema::String),
             other => Err(err_msg(format!("Unknown primitive type: {}", other)))
