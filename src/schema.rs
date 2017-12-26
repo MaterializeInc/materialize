@@ -37,7 +37,16 @@ pub struct RecordSchema {
     pub name: Name,
     pub doc: Documentation,
     pub fields: Vec<RecordField>,
-    pub lookup: HashMap<String, usize>,
+}
+
+impl RecordSchema {
+    pub fn lookup<'a>(&'a self) -> HashMap<&'a str, usize> {
+        let mut lookup: HashMap<&'a str, usize> = HashMap::new();
+        for ref field in self.fields.iter() {
+            lookup.insert(&(field.name), field.position);
+        }
+        lookup
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -207,16 +216,11 @@ impl Schema {
                     .collect::<Result<_, _>>()
             })?;
 
-        let mut lookup = HashMap::new();
-        for field in fields.iter() {
-            lookup.insert(field.name.clone(), field.position); // TODO: clone
-        }
 
         Ok(Schema::Record(Rc::new(RecordSchema {
             name: name,
             doc: complex.doc(),
             fields: fields,
-            lookup: lookup,
         })))
     }
 

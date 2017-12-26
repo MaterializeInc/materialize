@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use serde_json::Value as JsonValue;
 
-use schema::{RecordSchema, Schema};
+use schema::Schema;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -98,17 +97,24 @@ impl<T> ToAvro for Box<T> where T: ToAvro {
 }
 
 #[derive(Debug)]
-pub struct Record {
-    schema: Rc<RecordSchema>,
+pub struct Record<'a> {
+    lookup: Option<HashMap<&'a str, usize>>,
     fields: HashMap<String, Value>,
 }
 
-impl Record {
-    pub fn new(schema: &Schema) -> Option<Record> {
+impl<'a> Record<'a> {
+    pub fn new() -> Record<'a> {
+        Record {
+            lookup: None,
+            fields: HashMap::new(),
+        }
+    }
+
+    pub fn with_schema(schema: &'a Schema) -> Option<Record<'a>> {
         match schema {
             &Schema::Record(ref record_schema) => {
                 Some(Record {
-                    schema: record_schema.clone(),
+                    lookup: Some(record_schema.lookup()),
                     fields: HashMap::new(),
                 })
             },
@@ -117,15 +123,17 @@ impl Record {
     }
 
     pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
-        if let Some(_) = self.schema.lookup.get(field) {
-            // if let Some(value) = value.avro().with_schema(&self.schema.fields[index].schema.clone()) {
-            self.fields.insert(field.to_owned(), value.avro());
-            // }
+        if let Some(ref lookup) = self.lookup {
+            if lookup.get(field).is_none() {
+                return
+            }
         }
+
+        self.fields.insert(field.to_owned(), value.avro());
     }
 }
 
-impl ToAvro for Record {
+impl<'a> ToAvro for Record<'a> {
     fn avro(self) -> Value {
         Value::Record(self.fields)
     }
