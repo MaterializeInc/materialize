@@ -1,23 +1,19 @@
 extern crate avro;
+extern crate serde;
+#[macro_use] extern crate serde_derive;
+
+use serde::Serialize;
 
 use avro::Codec;
 use avro::reader::Reader;
 use avro::schema::Schema;
-use avro::types::{Record, ToAvro, Value};
+use avro::types::Record;
 use avro::writer::Writer;
 
+#[derive(Serialize)]
 struct Test<'a> {
     a: i64,
     b: &'a str,
-}
-
-impl<'a> ToAvro for Test<'a> {
-    fn avro(self) -> Value {
-        let mut record = Record::new();
-        record.put("a", self.a);
-        record.put("b", self.b);
-        record.avro()
-    }
 }
 
 fn main() {
@@ -48,7 +44,7 @@ fn main() {
         b: "foo",
     };
 
-    writer.append(test.avro()).unwrap();
+    writer.append_ser(test).unwrap();
 
     let input = writer.into_inner();
     let reader = Reader::new(&input[..]);

@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::error;
+use std::error::{self, Error as StdError};
+use std::iter::once;
 
-use serde::ser::{self, Serialize};
+use serde::ser::{self, Error as SerdeError, Serialize};
 
-use schema::Schema;
+use schema::{RecordSchema, Schema};
 use types::Value;
 
 pub struct Serializer<'a> {
@@ -12,12 +13,19 @@ pub struct Serializer<'a> {
 }
 
 pub struct SeqSerializer<'a> {
-    schema: &'a Schema,
+    serializer: Serializer<'a>,
     items: Vec<Value>,
 }
 
 pub struct MapSerializer<'a> {
-    schema: &'a Schema,
+    serializer: Serializer<'a>,
+    indices: HashMap<String, usize>,
+    values: Vec<Value>,
+}
+
+pub struct StructSerializer<'a> {
+    rschema: &'a RecordSchema,
+    lookup: HashMap<&'a str, usize>,
     items: HashMap<String, Value>,
 }
 
@@ -55,24 +63,45 @@ impl<'a> Serializer<'a> {
 }
 
 impl<'a> SeqSerializer<'a> {
-    pub fn new(schema: &'a Schema) -> SeqSerializer<'a> {
+    pub fn new(schema: &'a Schema, len: Option<usize>) -> SeqSerializer<'a> {
+        let items = match len {
+            Some(len) => Vec::with_capacity(len),
+            None => Vec::new(),
+        };
+
         SeqSerializer {
-            schema: schema,
-            items: Vec::new(),
+            serializer: Serializer::new(schema),
+            items: items,
         }
     }
 }
 
 impl<'a> MapSerializer<'a> {
-    pub fn new(schema: &'a Schema) -> MapSerializer<'a> {
+    pub fn new(schema: &'a Schema, len: Option<usize>) -> MapSerializer<'a> {
+        let (indices, values) = match len {
+            Some(len) => (HashMap::with_capacity(len), Vec::with_capacity(len)),
+            None => (HashMap::new(), Vec::new()),
+        };
+
         MapSerializer {
-            schema: schema,
-            items: HashMap::new(),
+            serializer: Serializer::new(schema),
+            indices: indices,
+            values: values,
         }
     }
 }
 
-impl<'a> ser::Serializer for Serializer<'a> {
+impl<'a> StructSerializer<'a> {
+    pub fn new(rschema: &'a RecordSchema, len: usize) -> StructSerializer<'a> {
+        StructSerializer {
+            rschema: rschema,
+            lookup: rschema.lookup(),
+            items: HashMap::with_capacity(len),
+        }
+    }
+}
+
+impl<'a, 'b> ser::Serializer for &'b mut Serializer<'a> {
     type Ok = Value;
     type Error = Error;
     type SerializeSeq = SeqSerializer<'a>;
@@ -80,122 +109,190 @@ impl<'a> ser::Serializer for Serializer<'a> {
     type SerializeTupleStruct = SeqSerializer<'a>;
     type SerializeTupleVariant = SeqSerializer<'a>;
     type SerializeMap = MapSerializer<'a>;
-    type SerializeStruct = MapSerializer<'a>;
-    type SerializeStructVariant = MapSerializer<'a>;
+    type SerializeStruct = StructSerializer<'a>;
+    type SerializeStructVariant = StructSerializer<'a>;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Boolean => Ok(Value::Boolean(v)),
+            _ => Err(Error::custom("schema is not bool")),
+        }
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Int => Ok(Value::Int(v)),
+            &Schema::Long => self.serialize_i64(v as i64),
+            &Schema::Float => self.serialize_f32(v as f32),
+            &Schema::Double => self.serialize_f64(v as f64),
+            _ => Err(Error::custom("schema is not int|long|float|double")),
+        }
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Long => Ok(Value::Long(v)),
+            &Schema::Float => self.serialize_f32(v as f32),
+            &Schema::Double => self.serialize_f64(v as f64),
+            _ => Err(Error::custom("schema is not long|float|double")),
+        }
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        self.serialize_i32(v as i32)
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        if v <= i32::max_value() as u32 {
+            self.serialize_i32(v as i32)
+        } else {
+            self.serialize_i64(v as i64)
+        }
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        if v <= i64::max_value() as u64 {
+            self.serialize_i64(v as i64)
+        } else {
+            Err(Error::custom("u64 is too large"))
+        }
     }
 
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Float => Ok(Value::Float(v)),
+            &Schema::Double => self.serialize_f64(v as f64),
+            _ => Err(Error::custom("schema is not float|double")),
+        }
     }
 
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Double => self.serialize_f64(v),
+            _ => Err(Error::custom("schema is not double")),
+        }
     }
 
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        self.serialize_str(&once(v).collect::<String>())
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::String => Ok(Value::String(v.to_owned())),
+            &Schema::Bytes
+            | &Schema::Fixed { .. } => self.serialize_bytes(v.as_ref()),
+            _ => Err(Error::custom("schema is not string|bytes|fixed")),
+        }
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Bytes => Ok(Value::Bytes(v.to_owned())),
+            &Schema::Fixed { size, .. } => {
+                if size == v.len() {
+                    Ok(Value::Bytes(v.to_owned()))
+                } else {
+                    Err(Error::custom("fixed size does not match"))
+                }
+            },
+            &Schema::String => ::std::str::from_utf8(v)
+                .map_err(|e| Error::custom(e.description()))
+                .and_then(|s| s.serialize(self)),
+            _ => Err(Error::custom("schema is not string|bytes|fixed")),
+        }
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Union(_) => Ok(Value::Null),
+            _ => Err(Error::custom("schema is not union")),
+        }
     }
 
     fn serialize_some<T: ? Sized>(self, value: &T) -> Result<Self::Ok, Self::Error> where
         T: Serialize {
-        unimplemented!()
+        match self.schema {
+            &Schema::Union(ref inner) => {
+                let v = value.serialize(&mut Serializer::new(inner))?;
+                Ok(Value::Union(Some(Box::new(v))))
+            },
+            _ => Err(Error::custom("schema is not union")),
+        }
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Null => Ok(Value::Null),
+            _ => Err(Error::custom("schema is not null")),
+        }
     }
 
     fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        self.serialize_unit()
     }
 
     fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        unimplemented!()  // TODO: enum
     }
 
     fn serialize_newtype_struct<T: ? Sized>(self, name: &'static str, value: &T) -> Result<Self::Ok, Self::Error> where
         T: Serialize {
-        unimplemented!()
+        value.serialize(self)
     }
 
     fn serialize_newtype_variant<T: ? Sized>(self, name: &'static str, variant_index: u32, variant: &'static str, value: &T) -> Result<Self::Ok, Self::Error> where
         T: Serialize {
-        unimplemented!()
+        value.serialize(self)
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Array(ref inner) => Ok(SeqSerializer::new(inner, len)),
+            _ => Err(Error::custom("schema is not array")),
+        }
     }
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        unimplemented!()
+        self.serialize_seq(Some(len))
     }
 
     fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        unimplemented!()
+        self.serialize_seq(Some(len))
     }
 
     fn serialize_tuple_variant(self, name: &'static str, variant_index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        unimplemented!()
+        unimplemented!()  // TODO ?
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Map(ref inner) => Ok(MapSerializer::new(inner, len)),
+            _ => Err(Error::custom("schema is not map")),
+        }
     }
 
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
-        unimplemented!()
+        match self.schema {
+            &Schema::Record(ref rschema) => Ok(StructSerializer::new(rschema, len)),
+            _ => Err(Error::custom("schema is not record")),
+        }
     }
 
     fn serialize_struct_variant(self, name: &'static str, variant_index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant, Self::Error> {
-        unimplemented!()
+        unimplemented!()  // TODO ?
     }
 }
 
@@ -205,11 +302,12 @@ impl<'a> ser::SerializeSeq for SeqSerializer<'a> {
 
     fn serialize_element<T: ? Sized>(&mut self, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        unimplemented!()
+        self.items.push(value.serialize(&mut self.serializer)?);
+        Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        Ok(Value::Array(self.items))
     }
 }
 
@@ -219,11 +317,12 @@ impl<'a> ser::SerializeTuple for SeqSerializer<'a> {
 
     fn serialize_element<T: ? Sized>(&mut self, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        unimplemented!()
+        self.items.push(value.serialize(&mut self.serializer)?);
+        Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        Ok(Value::Array(self.items))
     }
 }
 
@@ -233,11 +332,12 @@ impl<'a> ser::SerializeTupleStruct for SeqSerializer<'a> {
 
     fn serialize_field<T: ? Sized>(&mut self, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        unimplemented!()
+        self.items.push(value.serialize(&mut self.serializer)?);
+        Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        Ok(Value::Array(self.items))
     }
 }
 
@@ -261,34 +361,56 @@ impl<'a> ser::SerializeMap for MapSerializer<'a> {
 
     fn serialize_key<T: ? Sized>(&mut self, key: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        unimplemented!()
+        let key = key.serialize(&mut Serializer::new(&Schema::String))?;
+
+        if let Value::String(key) = key {
+            self.indices.insert(key, self.values.len());
+            Ok(())
+        } else {
+            Err(Error::custom("map key is not a string"))
+        }
     }
 
     fn serialize_value<T: ? Sized>(&mut self, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        unimplemented!()
+        self.values.push(value.serialize(&mut self.serializer)?);
+        Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        let mut items = HashMap::new();
+        for (key, index) in self.indices.into_iter() {
+            if let Some(value) = self.values.get(index) {
+                items.insert(key, value.clone());
+            }
+        }
+
+        Ok(Value::Map(items))
     }
 }
 
-impl<'a> ser::SerializeStruct for MapSerializer<'a> {
+impl<'a> ser::SerializeStruct for StructSerializer<'a> {
     type Ok = Value;
     type Error = Error;
 
     fn serialize_field<T: ? Sized>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        unimplemented!()
+        match self.lookup.get(key).and_then(|&i| self.rschema.fields.get(i)) {
+            Some(ref field) => {
+                let v = value.serialize(&mut Serializer::new(&field.schema))?;
+                self.items.insert(key.to_owned(), v);
+                Ok(())
+            },
+            None => Err(Error::custom("struct field not found in schema")),
+        }
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()
+        Ok(Value::Record(self.items))
     }
 }
 
-impl<'a> ser::SerializeStructVariant for MapSerializer<'a> {
+impl<'a> ser::SerializeStructVariant for StructSerializer<'a> {
     type Ok = Value;
     type Error = Error;
 

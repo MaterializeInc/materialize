@@ -5,15 +5,18 @@ use std::rc::Rc;
 
 use failure::{Error, err_msg};
 use rand::random;
+use serde::Serialize;
 use serde_json;
 
 use Codec;
 use encode::EncodeAvro;
 use schema::{Name, Schema};
+use ser::Serializer;
 use types::{ToAvro, Value};
 
 pub struct Writer<'a, W> {
     schema: &'a Schema,
+    serializer: Serializer<'a>,
     writer: W,
     codec: Codec,
     marker: Vec<u8>,
@@ -33,6 +36,7 @@ impl<'a, W: Write> Writer<'a, W> {
 
         Writer {
             schema: schema,
+            serializer: Serializer::new(schema),
             writer: writer,
             codec: codec,
             marker: marker,
@@ -52,7 +56,7 @@ impl<'a, W: Write> Writer<'a, W> {
                self.append_marker()?)
     }
 
-    pub fn append<V>(&mut self, value: V) -> Result<usize, Error> where V: ToAvro {
+    pub fn append<V: ToAvro>(&mut self, value: V) -> Result<usize, Error> {
         self.extend(once(value))
     }
 
@@ -69,8 +73,8 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
-    pub fn extend<I, V>(&mut self, values: I) -> Result<usize, Error>
-        where V: ToAvro, I: Iterator<Item=V>
+    pub fn extend<I, V: ToAvro>(&mut self, values: I) -> Result<usize, Error>
+        where I: Iterator<Item=V>
     {
         let mut num_values = 0;
         let mut stream = values
@@ -94,6 +98,11 @@ impl<'a, W: Write> Writer<'a, W> {
             self.append_raw(&Schema::Long, stream.len())? +
             self.writer.write(stream.as_ref())? +
             self.append_marker()?)
+    }
+
+    pub fn append_ser<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
+        let value = value.serialize(&mut self.serializer)?;
+        self.append(value)
     }
 
     pub fn into_inner(self) -> W {
