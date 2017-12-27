@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::Read;
 use std::rc::Rc;
 use std::str::{from_utf8, FromStr};
@@ -15,8 +16,7 @@ pub struct Reader<R> {
     schema: Schema,
     codec: Codec,
     marker: Vec<u8>,
-    item_index: usize,
-    items: Vec<Value>,
+    items: VecDeque<Value>,
 }
 
 impl<R: Read> Reader<R> {
@@ -26,8 +26,7 @@ impl<R: Read> Reader<R> {
             schema: Schema::Null,
             codec: Codec::Null,
             marker: Vec::with_capacity(16),
-            item_index: 0,
-            items: Vec::new(),
+            items: VecDeque::new(),
         };
 
         reader.read_header().unwrap();  // TODO
@@ -95,12 +94,11 @@ impl<R: Read> Reader<R> {
                 self.reader.read_exact(&mut marker)?;  // TODO check
 
                 // TODO: codec
-
-                self.items = Vec::with_capacity(block_len as usize);
-
                 let mut bytes: &[u8] = raw_bytes.as_ref();
+
+                self.items.clear();
                 for _ in 0..block_len {
-                    self.items.push(decode(&self.schema, &mut bytes)?);
+                    self.items.push_back(decode(&self.schema, &mut bytes)?);
                 }
 
                 return Ok(())
@@ -115,15 +113,12 @@ impl<R: Read> Iterator for Reader<R> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.item_index == self.items.len() {
+        if self.items.len() == 0 {
             if let Ok(_) = self.read_block() {
-                self.item_index = 0;
-                return self.next()
+                return self.next();
             }
         }
 
-        let item = self.items.get(self.item_index);
-        self.item_index += 1;
-        item.map(|i| i.clone())  // TODO clone
+        self.items.pop_front()
     }
 }
