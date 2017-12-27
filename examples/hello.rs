@@ -1,5 +1,4 @@
 extern crate avro;
-extern crate serde_json;
 
 use avro::Codec;
 use avro::reader::Reader;
