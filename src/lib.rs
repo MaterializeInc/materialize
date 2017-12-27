@@ -7,6 +7,7 @@ extern crate serde;
 extern crate serde_json;
 #[cfg(feature = "snappy")] extern crate snap;
 
+pub mod codec;
 pub mod decode;
 pub mod encode;
 pub mod reader;
@@ -15,13 +16,7 @@ pub mod types;
 pub mod writer;
 mod util;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Codec {
-    Null,
-    Deflate,
-    #[cfg(feature = "snappy")] Snappy,
-}
-
+pub use codec::Codec;
 
 #[cfg(test)]
 mod tests {

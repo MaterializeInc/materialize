@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::iter::once;
 use std::rc::Rc;
-use std::str::FromStr;
 
 use failure::{Error, err_msg};
 use libflate::deflate::Encoder;
@@ -14,31 +13,6 @@ use Codec;
 use encode::EncodeAvro;
 use schema::{Name, Schema};
 use types::{ToAvro, Value};
-
-impl ToAvro for Codec {
-    fn avro(self) -> Value {
-        Value::Bytes(
-            match self {
-                Codec::Null => "null",
-                Codec::Deflate => "deflate",
-                #[cfg(feature = "snappy")] Codec::Snappy => "snappy",
-            }
-                .to_owned().into_bytes())
-    }
-}
-
-impl FromStr for Codec {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "null" => Ok(Codec::Null),
-            "deflate" => Ok(Codec::Null),
-            #[cfg(feature = "snappy")] "snappy" => Ok(Codec::Snappy),
-            _ => Err(()),
-        }
-    }
-}
 
 pub struct Writer<'a, W> {
     schema: &'a Schema,
