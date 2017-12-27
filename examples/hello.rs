@@ -2,8 +2,6 @@ extern crate avro;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 
-use serde::Serialize;
-
 use avro::Codec;
 use avro::reader::Reader;
 use avro::schema::Schema;

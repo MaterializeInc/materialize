@@ -240,20 +240,20 @@ impl<'a, 'b> ser::Serializer for &'b mut Serializer<'a> {
         }
     }
 
-    fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
+    fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok, Self::Error> {
         self.serialize_unit()
     }
 
-    fn serialize_unit_variant(self, name: &'static str, variant_index: u32, variant: &'static str) -> Result<Self::Ok, Self::Error> {
+    fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<Self::Ok, Self::Error> {
         unimplemented!()  // TODO: enum
     }
 
-    fn serialize_newtype_struct<T: ? Sized>(self, name: &'static str, value: &T) -> Result<Self::Ok, Self::Error> where
+    fn serialize_newtype_struct<T: ? Sized>(self, _: &'static str, value: &T) -> Result<Self::Ok, Self::Error> where
         T: Serialize {
         value.serialize(self)
     }
 
-    fn serialize_newtype_variant<T: ? Sized>(self, name: &'static str, variant_index: u32, variant: &'static str, value: &T) -> Result<Self::Ok, Self::Error> where
+    fn serialize_newtype_variant<T: ? Sized>(self, _: &'static str, _: u32, _: &'static str, value: &T) -> Result<Self::Ok, Self::Error> where
         T: Serialize {
         value.serialize(self)
     }
@@ -269,11 +269,11 @@ impl<'a, 'b> ser::Serializer for &'b mut Serializer<'a> {
         self.serialize_seq(Some(len))
     }
 
-    fn serialize_tuple_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
+    fn serialize_tuple_struct(self, _: &'static str, len: usize) -> Result<Self::SerializeTupleStruct, Self::Error> {
         self.serialize_seq(Some(len))
     }
 
-    fn serialize_tuple_variant(self, name: &'static str, variant_index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeTupleVariant, Self::Error> {
+    fn serialize_tuple_variant(self, _: &'static str, _: u32, _: &'static str, _: usize) -> Result<Self::SerializeTupleVariant, Self::Error> {
         unimplemented!()  // TODO ?
     }
 
@@ -284,14 +284,14 @@ impl<'a, 'b> ser::Serializer for &'b mut Serializer<'a> {
         }
     }
 
-    fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
+    fn serialize_struct(self, _: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         match self.schema {
             &Schema::Record(ref rschema) => Ok(StructSerializer::new(rschema, len)),
             _ => Err(Error::custom("schema is not record")),
         }
     }
 
-    fn serialize_struct_variant(self, name: &'static str, variant_index: u32, variant: &'static str, len: usize) -> Result<Self::SerializeStructVariant, Self::Error> {
+    fn serialize_struct_variant(self, _: &'static str, _: u32, _: &'static str, _: usize) -> Result<Self::SerializeStructVariant, Self::Error> {
         unimplemented!()  // TODO ?
     }
 }
@@ -345,7 +345,7 @@ impl<'a> ser::SerializeTupleVariant for SeqSerializer<'a> {
     type Ok = Value;
     type Error = Error;
 
-    fn serialize_field<T: ? Sized>(&mut self, value: &T) -> Result<(), Self::Error> where
+    fn serialize_field<T: ? Sized>(&mut self, _: &T) -> Result<(), Self::Error> where
         T: Serialize {
         unimplemented!()
     }
@@ -414,7 +414,7 @@ impl<'a> ser::SerializeStructVariant for StructSerializer<'a> {
     type Ok = Value;
     type Error = Error;
 
-    fn serialize_field<T: ? Sized>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error> where
+    fn serialize_field<T: ? Sized>(&mut self, _: &'static str, _: &T) -> Result<(), Self::Error> where
         T: Serialize {
         unimplemented!()
     }
@@ -423,3 +423,57 @@ impl<'a> ser::SerializeStructVariant for StructSerializer<'a> {
         unimplemented!()
     }
 }
+
+/*
+impl Serialize for Value {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
+        S: SerdeSerializer {
+        match self {
+            &Value::Null => serializer.serialize_unit(),
+            &Value::Boolean(b) => serializer.serialize_bool(b),
+            &Value::Int(i) => serializer.serialize_i32(i),
+            &Value::Long(i) => serializer.serialize_i64(i),
+            &Value::Float(x) => serializer.serialize_f32(x),
+            &Value::Double(x) => serializer.serialize_f64(x),
+            &Value::Bytes(ref bytes) => serializer.serialize_bytes(bytes.as_ref()),
+            &Value::String(ref s) => serializer.serialize_str(&s),
+            &Value::Fixed(_, ref bytes) => serializer.serialize_bytes(bytes.as_ref()),
+            &Value::Array(ref items) => {
+                use serde::ser::SerializeSeq;
+
+                let mut sseq = serializer.serialize_seq(Some(items.len()))?;
+                items.iter()
+                    .map(|item| sseq.serialize_element(item))
+                    .collect::<Result<Vec<()>, _>>()?;
+                sseq.end()
+            },
+            &Value::Map(ref items) => {
+                use serde::ser::SerializeMap;
+
+                let mut mseq = serializer.serialize_map(Some(items.len()))?;
+                items.iter()
+                    .map(|(key, value)| {
+                        mseq.serialize_key(key)?;
+                        mseq.serialize_value(value)
+                    })
+                    .collect::<Result<Vec<()>, _>>()?;
+                mseq.end()
+            },
+            &Value::Union(ref option) => match option {
+                &Some(ref item) => serializer.serialize_some(item),
+                &None => serializer.serialize_none(),
+            },
+            &Value::Record(ref items) => {
+                use serde::ser::SerializeStruct;
+
+                let mut sseq = serializer.serialize_struct("", items.len())?;
+
+                // sseq.serialize_field expects &'static str as field name
+                // Value::Record has String field name :(
+
+                mseq.end()
+            }
+        }
+    }
+}
+*/
