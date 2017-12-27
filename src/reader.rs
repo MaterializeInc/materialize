@@ -15,7 +15,7 @@ pub struct Reader<R> {
     reader: R,
     schema: Schema,
     codec: Codec,
-    marker: Vec<u8>,
+    marker: [u8; 16],
     items: VecDeque<Value>,
 }
 
@@ -25,7 +25,7 @@ impl<R: Read> Reader<R> {
             reader: reader,
             schema: Schema::Null,
             codec: Codec::Null,
-            marker: Vec::with_capacity(16),
+            marker: [0u8; 16],
             items: VecDeque::new(),
         };
 
@@ -79,7 +79,7 @@ impl<R: Read> Reader<R> {
         let mut buf = [0u8; 16];
         self.reader.read_exact(&mut buf)?;
 
-        self.marker.extend(buf.into_iter());
+        self.marker = buf;
 
         Ok(())
     }
@@ -91,7 +91,11 @@ impl<R: Read> Reader<R> {
                 self.reader.read_exact(&mut raw_bytes)?;
 
                 let mut marker = [0u8; 16];
-                self.reader.read_exact(&mut marker)?;  // TODO check
+                self.reader.read_exact(&mut marker)?;
+
+                if marker != self.marker {
+                    return Err(err_msg("block marker does not match header marker"));
+                }
 
                 let decompressed = self.codec.decompress(raw_bytes)?;
 
