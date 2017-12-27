@@ -4,10 +4,8 @@ use std::iter::once;
 use std::rc::Rc;
 
 use failure::{Error, err_msg};
-use libflate::deflate::Encoder;
 use rand::random;
 use serde_json;
-#[cfg(feature = "snappy")] use snap::Writer as SnappyWriter;
 
 use Codec;
 use encode::EncodeAvro;
@@ -85,19 +83,7 @@ impl<'a, W: Write> Writer<'a, W> {
                 acc.extend(stream); acc
             });
 
-        stream = match self.codec {
-            Codec::Null => stream,
-            Codec::Deflate => {
-                let mut encoder = Encoder::new(Vec::new());
-                encoder.write(stream.as_ref())?;
-                encoder.finish().into_result()?
-            },
-            #[cfg(feature = "snappy")] Codec::Snappy => {
-                let mut writer = SnappyWriter::new(Vec::new());
-                writer.write(stream.as_ref())?;
-                writer.into_inner()?  // .into_inner() will also call .flush()
-            },
-        };
+        stream = self.codec.compress(stream)?;
 
         if !self.has_header {
             self.header()?;

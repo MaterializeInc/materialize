@@ -93,12 +93,11 @@ impl<R: Read> Reader<R> {
                 let mut marker = [0u8; 16];
                 self.reader.read_exact(&mut marker)?;  // TODO check
 
-                // TODO: codec
-                let mut bytes: &[u8] = raw_bytes.as_ref();
+                let decompressed = self.codec.decompress(raw_bytes)?;
 
                 self.items.clear();
                 for _ in 0..block_len {
-                    self.items.push_back(decode(&self.schema, &mut bytes)?);
+                    self.items.push_back(decode(&self.schema, &mut &decompressed[..])?);
                 }
 
                 return Ok(())

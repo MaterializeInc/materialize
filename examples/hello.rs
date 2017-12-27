@@ -1,17 +1,11 @@
 extern crate avro;
 extern crate serde_json;
 
+use avro::Codec;
 use avro::reader::Reader;
 use avro::schema::Schema;
 use avro::types::{Record, ToAvro, Value};
 use avro::writer::Writer;
-
-fn display(res: Vec<u8>) {
-    for c in res {
-        print!("{:02X} ", c);
-    }
-    println!();
-}
 
 struct Test<'a> {
     a: i64,
@@ -47,7 +41,7 @@ fn main() {
     record.put("a", 27);
     record.put("b", "foo");
 
-    let mut writer = Writer::new(&schema, Vec::new());
+    let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
     writer.append(record).unwrap();
 
     let test = Test {
