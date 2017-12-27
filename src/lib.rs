@@ -12,6 +12,7 @@ pub mod decode;
 pub mod encode;
 pub mod reader;
 pub mod schema;
+pub mod ser;
 pub mod types;
 pub mod writer;
 mod util;
