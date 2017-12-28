@@ -9,16 +9,16 @@ extern crate serde_json;
 
 pub mod codec;
 pub mod de;
-pub mod decode;
-pub mod encode;
-pub mod reader;
 pub mod schema;
 pub mod ser;
 pub mod types;
-pub mod writer;
 mod util;
 
 pub use codec::Codec;
+
+pub use de::de::from_value;
+pub use de::reader;
+pub use ser::writer;
 
 #[cfg(test)]
 mod tests {

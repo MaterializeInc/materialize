@@ -6,7 +6,6 @@ use std::slice::Iter;
 
 use serde::de::{self, Deserialize, DeserializeSeed, Error as SerdeError, Visitor};
 
-use schema::Schema;
 use types::Value;
 
 #[derive(Clone, Debug, PartialEq)]

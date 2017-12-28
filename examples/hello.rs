@@ -3,7 +3,7 @@ extern crate serde;
 #[macro_use] extern crate serde_derive;
 
 use avro::Codec;
-use avro::de::from_value;
+use avro::from_value;
 use avro::reader::Reader;
 use avro::schema::Schema;
 use avro::types::Record;
