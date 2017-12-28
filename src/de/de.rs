@@ -78,8 +78,6 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
-        unimplemented!()
-        /*
         match self.input {
             &Value::Null => visitor.visit_unit(),
             &Value::Boolean(b) => visitor.visit_bool(b),
@@ -87,82 +85,14 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
             &Value::Long(i) => visitor.visit_i64(i),
             &Value::Float(x) => visitor.visit_f32(x),
             &Value::Double(x) => visitor.visit_f64(x),
-        }
-        */
-    }
-
-    fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        match self.input {
-            &Value::Boolean(b) => visitor.visit_bool(b),
-            _ => Err(Error::custom("not a boolean")),
+            _ => Err(Error::custom("incorrect value")),
         }
     }
 
-    fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        Err(Error::custom("avro does not support i8"))
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64
     }
 
-    fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        Err(Error::custom("avro does not support i16"))
-    }
-
-    fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        match self.input {
-            &Value::Int(i) => visitor.visit_i32(i),
-            // &Value::Long(i) if i >= i32::min_value() as i64 && i <= i32::max_value() as i64 => visitor.visit_i32(i as i32),
-            _ => Err(Error::custom("not an int")),
-        }
-    }
-
-    fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        match self.input {
-            &Value::Int(i) => visitor.visit_i64(i as i64),
-            &Value::Long(i) => visitor.visit_i64(i),
-            _ => Err(Error::custom("not an int|long")),
-        }
-    }
-
-    fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        Err(Error::custom("avro does not support u8"))
-    }
-
-    fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        Err(Error::custom("avro does not support u16"))
-    }
-
-    fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        Err(Error::custom("avro does not support u32"))
-    }
-
-    fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        Err(Error::custom("avro does not support u64"))
-    }
-
-    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        match self.input {
-            &Value::Float(x) => visitor.visit_f32(x),
-            _ => Err(Error::custom("not a float")),
-        }
-    }
-
-    fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
-        V: Visitor<'de> {
-        match self.input {
-            &Value::Float(x) => visitor.visit_f64(x as f64),
-            &Value::Double(x) => visitor.visit_f64(x),
-            _ => Err(Error::custom("not a double")),
-        }
-    }
 
     fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
