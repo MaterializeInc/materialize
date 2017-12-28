@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::Value as JsonValue;
 
-use schema::Schema;
+use schema::{RecordSchema, Schema};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -156,6 +156,185 @@ impl ToAvro for JsonValue {
                 Value::Map(items.into_iter()
                     .map(|(key, value)| (key, value.avro()))
                     .collect::<_>()),
+        }
+    }
+}
+
+impl Value {
+    pub fn with_schema(self, schema: &Schema) -> Option<Value> {
+        match schema {
+            &Schema::Null => self.with_null(),
+            &Schema::Boolean => self.with_boolean(),
+            &Schema::Int => self.with_int(),
+            &Schema::Long => self.with_long(),
+            &Schema::Float => self.with_float(),
+            &Schema::Double => self.with_double(),
+            &Schema::Bytes => self.with_bytes(),
+            &Schema::String => self.with_string(),
+            &Schema::Array(ref inner) => self.with_array(inner),
+            &Schema::Map(ref inner) => self.with_map(inner),
+            &Schema::Union(ref inner) => self.with_union(inner),
+            &Schema::Record(ref rschema) => self.with_record(rschema),
+            &Schema::Enum { ref symbols, .. } => self.with_enum(symbols),
+            &Schema::Fixed { ref size, .. } => self.with_fixed(*size),
+        }
+    }
+
+    fn with_null(self) -> Option<Value> {
+        match self {
+            Value::Null => Some(Value::Null),
+            _ => None,
+        }
+    }
+
+    fn with_boolean(self) -> Option<Value> {
+        match self {
+            Value::Boolean(b) => Some(Value::Boolean(b)),
+            _ => None,
+        }
+    }
+
+
+    fn with_int(self) -> Option<Value> {
+        match self {
+            Value::Int(i) => Some(Value::Int(i)),
+            _ => None,
+        }
+    }
+
+    fn with_long(self) -> Option<Value> {
+        match self {
+            Value::Int(i) => Some(Value::Long(i as i64)),
+            Value::Long(i) => Some(Value::Long(i)),
+            _ => None,
+        }
+    }
+
+    fn with_float(self) -> Option<Value> {
+        match self {
+            Value::Int(i) => Some(Value::Float(i as f32)),
+            Value::Long(i) => Some(Value::Float(i as f32)),
+            Value::Float(x) => Some(Value::Float(x)),
+            _ => None,
+        }
+    }
+
+    fn with_double(self) -> Option<Value> {
+        match self {
+            Value::Int(i) => Some(Value::Double(i as f64)),
+            Value::Long(i) => Some(Value::Double(i as f64)),
+            Value::Float(x) => Some(Value::Double(x as f64)),
+            Value::Double(x) => Some(Value::Double(x)),
+            _ => None,
+        }
+    }
+
+    fn with_bytes(self) -> Option<Value> {
+        match self {
+            Value::Bytes(bytes)
+            | Value::Fixed(_, bytes) => Some(Value::Bytes(bytes)),
+            Value::String(s) => Some(Value::Bytes(s.into_bytes())),
+            _ => None,
+        }
+    }
+
+    fn with_string(self) -> Option<Value> {
+        match self {
+            Value::String(s) => Some(Value::String(s)),
+            Value::Bytes(bytes)
+            | Value::Fixed(_, bytes) => String::from_utf8(bytes).ok().map(Value::String),
+            _ => None,
+        }
+    }
+
+    fn with_array(self, schema: &Schema) -> Option<Value> {
+        match self {
+            Value::Array(items) =>
+                items.into_iter()
+                    .map(|item| item.with_schema(schema))
+                    .collect::<Option<_>>()
+                    .map(Value::Array),
+            _ => None,
+        }
+    }
+
+    fn with_map(self, schema: &Schema) -> Option<Value> {
+        match self {
+            Value::Map(items) =>
+                items.into_iter()
+                    .map(|(key, value)| value.with_schema(schema).map(|v| (key, v)))
+                    .collect::<Option<_>>()
+                    .map(Value::Map),
+            _ => None,
+        }
+    }
+
+    fn with_union(self, schema: &Schema) -> Option<Value> {
+        match self {
+            Value::Union(None) => Some(Value::Union(None)),
+            Value::Union(Some(inner)) => (*inner).with_schema(schema).map(|i| Value::Union(Some(Box::new(i)))),
+            value => value.with_schema(schema),
+        }
+    }
+
+    fn with_enum(self, symbols: &Vec<String>) -> Option<Value> {
+        // TODO Value::Enum
+        match self {
+            Value::Int(i) if i >= 0 && i < symbols.len() as i32 => Some(Value::Int(i)),
+            _ => None,
+        }
+    }
+
+    fn with_fixed(self, size: usize) -> Option<Value> {
+        match self {
+            Value::Fixed(s, bytes) => {
+                if s == size {
+                    Some(Value::Fixed(size, bytes))
+                } else {
+                    None
+                }
+            },
+            Value::String(s) => {
+                if s.as_bytes().len() == size {
+                    Some(Value::Fixed(size, s.into_bytes()))
+                } else {
+                    None
+                }
+            },
+            Value::Bytes(bytes) => {
+                if bytes.len() == size {
+                    Some(Value::Fixed(size, bytes))
+                } else {
+                    None
+                }
+            },
+            _ => None,
+        }
+    }
+
+    fn with_record(self, rschema: &RecordSchema) -> Option<Value> {
+        match self {
+            Value::Record(mut items) => {
+                // Fill in defaults if needed
+                for field in rschema.fields.iter() {
+                    if !items.contains_key(&field.name) {
+                        if let Some(default) = field.default.clone() {
+                            items.insert(field.name.clone(), default.avro());
+                        } else {
+                            return None
+                        }
+                    }
+                }
+
+                // Remove fields that do not exist
+                let lookup = rschema.lookup();
+                let items = items.into_iter()
+                    .filter_map(|(key, value)| lookup.get::<str>(&key).map(|_| (key, value)))
+                    .collect::<HashMap<_, _>>();
+
+                Some(Value::Record(items))
+            },
+            _ => None,
         }
     }
 }

@@ -11,19 +11,21 @@ use de::decode::decode;
 use schema::Schema;
 use types::Value;
 
-pub struct Reader<R> {
+pub struct Reader<'a, R> {
     reader: R,
-    schema: Schema,
+    schema: &'a Schema,
+    header_schema: Schema,
     codec: Codec,
     marker: [u8; 16],
     items: VecDeque<Value>,
 }
 
-impl<R: Read> Reader<R> {
-    pub fn new(reader: R) -> Reader<R> {
+impl<'a, R: Read> Reader<'a, R> {
+    pub fn new(schema: &'a Schema, reader: R) -> Reader<'a, R> {
         let mut reader = Reader {
             reader: reader,
-            schema: Schema::Null,
+            schema: schema,
+            header_schema: Schema::Null,
             codec: Codec::Null,
             marker: [0u8; 16],
             items: VecDeque::new(),
@@ -56,7 +58,7 @@ impl<R: Read> Reader<R> {
                 .and_then(|json| Schema::parse(&json).ok());
 
             if let Some(schema) = schema {
-                self.schema = schema
+                self.header_schema = schema
             } else {
                 return Err(err_msg("unable to parse schema"))
             }
@@ -101,7 +103,12 @@ impl<R: Read> Reader<R> {
 
                 self.items.clear();
                 for _ in 0..block_len {
-                    self.items.push_back(decode(&self.schema, &mut &decompressed[..])?);
+                    let item = decode(&self.header_schema, &mut &decompressed[..])?;
+
+                    if let Some(item) = item.with_schema(self.schema) {
+                        self.items.push_back(item);
+                        // self.items.push_back(decode(&self.header_schema, &mut &decompressed[..])?);
+                    }
                 }
 
                 return Ok(())
@@ -112,7 +119,7 @@ impl<R: Read> Reader<R> {
     }
 }
 
-impl<R: Read> Iterator for Reader<R> {
+impl<'a, R: Read> Iterator for Reader<'a, R> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {

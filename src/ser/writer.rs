@@ -78,7 +78,7 @@ impl<'a, W: Write> Writer<'a, W> {
     {
         let mut num_values = 0;
         let mut stream = values
-            .map(|value| value.avro().encode(self.schema))
+            .map(|value| value.avro().encode(self.schema))  // TODO with_schema
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| err_msg("value does not match given schema"))?
             .into_iter()
