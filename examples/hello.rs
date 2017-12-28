@@ -3,15 +3,16 @@ extern crate serde;
 #[macro_use] extern crate serde_derive;
 
 use avro::Codec;
+use avro::de::from_value;
 use avro::reader::Reader;
 use avro::schema::Schema;
 use avro::types::Record;
 use avro::writer::Writer;
 
-#[derive(Serialize)]
-struct Test<'a> {
+#[derive(Debug, Deserialize, Serialize)]
+struct Test {
     a: i64,
-    b: &'a str,
+    b: String,
 }
 
 fn main() {
@@ -39,7 +40,7 @@ fn main() {
 
     let test = Test {
         a: 27,
-        b: "foo",
+        b: "foo".to_owned(),
     };
 
     writer.append_ser(test).unwrap();
@@ -48,6 +49,6 @@ fn main() {
     let reader = Reader::new(&input[..]);
 
     for record in reader {
-        println!("{:?}", record);
+        println!("{:?}", from_value::<Test>(&record));
     }
 }
