@@ -7,7 +7,7 @@ use std::rc::Rc;
 use serde::ser::{self, Error as SerdeError, Serialize};
 
 use schema::{RecordSchema, Schema};
-use types::{Record, Value};
+use types::{Record, ToAvro, Value};
 
 #[derive(Clone)]
 pub struct Serializer<'a> {
@@ -499,6 +499,10 @@ impl<'a> Serialize for Record<'a> {
         for field in self.rschema.fields.iter() {
             if let Some(value) = self.fields.get(&field.name) {
                 sseq.serialize_field("", value)?;
+            } else if let Some(ref default) = field.default {
+                sseq.serialize_field("", &default.clone().avro())?;
+            } else {
+                return Err(S::Error::custom("missing field when serializing struct"))
             }
         }
 

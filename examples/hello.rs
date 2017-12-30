@@ -20,8 +20,8 @@ fn main() {
             "type": "record",
             "name": "test",
             "fields": [
-                {"name": "a", "type": "long"},
-                {"name": "b", "type": "string", "default": "alo"}
+                {"name": "a", "type": "long", "default": 42},
+                {"name": "b", "type": "string"}
             ]
         }
     "#;
@@ -31,8 +31,8 @@ fn main() {
     println!("{:?}", schema);
 
     let mut record = Record::new(&schema).unwrap();
-    record.put("a", 27);
-    // record.put("b", "foo");
+    // record.put("a", 27);
+    record.put("b", "foo");
 
     let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
     writer.append(record).unwrap();
