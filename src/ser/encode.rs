@@ -187,7 +187,7 @@ impl EncodeAvro for Value {
             Value::Union(option) => option.encode(schema),
             Value::Array(items) => items.encode(schema),
             Value::Map(items) => items.encode(schema),
-            Value::Record(mut items) => {
+            Value::Record(mut items, _) => {
                 match schema {
                     &Schema::Record(ref record_schema) =>
                         record_schema.fields

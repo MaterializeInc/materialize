@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use serde_json::Value as JsonValue;
 
@@ -18,7 +19,7 @@ pub enum Value {
     Union(Option<Box<Value>>),
     Array(Vec<Value>),
     Map(HashMap<String, Value>),
-    Record(HashMap<String, Value>),
+    Record(HashMap<String, Value>, Rc<RecordSchema>),
 }
 
 pub trait ToAvro {
@@ -98,23 +99,18 @@ impl<T> ToAvro for Box<T> where T: ToAvro {
 
 #[derive(Debug)]
 pub struct Record<'a> {
+    pub rschema: Rc<RecordSchema>,
     lookup: Option<HashMap<&'a str, usize>>,
-    fields: HashMap<String, Value>,
+    pub fields: HashMap<String, Value>,
 }
 
 impl<'a> Record<'a> {
-    pub fn new() -> Record<'a> {
-        Record {
-            lookup: None,
-            fields: HashMap::new(),
-        }
-    }
-
-    pub fn with_schema(schema: &'a Schema) -> Option<Record<'a>> {
+    pub fn new(schema: &'a Schema) -> Option<Record<'a>> {
         match schema {
-            &Schema::Record(ref record_schema) => {
+            &Schema::Record(ref rschema) => {
                 Some(Record {
-                    lookup: Some(record_schema.lookup()),
+                    rschema: rschema.clone(),
+                    lookup: Some(rschema.lookup()),
                     fields: HashMap::new(),
                 })
             },
@@ -135,7 +131,8 @@ impl<'a> Record<'a> {
 
 impl<'a> ToAvro for Record<'a> {
     fn avro(self) -> Value {
-        Value::Record(self.fields)
+        // TODO add defaults?
+        Value::Record(self.fields, self.rschema)
     }
 }
 
@@ -174,7 +171,7 @@ impl Value {
             &Schema::Array(ref inner) => self.with_array(inner),
             &Schema::Map(ref inner) => self.with_map(inner),
             &Schema::Union(ref inner) => self.with_union(inner),
-            &Schema::Record(ref rschema) => self.with_record(rschema),
+            &Schema::Record(ref rschema) => self.with_record(rschema.clone()),
             &Schema::Enum { ref symbols, .. } => self.with_enum(symbols),
             &Schema::Fixed { ref size, .. } => self.with_fixed(*size),
         }
@@ -312,9 +309,9 @@ impl Value {
         }
     }
 
-    fn with_record(self, rschema: &RecordSchema) -> Option<Value> {
+    fn with_record(self, rschema: Rc<RecordSchema>) -> Option<Value> {
         match self {
-            Value::Record(mut items) => {
+            Value::Record(mut items, _) => {
                 // Fill in defaults if needed
                 for field in rschema.fields.iter() {
                     if !items.contains_key(&field.name) {
@@ -332,7 +329,7 @@ impl Value {
                     .filter_map(|(key, value)| lookup.get::<str>(&key).map(|_| (key, value)))
                     .collect::<HashMap<_, _>>();
 
-                Some(Value::Record(items))
+                Some(Value::Record(items, rschema.clone()))
             },
             _ => None,
         }

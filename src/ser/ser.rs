@@ -2,12 +2,14 @@ use std::collections::HashMap;
 use std::fmt;
 use std::error::{self, Error as StdError};
 use std::iter::once;
+use std::rc::Rc;
 
 use serde::ser::{self, Error as SerdeError, Serialize};
 
 use schema::{RecordSchema, Schema};
-use types::Value;
+use types::{Record, Value};
 
+#[derive(Clone)]
 pub struct Serializer<'a> {
     schema: &'a Schema,
 }
@@ -23,10 +25,11 @@ pub struct MapSerializer<'a> {
     values: Vec<Value>,
 }
 
-pub struct StructSerializer<'a> {
-    rschema: &'a RecordSchema,
-    lookup: HashMap<&'a str, usize>,
+pub struct StructSerializer {
+    rschema: Rc<RecordSchema>,
+    // lookup: HashMap<&'a str, usize>,  TODO
     items: HashMap<String, Value>,
+    index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,12 +94,12 @@ impl<'a> MapSerializer<'a> {
     }
 }
 
-impl<'a> StructSerializer<'a> {
-    pub fn new(rschema: &'a RecordSchema, len: usize) -> StructSerializer<'a> {
+impl StructSerializer {
+    pub fn new(rschema: Rc<RecordSchema>, len: usize) -> StructSerializer {
         StructSerializer {
-            rschema: rschema,
-            lookup: rschema.lookup(),
+            rschema: rschema.clone(),
             items: HashMap::with_capacity(len),
+            index: 0,
         }
     }
 }
@@ -109,8 +112,8 @@ impl<'a, 'b> ser::Serializer for &'b mut Serializer<'a> {
     type SerializeTupleStruct = SeqSerializer<'a>;
     type SerializeTupleVariant = SeqSerializer<'a>;
     type SerializeMap = MapSerializer<'a>;
-    type SerializeStruct = StructSerializer<'a>;
-    type SerializeStructVariant = StructSerializer<'a>;
+    type SerializeStruct = StructSerializer;
+    type SerializeStructVariant = StructSerializer;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
         match self.schema {
@@ -286,7 +289,7 @@ impl<'a, 'b> ser::Serializer for &'b mut Serializer<'a> {
 
     fn serialize_struct(self, _: &'static str, len: usize) -> Result<Self::SerializeStruct, Self::Error> {
         match self.schema {
-            &Schema::Record(ref rschema) => Ok(StructSerializer::new(rschema, len)),
+            &Schema::Record(ref rschema) => Ok(StructSerializer::new(rschema.clone(), len)),
             _ => Err(Error::custom("schema is not record")),
         }
     }
@@ -317,12 +320,11 @@ impl<'a> ser::SerializeTuple for SeqSerializer<'a> {
 
     fn serialize_element<T: ? Sized>(&mut self, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        self.items.push(value.serialize(&mut self.serializer)?);
-        Ok(())
+        ser::SerializeSeq::serialize_element(self, value)
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(Value::Array(self.items))
+        ser::SerializeSeq::end(self)
     }
 }
 
@@ -332,12 +334,11 @@ impl<'a> ser::SerializeTupleStruct for SeqSerializer<'a> {
 
     fn serialize_field<T: ? Sized>(&mut self, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        self.items.push(value.serialize(&mut self.serializer)?);
-        Ok(())
+        ser::SerializeSeq::serialize_element(self, value)
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(Value::Array(self.items))
+        ser::SerializeSeq::end(self)
     }
 }
 
@@ -389,16 +390,24 @@ impl<'a> ser::SerializeMap for MapSerializer<'a> {
     }
 }
 
-impl<'a> ser::SerializeStruct for StructSerializer<'a> {
+impl ser::SerializeStruct for StructSerializer {
     type Ok = Value;
     type Error = Error;
 
-    fn serialize_field<T: ? Sized>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error> where
+    fn serialize_field<T: ? Sized>(&mut self, _: &'static str, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        match self.lookup.get(key).and_then(|&i| self.rschema.fields.get(i)) {
+        let to_insert = match self.rschema.fields.get(self.index) {
             Some(ref field) => {
                 let v = value.serialize(&mut Serializer::new(&field.schema))?;
-                self.items.insert(key.to_owned(), v);
+                Some((field.name.to_owned(), v))
+            },
+            None => None,
+        };
+
+        match to_insert {
+            Some((key, value)) => {
+                self.index += 1;
+                self.items.insert(key, value);
                 Ok(())
             },
             None => Err(Error::custom("struct field not found in schema")),
@@ -406,11 +415,12 @@ impl<'a> ser::SerializeStruct for StructSerializer<'a> {
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(Value::Record(self.items))
+        // TODO: index == rschema.fields.len()
+        Ok(Value::Record(self.items, self.rschema))
     }
 }
 
-impl<'a> ser::SerializeStructVariant for StructSerializer<'a> {
+impl ser::SerializeStructVariant for StructSerializer {
     type Ok = Value;
     type Error = Error;
 
@@ -424,10 +434,9 @@ impl<'a> ser::SerializeStructVariant for StructSerializer<'a> {
     }
 }
 
-/*
 impl Serialize for Value {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
-        S: SerdeSerializer {
+        S: ser::Serializer {
         match self {
             &Value::Null => serializer.serialize_unit(),
             &Value::Boolean(b) => serializer.serialize_bool(b),
@@ -463,17 +472,36 @@ impl Serialize for Value {
                 &Some(ref item) => serializer.serialize_some(item),
                 &None => serializer.serialize_none(),
             },
-            &Value::Record(ref items) => {
+            &Value::Record(ref items, ref rschema) => {
                 use serde::ser::SerializeStruct;
 
                 let mut sseq = serializer.serialize_struct("", items.len())?;
 
-                // sseq.serialize_field expects &'static str as field name
-                // Value::Record has String field name :(
+                for field in rschema.fields.iter() {
+                    if let Some(value) = items.get(&field.name) {
+                        sseq.serialize_field("", value)?;
+                    }
+                }
 
-                mseq.end()
+                sseq.end()
             }
         }
     }
 }
-*/
+
+impl<'a> Serialize for Record<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
+        S: ser::Serializer {
+        use serde::ser::SerializeStruct;
+
+        let mut sseq = serializer.serialize_struct("", self.fields.len())?;
+
+        for field in self.rschema.fields.iter() {
+            if let Some(value) = self.fields.get(&field.name) {
+                sseq.serialize_field("", value)?;
+            }
+        }
+
+        sseq.end()
+    }
+}

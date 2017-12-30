@@ -1,5 +1,4 @@
 extern crate avro;
-extern crate serde;
 #[macro_use] extern crate serde_derive;
 
 use avro::Codec;
@@ -22,7 +21,7 @@ fn main() {
             "name": "test",
             "fields": [
                 {"name": "a", "type": "long"},
-                {"name": "b", "type": "string"}
+                {"name": "b", "type": "string", "default": "alo"}
             ]
         }
     "#;
@@ -31,9 +30,9 @@ fn main() {
 
     println!("{:?}", schema);
 
-    let mut record = Record::with_schema(&schema).unwrap();
+    let mut record = Record::new(&schema).unwrap();
     record.put("a", 27);
-    record.put("b", "foo");
+    // record.put("b", "foo");
 
     let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
     writer.append(record).unwrap();
@@ -43,7 +42,7 @@ fn main() {
         b: "foo".to_owned(),
     };
 
-    writer.append_ser(test).unwrap();
+    writer.append(test).unwrap();
 
     let input = writer.into_inner();
     let reader = Reader::new(&schema, &input[..]);

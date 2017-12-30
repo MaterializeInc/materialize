@@ -56,7 +56,7 @@ impl<'a, W: Write> Writer<'a, W> {
                self.append_marker()?)
     }
 
-    pub fn append<V: ToAvro>(&mut self, value: V) -> Result<usize, Error> {
+    pub fn append<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
         self.extend(once(value))
     }
 
@@ -73,12 +73,15 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
-    pub fn extend<I, V: ToAvro>(&mut self, values: I) -> Result<usize, Error>
-        where I: Iterator<Item=V>
+    pub fn extend<I, S: Serialize>(&mut self, values: I) -> Result<usize, Error>
+        where I: Iterator<Item=S>
     {
         let mut num_values = 0;
+        /*
+        https://github.com/rust-lang/rfcs/issues/811 :(
         let mut stream = values
-            .map(|value| value.avro().encode(self.schema))  // TODO with_schema
+            .filter_map(|value| value.serialize(&mut self.serializer).ok())  // TODO not filter
+            .map(|value| value.encode(self.schema))  // TODO with_schema
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| err_msg("value does not match given schema"))?
             .into_iter()
@@ -86,6 +89,24 @@ impl<'a, W: Write> Writer<'a, W> {
                 num_values += 1;
                 acc.extend(stream); acc
             });
+        */
+
+        let mut v = Vec::new();
+        for value in values {
+            match value.serialize(&mut self.serializer) {
+                Ok(s) => match s.encode(self.schema) {
+                    Some(stream) => {
+                        v.push(stream);
+                        num_values += 1;
+                    },
+                    None => return Err(err_msg("value does not match schema")),
+                },
+                Err(e) => Err(e)?,
+            }
+        }
+
+        let mut stream: Vec<u8> = v.iter()
+            .fold(Vec::new(), |mut acc, s| { acc.extend(s); acc });
 
         stream = self.codec.compress(stream)?;
 
@@ -98,11 +119,6 @@ impl<'a, W: Write> Writer<'a, W> {
             self.append_raw(&Schema::Long, stream.len())? +
             self.writer.write(stream.as_ref())? +
             self.append_marker()?)
-    }
-
-    pub fn append_ser<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
-        let value = value.serialize(&mut self.serializer)?;
-        self.append(value)
     }
 
     pub fn into_inner(self) -> W {
