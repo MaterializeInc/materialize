@@ -44,6 +44,10 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
+    pub fn schema(&self) -> &'a Schema {
+        self.schema
+    }
+
     pub fn header(&mut self) -> Result<usize, Error> {
         let magic_schema = Schema::Fixed { name: Name::new("Magic"), size: 4 };
         let meta_schema = &Schema::Map(Rc::new(Schema::Bytes));

@@ -489,7 +489,7 @@ impl Serialize for Value {
     }
 }
 
-impl<'a> Serialize for Record<'a> {
+impl Serialize for Record {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
         S: ser::Serializer {
         use serde::ser::SerializeStruct;

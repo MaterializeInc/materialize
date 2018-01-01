@@ -30,11 +30,12 @@ fn main() {
 
     println!("{:?}", schema);
 
-    let mut record = Record::new(&schema).unwrap();
+    let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
+
+    let mut record = Record::new(writer.schema()).unwrap();
     // record.put("a", 27);
     record.put("b", "foo");
 
-    let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
     writer.append(record).unwrap();
 
     let test = Test {

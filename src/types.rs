@@ -98,19 +98,19 @@ impl<T> ToAvro for Box<T> where T: ToAvro {
 }
 
 #[derive(Debug)]
-pub struct Record<'a> {
+pub struct Record {
     pub rschema: Rc<RecordSchema>,
-    lookup: Option<HashMap<&'a str, usize>>,
     pub fields: HashMap<String, Value>,
+    lookup: HashMap<String, usize>,
 }
 
-impl<'a> Record<'a> {
-    pub fn new(schema: &'a Schema) -> Option<Record<'a>> {
+impl Record {
+    pub fn new(schema: &Schema) -> Option<Record> {
         match schema {
             &Schema::Record(ref rschema) => {
                 Some(Record {
                     rschema: rschema.clone(),
-                    lookup: Some(rschema.lookup()),
+                    lookup: rschema.lookup(),
                     fields: HashMap::new(),
                 })
             },
@@ -118,18 +118,33 @@ impl<'a> Record<'a> {
         }
     }
 
+    pub fn from_value(value: &Value) -> Option<Record> {
+        match value {
+            &Value::Record(ref fields, ref rschema) => {
+                Some(Record {
+                    rschema: rschema.clone(),
+                    lookup: rschema.lookup(),
+                    fields: fields.clone(),
+                })
+            },
+            _ => None,
+        }
+    }
+
     pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
-        if let Some(ref lookup) = self.lookup {
-            if lookup.get(field).is_none() {
-                return
-            }
+        if self.lookup.get(field).is_none() {
+            return
         }
 
         self.fields.insert(field.to_owned(), value.avro());
     }
+
+    pub fn schema(&self) -> Schema {
+        Schema::Record(self.rschema.clone())
+    }
 }
 
-impl<'a> ToAvro for Record<'a> {
+impl ToAvro for Record {
     fn avro(self) -> Value {
         // TODO add defaults?
         Value::Record(self.fields, self.rschema)
