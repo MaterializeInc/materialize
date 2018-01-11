@@ -7,7 +7,7 @@ use failure::{Error, err_msg};
 use serde_json::from_slice;
 
 use Codec;
-use de::decode::decode;
+use decode::decode;
 use schema::Schema;
 use types::Value;
 

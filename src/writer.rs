@@ -9,9 +9,9 @@ use serde::Serialize;
 use serde_json;
 
 use Codec;
-use ser::encode::EncodeAvro;
+use encode::EncodeAvro;
 use schema::{Name, Schema};
-use ser::ser::Serializer;
+use ser::Serializer;
 use types::{ToAvro, Value};
 
 pub struct Writer<'a, W> {
