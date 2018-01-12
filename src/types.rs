@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use schema::{RecordSchema, Schema};
@@ -46,6 +47,12 @@ to_avro!(String, Value::String);
 impl ToAvro for () {
     fn avro(self) -> Value {
         Value::Null
+    }
+}
+
+impl ToAvro for usize {
+    fn avro(self) -> Value {
+        Value::Long(self as i64)
     }
 }
 
@@ -146,7 +153,6 @@ impl Record {
 
 impl ToAvro for Record {
     fn avro(self) -> Value {
-        // TODO add defaults?
         Value::Record(self.fields, self.rschema)
     }
 }

@@ -34,7 +34,7 @@ pub fn zig_i64(n: i64) -> Vec<u8> {
 pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, Error> {
     let i = zag_i64(reader)?;
     if i < i32::min_value() as i64 || i > i32::max_value() as i64 {
-        Err(err_msg("int out of scope"))
+        Err(err_msg("int out of range"))
     } else {
         Ok(i as i32)
     }

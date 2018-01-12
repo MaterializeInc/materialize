@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::iter::once;
-use std::rc::Rc;
 
 use failure::{Error, err_msg};
 use rand::random;
@@ -9,8 +8,8 @@ use serde::Serialize;
 use serde_json;
 
 use Codec;
-use encode::EncodeAvro;
-use schema::{Name, Schema};
+use encode::encode;
+use schema::Schema;
 use ser::Serializer;
 use types::{ToAvro, Value};
 
@@ -49,15 +48,13 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn header(&mut self) -> Result<usize, Error> {
-        let magic_schema = Schema::Fixed { name: Name::new("Magic"), size: 4 };
-        let meta_schema = &Schema::Map(Rc::new(Schema::Bytes));
         let mut metadata = HashMap::new();
         metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()));
         metadata.insert("avro.codec", self.codec.avro());
 
-        Ok(self.append_raw(&magic_schema, &['O' as u8, 'b' as u8, 'j' as u8, 1u8][..])? +
-               self.append_raw(&meta_schema, metadata.avro())? +
-               self.append_marker()?)
+        Ok(self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))? +
+            self.append_raw(metadata.avro())? +
+            self.append_marker()?)
     }
 
     pub fn append<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
@@ -70,11 +67,8 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(self.writer.write(&self.marker)?)
     }
 
-    fn append_raw<V>(&mut self, schema: &Schema, value: V) -> Result<usize, Error> where V: EncodeAvro {
-        match value.encode(schema) {
-            Some(stream) => Ok(self.writer.write(stream.as_ref())?),
-            None => Err(err_msg("value does not match given schema")),
-        }
+    fn append_raw(&mut self, value: Value) -> Result<usize, Error> {
+        Ok(self.writer.write(encode(value).as_ref())?)
     }
 
     pub fn extend<I, S: Serialize>(&mut self, values: I) -> Result<usize, Error>
@@ -95,12 +89,12 @@ impl<'a, W: Write> Writer<'a, W> {
             });
         */
 
-        let mut v = Vec::new();
+        let mut stream = Vec::with_capacity(values.size_hint().0);
         for value in values {
             match value.serialize(&mut self.serializer) {
-                Ok(s) => match s.encode(self.schema) {
-                    Some(stream) => {
-                        v.push(stream);
+                Ok(s) => match s.with_schema(self.schema) {
+                    Some(value) => {
+                        stream.extend(encode(value));
                         num_values += 1;
                     },
                     None => return Err(err_msg("value does not match schema")),
@@ -109,9 +103,6 @@ impl<'a, W: Write> Writer<'a, W> {
             }
         }
 
-        let mut stream: Vec<u8> = v.iter()
-            .fold(Vec::new(), |mut acc, s| { acc.extend(s); acc });
-
         stream = self.codec.compress(stream)?;
 
         if !self.has_header {
@@ -119,8 +110,8 @@ impl<'a, W: Write> Writer<'a, W> {
             self.has_header = true;
         }
 
-        Ok(self.append_raw(&Schema::Long, num_values)? +
-            self.append_raw(&Schema::Long, stream.len())? +
+        Ok(self.append_raw(num_values.avro())? +
+            self.append_raw(stream.len().avro())? +
             self.writer.write(stream.as_ref())? +
             self.append_marker()?)
     }
