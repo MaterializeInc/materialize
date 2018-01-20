@@ -15,9 +15,9 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             let mut buf = [0u8; 1];
             reader.read_exact(&mut buf[..])?;
 
-            match buf {
-                [0u8] => Ok(Value::Boolean(false)),
-                [1u8] => Ok(Value::Boolean(true)),
+            match buf[0] {
+                0u8 => Ok(Value::Boolean(false)),
+                1u8 => Ok(Value::Boolean(true)),
                 _ => Err(err_msg("not a bool")),
             }
         },
@@ -114,9 +114,9 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             let mut buf = [0u8; 1];
             reader.read_exact(&mut buf)?;
 
-            match buf {
-                [0u8] => Ok(Value::Union(None)),
-                [1u8] => decode(inner, reader),
+            match buf[0] {
+                0u8 => Ok(Value::Union(None)),
+                1u8 => decode(inner, reader),
                 _ => Err(err_msg("union index out of bounds")),
             }
         },

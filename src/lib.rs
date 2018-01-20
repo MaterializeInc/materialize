@@ -1,5 +1,3 @@
-#![feature(slice_patterns)]
-
 extern crate failure;
 extern crate libflate;
 extern crate rand;

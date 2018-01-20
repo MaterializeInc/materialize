@@ -276,6 +276,13 @@ impl Schema {
             .map(|schemas| Schema::Union(schemas))
         */
 
+        if items.len() == 2 && items[0] == Value::String("null".to_owned()) {
+            Schema::parse(&items[1]).map(|s| Schema::Union(Rc::new(s)))
+        } else {
+            Err(err_msg("Unions only support null and type"))
+        }
+
+        /*
         match items.as_slice() {
             // &[Value::String(ref null), ref x] | &[ref x, Value::String(ref null)] if null == "null" => {
             &[Value::String(ref null), ref x] if null == "null" => {
@@ -283,6 +290,7 @@ impl Schema {
             },
             _ => Err(err_msg("Unions only support null and type")),
         }
+        */
     }
 
     fn parse_fixed(complex: &Map<String, Value>) -> Result<Self, Error> {
