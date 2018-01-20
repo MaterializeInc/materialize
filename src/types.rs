@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use schema::{RecordSchema, Schema};
@@ -108,7 +107,7 @@ impl<T> ToAvro for Box<T> where T: ToAvro {
 pub struct Record {
     pub rschema: Rc<RecordSchema>,
     pub fields: HashMap<String, Value>,
-    lookup: HashMap<String, usize>,
+    // lookup: HashMap<String, usize>,
 }
 
 impl Record {
@@ -117,7 +116,7 @@ impl Record {
             &Schema::Record(ref rschema) => {
                 Some(Record {
                     rschema: rschema.clone(),
-                    lookup: rschema.lookup(),
+                    // lookup: rschema.lookup(),
                     fields: HashMap::new(),
                 })
             },
@@ -130,7 +129,7 @@ impl Record {
             &Value::Record(ref fields, ref rschema) => {
                 Some(Record {
                     rschema: rschema.clone(),
-                    lookup: rschema.lookup(),
+                    // lookup: rschema.lookup(),
                     fields: fields.clone(),
                 })
             },
@@ -139,7 +138,8 @@ impl Record {
     }
 
     pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
-        if self.lookup.get(field).is_none() {
+        let lookup = self.rschema.lookup();  // TODO
+        if lookup.get(field).is_none() {
             return
         }
 

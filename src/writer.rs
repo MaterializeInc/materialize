@@ -1,3 +1,5 @@
+extern crate serde;
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::iter::once;
@@ -57,8 +59,13 @@ impl<'a, W: Write> Writer<'a, W> {
             self.append_marker()?)
     }
 
-    pub fn append<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
+    pub fn append(&mut self, value: Value) -> Result<usize, Error> {
         self.extend(once(value))
+    }
+
+    pub fn append_ser<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
+        let _value = value.serialize(&mut self.serializer)?;
+        self.append(_value)
     }
 
     fn append_marker(&mut self) -> Result<usize, Error> {
@@ -71,8 +78,8 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(self.writer.write(encode(value).as_ref())?)
     }
 
-    pub fn extend<I, S: Serialize>(&mut self, values: I) -> Result<usize, Error>
-        where I: Iterator<Item=S>
+    pub fn extend<I>(&mut self, values: I) -> Result<usize, Error>
+        where I: Iterator<Item=Value>
     {
         let mut num_values = 0;
         /*
@@ -91,15 +98,12 @@ impl<'a, W: Write> Writer<'a, W> {
 
         let mut stream = Vec::with_capacity(values.size_hint().0);
         for value in values {
-            match value.serialize(&mut self.serializer) {
-                Ok(s) => match s.with_schema(self.schema) {
-                    Some(value) => {
-                        stream.extend(encode(value));
-                        num_values += 1;
-                    },
-                    None => return Err(err_msg("value does not match schema")),
+            match value.with_schema(self.schema) {
+                Some(value) => {
+                    stream.extend(encode(value));
+                    num_values += 1;
                 },
-                Err(e) => Err(e)?,
+                None => return Err(err_msg("value does not match schema")),
             }
         }
 

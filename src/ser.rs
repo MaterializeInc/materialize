@@ -7,7 +7,7 @@ use std::rc::Rc;
 use serde::ser::{self, Error as SerdeError, Serialize};
 
 use schema::{RecordSchema, Schema};
-use types::{Record, ToAvro, Value};
+use types::Value;
 
 #[derive(Clone)]
 pub struct Serializer<'a> {
@@ -27,9 +27,8 @@ pub struct MapSerializer<'a> {
 
 pub struct StructSerializer {
     rschema: Rc<RecordSchema>,
-    // lookup: HashMap<&'a str, usize>,  TODO
+    lookup: HashMap<String, usize>,
     items: HashMap<String, Value>,
-    index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,8 +97,8 @@ impl StructSerializer {
     pub fn new(rschema: Rc<RecordSchema>, len: usize) -> StructSerializer {
         StructSerializer {
             rschema: rschema.clone(),
+            lookup: rschema.lookup(),
             items: HashMap::with_capacity(len),
-            index: 0,
         }
     }
 }
@@ -394,9 +393,9 @@ impl ser::SerializeStruct for StructSerializer {
     type Ok = Value;
     type Error = Error;
 
-    fn serialize_field<T: ? Sized>(&mut self, _: &'static str, value: &T) -> Result<(), Self::Error> where
+    fn serialize_field<T: ? Sized>(&mut self, name: &'static str, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        let to_insert = match self.rschema.fields.get(self.index) {
+        let to_insert = match self.lookup.get(name).and_then(|&index| self.rschema.fields.get(index)) {
             Some(ref field) => {
                 let v = value.serialize(&mut Serializer::new(&field.schema))?;
                 Some((field.name.to_owned(), v))
@@ -404,13 +403,11 @@ impl ser::SerializeStruct for StructSerializer {
             None => None,
         };
 
-        match to_insert {
-            Some((key, value)) => {
-                self.index += 1;
-                self.items.insert(key, value);
-                Ok(())
-            },
-            None => Err(Error::custom("struct field not found in schema")),
+        if let Some((key, value)) = to_insert {
+            self.items.insert(key, value);
+            Ok(())
+        } else {
+            Err(Error::custom("struct field not found in schema"))
         }
     }
 
@@ -431,81 +428,5 @@ impl ser::SerializeStructVariant for StructSerializer {
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         unimplemented!()
-    }
-}
-
-impl Serialize for Value {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
-        S: ser::Serializer {
-        match self {
-            &Value::Null => serializer.serialize_unit(),
-            &Value::Boolean(b) => serializer.serialize_bool(b),
-            &Value::Int(i) => serializer.serialize_i32(i),
-            &Value::Long(i) => serializer.serialize_i64(i),
-            &Value::Float(x) => serializer.serialize_f32(x),
-            &Value::Double(x) => serializer.serialize_f64(x),
-            &Value::Bytes(ref bytes) => serializer.serialize_bytes(bytes.as_ref()),
-            &Value::String(ref s) => serializer.serialize_str(&s),
-            &Value::Fixed(_, ref bytes) => serializer.serialize_bytes(bytes.as_ref()),
-            &Value::Array(ref items) => {
-                use serde::ser::SerializeSeq;
-
-                let mut sseq = serializer.serialize_seq(Some(items.len()))?;
-                items.iter()
-                    .map(|item| sseq.serialize_element(item))
-                    .collect::<Result<Vec<()>, _>>()?;
-                sseq.end()
-            },
-            &Value::Map(ref items) => {
-                use serde::ser::SerializeMap;
-
-                let mut mseq = serializer.serialize_map(Some(items.len()))?;
-                items.iter()
-                    .map(|(key, value)| {
-                        mseq.serialize_key(key)?;
-                        mseq.serialize_value(value)
-                    })
-                    .collect::<Result<Vec<()>, _>>()?;
-                mseq.end()
-            },
-            &Value::Union(ref option) => match option {
-                &Some(ref item) => serializer.serialize_some(item),
-                &None => serializer.serialize_none(),
-            },
-            &Value::Record(ref items, ref rschema) => {
-                use serde::ser::SerializeStruct;
-
-                let mut sseq = serializer.serialize_struct("", items.len())?;
-
-                for field in rschema.fields.iter() {
-                    if let Some(value) = items.get(&field.name) {
-                        sseq.serialize_field("", value)?;
-                    }
-                }
-
-                sseq.end()
-            }
-        }
-    }
-}
-
-impl Serialize for Record {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
-        S: ser::Serializer {
-        use serde::ser::SerializeStruct;
-
-        let mut sseq = serializer.serialize_struct("", self.fields.len())?;
-
-        for field in self.rschema.fields.iter() {
-            if let Some(value) = self.fields.get(&field.name) {
-                sseq.serialize_field("", value)?;
-            } else if let Some(ref default) = field.default {
-                sseq.serialize_field("", &default.clone().avro())?;
-            } else {
-                return Err(S::Error::custom("missing field when serializing struct"))
-            }
-        }
-
-        sseq.end()
     }
 }
