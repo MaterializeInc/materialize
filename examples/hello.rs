@@ -36,14 +36,14 @@ fn main() {
     // record.put("a", 27);
     record.put("b", "foo");
 
-    writer.append(record.avro()).unwrap();
+    // writer.append(record.avro()).unwrap();
 
     let test = Test {
         a: 27,
         b: "foo".to_owned(),
     };
 
-    writer.append_ser(test).unwrap();
+    writer.append(test).unwrap();
 
     let input = writer.into_inner();
     let reader = Reader::new(&schema, &input[..]);

@@ -3,6 +3,7 @@ extern crate serde;
 use std::collections::HashMap;
 use std::io::Write;
 use std::iter::once;
+use std::rc::Rc;
 
 use failure::{Error, err_msg};
 use rand::random;
@@ -17,7 +18,7 @@ use types::{ToAvro, Value};
 
 pub struct Writer<'a, W> {
     schema: &'a Schema,
-    serializer: Serializer<'a>,
+    serializer: Serializer,
     writer: W,
     codec: Codec,
     marker: Vec<u8>,
@@ -37,7 +38,7 @@ impl<'a, W: Write> Writer<'a, W> {
 
         Writer {
             schema: schema,
-            serializer: Serializer::new(schema),
+            serializer: Serializer::new(),
             writer: writer,
             codec: codec,
             marker: marker,
@@ -50,22 +51,18 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn header(&mut self) -> Result<usize, Error> {
+        let metadata_schema = Schema::Map(Rc::new(Schema::Bytes));
         let mut metadata = HashMap::new();
         metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()));
         metadata.insert("avro.codec", self.codec.avro());
 
         Ok(self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))? +
-            self.append_raw(metadata.avro())? +
+            self.append_raw_schema(metadata.avro(), Some(&metadata_schema))? +
             self.append_marker()?)
     }
 
-    pub fn append(&mut self, value: Value) -> Result<usize, Error> {
+    pub fn append<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
         self.extend(once(value))
-    }
-
-    pub fn append_ser<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
-        let _value = value.serialize(&mut self.serializer)?;
-        self.append(_value)
     }
 
     fn append_marker(&mut self) -> Result<usize, Error> {
@@ -75,11 +72,15 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     fn append_raw(&mut self, value: Value) -> Result<usize, Error> {
-        Ok(self.writer.write(encode(value).as_ref())?)
+        self.append_raw_schema(value, None)
     }
 
-    pub fn extend<I>(&mut self, values: I) -> Result<usize, Error>
-        where I: Iterator<Item=Value>
+    fn append_raw_schema(&mut self, value: Value, schema: Option<&Schema>) -> Result<usize, Error> {
+        Ok(self.writer.write(encode(value, schema).as_ref())?)
+    }
+
+    pub fn extend<I, S: Serialize>(&mut self, values: I) -> Result<usize, Error>
+        where I: Iterator<Item=S>
     {
         let mut num_values = 0;
         /*
@@ -96,11 +97,11 @@ impl<'a, W: Write> Writer<'a, W> {
             });
         */
 
-        let mut stream = Vec::with_capacity(values.size_hint().0);
+        let mut stream = Vec::new();
         for value in values {
-            match value.with_schema(self.schema) {
+            match value.serialize(&mut self.serializer)?.with_schema(self.schema) {
                 Some(value) => {
-                    stream.extend(encode(value));
+                    stream.extend(encode(value, Some(self.schema)));
                     num_values += 1;
                 },
                 None => return Err(err_msg("value does not match schema")),

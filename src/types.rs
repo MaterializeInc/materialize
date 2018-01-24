@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use serde::{Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
 use schema::{RecordSchema, Schema};
@@ -19,7 +20,7 @@ pub enum Value {
     Union(Option<Box<Value>>),
     Array(Vec<Value>),
     Map(HashMap<String, Value>),
-    Record(HashMap<String, Value>, Rc<RecordSchema>),
+    Record(HashMap<String, Value>),
 }
 
 pub trait ToAvro {
@@ -51,7 +52,7 @@ impl ToAvro for () {
 
 impl ToAvro for usize {
     fn avro(self) -> Value {
-        Value::Long(self as i64)
+        (self as i64).avro()
     }
 }
 
@@ -124,9 +125,10 @@ impl Record {
         }
     }
 
+    /*
     pub fn from_value(value: &Value) -> Option<Record> {
         match value {
-            &Value::Record(ref fields, ref rschema) => {
+            &Value::Record(ref fields) => {
                 Some(Record {
                     rschema: rschema.clone(),
                     // lookup: rschema.lookup(),
@@ -136,6 +138,7 @@ impl Record {
             _ => None,
         }
     }
+    */
 
     pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
         let lookup = self.rschema.lookup();  // TODO
@@ -153,7 +156,7 @@ impl Record {
 
 impl ToAvro for Record {
     fn avro(self) -> Value {
-        Value::Record(self.fields, self.rschema)
+        Value::Record(self.fields)
     }
 }
 
@@ -332,7 +335,7 @@ impl Value {
 
     fn with_record(self, rschema: Rc<RecordSchema>) -> Option<Value> {
         match self {
-            Value::Record(mut items, _) => {
+            Value::Record(mut items) => {
                 // Fill in defaults if needed
                 for field in rschema.fields.iter() {
                     if !items.contains_key(&field.name) {
@@ -350,9 +353,18 @@ impl Value {
                     .filter_map(|(key, value)| lookup.get::<str>(&key).map(|_| (key, value)))
                     .collect::<HashMap<_, _>>();
 
-                Some(Value::Record(items, rschema.clone()))
+                Some(Value::Record(items))
             },
             _ => None,
         }
     }
 }
+
+/*
+impl Serialize for Value {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
+        S: Serializer {
+
+    }
+}
+*/

@@ -172,7 +172,7 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         visitor.visit_newtype_struct(self)
     }
 
-    fn deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value, Self::Error> where
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
         match self.input {
             &Value::Array(ref items) => {
@@ -205,7 +205,7 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
     fn deserialize_struct<V>(self, name: &'static str, fields: &'static [&'static str], visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
         match self.input {
-            &Value::Record(ref items, _) => visitor.visit_map(MapDeserializer::new(items)),
+            &Value::Record(ref items) => visitor.visit_map(MapDeserializer::new(items)),
             _ => Err(Error::custom("not a record")),
         }
     }
