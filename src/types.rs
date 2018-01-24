@@ -2,7 +2,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use serde::{Serialize, Serializer};
+use serde::ser::SerializeMap;
+use serde::ser::SerializeSeq;
+use serde::ser::SerializeStruct;
 use serde_json::Value as JsonValue;
+
 
 use schema::{RecordSchema, Schema};
 
@@ -37,12 +41,13 @@ macro_rules! to_avro(
     );
 );
 
-to_avro!(bool, Value::Boolean);
-to_avro!(i32, Value::Int);
-to_avro!(i64, Value::Long);
-to_avro!(f32, Value::Float);
-to_avro!(f64, Value::Double);
-to_avro!(String, Value::String);
+/*
+to_avro!(bool, Value::Boolean, Schema::Boolean);
+to_avro!(i32, Value::Int, Schema::Int);  // TODO: int to long/float/double, etc...
+to_avro!(i64, Value::Long, Schema::Long);
+to_avro!(f32, Value::Float, Schema::Float);
+to_avro!(f64, Value::Double, Schema::Double);
+to_avro!(String, Value::String, Schema::String);
 
 impl ToAvro for () {
     fn avro(self) -> Value {
@@ -57,20 +62,30 @@ impl ToAvro for usize {
 }
 
 impl<'a> ToAvro for &'a str {
-    fn avro(self) -> Value {
-        Value::String(self.to_owned())
+    fn avro(self, schema: &Schema) -> Option<Value> {
+        match schema {
+            &Schema::String => Some(Value::String(self.to_owned())),
+            _ => None,
+        }
     }
 }
 
 impl<'a> ToAvro for &'a [u8] {
-    fn avro(self) -> Value {
-        Value::Bytes(self.to_owned())
+    fn avro(self, schema: &Schema) -> Option<Value> {
+        match schema {
+            &Schema::Bytes => Some(Value::Bytes(self.to_owned())),
+            &Schema::Fixed { size, .. } if size == self.len() => Some(Value::Fixed(self.len(), self.to_owned())),
+            _ => None,
+        }
+
     }
 }
 
 impl<T> ToAvro for Option<T> where T: ToAvro {
-    fn avro(self) -> Value {
-        Value::Union(self.map(|v| Box::new(v.avro())))
+    fn avro(self, schema: &Schema) -> Option<Value> {
+        match schema {
+            &Schema::Union(ref inner) => Value::Union(self.map(|v| Box::new(v.avro(inner)))),
+        }
     }
 }
 
@@ -101,6 +116,65 @@ impl ToAvro for Value {
 impl<T> ToAvro for Box<T> where T: ToAvro {
     fn avro(self) -> Value {
         (*self).avro()
+    }
+}
+*/
+
+impl<S: Serialize> ToAvro for S {
+    fn avro(self) -> Value {
+        use ser::Serializer;
+
+        self.serialize(&mut Serializer::new()).unwrap()
+    }
+}
+
+impl Serialize for Value {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
+        S: Serializer {
+        match self {
+            &Value::Null => serializer.serialize_unit(),
+            &Value::Boolean(b) => serializer.serialize_bool(b),
+            &Value::Int(i) => serializer.serialize_i32(i),
+            &Value::Long(i) => serializer.serialize_i64(i),
+            &Value::Float(x) => serializer.serialize_f32(x),
+            &Value::Double(x) => serializer.serialize_f64(x),
+            &Value::Bytes(ref bytes) => serializer.serialize_bytes(bytes),
+            &Value::String(ref string) => serializer.serialize_str(string),
+            &Value::Fixed(_, ref bytes) => serializer.serialize_bytes(bytes),
+            &Value::Union(None) => serializer.serialize_none(),
+            &Value::Union(Some(ref inner)) => serializer.serialize_some(inner),
+            &Value::Array(ref items) => {
+                let mut seq = serializer.serialize_seq(Some(items.len()))?;
+
+                for item in items.iter() {
+                    seq.serialize_element(item)?;
+                }
+
+                seq.end()
+            },
+            &Value::Map(ref items) => {
+                let mut map = serializer.serialize_map(Some(items.len()))?;
+
+                for (key, value) in items.iter() {
+                    map.serialize_key(key)?;
+                    map.serialize_value(value)?;
+                }
+
+                map.end()
+            },
+            &Value::Record(ref fields) => {
+                let record = serializer.serialize_struct("", fields.len())?;
+
+                /*
+                grblrbkdjkg serde
+                for (field, value) in fields {
+                    record.serialize_field(field, value)?;
+                }
+                */
+
+                record.end()
+            },
+        }
     }
 }
 
@@ -160,6 +234,7 @@ impl ToAvro for Record {
     }
 }
 
+/*
 impl ToAvro for JsonValue {
     fn avro(self) -> Value {
         match self {
@@ -180,6 +255,7 @@ impl ToAvro for JsonValue {
         }
     }
 }
+*/
 
 impl Value {
     pub fn with_schema(self, schema: &Schema) -> Option<Value> {

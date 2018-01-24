@@ -36,7 +36,7 @@ fn main() {
     // record.put("a", 27);
     record.put("b", "foo");
 
-    // writer.append(record.avro()).unwrap();
+    writer.append(record).unwrap();
 
     let test = Test {
         a: 27,

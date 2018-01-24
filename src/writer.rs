@@ -61,7 +61,7 @@ impl<'a, W: Write> Writer<'a, W> {
             self.append_marker()?)
     }
 
-    pub fn append<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
+    pub fn append<T: ToAvro>(&mut self, value: T) -> Result<usize, Error> {
         self.extend(once(value))
     }
 
@@ -79,8 +79,8 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(self.writer.write(encode(value, schema).as_ref())?)
     }
 
-    pub fn extend<I, S: Serialize>(&mut self, values: I) -> Result<usize, Error>
-        where I: Iterator<Item=S>
+    pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
+        where I: Iterator<Item=T>
     {
         let mut num_values = 0;
         /*
@@ -99,7 +99,7 @@ impl<'a, W: Write> Writer<'a, W> {
 
         let mut stream = Vec::new();
         for value in values {
-            match value.serialize(&mut self.serializer)?.with_schema(self.schema) {
+            match value.avro().with_schema(self.schema) {
                 Some(value) => {
                     stream.extend(encode(value, Some(self.schema)));
                     num_values += 1;
