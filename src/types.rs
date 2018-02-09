@@ -1,12 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use serde::{Serialize, Serializer};
-use serde::ser::SerializeMap;
-use serde::ser::SerializeSeq;
-use serde::ser::SerializeStruct;
 use serde_json::Value as JsonValue;
-
 
 use schema::{RecordSchema, Schema};
 
@@ -24,13 +19,91 @@ pub enum Value {
     Union(Option<Box<Value>>),
     Array(Vec<Value>),
     Map(HashMap<String, Value>),
-    Record(HashMap<String, Value>),
+    Record(Vec<(String, Value)>),
 }
 
 pub trait ToAvro {
     fn avro(self) -> Value;
 }
 
+macro_rules! to_avro(
+    ($t:ty, $v:expr) => (
+        impl ToAvro for $t {
+            fn avro(self) -> Value {
+                $v(self)
+            }
+        }
+    );
+);
+
+to_avro!(bool, Value::Boolean);
+to_avro!(i32, Value::Int);
+to_avro!(i64, Value::Long);
+to_avro!(f32, Value::Float);
+to_avro!(f64, Value::Double);
+to_avro!(String, Value::String);
+
+impl ToAvro for () {
+    fn avro(self) -> Value {
+        Value::Null
+    }
+}
+
+impl ToAvro for usize {
+    fn avro(self) -> Value {
+        (self as i64).avro()
+    }
+}
+
+impl<'a> ToAvro for &'a str {
+    fn avro(self) -> Value {
+        Value::String(self.to_owned())
+    }
+}
+
+impl<'a> ToAvro for &'a [u8] {
+    fn avro(self) -> Value {
+        Value::Bytes(self.to_owned())
+    }
+}
+
+impl<T> ToAvro for Option<T> where T: ToAvro {
+    fn avro(self) -> Value {
+        Value::Union(self.map(|v| Box::new(v.avro())))
+    }
+}
+
+impl<T> ToAvro for HashMap<String, T> where T: ToAvro {
+    fn avro(self) -> Value {
+        Value::Map(self
+            .into_iter()
+            .map(|(key, value)| (key, value.avro()))
+            .collect::<_>())
+    }
+}
+
+impl<'a, T> ToAvro for HashMap<&'a str, T> where T: ToAvro {
+    fn avro(self) -> Value {
+        Value::Map(self
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.avro()))
+            .collect::<_>())
+    }
+}
+
+impl ToAvro for Value {
+    fn avro(self) -> Value {
+        self
+    }
+}
+
+impl<T> ToAvro for Box<T> where T: ToAvro {
+    fn avro(self) -> Value {
+        (*self).avro()
+    }
+}
+
+/*
 impl<S: Serialize> ToAvro for S {
     fn avro(self) -> Value {
         use ser::Serializer;
@@ -38,56 +111,7 @@ impl<S: Serialize> ToAvro for S {
         self.serialize(&mut Serializer::new()).unwrap()
     }
 }
-
-impl Serialize for Value {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
-        S: Serializer {
-        match self {
-            &Value::Null => serializer.serialize_unit(),
-            &Value::Boolean(b) => serializer.serialize_bool(b),
-            &Value::Int(i) => serializer.serialize_i32(i),
-            &Value::Long(i) => serializer.serialize_i64(i),
-            &Value::Float(x) => serializer.serialize_f32(x),
-            &Value::Double(x) => serializer.serialize_f64(x),
-            &Value::Bytes(ref bytes) => serializer.serialize_bytes(bytes),
-            &Value::String(ref string) => serializer.serialize_str(string),
-            &Value::Fixed(_, ref bytes) => serializer.serialize_bytes(bytes),
-            &Value::Union(None) => serializer.serialize_none(),
-            &Value::Union(Some(ref inner)) => serializer.serialize_some(inner),
-            &Value::Array(ref items) => {
-                let mut seq = serializer.serialize_seq(Some(items.len()))?;
-
-                for item in items.iter() {
-                    seq.serialize_element(item)?;
-                }
-
-                seq.end()
-            },
-            &Value::Map(ref items) => {
-                let mut map = serializer.serialize_map(Some(items.len()))?;
-
-                for (key, value) in items.iter() {
-                    map.serialize_key(key)?;
-                    map.serialize_value(value)?;
-                }
-
-                map.end()
-            },
-            &Value::Record(ref fields) => {
-                let record = serializer.serialize_struct("", fields.len())?;
-
-                /*
-                grblrbkdjkg serde
-                for (field, value) in fields {
-                    record.serialize_field(field, value)?;
-                }
-                */
-
-                record.end()
-            },
-        }
-    }
-}
+*/
 
 #[derive(Debug)]
 pub struct Record {
@@ -125,8 +149,36 @@ impl Record {
 }
 
 impl ToAvro for Record {
+    fn avro(mut self) -> Value {
+        let mut record_fields = Vec::new();
+        for field in self.rschema.fields.iter() {
+            if let Some(value) = self.fields.remove(&field.name) {
+                record_fields.push((field.name.clone(), value));
+            }
+        }
+
+        Value::Record(record_fields)
+    }
+}
+
+impl ToAvro for JsonValue {
     fn avro(self) -> Value {
-        Value::Record(self.fields)
+        match self {
+            JsonValue::Null => Value::Null,
+            JsonValue::Bool(b) => Value::Boolean(b),
+            JsonValue::Number(ref n) if n.is_i64() => Value::Long(n.as_i64().unwrap()),
+            JsonValue::Number(ref n) if n.is_f64() => Value::Double(n.as_f64().unwrap()),
+            JsonValue::Number(n) => Value::Long(n.as_u64().unwrap() as i64),  // TODO: Not so great
+            JsonValue::String(s) => Value::String(s),
+            JsonValue::Array(items) =>
+                Value::Array(items.into_iter()
+                    .map(|item| item.avro())
+                    .collect::<_>()),
+            JsonValue::Object(items) =>
+                Value::Map(items.into_iter()
+                    .map(|(key, value)| (key, value.avro()))
+                    .collect::<_>()),
+        }
     }
 }
 
@@ -284,7 +336,9 @@ impl Value {
 
     fn with_record(self, rschema: Rc<RecordSchema>) -> Option<Value> {
         match self {
-            Value::Record(mut items) => {
+            Value::Record(fields) => {
+                /*
+                let mut items = fields.into_iter().collect::<HashMap<_, _>>();
                 // Fill in defaults if needed
                 for field in rschema.fields.iter() {
                     if !items.contains_key(&field.name) {
@@ -301,19 +355,11 @@ impl Value {
                 let items = items.into_iter()
                     .filter_map(|(key, value)| lookup.get::<str>(&key).map(|_| (key, value)))
                     .collect::<HashMap<_, _>>();
+                */
 
-                Some(Value::Record(items))
+                Some(Value::Record(fields))
             },
             _ => None,
         }
     }
 }
-
-/*
-impl Serialize for Value {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
-        S: Serializer {
-
-    }
-}
-*/

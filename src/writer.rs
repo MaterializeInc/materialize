@@ -3,7 +3,6 @@ extern crate serde;
 use std::collections::HashMap;
 use std::io::Write;
 use std::iter::once;
-use std::rc::Rc;
 
 use failure::{Error, err_msg};
 use rand::random;
@@ -51,18 +50,22 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn header(&mut self) -> Result<usize, Error> {
-        let metadata_schema = Schema::Map(Rc::new(Schema::Bytes));
         let mut metadata = HashMap::new();
         metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()));
         metadata.insert("avro.codec", self.codec.avro());
 
         Ok(self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))? +
-            self.append_raw_schema(metadata.avro(), Some(&metadata_schema))? +
+            self.append_raw(metadata.avro())? +
             self.append_marker()?)
     }
 
     pub fn append<T: ToAvro>(&mut self, value: T) -> Result<usize, Error> {
         self.extend(once(value))
+    }
+
+    pub fn append_ser<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
+        let avro_value = value.serialize(&mut self.serializer)?;
+        self.append(avro_value)
     }
 
     fn append_marker(&mut self) -> Result<usize, Error> {
@@ -72,11 +75,7 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     fn append_raw(&mut self, value: Value) -> Result<usize, Error> {
-        self.append_raw_schema(value, None)
-    }
-
-    fn append_raw_schema(&mut self, value: Value, schema: Option<&Schema>) -> Result<usize, Error> {
-        Ok(self.writer.write(encode(value, schema).as_ref())?)
+        Ok(self.writer.write(encode(value).as_ref())?)
     }
 
     pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
@@ -101,7 +100,7 @@ impl<'a, W: Write> Writer<'a, W> {
         for value in values {
             match value.avro().with_schema(self.schema) {
                 Some(value) => {
-                    stream.extend(encode(value, Some(self.schema)));
+                    stream.extend(encode(value));
                     num_values += 1;
                 },
                 None => return Err(err_msg("value does not match schema")),

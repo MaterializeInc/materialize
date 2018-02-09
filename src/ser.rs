@@ -21,7 +21,7 @@ pub struct MapSerializer {
 }
 
 pub struct StructSerializer {
-    fields: HashMap<String, Value>,
+    fields: Vec<(String, Value)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +85,7 @@ impl MapSerializer {
 impl StructSerializer {
     pub fn new(len: usize) -> StructSerializer {
         StructSerializer {
-            fields: HashMap::with_capacity(len),
+            fields: Vec::with_capacity(len),
         }
     }
 }
@@ -323,7 +323,7 @@ impl ser::SerializeStruct for StructSerializer {
 
     fn serialize_field<T: ? Sized>(&mut self, name: &'static str, value: &T) -> Result<(), Self::Error> where
         T: Serialize {
-        self.fields.insert(name.to_owned(), value.serialize(&mut Serializer::new())?);
+        self.fields.push((name.to_owned(), value.serialize(&mut Serializer::new())?));
         Ok(())
     }
 

@@ -5,7 +5,7 @@ use avro::Codec;
 use avro::from_value;
 use avro::reader::Reader;
 use avro::schema::Schema;
-use avro::types::{Record, ToAvro};
+use avro::types::Record;
 use avro::writer::Writer;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -43,7 +43,7 @@ fn main() {
         b: "foo".to_owned(),
     };
 
-    writer.append(test).unwrap();
+    writer.append_ser(test).unwrap();
 
     let input = writer.into_inner();
     let reader = Reader::new(&schema, &input[..]);

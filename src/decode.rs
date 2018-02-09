@@ -127,7 +127,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                     decode(&field.schema, reader)
                         .map(|value| (field.name.clone(), value))
                 })
-                .collect::<Result<HashMap<String, Value>, _>>()
+                .collect::<Result<Vec<(String, Value)>, _>>()
                 .map(|items| Value::Record(items))
         },
         &Schema::Enum { ref symbols, .. } => {
