@@ -338,6 +338,7 @@ impl Value {
         match self {
             Value::Record(fields) => {
                 /*
+                TODO
                 let mut items = fields.into_iter().collect::<HashMap<_, _>>();
                 // Fill in defaults if needed
                 for field in rschema.fields.iter() {

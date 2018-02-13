@@ -46,6 +46,11 @@ struct MapDeserializer<'de> {
     input_values: Values<'de, String, Value>,
 }
 
+struct StructDeserializer<'de> {
+    input: Iter<'de, (String, Value)>,
+    value: Option<&'de Value>,
+}
+
 impl<'de> Deserializer<'de> {
     pub fn new(input: &'de Value) -> Self {
         Deserializer {
@@ -69,6 +74,15 @@ impl<'de> MapDeserializer<'de> {
             input_values: input.values(),
             // keys: input.keys().map(|s| Value::String(s.to_owned())).collect::<Vec<Value>>(),
             // values: input.values().map(|s| s.to_owned()).collect::<Vec<Value>>(),
+        }
+    }
+}
+
+impl<'de> StructDeserializer<'de> {
+    pub fn new(input: &'de Vec<(String, Value)>) -> Self {
+        StructDeserializer {
+            input: input.iter(),
+            value: None,
         }
     }
 }
@@ -212,6 +226,7 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
                 visitor.visit_map(MapDeserializer::new(&map_items))
             },
             */
+            &Value::Record(ref fields) => visitor.visit_map(StructDeserializer::new(fields)),
             _ => Err(Error::custom("not a record")),
         }
     }
@@ -261,6 +276,30 @@ impl<'de> de::MapAccess<'de> for MapDeserializer<'de> {
         V: DeserializeSeed<'de> {
         match self.input_values.next() {
             Some(ref value) => seed.deserialize(&mut Deserializer::new(value)),
+            None => Err(Error::custom("should not happen - too many values")),
+        }
+    }
+}
+
+impl<'de> de::MapAccess<'de> for StructDeserializer<'de> {
+    type Error = Error;
+
+    fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error> where
+        K: DeserializeSeed<'de> {
+        match self.input.next() {
+            Some(item) => {
+                let (ref field, ref value) = *item;
+                self.value = Some(value);
+                seed.deserialize(StringDeserializer { input: field.clone() }).map(Some)
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error> where
+        V: DeserializeSeed<'de> {
+        match self.value.take() {
+            Some(value) => seed.deserialize(&mut Deserializer::new(value)),
             None => Err(Error::custom("should not happen - too many values")),
         }
     }
