@@ -105,7 +105,7 @@ impl<'a, R: Read> Reader<'a, R> {
                 for _ in 0..block_len {
                     let item = decode(&self.header_schema, &mut &decompressed[..])?;
 
-                    if let Some(item) = item.with_schema(self.schema) {
+                    if item.validate(self.schema) { // TODO let Some(item) = item.with_schema(self.schema) {
                         self.items.push_back(item);
                         // self.items.push_back(decode(&self.header_schema, &mut &decompressed[..])?);
                     }

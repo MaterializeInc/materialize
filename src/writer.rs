@@ -98,13 +98,15 @@ impl<'a, W: Write> Writer<'a, W> {
 
         let mut stream = Vec::new();
         for value in values {
-            match value.avro().with_schema(self.schema) {
-                Some(value) => {
-                    stream.extend(encode(value));
-                    num_values += 1;
-                },
-                None => return Err(err_msg("value does not match schema")),
+            let avro = value.avro();
+
+            if !avro.validate(self.schema) {
+                println!("{:?}", avro);
+                return Err(err_msg("value does not match schema"))
             }
+
+            stream.extend(encode(avro));
+            num_values += 1;
         }
 
         stream = self.codec.compress(stream)?;

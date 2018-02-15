@@ -33,7 +33,7 @@ fn main() {
     let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
 
     let mut record = Record::new(writer.schema()).unwrap();
-    record.put("a", 27);
+    record.put("a", 27i64);
     record.put("b", "foo");
 
     writer.append(record).unwrap();
