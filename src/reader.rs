@@ -13,19 +13,34 @@ use types::Value;
 
 pub struct Reader<'a, R> {
     reader: R,
-    schema: &'a Schema,
-    header_schema: Schema,
+    reader_schema: Option<&'a Schema>,
+    writer_schema: Schema,
     codec: Codec,
     marker: [u8; 16],
     items: VecDeque<Value>,
 }
 
 impl<'a, R: Read> Reader<'a, R> {
-    pub fn new(schema: &'a Schema, reader: R) -> Reader<'a, R> {
+    pub fn new(reader: R) -> Reader<'a, R> {
         let mut reader = Reader {
             reader: reader,
-            schema: schema,
-            header_schema: Schema::Null,
+            reader_schema: None,
+            writer_schema: Schema::Null,
+            codec: Codec::Null,
+            marker: [0u8; 16],
+            items: VecDeque::new(),
+        };
+
+        reader.read_header().unwrap();  // TODO
+
+        reader
+    }
+
+    pub fn with_schema(schema: &'a Schema, reader: R) -> Reader<'a, R> {
+        let mut reader = Reader {
+            reader: reader,
+            reader_schema: Some(schema),
+            writer_schema: Schema::Null,
             codec: Codec::Null,
             marker: [0u8; 16],
             items: VecDeque::new(),
@@ -58,7 +73,7 @@ impl<'a, R: Read> Reader<'a, R> {
                 .and_then(|json| Schema::parse(&json).ok());
 
             if let Some(schema) = schema {
-                self.header_schema = schema
+                self.writer_schema = schema
             } else {
                 return Err(err_msg("unable to parse schema"))
             }
@@ -103,12 +118,14 @@ impl<'a, R: Read> Reader<'a, R> {
 
                 self.items.clear();
                 for _ in 0..block_len {
-                    let item = decode(&self.header_schema, &mut &decompressed[..])?;
+                    let item = decode(&self.writer_schema, &mut &decompressed[..])?;
 
-                    if item.validate(self.schema) { // TODO let Some(item) = item.with_schema(self.schema) {
-                        self.items.push_back(item);
-                        // self.items.push_back(decode(&self.header_schema, &mut &decompressed[..])?);
-                    }
+                    let item = match self.reader_schema {
+                        Some(ref schema) => item.resolve(schema)?,
+                        None => item,
+                    };
+
+                    self.items.push_back(item)
                 }
 
                 return Ok(())

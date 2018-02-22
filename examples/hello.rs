@@ -46,7 +46,7 @@ fn main() {
     writer.append_ser(test).unwrap();
 
     let input = writer.into_inner();
-    let reader = Reader::new(&schema, &input[..]);
+    let reader = Reader::with_schema(&schema, &input[..]);
 
     for record in reader {
         println!("{:?}", from_value::<Test>(&record));
