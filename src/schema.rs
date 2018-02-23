@@ -337,12 +337,12 @@ impl Serialize for Schema {
                 seq.serialize_element(&*inner.clone())?;
                 seq.end()
             },
-            Schema::Record(ref record_schema) => {
+            Schema::Record(ref rschema) => {
                 let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("type", "record")?;
-                map.serialize_entry("name", &record_schema.name.name)?;
+                map.serialize_entry("name", &rschema.name.name)?;
                 // TODO: namespace, etc...
-                map.serialize_entry("fields", &record_schema.fields)?;
+                map.serialize_entry("fields", &rschema.fields)?;
                 map.end()
             },
             Schema::Enum { ref name, ref symbols, .. } => {

@@ -120,8 +120,8 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                 _ => Err(err_msg("union index out of bounds")),
             }
         },
-        &Schema::Record(ref record_schema) => {
-            record_schema.fields
+        &Schema::Record(ref rschema) => {
+            rschema.fields
                 .iter()
                 .map(|field| {
                     decode(&field.schema, reader)
