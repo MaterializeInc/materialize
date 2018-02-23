@@ -107,8 +107,7 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64
     }
 
-
-    fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, Self::Error> where
+    fn deserialize_char<V>(self, _: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
         Err(Error::custom("avro does not support char"))
     }
@@ -196,12 +195,12 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         }
     }
 
-    fn deserialize_tuple<V>(self, len: usize, visitor: V) -> Result<V::Value, Self::Error> where
+    fn deserialize_tuple<V>(self, _: usize, visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
         self.deserialize_seq(visitor)
     }
 
-    fn deserialize_tuple_struct<V>(self, name: &'static str, len: usize, visitor: V) -> Result<V::Value, Self::Error> where
+    fn deserialize_tuple_struct<V>(self, _: &'static str, _: usize, visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
         self.deserialize_seq(visitor)
     }
@@ -216,24 +215,20 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         }
     }
 
-    fn deserialize_struct<V>(self, name: &'static str, fields: &'static [&'static str], visitor: V) -> Result<V::Value, Self::Error> where
+    fn deserialize_struct<V>(self, _: &'static str, _: &'static [&'static str], visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
         match self.input {
-            /*
-            TODO
-            &Value::Record(ref items) => {
-                let map_items = (*items).into_iter().collect::<HashMap<String, Value>>();
-                visitor.visit_map(MapDeserializer::new(&map_items))
-            },
-            */
             &Value::Record(ref fields) => visitor.visit_map(StructDeserializer::new(fields)),
             _ => Err(Error::custom("not a record")),
         }
     }
 
-    fn deserialize_enum<V>(self, name: &'static str, variants: &'static [&'static str], visitor: V) -> Result<V::Value, Self::Error> where
+    fn deserialize_enum<V>(self, _: &'static str, _variants: &'static [&'static str], _visitor: V) -> Result<V::Value, Self::Error> where
         V: Visitor<'de> {
-        unimplemented!()
+        match self.input {
+            // &Value::Enum(i) => ,  TODO
+            _ => Err(Error::custom("not an enum")),
+        }
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error> where

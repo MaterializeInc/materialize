@@ -183,8 +183,8 @@ impl<'b> ser::Serializer for &'b mut Serializer {
         self.serialize_unit()
     }
 
-    fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<Self::Ok, Self::Error> {
-        unimplemented!()  // TODO: enum
+    fn serialize_unit_variant(self, _: &'static str, index: u32, _: &'static str) -> Result<Self::Ok, Self::Error> {
+        Ok(Value::Enum(index as i32))
     }
 
     fn serialize_newtype_struct<T: ? Sized>(self, _: &'static str, value: &T) -> Result<Self::Ok, Self::Error> where
