@@ -40,7 +40,6 @@ pub struct RecordSchema {
 }
 
 impl RecordSchema {
-    /*
     pub fn lookup<'a>(&'a self) -> HashMap<&'a str, usize> {
         let mut lookup: HashMap<&'a str, usize> = HashMap::new();
         for ref field in self.fields.iter() {
@@ -48,8 +47,8 @@ impl RecordSchema {
         }
         lookup
     }
-    */
 
+    /*
     pub fn lookup(&self) -> HashMap<String, usize> {
         let mut lookup = HashMap::new();
         for ref field in self.fields.iter() {
@@ -57,6 +56,7 @@ impl RecordSchema {
         }
         lookup
     }
+    */
 }
 
 #[derive(Clone, Debug, PartialEq)]
