@@ -133,7 +133,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
         &Schema::Enum { ref symbols, .. } => {
             if let Value::Int(index) = decode(&Schema::Int, reader)? {
                 if index >= 0 && (index as usize) <= symbols.len() {
-                    Ok(Value::Int(index))  // TODO: Value::Enum
+                    Ok(Value::Enum(index))
                 } else {
                     Err(err_msg("enum symbol index out of bounds"))
                 }

@@ -85,8 +85,8 @@ impl<'a, W: Write> Writer<'a, W> {
         /*
         https://github.com/rust-lang/rfcs/issues/811 :(
         let mut stream = values
-            .filter_map(|value| value.serialize(&mut self.serializer).ok())  // TODO not filter
-            .map(|value| value.encode(self.schema))  // TODO with_schema
+            .filter_map(|value| value.serialize(&mut self.serializer).ok())
+            .map(|value| value.encode(self.schema))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| err_msg("value does not match given schema"))?
             .into_iter()

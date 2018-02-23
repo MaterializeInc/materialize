@@ -24,6 +24,7 @@ pub fn encode(value: Value) -> Vec<u8> {
         Value::Bytes(bytes) => stream!(encode(Value::Long(bytes.len() as i64)), bytes),
         Value::String(s) => stream!(encode(Value::Long(s.len() as i64)), s.into_bytes()),
         Value::Fixed(_, bytes) => bytes,
+        Value::Enum(i) => encode(Value::Int(i)),
         Value::Union(None) => vec![0u8],
         Value::Union(Some(item)) => stream!(vec![1u8], encode(*item)),
         Value::Array(items) => {
