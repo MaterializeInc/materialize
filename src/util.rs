@@ -89,6 +89,6 @@ mod tests {
 
     #[test]
     fn test_zigzag() {
-        assert_eq!(zigzag_i32(42i32), zigzag_i64(42i64))
+        assert_eq!(zig_i32(42i32), zig_i64(42i64))
     }
 }
