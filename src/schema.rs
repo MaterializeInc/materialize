@@ -192,7 +192,7 @@ impl Schema {
             "float" => Ok(Schema::Float),
             "bytes" => Ok(Schema::Bytes),
             "string" => Ok(Schema::String),
-            other => Err(err_msg(format!("Unknown primitive type: {}", other)))
+            other => Err(err_msg(format!("Unknown type: {}", other)))
         }
     }
 
@@ -204,8 +204,14 @@ impl Schema {
                 "array" => Schema::parse_array(complex),
                 "map" => Schema::parse_map(complex),
                 "fixed" => Schema::parse_fixed(complex),
-                other => Err(err_msg(format!("Unknown complex type: {}", other)))
-            }
+                other => Schema::parse_primitive(other),
+            },
+            Some(&Value::Object(ref data)) => {
+                match data.get("type") {
+                    Some(ref value) => Schema::parse(value),
+                    None => Err(err_msg(format!("Unknown complex type: {:?}", complex)))
+                }
+            },
             _ => Err(err_msg("No `type` in complex type")),
         }
     }
