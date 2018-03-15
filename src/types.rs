@@ -116,20 +116,23 @@ impl<S: Serialize> ToAvro for S {
 */
 
 #[derive(Debug)]
-pub struct Record<'a> {
+pub struct Record {
     pub rschema: Rc<RecordSchema>,
-    pub fields: HashMap<String, Value>,
-    lookup: HashMap<&'a str, usize>,
+    pub fields: Vec<(String, Value)>,
 }
 
-impl<'a> Record<'a> {
+impl Record {
     pub fn new(schema: &Schema) -> Option<Record> {
         match schema {
             &Schema::Record(ref rschema) => {
+                let mut fields = Vec::with_capacity(rschema.fields.len());
+                for field in rschema.fields.iter() {
+                    fields.push((field.name.clone(), Value::Null));
+                }
+
                 Some(Record {
                     rschema: rschema.clone(),
-                    lookup: rschema.lookup(),
-                    fields: HashMap::new(),
+                    fields: fields,
                 })
             },
             _ => None,
@@ -137,8 +140,9 @@ impl<'a> Record<'a> {
     }
 
     pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
-        if self.lookup.get(field).is_some() {
-            self.fields.insert(field.to_owned(), value.avro());
+        match self.rschema.lookup.get(field) {
+            Some(&position) => self.fields[position].1 = value.avro(),
+            None => (),
         }
     }
 
@@ -147,16 +151,9 @@ impl<'a> Record<'a> {
     }
 }
 
-impl<'a> ToAvro for Record<'a> {
-    fn avro(mut self) -> Value {
-        let mut record_fields = Vec::new();
-        for field in self.rschema.fields.iter() {
-            if let Some(value) = self.fields.remove(&field.name) {
-                record_fields.push((field.name.clone(), value));
-            }
-        }
-
-        Value::Record(record_fields)
+impl ToAvro for Record {
+    fn avro(self) -> Value {
+        Value::Record(self.fields)
     }
 }
 

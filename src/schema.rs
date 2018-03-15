@@ -37,9 +37,12 @@ pub struct RecordSchema {
     pub name: Name,
     pub doc: Documentation,
     pub fields: Vec<RecordField>,
+    pub lookup: HashMap<String, usize>,  // TODO: &'a str?
 }
 
+/*
 impl RecordSchema {
+    /*
     pub fn lookup<'a>(&'a self) -> HashMap<&'a str, usize> {
         let mut lookup: HashMap<&'a str, usize> = HashMap::new();
         for ref field in self.fields.iter() {
@@ -47,6 +50,7 @@ impl RecordSchema {
         }
         lookup
     }
+    */
 
     /*
     pub fn lookup(&self) -> HashMap<String, usize> {
@@ -58,6 +62,7 @@ impl RecordSchema {
     }
     */
 }
+*/
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Name {
@@ -219,6 +224,8 @@ impl Schema {
     fn parse_record(complex: &Map<String, Value>) -> Result<Self, Error> {
         let name = Name::parse(complex)?;
 
+        let mut lookup = HashMap::new();
+
         let fields: Vec<RecordField> = complex.get("fields")
             .and_then(|fields| fields.as_array())
             .ok_or_else(|| err_msg("No `fields` in record"))
@@ -232,11 +239,15 @@ impl Schema {
                     .collect::<Result<_, _>>()
             })?;
 
+        for field in fields.iter() {
+            lookup.insert(field.name.clone(), field.position);
+        }
 
         Ok(Schema::Record(Rc::new(RecordSchema {
             name: name,
             doc: complex.doc(),
             fields: fields,
+            lookup: lookup,
         })))
     }
 

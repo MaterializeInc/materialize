@@ -101,7 +101,6 @@ impl<'a, W: Write> Writer<'a, W> {
             let avro = value.avro();
 
             if !avro.validate(self.schema) {
-                println!("{:?}", avro);
                 return Err(err_msg("value does not match schema"))
             }
 
