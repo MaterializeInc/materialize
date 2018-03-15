@@ -40,37 +40,45 @@ impl FromStr for Codec {
 }
 
 impl Codec {
-    pub fn compress(&self, stream: Vec<u8>) -> Result<Vec<u8>, Error> {
+    pub fn compress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
         match self {
-            &Codec::Null => Ok(stream),
+            &Codec::Null => (),
             &Codec::Deflate => {
                 let mut encoder = Encoder::new(Vec::new());
-                encoder.write(stream.as_ref())?;
-                Ok(encoder.finish().into_result()?)
+                encoder.write(stream)?;
+                *stream = encoder.finish().into_result()?;
             },
             #[cfg(feature = "snappy")] &Codec::Snappy => {
                 let mut writer = Writer::new(Vec::new());
-                writer.write(stream.as_ref())?;
-                Ok(writer.into_inner()?)  // .into_inner() will also call .flush()
+                writer.write(stream)?;
+                *stream = writer.into_inner()?;  // .into_inner() will also call .flush()
             },
-        }
+        };
+
+        Ok(())
     }
 
-    pub fn decompress(&self, stream: Vec<u8>) -> Result<Vec<u8>, Error> {
+    pub fn decompress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
         match self {
-            &Codec::Null => Ok(stream),
+            &Codec::Null => (),
             &Codec::Deflate => {
-                let mut decoder = Decoder::new(&stream[..]);
                 let mut decoded = Vec::new();
-                decoder.read_to_end(&mut decoded)?;
-                Ok(decoded)
+                {  // either the compiler or I is dumb
+                    let mut decoder = Decoder::new(&stream[..]);
+                    decoder.read_to_end(&mut decoded)?;
+                }
+                *stream = decoded;
             },
             #[cfg(feature = "snappy")] &Codec::Snappy => {
-                let mut reader = Reader::new(&stream[..]);
                 let mut read = Vec::new();
-                reader.read_to_end(&mut read)?;
-                Ok(read)
+                {
+                    let mut reader = Reader::new(&stream[..]);
+                    reader.read_to_end(&mut read)?;
+                }
+                *stream = read;
             },
-        }
+        };
+
+        Ok(())
     }
 }

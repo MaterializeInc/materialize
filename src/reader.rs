@@ -104,8 +104,8 @@ impl<'a, R: Read> Reader<'a, R> {
     fn read_block(&mut self) -> Result<(), Error> {
         if let Value::Long(block_len) = decode(&Schema::Long, &mut self.reader)? {
             if let Value::Long(block_bytes) = decode(&Schema::Long, &mut self.reader)? {
-                let mut raw_bytes = vec![0u8; block_bytes as usize];
-                self.reader.read_exact(&mut raw_bytes)?;
+                let mut bytes = vec![0u8; block_bytes as usize];
+                self.reader.read_exact(&mut bytes)?;
 
                 let mut marker = [0u8; 16];
                 self.reader.read_exact(&mut marker)?;
@@ -114,11 +114,13 @@ impl<'a, R: Read> Reader<'a, R> {
                     return Err(err_msg("block marker does not match header marker"));
                 }
 
-                let decompressed = self.codec.decompress(raw_bytes)?;
+                self.codec.decompress(&mut bytes)?;
 
                 self.items.clear();
+                self.items.reserve_exact(block_len as usize);
+
                 for _ in 0..block_len {
-                    let item = decode(&self.writer_schema, &mut &decompressed[..])?;
+                    let item = decode(&self.writer_schema, &mut &bytes[..])?;
 
                     let item = match self.reader_schema {
                         Some(ref schema) => item.resolve(schema)?,

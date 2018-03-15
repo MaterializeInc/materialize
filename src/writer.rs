@@ -1,8 +1,5 @@
-extern crate serde;
-
 use std::collections::HashMap;
 use std::io::Write;
-use std::iter::once;
 
 use failure::{Error, err_msg};
 use rand::random;
@@ -15,10 +12,15 @@ use schema::Schema;
 use ser::Serializer;
 use types::{ToAvro, Value};
 
+const SYNC_SIZE: usize = 16;
+const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE;  // TODO: parametrize in Writer
+
 pub struct Writer<'a, W> {
     schema: &'a Schema,
     serializer: Serializer,
     writer: W,
+    buffer: Vec<u8>,
+    num_values: usize,
     codec: Codec,
     marker: Vec<u8>,
     has_header: bool,
@@ -39,6 +41,8 @@ impl<'a, W: Write> Writer<'a, W> {
             schema: schema,
             serializer: Serializer::new(),
             writer: writer,
+            buffer: Vec::with_capacity(SYNC_INTERVAL),
+            num_values: 0,
             codec: codec,
             marker: marker,
             has_header: false,
@@ -60,7 +64,25 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn append<T: ToAvro>(&mut self, value: T) -> Result<usize, Error> {
-        self.extend(once(value))
+        if !self.has_header {
+            self.header()?;
+            self.has_header = true;
+        }
+
+        let avro = value.avro();
+
+        if !avro.validate(self.schema) {
+            return Err(err_msg("value does not match schema"))
+        }
+
+        self.buffer.extend(encode(avro));
+        self.num_values += 1;
+
+        if self.buffer.len() >= SYNC_INTERVAL {
+            return self.flush();
+        }
+
+        Ok(0)  // Technically, no bytes have been written
     }
 
     pub fn append_ser<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
@@ -81,7 +103,6 @@ impl<'a, W: Write> Writer<'a, W> {
     pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
         where I: Iterator<Item=T>
     {
-        let mut num_values = 0;
         /*
         https://github.com/rust-lang/rfcs/issues/811 :(
         let mut stream = values
@@ -96,29 +117,34 @@ impl<'a, W: Write> Writer<'a, W> {
             });
         */
 
-        let mut stream = Vec::new();
+        let mut num_bytes = 0;
         for value in values {
-            let avro = value.avro();
+            num_bytes += self.append(value)?;
+        }
+        self.flush()?;
 
-            if !avro.validate(self.schema) {
-                return Err(err_msg("value does not match schema"))
-            }
+        Ok(num_bytes)
+    }
 
-            stream.extend(encode(avro));
-            num_values += 1;
+    pub fn flush(&mut self) -> Result<usize, Error> {
+        if self.num_values == 0 {
+            return Ok(0)
         }
 
-        stream = self.codec.compress(stream)?;
+        self.codec.compress(&mut self.buffer)?;
 
-        if !self.has_header {
-            self.header()?;
-            self.has_header = true;
-        }
+        let num_values = self.num_values;
+        let stream_len = self.buffer.len();
 
-        Ok(self.append_raw(num_values.avro())? +
-            self.append_raw(stream.len().avro())? +
-            self.writer.write(stream.as_ref())? +
-            self.append_marker()?)
+        let num_bytes = self.append_raw(num_values.avro())? +
+            self.append_raw(stream_len.avro())? +
+            self.writer.write(self.buffer.as_ref())? +
+            self.append_marker()?;
+
+        self.buffer.clear();
+        self.num_values = 0;
+
+        Ok(num_bytes)
     }
 
     pub fn into_inner(self) -> W {
