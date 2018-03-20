@@ -22,7 +22,7 @@ fn duration(nanos: u64) -> Duration {
 }
 */
 
-fn benchmark(schema: &Schema, record: &Value, count: usize, runs: usize) {
+fn benchmark(schema: &Schema, record: &Value, s: &str, count: usize, runs: usize) {
     let mut records = Vec::new();
     for __ in 0..count {
         records.push(record.clone());
@@ -44,11 +44,11 @@ fn benchmark(schema: &Schema, record: &Value, count: usize, runs: usize) {
         bytes = Some(writer.into_inner());
     }
 
-    let total_duration = durations
+    let total_duration_write = durations
         .into_iter()
         .fold(0u64, |a, b| a + nanos(b));
 
-    println!("Write: {} {} {:?}", count, runs, seconds(total_duration));
+    // println!("Write: {} {} {:?}", count, runs, seconds(total_duration));
 
     let bytes = bytes.unwrap();
 
@@ -69,11 +69,14 @@ fn benchmark(schema: &Schema, record: &Value, count: usize, runs: usize) {
         // assert_eq!(count, read_records.len());
     }
 
-    let total_duration = durations
+    let total_duration_read = durations
         .into_iter()
         .fold(0u64, |a, b| a + nanos(b));
 
-    println!("Read: {} {} {:?}", count, runs, seconds(total_duration));
+    // println!("Read: {} {} {:?}", count, runs, seconds(total_duration));
+    let (s_w, s_r) = (seconds(total_duration_write), seconds(total_duration_read));
+
+    println!("{},{},{},{},{}", count, runs, s, s_w, s_r);
 }
 
 fn main() {
@@ -112,14 +115,14 @@ fn main() {
     big_record.put("address", address);
     let big_record = big_record.avro();
 
-    benchmark(&small_schema, &small_record, 10000, 1);
-    benchmark(&big_schema, &big_record, 10000, 1);
+    benchmark(&small_schema, &small_record, "S", 10000, 1);
+    benchmark(&big_schema, &big_record, "B", 10000, 1);
 
-    benchmark(&small_schema, &small_record, 1, 100000);
-    benchmark(&small_schema, &small_record, 100, 1000);
-    benchmark(&small_schema, &small_record, 10000, 10);
+    benchmark(&small_schema, &small_record, "S", 1, 100000);
+    benchmark(&small_schema, &small_record, "S", 100, 1000);
+    benchmark(&small_schema, &small_record, "S", 10000, 10);
 
-    benchmark(&big_schema, &big_record, 1, 100000);
-    benchmark(&big_schema, &big_record, 100, 1000);
-    benchmark(&big_schema, &big_record, 10000, 10);
+    benchmark(&big_schema, &big_record, "B", 1, 100000);
+    benchmark(&big_schema, &big_record, "B", 100, 1000);
+    benchmark(&big_schema, &big_record, "B", 10000, 10);
 }
