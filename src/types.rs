@@ -328,6 +328,25 @@ impl Value {
 
     fn resolve_record(self, rschema: &RecordSchema) -> Result<Self, Error> {
         match self {
+            // TODO: refactor
+            Value::Map(mut items) => {
+                let fields = rschema.fields.iter()
+                    .map(|field| {
+                        let value = match items.remove(&field.name) {
+                            Some(value) => value,
+                            None => match field.default {
+                                Some(ref value) => value.clone().avro(),
+                                _ => return Err(err_msg(format!("missing field {} in record", field.name))),
+                            }
+                        };
+
+                        value.resolve(&field.schema)
+                            .map(|value| (field.name.clone(), value))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                Ok(Value::Record(fields))
+            },
             Value::Record(fields) => {
                 let mut lookup = fields.into_iter().collect::<HashMap<_, _>>();
                 let new_fields = rschema.fields.iter()
