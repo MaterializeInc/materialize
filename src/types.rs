@@ -240,6 +240,7 @@ impl Value {
     fn resolve_int(self) -> Result<Self, Error> {
         match self {
             Value::Int(n) => Ok(Value::Int(n)),
+            Value::Long(n) => Ok(Value::Int(n as i32)),
             other => Err(err_msg(format!("Int expected, got {:?}", other))),
         }
     }
@@ -257,6 +258,7 @@ impl Value {
             Value::Int(n) => Ok(Value::Float(n as f32)),
             Value::Long(n) => Ok(Value::Float(n as f32)),
             Value::Float(x) => Ok(Value::Float(x)),
+            Value::Double(x) => Ok(Value::Float(x as f32)),
             other => Err(err_msg(format!("Float expected, got {:?}", other))),
         }
     }
