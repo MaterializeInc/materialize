@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json;
 
 use Codec;
-use encode::encode;
+use encode::{encode, encode_raw};
 use schema::Schema;
 use ser::Serializer;
 use types::{ToAvro, Value};
@@ -75,7 +75,7 @@ impl<'a, W: Write> Writer<'a, W> {
             return Err(err_msg("value does not match schema"))
         }
 
-        self.buffer.extend(encode(avro));
+        encode(avro, &mut self.buffer);
         self.num_values += 1;
 
         if self.buffer.len() >= SYNC_INTERVAL {
@@ -97,7 +97,7 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     fn append_raw(&mut self, value: Value) -> Result<usize, Error> {
-        Ok(self.writer.write(encode(value).as_ref())?)
+        Ok(self.writer.write(encode_raw(value).as_ref())?)
     }
 
     pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
