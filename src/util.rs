@@ -81,7 +81,6 @@ fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_zigzag() {

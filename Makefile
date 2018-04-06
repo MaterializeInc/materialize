@@ -29,7 +29,7 @@ clean-hooks:
 
 .PHONY: lint
 lint:
-	 cargo +nightly fmt --all
+	 cargo +nightly fmt
 
 .PHONY: clean-lint
 clean-lint:
@@ -38,6 +38,42 @@ clean-lint:
 .PHONY: clippy
 clippy:
 	cargo +nightly clippy --all-features
+
+
+# TESTING
+
+.PHONY: test
+test:
+	cargo test --all-features
+
+
+# BENCHMARKING
+
+.PHONY: benchmark
+benchmark:
+	cargo +nightly bench
+
+
+# DOCS
+
+.PHONY: doc
+doc:
+	cargo doc --no-deps --all-features
+
+.PHONY: doc-local
+doc-local:
+	cargo doc --no-deps --all-features --open
+
+
+# BUILDING
+
+.PHONY: build
+build:
+	cargo build --all-features
+
+.PHONY: release
+release:
+	cargo build --all-features --release
 
 
 # ALL

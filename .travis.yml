@@ -1,0 +1,6 @@
+language: rust
+rust:
+  - stable
+  - nightly
+cache: cargo
+script: ./scripts/travis-test.sh
