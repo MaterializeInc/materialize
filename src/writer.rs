@@ -12,8 +12,13 @@ use schema::Schema;
 use ser::Serializer;
 use types::{ToAvro, Value};
 
-const SYNC_SIZE: usize = 16;
-const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
+pub const SYNC_SIZE: usize = 16;
+pub const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
+
+// When using SingleWriter, generating a random sync marker has no real added value
+pub const SINGLE_WRITER_MARKER: &'static [u8] = &[0u8; 16];
+
+const AVRO_OBJECT_HEADER: &'static [u8] = &[b'O', b'b', b'j', 1u8];
 
 pub struct Writer<'a, W> {
     schema: &'a Schema,
@@ -53,28 +58,14 @@ impl<'a, W: Write> Writer<'a, W> {
         self.schema
     }
 
-    pub fn header(&mut self) -> Result<usize, Error> {
-        let mut metadata = HashMap::new();
-        metadata.insert(
-            "avro.schema",
-            Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()),
-        );
-        metadata.insert("avro.codec", self.codec.avro());
-
-        Ok(
-            self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))?
-                + self.append_raw(metadata.avro())? + self.append_marker()?,
-        )
-    }
-
     pub fn append<T: ToAvro>(&mut self, value: T) -> Result<usize, Error> {
         if !self.has_header {
-            self.header()?;
+            let header = header(self.schema, self.codec, self.marker.as_ref());
+            self.append_bytes(header.as_ref())?;
             self.has_header = true;
         }
 
         let avro = value.avro();
-
         if !avro.validate(self.schema) {
             return Err(err_msg("value does not match schema"))
         }
@@ -101,7 +92,11 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     fn append_raw(&mut self, value: Value) -> Result<usize, Error> {
-        Ok(self.writer.write(encode_raw(value).as_ref())?)
+        self.append_bytes(encode_raw(value).as_ref())
+    }
+
+    fn append_bytes(&mut self, bytes: &[u8]) -> Result<usize, Error> {
+        Ok(self.writer.write(bytes)?)
     }
 
     pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
@@ -154,4 +149,67 @@ impl<'a, W: Write> Writer<'a, W> {
     pub fn into_inner(self) -> W {
         self.writer
     }
+}
+
+pub struct SingleWriter<'a> {
+    schema: &'a Schema,
+    header: Vec<u8>,
+    buffer: Vec<u8>,
+    codec: Codec,
+}
+
+impl<'a> SingleWriter<'a> {
+    pub fn new(schema: &'a Schema) -> SingleWriter<'a> {
+        Self::with_codec(schema, Codec::Null)
+    }
+
+    pub fn with_codec(schema: &'a Schema, codec: Codec) -> SingleWriter<'a> {
+        Self {
+            schema,
+            header: header(schema, codec, SINGLE_WRITER_MARKER),
+            buffer: Vec::with_capacity(SYNC_INTERVAL),
+            codec,
+        }
+    }
+
+    pub fn schema(&self) -> &'a Schema {
+        self.schema
+    }
+
+    pub fn write<W: Write, T: ToAvro>(&mut self, writer: &mut W, value: T) -> Result<(), Error> {
+        let avro = value.avro();
+        if !avro.validate(self.schema) {
+            return Err(err_msg("value does not match schema"))
+        }
+
+        encode(avro, &mut self.buffer);
+        self.codec.compress(&mut self.buffer)?;
+
+        let num_bytes = self.buffer.len();
+
+        writer.write_all(self.header.as_slice())?;
+        writer.write_all(encode_raw(1i64.avro()).as_ref())?;
+        writer.write_all(encode_raw(num_bytes.avro()).as_ref())?;
+        writer.write_all(self.buffer.as_ref())?;
+        writer.write_all(SINGLE_WRITER_MARKER)?;
+
+        self.buffer.clear();
+
+        Ok(())
+    }
+}
+
+fn header(schema: &Schema, codec: Codec, marker: &[u8]) -> Vec<u8> {
+    let schema_bytes = serde_json::to_string(schema).unwrap().into_bytes();
+
+    let mut metadata = HashMap::with_capacity(2);
+    metadata.insert("avro.schema", Value::Bytes(schema_bytes));
+    metadata.insert("avro.codec", codec.avro());
+
+    let mut header = Vec::new();
+    header.extend_from_slice(AVRO_OBJECT_HEADER);
+    encode(metadata.avro(), &mut header);
+    header.extend_from_slice(marker);
+
+    header
 }
