@@ -3,3 +3,5 @@
 Cargo.lock
 *.swp
 .idea/
+*.iml
+precommit_venv/

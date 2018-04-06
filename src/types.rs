@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use failure::{Error, err_msg};
+use failure::{err_msg, Error};
 use serde_json::Value as JsonValue;
 
 use schema::{RecordSchema, Schema};
@@ -69,27 +69,38 @@ impl<'a> ToAvro for &'a [u8] {
     }
 }
 
-impl<T> ToAvro for Option<T> where T: ToAvro {
+impl<T> ToAvro for Option<T>
+where
+    T: ToAvro,
+{
     fn avro(self) -> Value {
         Value::Union(self.map(|v| Box::new(v.avro())))
     }
 }
 
-impl<T> ToAvro for HashMap<String, T> where T: ToAvro {
+impl<T> ToAvro for HashMap<String, T>
+where
+    T: ToAvro,
+{
     fn avro(self) -> Value {
-        Value::Map(self
-            .into_iter()
-            .map(|(key, value)| (key, value.avro()))
-            .collect::<_>())
+        Value::Map(
+            self.into_iter()
+                .map(|(key, value)| (key, value.avro()))
+                .collect::<_>(),
+        )
     }
 }
 
-impl<'a, T> ToAvro for HashMap<&'a str, T> where T: ToAvro {
+impl<'a, T> ToAvro for HashMap<&'a str, T>
+where
+    T: ToAvro,
+{
     fn avro(self) -> Value {
-        Value::Map(self
-            .into_iter()
-            .map(|(key, value)| (key.to_owned(), value.avro()))
-            .collect::<_>())
+        Value::Map(
+            self.into_iter()
+                .map(|(key, value)| (key.to_owned(), value.avro()))
+                .collect::<_>(),
+        )
     }
 }
 
@@ -99,7 +110,10 @@ impl ToAvro for Value {
     }
 }
 
-impl<T> ToAvro for Box<T> where T: ToAvro {
+impl<T> ToAvro for Box<T>
+where
+    T: ToAvro,
+{
     fn avro(self) -> Value {
         (*self).avro()
     }
@@ -132,14 +146,17 @@ impl Record {
 
                 Some(Record {
                     rschema: rschema.clone(),
-                    fields: fields,
+                    fields,
                 })
             },
             _ => None,
         }
     }
 
-    pub fn put<V>(&mut self, field: &str, value: V) where V: ToAvro {
+    pub fn put<V>(&mut self, field: &str, value: V)
+    where
+        V: ToAvro,
+    {
         match self.rschema.lookup.get(field) {
             Some(&position) => self.fields[position].1 = value.avro(),
             None => (),
@@ -164,16 +181,17 @@ impl ToAvro for JsonValue {
             JsonValue::Bool(b) => Value::Boolean(b),
             JsonValue::Number(ref n) if n.is_i64() => Value::Long(n.as_i64().unwrap()),
             JsonValue::Number(ref n) if n.is_f64() => Value::Double(n.as_f64().unwrap()),
-            JsonValue::Number(n) => Value::Long(n.as_u64().unwrap() as i64),  // TODO: Not so great
+            JsonValue::Number(n) => Value::Long(n.as_u64().unwrap() as i64), // TODO: Not so great
             JsonValue::String(s) => Value::String(s),
-            JsonValue::Array(items) =>
-                Value::Array(items.into_iter()
-                    .map(|item| item.avro())
-                    .collect::<_>()),
-            JsonValue::Object(items) =>
-                Value::Map(items.into_iter()
+            JsonValue::Array(items) => {
+                Value::Array(items.into_iter().map(|item| item.avro()).collect::<_>())
+            },
+            JsonValue::Object(items) => Value::Map(
+                items
+                    .into_iter()
                     .map(|(key, value)| (key, value.avro()))
-                    .collect::<_>()),
+                    .collect::<_>(),
+            ),
         }
     }
 }
@@ -190,15 +208,25 @@ impl Value {
             (&Value::Bytes(_), &Schema::Bytes) => true,
             (&Value::String(_), &Schema::String) => true,
             (&Value::Fixed(n, _), &Schema::Fixed { size, .. }) => n == size,
-            (&Value::Enum(i), &Schema::Enum { ref symbols, .. }) => i >= 0 && i < (symbols.len() as i32),
+            (&Value::Enum(i), &Schema::Enum { ref symbols, .. }) => {
+                i >= 0 && i < (symbols.len() as i32)
+            },
             (&Value::Union(None), &Schema::Union(_)) => true,
             (&Value::Union(Some(ref value)), &Schema::Union(ref inner)) => value.validate(inner),
-            (&Value::Array(ref items), &Schema::Array(ref inner)) => items.iter().all(|item| item.validate(inner)),
-            (&Value::Map(ref items), &Schema::Map(ref inner)) => items.iter().all(|(_, value)| value.validate(inner)),
-            (&Value::Record(ref fields), &Schema::Record(ref rschema)) =>
-                rschema.fields.len() == fields.len() && rschema.fields.iter().zip(fields.iter())
-                    .all(|(rfield, &(ref name, ref value))|
-                        rfield.name == *name && value.validate(&rfield.schema)),
+            (&Value::Array(ref items), &Schema::Array(ref inner)) => {
+                items.iter().all(|item| item.validate(inner))
+            },
+            (&Value::Map(ref items), &Schema::Map(ref inner)) => {
+                items.iter().all(|(_, value)| value.validate(inner))
+            },
+            (&Value::Record(ref fields), &Schema::Record(ref rschema)) => {
+                rschema.fields.len() == fields.len()
+                    && rschema.fields.iter().zip(fields.iter()).all(
+                        |(rfield, &(ref name, ref value))| {
+                            rfield.name == *name && value.validate(&rfield.schema)
+                        },
+                    )
+            },
             _ => false,
         }
     }
@@ -218,7 +246,10 @@ impl Value {
             &Schema::Array(ref inner) => self.resolve_array(inner),
             &Schema::Map(ref inner) => self.resolve_map(inner),
             &Schema::Record(ref rschema) => self.resolve_record(rschema),
-            _ => Err(err_msg(format!("Cannot resolve schema {:?} with {:?}", schema, self))),
+            _ => Err(err_msg(format!(
+                "Cannot resolve schema {:?} with {:?}",
+                schema, self
+            ))),
         }
     }
 
@@ -294,7 +325,10 @@ impl Value {
             Value::Fixed(n, bytes) => if n == size {
                 Ok(Value::Fixed(n, bytes))
             } else {
-                Err(err_msg(format!("Fixed size mismatch, {} expected, got {}", size, n)))
+                Err(err_msg(format!(
+                    "Fixed size mismatch, {} expected, got {}",
+                    size, n
+                )))
             },
             other => Err(err_msg(format!("String expected, got {:?}", other))),
         }
@@ -304,27 +338,36 @@ impl Value {
         match self {
             Value::Union(None) => Ok(Value::Union(None)),
             Value::Union(Some(inner)) => Ok(Value::Union(Some(Box::new(inner.resolve(schema)?)))),
-            other => Err(err_msg(format!("Union({:?}) expected, got {:?}", schema, other))),
+            other => Err(err_msg(format!(
+                "Union({:?}) expected, got {:?}",
+                schema, other
+            ))),
         }
     }
 
     fn resolve_array(self, schema: &Schema) -> Result<Self, Error> {
         match self {
-            Value::Array(items) => Ok(Value::Array(
-                items.into_iter()
-                    .map(|item| item.resolve(schema))
-                    .collect::<Result<Vec<_>, _>>()?)),
-            other => Err(err_msg(format!("Array({:?}) expected, got {:?}", schema, other))),
+            Value::Array(items) => Ok(Value::Array(items
+                .into_iter()
+                .map(|item| item.resolve(schema))
+                .collect::<Result<Vec<_>, _>>()?)),
+            other => Err(err_msg(format!(
+                "Array({:?}) expected, got {:?}",
+                schema, other
+            ))),
         }
     }
 
     fn resolve_map(self, schema: &Schema) -> Result<Self, Error> {
         match self {
-            Value::Map(items) => Ok(Value::Map(
-                items.into_iter()
-                    .map(|(key, value)| value.resolve(schema).map(|value| (key, value)))
-                    .collect::<Result<HashMap<_, _>, _>>()?)),
-            other => Err(err_msg(format!("Map({:?}) expected, got {:?}", schema, other))),
+            Value::Map(items) => Ok(Value::Map(items
+                .into_iter()
+                .map(|(key, value)| value.resolve(schema).map(|value| (key, value)))
+                .collect::<Result<HashMap<_, _>, _>>()?)),
+            other => Err(err_msg(format!(
+                "Map({:?}) expected, got {:?}",
+                schema, other
+            ))),
         }
     }
 
@@ -332,17 +375,25 @@ impl Value {
         match self {
             // TODO: refactor
             Value::Map(mut items) => {
-                let fields = rschema.fields.iter()
+                let fields = rschema
+                    .fields
+                    .iter()
                     .map(|field| {
                         let value = match items.remove(&field.name) {
                             Some(value) => value,
                             None => match field.default {
                                 Some(ref value) => value.clone().avro(),
-                                _ => return Err(err_msg(format!("missing field {} in record", field.name))),
-                            }
+                                _ => {
+                                    return Err(err_msg(format!(
+                                        "missing field {} in record",
+                                        field.name
+                                    )))
+                                },
+                            },
                         };
 
-                        value.resolve(&field.schema)
+                        value
+                            .resolve(&field.schema)
                             .map(|value| (field.name.clone(), value))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -351,24 +402,35 @@ impl Value {
             },
             Value::Record(fields) => {
                 let mut lookup = fields.into_iter().collect::<HashMap<_, _>>();
-                let new_fields = rschema.fields.iter()
+                let new_fields = rschema
+                    .fields
+                    .iter()
                     .map(|field| {
                         let value = match lookup.remove(&field.name) {
                             Some(value) => value,
                             None => match field.default {
                                 Some(ref value) => value.clone().avro(),
-                                _ => return Err(err_msg(format!("missing field {} in record", field.name))),
-                            }
+                                _ => {
+                                    return Err(err_msg(format!(
+                                        "missing field {} in record",
+                                        field.name
+                                    )))
+                                },
+                            },
                         };
 
-                        value.resolve(&field.schema)
+                        value
+                            .resolve(&field.schema)
                             .map(|value| (field.name.clone(), value))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
                 Ok(Value::Record(new_fields))
             },
-            other => Err(err_msg(format!("Record({:?}) expected, got {:?}", rschema, other))),
+            other => Err(err_msg(format!(
+                "Record({:?}) expected, got {:?}",
+                rschema, other
+            ))),
         }
     }
 }

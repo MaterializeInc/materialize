@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use failure::{Error, err_msg};
+use failure::{err_msg, Error};
 use serde_json::{Map, Value};
 
 pub trait MapHelper {
@@ -68,7 +68,7 @@ fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
     let mut j = 0;
     loop {
         reader.read_exact(&mut buf[..])?;
-        i |= ((buf[0] & 0x7F) as u64) << (j * 7);  // TODO overflow
+        i |= ((buf[0] & 0x7F) as u64) << (j * 7); // TODO overflow
         if (buf[0] >> 7) == 0 {
             break
         } else {

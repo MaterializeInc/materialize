@@ -3,8 +3,8 @@ extern crate avro;
 use std::time::Duration;
 use std::time::Instant;
 
-use avro::schema::Schema;
 use avro::reader::Reader;
+use avro::schema::Schema;
 use avro::types::{Record, ToAvro, Value};
 use avro::writer::Writer;
 
@@ -44,9 +44,7 @@ fn benchmark(schema: &Schema, record: &Value, s: &str, count: usize, runs: usize
         bytes = Some(writer.into_inner());
     }
 
-    let total_duration_write = durations
-        .into_iter()
-        .fold(0u64, |a, b| a + nanos(b));
+    let total_duration_write = durations.into_iter().fold(0u64, |a, b| a + nanos(b));
 
     // println!("Write: {} {} {:?}", count, runs, seconds(total_duration));
 
@@ -69,9 +67,7 @@ fn benchmark(schema: &Schema, record: &Value, s: &str, count: usize, runs: usize
         // assert_eq!(count, read_records.len());
     }
 
-    let total_duration_read = durations
-        .into_iter()
-        .fold(0u64, |a, b| a + nanos(b));
+    let total_duration_read = durations.into_iter().fold(0u64, |a, b| a + nanos(b));
 
     // println!("Read: {} {} {:?}", count, runs, seconds(total_duration));
     let (s_w, s_r) = (seconds(total_duration_write), seconds(total_duration_read));

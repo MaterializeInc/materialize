@@ -1,5 +1,6 @@
 extern crate avro;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate serde_derive;
 
 use avro::Codec;
 use avro::from_value;

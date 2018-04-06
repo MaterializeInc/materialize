@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use failure::{Error, err_msg};
+use failure::{err_msg, Error};
 use rand::random;
 use serde::Serialize;
 use serde_json;
@@ -13,7 +13,7 @@ use ser::Serializer;
 use types::{ToAvro, Value};
 
 const SYNC_SIZE: usize = 16;
-const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE;  // TODO: parametrize in Writer
+const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
 
 pub struct Writer<'a, W> {
     schema: &'a Schema,
@@ -38,13 +38,13 @@ impl<'a, W: Write> Writer<'a, W> {
         }
 
         Writer {
-            schema: schema,
+            schema,
             serializer: Serializer::new(),
-            writer: writer,
+            writer,
             buffer: Vec::with_capacity(SYNC_INTERVAL),
             num_values: 0,
-            codec: codec,
-            marker: marker,
+            codec,
+            marker,
             has_header: false,
         }
     }
@@ -55,12 +55,16 @@ impl<'a, W: Write> Writer<'a, W> {
 
     pub fn header(&mut self) -> Result<usize, Error> {
         let mut metadata = HashMap::new();
-        metadata.insert("avro.schema", Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()));
+        metadata.insert(
+            "avro.schema",
+            Value::Bytes(serde_json::to_string(self.schema)?.into_bytes()),
+        );
         metadata.insert("avro.codec", self.codec.avro());
 
-        Ok(self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))? +
-            self.append_raw(metadata.avro())? +
-            self.append_marker()?)
+        Ok(
+            self.append_raw(Value::Fixed(4, vec!['O' as u8, 'b' as u8, 'j' as u8, 1u8]))?
+                + self.append_raw(metadata.avro())? + self.append_marker()?,
+        )
     }
 
     pub fn append<T: ToAvro>(&mut self, value: T) -> Result<usize, Error> {
@@ -79,10 +83,10 @@ impl<'a, W: Write> Writer<'a, W> {
         self.num_values += 1;
 
         if self.buffer.len() >= SYNC_INTERVAL {
-            return self.flush();
+            return self.flush()
         }
 
-        Ok(0)  // Technically, no bytes have been written
+        Ok(0) // Technically, no bytes have been written
     }
 
     pub fn append_ser<S: Serialize>(&mut self, value: S) -> Result<usize, Error> {
@@ -101,7 +105,8 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
-        where I: Iterator<Item=T>
+    where
+        I: Iterator<Item = T>,
     {
         /*
         https://github.com/rust-lang/rfcs/issues/811 :(
@@ -136,10 +141,9 @@ impl<'a, W: Write> Writer<'a, W> {
         let num_values = self.num_values;
         let stream_len = self.buffer.len();
 
-        let num_bytes = self.append_raw(num_values.avro())? +
-            self.append_raw(stream_len.avro())? +
-            self.writer.write(self.buffer.as_ref())? +
-            self.append_marker()?;
+        let num_bytes = self.append_raw(num_values.avro())? + self.append_raw(stream_len.avro())?
+            + self.writer.write(self.buffer.as_ref())?
+            + self.append_marker()?;
 
         self.buffer.clear();
         self.num_values = 0;

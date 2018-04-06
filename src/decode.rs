@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::mem::transmute;
 
-use failure::{Error, err_msg};
+use failure::{err_msg, Error};
 
-use types::Value;
 use schema::Schema;
+use types::Value;
 use util::{zag_i32, zag_i64};
 
 pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
@@ -32,7 +32,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             let mut buf = [0u8; 8];
             reader.read_exact(&mut buf[..])?;
             Ok(Value::Double(unsafe { transmute::<[u8; 8], f64>(buf) }))
-        }
+        },
         &Schema::Bytes => {
             if let Value::Long(len) = decode(&Schema::Long, reader)? {
                 let mut buf = vec![0u8; len as usize];
@@ -77,7 +77,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                         items.push(decode(inner, reader)?);
                     }
                 } else {
-                    return Err(err_msg("array len not found"));
+                    return Err(err_msg("array len not found"))
                 }
             }
 
@@ -104,7 +104,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                         }
                     }
                 } else {
-                    return Err(err_msg("map len not found"));
+                    return Err(err_msg("map len not found"))
                 }
             }
 
@@ -120,16 +120,12 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                 _ => Err(err_msg("union index out of bounds")),
             }
         },
-        &Schema::Record(ref rschema) => {
-            rschema.fields
-                .iter()
-                .map(|field| {
-                    decode(&field.schema, reader)
-                        .map(|value| (field.name.clone(), value))
-                })
-                .collect::<Result<Vec<(String, Value)>, _>>()
-                .map(|items| Value::Record(items))
-        },
+        &Schema::Record(ref rschema) => rschema
+            .fields
+            .iter()
+            .map(|field| decode(&field.schema, reader).map(|value| (field.name.clone(), value)))
+            .collect::<Result<Vec<(String, Value)>, _>>()
+            .map(|items| Value::Record(items)),
         &Schema::Enum { ref symbols, .. } => {
             if let Value::Int(index) = decode(&Schema::Int, reader)? {
                 if index >= 0 && (index as usize) <= symbols.len() {

@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 use std::io::Read;
 use std::rc::Rc;
-use std::str::{from_utf8, FromStr};
+use std::str::{FromStr, from_utf8};
 
-use failure::{Error, err_msg};
+use failure::{err_msg, Error};
 use serde_json::from_slice;
 
 use Codec;
@@ -23,7 +23,7 @@ pub struct Reader<'a, R> {
 impl<'a, R: Read> Reader<'a, R> {
     pub fn new(reader: R) -> Reader<'a, R> {
         let mut reader = Reader {
-            reader: reader,
+            reader,
             reader_schema: None,
             writer_schema: Schema::Null,
             codec: Codec::Null,
@@ -31,14 +31,14 @@ impl<'a, R: Read> Reader<'a, R> {
             items: VecDeque::new(),
         };
 
-        reader.read_header().unwrap();  // TODO
+        reader.read_header().unwrap(); // TODO
 
         reader
     }
 
     pub fn with_schema(schema: &'a Schema, reader: R) -> Reader<'a, R> {
         let mut reader = Reader {
-            reader: reader,
+            reader,
             reader_schema: Some(schema),
             writer_schema: Schema::Null,
             codec: Codec::Null,
@@ -46,7 +46,7 @@ impl<'a, R: Read> Reader<'a, R> {
             items: VecDeque::new(),
         };
 
-        reader.read_header().unwrap();  // TODO
+        reader.read_header().unwrap(); // TODO
 
         reader
     }
@@ -86,7 +86,8 @@ impl<'a, R: Read> Reader<'a, R> {
                         None
                     }
                 })
-                .and_then(|codec| Codec::from_str(codec).ok()) {
+                .and_then(|codec| Codec::from_str(codec).ok())
+            {
                 self.codec = codec;
             }
         } else {
@@ -111,7 +112,7 @@ impl<'a, R: Read> Reader<'a, R> {
                 self.reader.read_exact(&mut marker)?;
 
                 if marker != self.marker {
-                    return Err(err_msg("block marker does not match header marker"));
+                    return Err(err_msg("block marker does not match header marker"))
                 }
 
                 self.codec.decompress(&mut bytes)?;
@@ -144,7 +145,7 @@ impl<'a, R: Read> Iterator for Reader<'a, R> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.items.len() == 0 {
             if let Ok(_) = self.read_block() {
-                return self.next();
+                return self.next()
             }
         }
 

@@ -1,9 +1,11 @@
 extern crate failure;
 extern crate libflate;
 extern crate rand;
-#[macro_use] extern crate serde;
+#[macro_use]
+extern crate serde;
 extern crate serde_json;
-#[cfg(feature = "snappy")] extern crate snap;
+#[cfg(feature = "snappy")]
+extern crate snap;
 
 pub mod codec;
 pub mod de;
@@ -13,8 +15,8 @@ pub mod reader;
 pub mod schema;
 pub mod ser;
 pub mod types;
-pub mod writer;
 mod util;
+pub mod writer;
 
 pub use codec::Codec;
 

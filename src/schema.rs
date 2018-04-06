@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use failure::{Error, err_msg};
+use failure::{err_msg, Error};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::{self, Map, Value};
 
@@ -29,7 +29,7 @@ pub enum Schema {
     Fixed {
         name: Name,
         size: usize,
-    }
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,7 +37,7 @@ pub struct RecordSchema {
     pub name: Name,
     pub doc: Documentation,
     pub fields: Vec<RecordField>,
-    pub lookup: HashMap<String, usize>,  // TODO: &'a str?
+    pub lookup: HashMap<String, usize>, // TODO: &'a str?
 }
 
 /*
@@ -83,24 +83,25 @@ impl Name {
     }
 
     fn parse(complex: &Map<String, Value>) -> Result<Self, Error> {
-        let name = complex.name()
-            .ok_or_else(|| err_msg("No `name` field"))?;
+        let name = complex.name().ok_or_else(|| err_msg("No `name` field"))?;
 
         let namespace = complex.string("namespace");
 
-        let aliases: Option<Vec<String>> = complex.get("aliases")
+        let aliases: Option<Vec<String>> = complex
+            .get("aliases")
             .and_then(|aliases| aliases.as_array())
             .and_then(|aliases| {
-                aliases.iter()
+                aliases
+                    .iter()
                     .map(|alias| alias.as_str())
                     .map(|alias| alias.map(|a| a.to_string()))
                     .collect::<Option<_>>()
             });
 
         Ok(Name {
-            name: name,
-            namespace: namespace,
-            aliases: aliases,
+            name,
+            namespace,
+            aliases,
         })
     }
 
@@ -139,18 +140,20 @@ pub enum RecordFieldOrder {
 
 impl RecordField {
     fn parse(field: &Map<String, Value>, position: usize) -> Result<Self, Error> {
-        let name = field.name()
+        let name = field
+            .name()
             .ok_or_else(|| err_msg("No `name` in record field"))?;
 
         // TODO: "type" = "<record name>"
-        let schema = field.get("type")
+        let schema = field
+            .get("type")
             .ok_or_else(|| err_msg("No `type` in record field"))
             .and_then(|type_| Schema::parse(type_))?;
 
-        let default = field.get("default")
-            .map(|f| f.clone());
+        let default = field.get("default").map(|f| f.clone());
 
-        let order = field.get("order")
+        let order = field
+            .get("order")
             .and_then(|o| o.as_str())
             .and_then(|order| match order {
                 "ascending" => Some(RecordFieldOrder::Ascending),
@@ -160,14 +163,13 @@ impl RecordField {
             })
             .unwrap_or_else(|| RecordFieldOrder::Ascending);
 
-
         Ok(RecordField {
-            name: name,
+            name,
             doc: field.doc(),
-            default: default,
-            schema: schema,
-            order: order,
-            position: position,
+            default,
+            schema,
+            order,
+            position,
         })
     }
 }
@@ -183,7 +185,7 @@ impl Schema {
             Value::String(ref t) => Schema::parse_primitive(t.as_str()),
             Value::Object(ref data) => Schema::parse_complex(data),
             Value::Array(ref data) => Schema::parse_union(data),
-            _ => Err(err_msg("Error"))
+            _ => Err(err_msg("Error")),
         }
     }
 
@@ -197,7 +199,7 @@ impl Schema {
             "float" => Ok(Schema::Float),
             "bytes" => Ok(Schema::Bytes),
             "string" => Ok(Schema::String),
-            other => Err(err_msg(format!("Unknown type: {}", other)))
+            other => Err(err_msg(format!("Unknown type: {}", other))),
         }
     }
 
@@ -211,11 +213,9 @@ impl Schema {
                 "fixed" => Schema::parse_fixed(complex),
                 other => Schema::parse_primitive(other),
             },
-            Some(&Value::Object(ref data)) => {
-                match data.get("type") {
-                    Some(ref value) => Schema::parse(value),
-                    None => Err(err_msg(format!("Unknown complex type: {:?}", complex)))
-                }
+            Some(&Value::Object(ref data)) => match data.get("type") {
+                Some(ref value) => Schema::parse(value),
+                None => Err(err_msg(format!("Unknown complex type: {:?}", complex))),
             },
             _ => Err(err_msg("No `type` in complex type")),
         }
@@ -226,16 +226,16 @@ impl Schema {
 
         let mut lookup = HashMap::new();
 
-        let fields: Vec<RecordField> = complex.get("fields")
+        let fields: Vec<RecordField> = complex
+            .get("fields")
             .and_then(|fields| fields.as_array())
             .ok_or_else(|| err_msg("No `fields` in record"))
             .and_then(|fields| {
-                fields.iter()
+                fields
+                    .iter()
                     .filter_map(|field| field.as_object())
                     .enumerate()
-                    .map(|(position, field)| {
-                        RecordField::parse(field, position)
-                    })
+                    .map(|(position, field)| RecordField::parse(field, position))
                     .collect::<Result<_, _>>()
             })?;
 
@@ -244,42 +244,46 @@ impl Schema {
         }
 
         Ok(Schema::Record(Rc::new(RecordSchema {
-            name: name,
+            name,
             doc: complex.doc(),
-            fields: fields,
-            lookup: lookup,
+            fields,
+            lookup,
         })))
     }
 
     fn parse_enum(complex: &Map<String, Value>) -> Result<Self, Error> {
         let name = Name::parse(complex)?;
 
-        let symbols = complex.get("symbols")
+        let symbols = complex
+            .get("symbols")
             .and_then(|v| v.as_array())
             .ok_or_else(|| err_msg("No `symbols` field in enum"))
             .and_then(|symbols| {
-                symbols.iter()
+                symbols
+                    .iter()
                     .map(|symbol| symbol.as_str().map(|s| s.to_string()))
                     .collect::<Option<_>>()
                     .ok_or_else(|| err_msg("Unable to parse `symbols` in enum"))
             })?;
 
         Ok(Schema::Enum {
-            name: name,
+            name,
             doc: complex.doc(),
-            symbols: symbols,
+            symbols,
         })
     }
 
     fn parse_array(complex: &Map<String, Value>) -> Result<Self, Error> {
-        complex.get("items")
+        complex
+            .get("items")
             .ok_or_else(|| err_msg("No `items` in array"))
             .and_then(|items| Schema::parse(items))
             .map(|schema| Schema::Array(Rc::new(schema)))
     }
 
     fn parse_map(complex: &Map<String, Value>) -> Result<Self, Error> {
-        complex.get("values")
+        complex
+            .get("values")
             .ok_or_else(|| err_msg("No `values` in map"))
             .and_then(|items| Schema::parse(items))
             .map(|schema| Schema::Map(Rc::new(schema)))
@@ -313,20 +317,23 @@ impl Schema {
     fn parse_fixed(complex: &Map<String, Value>) -> Result<Self, Error> {
         let name = Name::parse(complex)?;
 
-        let size = complex.get("size")
+        let size = complex
+            .get("size")
             .and_then(|v| v.as_i64())
             .ok_or_else(|| err_msg("No `size` in fixed"))?;
 
         Ok(Schema::Fixed {
-            name: name,
+            name,
             size: size as usize,
         })
     }
 }
 
 impl Serialize for Schema {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
-        S: Serializer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         match *self {
             Schema::Null => serializer.serialize_str("null"),
             Schema::Boolean => serializer.serialize_str("boolean"),
@@ -362,7 +369,11 @@ impl Serialize for Schema {
                 map.serialize_entry("fields", &rschema.fields)?;
                 map.end()
             },
-            Schema::Enum { ref name, ref symbols, .. } => {
+            Schema::Enum {
+                ref name,
+                ref symbols,
+                ..
+            } => {
                 let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("type", "enum")?;
                 map.serialize_entry("name", &name.name)?;
@@ -375,14 +386,16 @@ impl Serialize for Schema {
                 map.serialize_entry("name", &name.name)?;
                 map.serialize_entry("size", size)?;
                 map.end()
-            }
+            },
         }
     }
 }
 
 impl Serialize for RecordField {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where
-        S: Serializer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("name", &self.name)?;
         map.serialize_entry("type", &self.schema)?;

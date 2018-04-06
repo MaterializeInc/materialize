@@ -3,7 +3,8 @@ use std::str::FromStr;
 
 use failure::Error;
 use libflate::deflate::{Decoder, Encoder};
-#[cfg(feature = "snappy")] use snap::{Reader, Writer};
+#[cfg(feature = "snappy")]
+use snap::{Reader, Writer};
 
 use types::{ToAvro, Value};
 
@@ -11,7 +12,8 @@ use types::{ToAvro, Value};
 pub enum Codec {
     Null,
     Deflate,
-    #[cfg(feature = "snappy")] Snappy,
+    #[cfg(feature = "snappy")]
+    Snappy,
 }
 
 impl ToAvro for Codec {
@@ -20,9 +22,11 @@ impl ToAvro for Codec {
             match self {
                 Codec::Null => "null",
                 Codec::Deflate => "deflate",
-                #[cfg(feature = "snappy")] Codec::Snappy => "snappy",
-            }
-                .to_owned().into_bytes())
+                #[cfg(feature = "snappy")]
+                Codec::Snappy => "snappy",
+            }.to_owned()
+                .into_bytes(),
+        )
     }
 }
 
@@ -33,7 +37,8 @@ impl FromStr for Codec {
         match s {
             "null" => Ok(Codec::Null),
             "deflate" => Ok(Codec::Deflate),
-            #[cfg(feature = "snappy")] "snappy" => Ok(Codec::Snappy),
+            #[cfg(feature = "snappy")]
+            "snappy" => Ok(Codec::Snappy),
             _ => Err(()),
         }
     }
@@ -45,13 +50,14 @@ impl Codec {
             &Codec::Null => (),
             &Codec::Deflate => {
                 let mut encoder = Encoder::new(Vec::new());
-                encoder.write(stream)?;
+                encoder.write_all(stream)?;
                 *stream = encoder.finish().into_result()?;
             },
-            #[cfg(feature = "snappy")] &Codec::Snappy => {
+            #[cfg(feature = "snappy")]
+            &Codec::Snappy => {
                 let mut writer = Writer::new(Vec::new());
-                writer.write(stream)?;
-                *stream = writer.into_inner()?;  // .into_inner() will also call .flush()
+                writer.write_all(stream)?;
+                *stream = writer.into_inner()?; // .into_inner() will also call .flush()
             },
         };
 
@@ -63,13 +69,15 @@ impl Codec {
             &Codec::Null => (),
             &Codec::Deflate => {
                 let mut decoded = Vec::new();
-                {  // either the compiler or I is dumb
+                {
+                    // either the compiler or I is dumb
                     let mut decoder = Decoder::new(&stream[..]);
                     decoder.read_to_end(&mut decoded)?;
                 }
                 *stream = decoded;
             },
-            #[cfg(feature = "snappy")] &Codec::Snappy => {
+            #[cfg(feature = "snappy")]
+            &Codec::Snappy => {
                 let mut read = Vec::new();
                 {
                     let mut reader = Reader::new(&stream[..]);
