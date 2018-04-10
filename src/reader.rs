@@ -51,6 +51,14 @@ impl<'a, R: Read> Reader<'a, R> {
         reader
     }
 
+    pub fn writer_schema(&self) -> &Schema {
+        &self.writer_schema
+    }
+
+    pub fn reader_schema(&self) -> Option<&Schema> {
+        self.reader_schema
+    }
+
     fn read_header(&mut self) -> Result<(), Error> {
         let meta_schema = Schema::Map(Rc::new(Schema::Bytes));
 
