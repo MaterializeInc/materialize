@@ -1,3 +1,4 @@
+//! Logic for serde-compatible deserialization.
 use std::collections::HashMap;
 use std::collections::hash_map::{Keys, Values};
 use std::error::{self, Error as StdError};

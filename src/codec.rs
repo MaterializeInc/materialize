@@ -1,3 +1,5 @@
+//! Logic for all supported compression codecs in Avro.
+
 use std::io::{Read, Write};
 use std::str::FromStr;
 
@@ -8,11 +10,19 @@ use snap::{Reader, Writer};
 
 use types::{ToAvro, Value};
 
+/// The compression codec used to compress blocks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Codec {
+    /// The `Null` codec simply passes through data uncompressed.
     Null,
+    /// The `Deflate` codec writes the data block using the deflate algorithm
+    /// as specified in RFC 1951, and typically implemented using the zlib library.
+    /// Note that this format (unlike the "zlib format" in RFC 1950) does not have a checksum.
     Deflate,
     #[cfg(feature = "snappy")]
+    /// The `Snappy` codec uses Google's [Snappy](http://google.github.io/snappy/)
+    /// compression library. Each compressed block is followed by the 4-byte, big-endian
+    /// CRC32 checksum of the uncompressed data in the block.
     Snappy,
 }
 
@@ -45,6 +55,7 @@ impl FromStr for Codec {
 }
 
 impl Codec {
+    /// Compress a stream of bytes in-place.
     pub fn compress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
         match self {
             &Codec::Null => (),
@@ -64,6 +75,7 @@ impl Codec {
         Ok(())
     }
 
+    /// Decompress a stream of bytes in-place.
     pub fn decompress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
         match self {
             &Codec::Null => (),
@@ -88,5 +100,45 @@ impl Codec {
         };
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static INPUT: &'static [u8] = b"theanswertolifetheuniverseandeverythingis42theanswertolifetheuniverseandeverythingis4theanswertolifetheuniverseandeverythingis2";
+
+    #[test]
+    fn null_compress_and_decompress() {
+        let codec = Codec::Null;
+        let mut stream = INPUT.to_vec();
+        codec.compress(&mut stream).unwrap();
+        assert_eq!(INPUT, stream.as_slice());
+        codec.decompress(&mut stream).unwrap();
+        assert_eq!(INPUT, stream.as_slice());
+    }
+
+    #[test]
+    fn deflate_compress_and_decompress() {
+        let codec = Codec::Deflate;
+        let mut stream = INPUT.to_vec();
+        codec.compress(&mut stream).unwrap();
+        assert_ne!(INPUT, stream.as_slice());
+        assert!(INPUT.len() > stream.len());
+        codec.decompress(&mut stream).unwrap();
+        assert_eq!(INPUT, stream.as_slice());
+    }
+
+    #[cfg(feature = "snappy")]
+    #[test]
+    fn snappy_compress_and_decompress() {
+        let codec = Codec::Snappy;
+        let mut stream = INPUT.to_vec();
+        codec.compress(&mut stream).unwrap();
+        assert_ne!(INPUT, stream.as_slice());
+        assert!(INPUT.len() > stream.len());
+        codec.decompress(&mut stream).unwrap();
+        assert_eq!(INPUT, stream.as_slice());
     }
 }

@@ -1,3 +1,4 @@
+//! Logic for serde-compatible serialization.
 use std::collections::HashMap;
 use std::error;
 use std::fmt;

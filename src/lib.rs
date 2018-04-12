@@ -66,19 +66,19 @@ extern crate serde_json;
 #[cfg(feature = "snappy")]
 extern crate snap;
 
-pub mod codec;
-pub mod de;
+mod codec;
+mod de;
+mod ser;
+mod util;
+
 pub mod decode;
 pub mod encode;
 pub mod reader;
 pub mod schema;
-pub mod ser;
 pub mod types;
-mod util;
 pub mod writer;
 
 pub use codec::Codec;
-
 pub use de::from_value;
 
 #[cfg(test)]
