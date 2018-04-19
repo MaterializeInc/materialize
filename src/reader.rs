@@ -1,15 +1,15 @@
 use std::collections::VecDeque;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::rc::Rc;
-use std::str::{FromStr, from_utf8};
+use std::str::{from_utf8, FromStr};
 
 use failure::{err_msg, Error};
 use serde_json::from_slice;
 
-use Codec;
 use decode::decode;
 use schema::Schema;
 use types::Value;
+use Codec;
 
 pub struct Reader<'a, R> {
     reader: R,
@@ -111,52 +111,59 @@ impl<'a, R: Read> Reader<'a, R> {
     }
 
     fn read_block(&mut self) -> Result<(), Error> {
-        if let Value::Long(block_len) = decode(&Schema::Long, &mut self.reader)? {
-            if let Value::Long(block_bytes) = decode(&Schema::Long, &mut self.reader)? {
-                let mut bytes = vec![0u8; block_bytes as usize];
-                self.reader.read_exact(&mut bytes)?;
+        match decode(&Schema::Long, &mut self.reader) {
+            Ok(block) => {
+                if let Value::Long(block_len) = block {
+                    if let Value::Long(block_bytes) = decode(&Schema::Long, &mut self.reader)? {
+                        let mut bytes = vec![0u8; block_bytes as usize];
+                        self.reader.read_exact(&mut bytes)?;
 
-                let mut marker = [0u8; 16];
-                self.reader.read_exact(&mut marker)?;
+                        let mut marker = [0u8; 16];
+                        self.reader.read_exact(&mut marker)?;
 
-                if marker != self.marker {
-                    return Err(err_msg("block marker does not match header marker"))
+                        if marker != self.marker {
+                            return Err(err_msg("block marker does not match header marker"))
+                        }
+
+                        self.codec.decompress(&mut bytes)?;
+
+                        self.items.clear();
+                        self.items.reserve_exact(block_len as usize);
+
+                        for _ in 0..block_len {
+                            let item = decode(&self.writer_schema, &mut &bytes[..])?;
+
+                            let item = match self.reader_schema {
+                                Some(ref schema) => item.resolve(schema)?,
+                                None => item,
+                            };
+
+                            self.items.push_back(item)
+                        }
+
+                        return Ok(())
+                    }
                 }
-
-                self.codec.decompress(&mut bytes)?;
-
-                self.items.clear();
-                self.items.reserve_exact(block_len as usize);
-
-                for _ in 0..block_len {
-                    let item = decode(&self.writer_schema, &mut &bytes[..])?;
-
-                    let item = match self.reader_schema {
-                        Some(ref schema) => item.resolve(schema)?,
-                        None => item,
-                    };
-
-                    self.items.push_back(item)
-                }
-
-                return Ok(())
-            }
-        }
-
+            },
+            Err(e) => match e.downcast::<::std::io::Error>()?.kind() {
+                ErrorKind::UnexpectedEof => return Ok(()),
+                _ => (),
+            },
+        };
         Err(err_msg("unable to read block"))
     }
 }
 
 impl<'a, R: Read> Iterator for Reader<'a, R> {
-    type Item = Value;
+    type Item = Result<Value, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.items.len() == 0 {
-            if let Ok(_) = self.read_block() {
-                return self.next()
+            if let Err(e) = self.read_block() {
+                return Some(Err(err_msg(e)))
             }
         }
 
-        self.items.pop_front()
+        self.items.pop_front().map(Ok)
     }
 }

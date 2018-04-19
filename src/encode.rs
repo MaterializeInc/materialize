@@ -20,7 +20,7 @@ pub fn encode(value: Value, buffer: &mut Vec<u8>) {
             buffer.extend(s.into_bytes());
         },
         Value::Fixed(_, bytes) => buffer.extend(bytes),
-        Value::Enum(i) => encode(Value::Int(i), buffer),
+        Value::Enum(i, _) => encode(Value::Int(i), buffer),
         Value::Union(None) => buffer.push(0u8),
         Value::Union(Some(item)) => {
             buffer.push(1u8);
@@ -41,10 +41,8 @@ pub fn encode(value: Value, buffer: &mut Vec<u8>) {
             }
             buffer.push(0u8);
         },
-        Value::Record(fields) => {
-            for (_, value) in fields.into_iter() {
-                encode(value, buffer);
-            }
+        Value::Record(fields) => for (_, value) in fields.into_iter() {
+            encode(value, buffer);
         },
     }
 }

@@ -184,9 +184,9 @@ impl<'b> ser::Serializer for &'b mut Serializer {
         self,
         _: &'static str,
         index: u32,
-        _: &'static str,
+        variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
-        Ok(Value::Enum(index as i32))
+        Ok(Value::Enum(index as i32, variant.to_string()))
     }
 
     fn serialize_newtype_struct<T: ?Sized>(

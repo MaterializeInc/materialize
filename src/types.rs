@@ -17,7 +17,7 @@ pub enum Value {
     Bytes(Vec<u8>),
     String(String),
     Fixed(usize, Vec<u8>),
-    Enum(i32),
+    Enum(i32, String),
     Union(Option<Box<Value>>),
     Array(Vec<Value>),
     Map(HashMap<String, Value>),
@@ -208,8 +208,9 @@ impl Value {
             (&Value::Bytes(_), &Schema::Bytes) => true,
             (&Value::String(_), &Schema::String) => true,
             (&Value::Fixed(n, _), &Schema::Fixed { size, .. }) => n == size,
-            (&Value::Enum(i), &Schema::Enum { ref symbols, .. }) => {
-                i >= 0 && i < (symbols.len() as i32)
+            (&Value::String(ref s), &Schema::Enum { ref symbols, .. }) => symbols.contains(s),
+            (&Value::Enum(i, ref s), &Schema::Enum { ref symbols, .. }) => {
+                i > 0 && i < symbols.len() as i32 && symbols.contains(s)
             },
             (&Value::Union(None), &Schema::Union(_)) => true,
             (&Value::Union(Some(ref value)), &Schema::Union(ref inner)) => value.validate(inner),
@@ -243,17 +244,13 @@ impl Value {
             &Schema::String => self.resolve_string(),
             &Schema::Fixed { size, .. } => self.resolve_fixed(size),
             &Schema::Union(ref inner) => self.resolve_union(inner),
+            &Schema::Enum { ref symbols, .. } => self.resolve_enum(symbols),
             &Schema::Array(ref inner) => self.resolve_array(inner),
             &Schema::Map(ref inner) => self.resolve_map(inner),
             &Schema::Record(ref rschema) => self.resolve_record(rschema),
-            _ => Err(err_msg(format!(
-                "Cannot resolve schema {:?} with {:?}",
-                schema, self
-            ))),
         }
     }
 
-    // TODO: macro?
     fn resolve_null(self) -> Result<Self, Error> {
         match self {
             Value::Null => Ok(Value::Null),
@@ -334,6 +331,36 @@ impl Value {
         }
     }
 
+    fn resolve_enum(self, symbols: &Vec<String>) -> Result<Self, Error> {
+        let validate_symbol = |symbol: String, symbols: &Vec<String>| {
+            if let Some(index) = symbols.iter().position(|ref item| item == &&symbol) {
+                Ok(Value::Enum(index as i32, symbol))
+            } else {
+                Err(err_msg(format!(
+                    "Enum default {} is not among allowed symbols {:?}",
+                    symbol, symbols,
+                )))
+            }
+        };
+
+        match self {
+            Value::Enum(i, s) => if i > 0 && i < symbols.len() as i32 {
+                validate_symbol(s, symbols)
+            } else {
+                Err(err_msg(format!(
+                    "Enum value {} is out of bound {}",
+                    i,
+                    symbols.len() as i32
+                )))
+            },
+            Value::String(s) => validate_symbol(s, symbols),
+            other => Err(err_msg(format!(
+                "Enum({:?}) expected, got {:?}",
+                symbols, other
+            ))),
+        }
+    }
+
     fn resolve_union(self, schema: &Schema) -> Result<Self, Error> {
         match self {
             Value::Union(None) => Ok(Value::Union(None)),
@@ -372,65 +399,37 @@ impl Value {
     }
 
     fn resolve_record(self, rschema: &RecordSchema) -> Result<Self, Error> {
-        match self {
-            // TODO: refactor
-            Value::Map(mut items) => {
-                let fields = rschema
-                    .fields
-                    .iter()
-                    .map(|field| {
-                        let value = match items.remove(&field.name) {
-                            Some(value) => value,
-                            None => match field.default {
-                                Some(ref value) => value.clone().avro(),
-                                _ => {
-                                    return Err(err_msg(format!(
-                                        "missing field {} in record",
-                                        field.name
-                                    )))
-                                },
-                            },
-                        };
-
-                        value
-                            .resolve(&field.schema)
-                            .map(|value| (field.name.clone(), value))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Ok(Value::Record(fields))
-            },
-            Value::Record(fields) => {
-                let mut lookup = fields.into_iter().collect::<HashMap<_, _>>();
-                let new_fields = rschema
-                    .fields
-                    .iter()
-                    .map(|field| {
-                        let value = match lookup.remove(&field.name) {
-                            Some(value) => value,
-                            None => match field.default {
-                                Some(ref value) => value.clone().avro(),
-                                _ => {
-                                    return Err(err_msg(format!(
-                                        "missing field {} in record",
-                                        field.name
-                                    )))
-                                },
-                            },
-                        };
-
-                        value
-                            .resolve(&field.schema)
-                            .map(|value| (field.name.clone(), value))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                Ok(Value::Record(new_fields))
-            },
+        let mut items = match self {
+            Value::Map(items) => Ok(items),
+            Value::Record(fields) => Ok(fields.into_iter().collect::<HashMap<_, _>>()),
             other => Err(err_msg(format!(
                 "Record({:?}) expected, got {:?}",
                 rschema, other
             ))),
-        }
+        }?;
+
+        let new_fields = rschema
+            .fields
+            .iter()
+            .map(|field| {
+                let value = match items.remove(&field.name) {
+                    Some(value) => value,
+                    None => match field.default {
+                        Some(ref value) => match field.schema {
+                            Schema::Enum { ref symbols, .. } => {
+                                value.clone().avro().resolve_enum(symbols)?
+                            },
+                            _ => value.clone().avro(),
+                        },
+                        _ => return Err(err_msg(format!("missing field {} in record", field.name))),
+                    },
+                };
+                value
+                    .resolve(&field.schema)
+                    .map(|value| (field.name.clone(), value))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Value::Record(new_fields))
     }
 }

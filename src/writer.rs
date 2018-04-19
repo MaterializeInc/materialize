@@ -6,11 +6,11 @@ use rand::random;
 use serde::Serialize;
 use serde_json;
 
-use Codec;
 use encode::{encode, encode_raw};
 use schema::Schema;
 use ser::Serializer;
 use types::{ToAvro, Value};
+use Codec;
 
 pub const SYNC_SIZE: usize = 16;
 pub const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
@@ -70,7 +70,7 @@ impl<'a, W: Write> Writer<'a, W> {
             return Err(err_msg("value does not match schema"))
         }
 
-        encode(avro, &mut self.buffer);
+        encode(avro.resolve(self.schema)?, &mut self.buffer);
         self.num_values += 1;
 
         if self.buffer.len() >= SYNC_INTERVAL {
