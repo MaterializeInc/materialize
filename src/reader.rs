@@ -1,15 +1,15 @@
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read};
 use std::rc::Rc;
-use std::str::{from_utf8, FromStr};
+use std::str::{FromStr, from_utf8};
 
 use failure::{err_msg, Error};
 use serde_json::from_slice;
 
+use Codec;
 use decode::decode;
 use schema::Schema;
 use types::Value;
-use Codec;
 
 pub struct Reader<'a, R> {
     reader: R,

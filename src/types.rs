@@ -6,25 +6,61 @@ use serde_json::Value as JsonValue;
 
 use schema::{RecordSchema, Schema};
 
+/// Represents any valid Avro value
+/// More information about Avro values can be found in the
+/// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
+    /// A `null` Avro value.
     Null,
+    /// A `boolean` Avro value.
     Boolean(bool),
+    /// A `int` Avro value.
     Int(i32),
+    /// A `long` Avro value.
     Long(i64),
+    /// A `float` Avro value.
     Float(f32),
+    /// A `double` Avro value.
     Double(f64),
+    /// A `bytes` Avro value.
     Bytes(Vec<u8>),
+    /// A `string` Avro value.
     String(String),
+    /// A `fixed` Avro value.
+    /// The size of the fixed value is represented as a `usize`.
     Fixed(usize, Vec<u8>),
+    /// An `enum` Avro value.
+    ///
+    /// An Enum is represented by a symbol and its position in the symbols list
+    /// of its corresponding schema.
+    /// This allows schema-less encoding, as well as schema resolution while
+    /// reading values.
     Enum(i32, String),
+    /// An `union` Avro value.
+    ///
+    /// The current implementation limits union support to \["null", "< type >"\].
+    ///
+    /// `None` represents a `null` value, while `Some(<X>)` represents a `type`
+    /// value.
     Union(Option<Box<Value>>),
+    /// An `array` Avro value.
     Array(Vec<Value>),
+    /// A `map` Avro value.
     Map(HashMap<String, Value>),
+    /// A `record` Avro value.
+    ///
+    /// A Record is represented by a vector of (`<record name>`, `value`).
+    /// This allows schema-less encoding.
+    ///
+    /// See [Record](types.Record) for a more user-friendly support.
     Record(Vec<(String, Value)>),
 }
 
+/// Any structure implementing the [ToAvro](trait.ToAvro.html) trait will be usable
+/// from a [Writer](../writer/struct.Writer.html).
 pub trait ToAvro {
+    /// Transforms this value into an Avro-compatible [Value](enum.Value.html).
     fn avro(self) -> Value;
 }
 
@@ -197,6 +233,10 @@ impl ToAvro for JsonValue {
 }
 
 impl Value {
+    /// Validate the value against the given [Schema](../schema/enum.Schema.html).
+    ///
+    /// See the [Avro specification](https://avro.apache.org/docs/current/spec.html)
+    /// for the full set of rules of schema validation.
     pub fn validate(&self, schema: &Schema) -> bool {
         match (self, schema) {
             (&Value::Null, &Schema::Null) => true,
@@ -209,9 +249,10 @@ impl Value {
             (&Value::String(_), &Schema::String) => true,
             (&Value::Fixed(n, _), &Schema::Fixed { size, .. }) => n == size,
             (&Value::String(ref s), &Schema::Enum { ref symbols, .. }) => symbols.contains(s),
-            (&Value::Enum(i, ref s), &Schema::Enum { ref symbols, .. }) => {
-                i > 0 && i < symbols.len() as i32 && symbols.contains(s)
-            },
+            (&Value::Enum(i, ref s), &Schema::Enum { ref symbols, .. }) => symbols
+                .get(i as usize)
+                .map(|ref symbol| symbol == &s)
+                .unwrap_or(false),
             (&Value::Union(None), &Schema::Union(_)) => true,
             (&Value::Union(Some(ref value)), &Schema::Union(ref inner)) => value.validate(inner),
             (&Value::Array(ref items), &Schema::Array(ref inner)) => {
@@ -232,6 +273,12 @@ impl Value {
         }
     }
 
+    /// Attempt to perform schema resolution on the value, with the given
+    /// [Schema](../schema/enum.Schema.html).
+    ///
+    /// See [Schema Resolution](https://avro.apache.org/docs/current/spec.html#Schema+Resolution)
+    /// in the Avro specification for the full set of rules of schema
+    /// resolution.
     pub fn resolve(self, schema: &Schema) -> Result<Self, Error> {
         match schema {
             &Schema::Null => self.resolve_null(),
@@ -431,5 +478,158 @@ impl Value {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Value::Record(new_fields))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::rc::Rc;
+
+    use schema::{Name, RecordField, RecordFieldOrder, RecordSchema};
+
+    #[test]
+    fn validate() {
+        let value_schema_valid = vec![
+            (Value::Int(42), Schema::Int, true),
+            (Value::Int(42), Schema::Boolean, false),
+            (
+                Value::Union(None),
+                Schema::Union(Rc::new(Schema::Int)),
+                true,
+            ),
+            (
+                Value::Union(Some(Box::new(Value::Int(42)))),
+                Schema::Union(Rc::new(Schema::Int)),
+                true,
+            ),
+            (
+                Value::Union(Some(Box::new(Value::Null))),
+                Schema::Union(Rc::new(Schema::Int)),
+                false,
+            ),
+            (
+                Value::Array(vec![Value::Long(42i64)]),
+                Schema::Array(Rc::new(Schema::Long)),
+                true,
+            ),
+            (
+                Value::Array(vec![Value::Boolean(true)]),
+                Schema::Array(Rc::new(Schema::Long)),
+                false,
+            ),
+            (Value::Record(vec![]), Schema::Null, false),
+        ];
+
+        for (value, schema, valid) in value_schema_valid.into_iter() {
+            assert_eq!(valid, value.validate(&schema));
+        }
+    }
+
+    #[test]
+    fn validate_fixed() {
+        let schema = Schema::Fixed {
+            size: 4,
+            name: Name::new("some_fixed"),
+        };
+
+        assert!(Value::Fixed(4, vec![0, 0, 0, 0]).validate(&schema));
+        assert!(!Value::Fixed(5, vec![0, 0, 0, 0, 0]).validate(&schema));
+    }
+
+    #[test]
+    fn validate_enum() {
+        let schema = Schema::Enum {
+            name: Name::new("some_enum"),
+            doc: None,
+            symbols: vec![
+                "spades".to_string(),
+                "hearts".to_string(),
+                "diamonds".to_string(),
+                "clubs".to_string(),
+            ],
+        };
+
+        assert!(Value::Enum(0, "spades".to_string()).validate(&schema));
+        assert!(Value::String("spades".to_string()).validate(&schema));
+
+        assert!(!Value::Enum(1, "spades".to_string()).validate(&schema));
+        assert!(!Value::String("lorem".to_string()).validate(&schema));
+
+        let other_schema = Schema::Enum {
+            name: Name::new("some_other_enum"),
+            doc: None,
+            symbols: vec![
+                "hearts".to_string(),
+                "diamonds".to_string(),
+                "clubs".to_string(),
+                "spades".to_string(),
+            ],
+        };
+
+        assert!(!Value::Enum(0, "spades".to_string()).validate(&other_schema));
+    }
+
+    #[test]
+    fn validate_record() {
+        // {
+        //    "type": "record",
+        //    "fields": [
+        //      {"type": "long", "name": "a"},
+        //      {"type": "string", "name": "b"}
+        //    ]
+        // }
+        let schema = Schema::Record(Rc::new(RecordSchema {
+            name: Name::new("some_record"),
+            doc: None,
+            fields: vec![
+                RecordField {
+                    name: "a".to_string(),
+                    doc: None,
+                    default: None,
+                    schema: Schema::Long,
+                    order: RecordFieldOrder::Ascending,
+                    position: 0,
+                },
+                RecordField {
+                    name: "b".to_string(),
+                    doc: None,
+                    default: None,
+                    schema: Schema::String,
+                    order: RecordFieldOrder::Ascending,
+                    position: 1,
+                },
+            ],
+            lookup: HashMap::new(),
+        }));
+
+        assert!(
+            Value::Record(vec![
+                ("a".to_string(), Value::Long(42i64)),
+                ("b".to_string(), Value::String("foo".to_string())),
+            ]).validate(&schema)
+        );
+
+        assert!(!Value::Record(vec![
+            ("b".to_string(), Value::String("foo".to_string())),
+            ("a".to_string(), Value::Long(42i64)),
+        ]).validate(&schema));
+
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Boolean(false)),
+            ("b".to_string(), Value::String("foo".to_string())),
+        ]).validate(&schema));
+
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Long(42i64)),
+            ("c".to_string(), Value::String("foo".to_string())),
+        ]).validate(&schema));
+
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Long(42i64)),
+            ("b".to_string(), Value::String("foo".to_string())),
+            ("c".to_string(), Value::Null),
+        ]).validate(&schema));
     }
 }

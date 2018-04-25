@@ -1,6 +1,6 @@
 //! Logic for serde-compatible deserialization.
-use std::collections::hash_map::{Keys, Values};
 use std::collections::HashMap;
+use std::collections::hash_map::{Keys, Values};
 use std::error::{self, Error as StdError};
 use std::fmt;
 use std::slice::Iter;
