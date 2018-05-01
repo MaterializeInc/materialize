@@ -9,7 +9,7 @@
 //! use avro::reader::Reader;
 //! use avro::schema::Schema;
 //! use avro::types::Record;
-//! use avro::writer::Writer;
+//! use avro::Writer;
 //!
 //! #[derive(Debug, Deserialize, Serialize)]
 //! struct Test {
@@ -64,24 +64,31 @@ extern crate libflate;
 extern crate rand;
 #[macro_use]
 extern crate serde;
+
 extern crate serde_json;
 #[cfg(feature = "snappy")]
 extern crate snap;
 
+// test dependency
+#[cfg(test)]
+#[macro_use]
+extern crate serde_derive;
+
 mod codec;
 mod de;
+mod decode;
+mod encode;
 mod ser;
 mod util;
+mod writer;
 
-pub mod decode;
-pub mod encode;
 pub mod reader;
 pub mod schema;
 pub mod types;
-pub mod writer;
 
 pub use codec::Codec;
 pub use de::from_value;
+pub use writer::{to_avro_datum, Writer};
 
 #[cfg(test)]
 mod tests {
@@ -89,7 +96,6 @@ mod tests {
     use reader::Reader;
     use schema::Schema;
     use types::{Record, Value};
-    use writer::Writer;
 
     //TODO: move where it fits better
     #[test]

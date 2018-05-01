@@ -4,8 +4,8 @@ extern crate test;
 
 extern crate avro;
 use avro::schema::Schema;
+use avro::to_avro_datum;
 use avro::types::{Record, ToAvro, Value};
-use avro::writer::SingleWriter;
 
 static RAW_SMALL_SCHEMA: &'static str = r#"
 {
@@ -152,16 +152,9 @@ fn make_big_record() -> (Schema, Value) {
     (big_schema, big_record)
 }
 
-fn write(writer: &mut SingleWriter, record: Value) -> Vec<u8> {
-    let mut buffer = Vec::new();
-    writer.write(&mut buffer, record).unwrap();
-    buffer
-}
-
 fn bench_write(b: &mut test::Bencher, make_record: &Fn() -> (Schema, Value)) {
     let (schema, record) = make_record();
-    let mut writer = SingleWriter::new(&schema);
-    b.iter(|| write(&mut writer, record.clone()));
+    b.iter(|| to_avro_datum(&schema, record.clone()));
 }
 
 #[bench]

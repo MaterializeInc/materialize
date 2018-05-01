@@ -1,5 +1,4 @@
 //! Logic for all supported compression codecs in Avro.
-
 use std::io::{Read, Write};
 use std::str::FromStr;
 

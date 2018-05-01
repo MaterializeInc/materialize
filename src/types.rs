@@ -165,7 +165,7 @@ impl<S: Serialize> ToAvro for S {
 }
 */
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Record {
     pub rschema: Rc<RecordSchema>,
     pub fields: Vec<(String, Value)>,

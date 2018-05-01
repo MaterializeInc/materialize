@@ -6,7 +6,7 @@ use std::time::Instant;
 use avro::reader::Reader;
 use avro::schema::Schema;
 use avro::types::{Record, ToAvro, Value};
-use avro::writer::Writer;
+use avro::Writer;
 
 fn nanos(duration: Duration) -> u64 {
     duration.as_secs() * 1_000_000_000 + duration.subsec_nanos() as u64

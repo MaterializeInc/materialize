@@ -47,7 +47,7 @@ pub fn encode(value: Value, buffer: &mut Vec<u8>) {
     }
 }
 
-pub fn encode_raw(value: Value) -> Vec<u8> {
+pub fn encode_to_vec(value: Value) -> Vec<u8> {
     let mut buffer = Vec::new();
     encode(value, &mut buffer);
     buffer
