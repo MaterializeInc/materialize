@@ -3,9 +3,9 @@
 extern crate test;
 
 extern crate avro;
-use avro::reader::Reader;
 use avro::schema::Schema;
 use avro::types::{Record, ToAvro, Value};
+use avro::Reader;
 use avro::Writer;
 
 static RAW_SMALL_SCHEMA: &'static str = r#"

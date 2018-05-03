@@ -6,7 +6,7 @@
 //!
 //! use avro::Codec;
 //! use avro::from_value;
-//! use avro::reader::Reader;
+//! use avro::Reader;
 //! use avro::schema::Schema;
 //! use avro::types::Record;
 //! use avro::Writer;
@@ -51,7 +51,7 @@
 //!     writer.flush().unwrap();
 //!
 //!     let input = writer.into_inner();
-//!     let reader = Reader::with_schema(&schema, &input[..]);
+//!     let reader = Reader::with_schema(&schema, &input[..]).unwrap();
 //!
 //!     for record in reader {
 //!         println!("{:?}", from_value::<Test>(&record.unwrap()));
@@ -78,16 +78,17 @@ mod codec;
 mod de;
 mod decode;
 mod encode;
+mod reader;
 mod ser;
 mod util;
 mod writer;
 
-pub mod reader;
 pub mod schema;
 pub mod types;
 
 pub use codec::Codec;
 pub use de::from_value;
+pub use reader::Reader;
 pub use writer::{to_avro_datum, Writer};
 
 #[cfg(test)]
@@ -138,7 +139,7 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&reader_schema, &input[..]);
+        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
         assert_eq!(
             reader.next().unwrap().unwrap(),
             Value::Record(vec![
@@ -181,7 +182,7 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&schema, &input[..]);
+        let mut reader = Reader::with_schema(&schema, &input[..]).unwrap();
         assert_eq!(
             reader.next().unwrap().unwrap(),
             Value::Record(vec![
@@ -244,7 +245,7 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::with_schema(&reader_schema, &input[..]);
+        let mut reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
         assert!(reader.next().unwrap().is_err());
         assert!(reader.next().is_none());
     }
@@ -280,7 +281,7 @@ mod tests {
         writer.append(record).unwrap();
         writer.flush().unwrap();
         let input = writer.into_inner();
-        let mut reader = Reader::new(&input[..]);
+        let mut reader = Reader::new(&input[..]).unwrap();
         assert_eq!(
             reader.next().unwrap().unwrap(),
             Value::Record(vec![

@@ -3,9 +3,9 @@ extern crate avro;
 use std::time::Duration;
 use std::time::Instant;
 
-use avro::reader::Reader;
 use avro::schema::Schema;
 use avro::types::{Record, ToAvro, Value};
+use avro::Reader;
 use avro::Writer;
 
 fn nanos(duration: Duration) -> u64 {

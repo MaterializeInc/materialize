@@ -3,6 +3,7 @@ use std::mem::transmute;
 use types::{ToAvro, Value};
 use util::{zig_i32, zig_i64};
 
+/// Encode a `Value` into avro format.
 pub fn encode(value: Value, buffer: &mut Vec<u8>) {
     match value {
         Value::Null => (),

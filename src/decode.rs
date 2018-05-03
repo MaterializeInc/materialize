@@ -8,6 +8,7 @@ use schema::Schema;
 use types::Value;
 use util::{zag_i32, zag_i64};
 
+/// Decode a `Value` from avro format given its `Schema`.
 pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
     match schema {
         &Schema::Null => Ok(Value::Null),
