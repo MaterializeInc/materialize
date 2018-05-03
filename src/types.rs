@@ -1,10 +1,11 @@
+//! Logic handling the intermediate representation of Avro values.
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use failure::{err_msg, Error};
 use serde_json::Value as JsonValue;
 
-use schema::{RecordSchema, Schema};
+use schema::{RecordField, Schema};
 
 /// Represents any valid Avro value
 /// More information about Avro values can be found in the
@@ -165,42 +166,54 @@ impl<S: Serialize> ToAvro for S {
 }
 */
 
+/// Utility interface to build `Value::Record` objects.
 #[derive(Debug, Clone)]
 pub struct Record {
-    pub rschema: Rc<RecordSchema>,
+    /// List of fields contained in the record.
+    /// Ordered according to the fields in the schema given to create this
+    /// `Record` object. Any unset field defaults to `Value::Null`.
     pub fields: Vec<(String, Value)>,
+    schema_lookup: Rc<HashMap<String, usize>>,
 }
 
 impl Record {
+    /// Create a `Record` given a `Schema`.
+    ///
+    /// If the `Schema` is not a `Schema::Record` variant, `None` will be returned.
     pub fn new(schema: &Schema) -> Option<Record> {
         match schema {
-            &Schema::Record(ref rschema) => {
-                let mut fields = Vec::with_capacity(rschema.fields.len());
-                for field in rschema.fields.iter() {
-                    fields.push((field.name.clone(), Value::Null));
+            &Schema::Record {
+                fields: ref schema_fields,
+                lookup: ref schema_lookup,
+                ..
+            } => {
+                let mut fields = Vec::with_capacity(schema_fields.len());
+                for schema_field in schema_fields.iter() {
+                    fields.push((schema_field.name.clone(), Value::Null));
                 }
 
                 Some(Record {
-                    rschema: rschema.clone(),
                     fields,
+                    schema_lookup: schema_lookup.clone(),
                 })
             },
             _ => None,
         }
     }
 
+    /// Put a compatible value (implementing the `ToAvro` trait) in the
+    /// `Record` for a given `field` name.
+    ///
+    /// **NOTE** Only ensure that the field name is present in the `Schema` given when creating
+    /// this `Record`. Does not perform any schema validation.
     pub fn put<V>(&mut self, field: &str, value: V)
     where
         V: ToAvro,
     {
-        match self.rschema.lookup.get(field) {
+        match self.schema_lookup.get(field) {
             Some(&position) => self.fields[position].1 = value.avro(),
             None => (),
         }
-    }
-
-    pub fn schema(&self) -> Schema {
-        Schema::Record(self.rschema.clone())
     }
 }
 
@@ -261,11 +274,11 @@ impl Value {
             (&Value::Map(ref items), &Schema::Map(ref inner)) => {
                 items.iter().all(|(_, value)| value.validate(inner))
             },
-            (&Value::Record(ref fields), &Schema::Record(ref rschema)) => {
-                rschema.fields.len() == fields.len()
-                    && rschema.fields.iter().zip(fields.iter()).all(
-                        |(rfield, &(ref name, ref value))| {
-                            rfield.name == *name && value.validate(&rfield.schema)
+            (&Value::Record(ref record_fields), &Schema::Record { ref fields, .. }) => {
+                fields.len() == record_fields.len()
+                    && fields.iter().zip(record_fields.iter()).all(
+                        |(field, &(ref name, ref value))| {
+                            field.name == *name && value.validate(&field.schema)
                         },
                     )
             },
@@ -294,7 +307,7 @@ impl Value {
             &Schema::Enum { ref symbols, .. } => self.resolve_enum(symbols),
             &Schema::Array(ref inner) => self.resolve_array(inner),
             &Schema::Map(ref inner) => self.resolve_map(inner),
-            &Schema::Record(ref rschema) => self.resolve_record(rschema),
+            &Schema::Record { ref fields, .. } => self.resolve_record(fields),
         }
     }
 
@@ -445,18 +458,17 @@ impl Value {
         }
     }
 
-    fn resolve_record(self, rschema: &RecordSchema) -> Result<Self, Error> {
+    fn resolve_record(self, fields: &Vec<RecordField>) -> Result<Self, Error> {
         let mut items = match self {
             Value::Map(items) => Ok(items),
             Value::Record(fields) => Ok(fields.into_iter().collect::<HashMap<_, _>>()),
             other => Err(err_msg(format!(
                 "Record({:?}) expected, got {:?}",
-                rschema, other
+                fields, other
             ))),
         }?;
 
-        let new_fields = rschema
-            .fields
+        let new_fields = fields
             .iter()
             .map(|field| {
                 let value = match items.remove(&field.name) {
@@ -487,7 +499,7 @@ mod tests {
 
     use std::rc::Rc;
 
-    use schema::{Name, RecordField, RecordFieldOrder, RecordSchema};
+    use schema::{Name, RecordField, RecordFieldOrder};
 
     #[test]
     fn validate() {
@@ -580,7 +592,7 @@ mod tests {
         //      {"type": "string", "name": "b"}
         //    ]
         // }
-        let schema = Schema::Record(Rc::new(RecordSchema {
+        let schema = Schema::Record {
             name: Name::new("some_record"),
             doc: None,
             fields: vec![
@@ -601,8 +613,8 @@ mod tests {
                     position: 1,
                 },
             ],
-            lookup: HashMap::new(),
-        }));
+            lookup: Rc::new(HashMap::new()),
+        };
 
         assert!(
             Value::Record(vec![

@@ -1,3 +1,4 @@
+//! Logic for parsing and interacting with schemas in Avro format.
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -7,63 +8,78 @@ use serde_json::{self, Map, Value};
 
 use util::MapHelper;
 
+/// Represents any valid Avro schema
+/// More information about Avro schemas can be found in the
+/// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
 #[derive(Clone, Debug, PartialEq)]
 pub enum Schema {
+    /// A `null` Avro schema.
     Null,
+    /// A `boolean` Avro schema.
     Boolean,
+    /// An `int` Avro schema.
     Int,
+    /// A `long` Avro schema.
     Long,
+    /// A `float` Avro schema.
     Float,
+    /// A `double` Avro schema.
     Double,
+    /// A `bytes` Avro schema.
+    /// `Bytes` represents a sequence of 8-bit unsigned bytes.
     Bytes,
+    /// A `string` Avro schema.
+    /// `String` represents a unicode character sequence.
     String,
+    /// A `array` Avro schema.
+    /// `Array` holds a counted reference (`Rc`) to the `Schema` of its items.
     Array(Rc<Schema>),
+    /// A `map` Avro schema.
+    /// `Map` holds a counted reference (`Rc`) to the `Schema` of its values.
+    /// `Map` keys are assumed to be `string`.
     Map(Rc<Schema>),
+    /// A `union` Avro schema.
+    ///
+    /// `Union` holds a counted reference (`Rc`) to its non-`null` `Schema`.
+    ///
+    /// **NOTE** Only \["null", "< type >"`] unions are currently supported.
+    /// Any other combination of `Schema`s contained in a `union` will be
+    /// considered invalid and errors will be reported when trying to parse
+    /// such a schema.
     Union(Rc<Schema>),
-    Record(Rc<RecordSchema>),
+    /// A `record` Avro schema.
+    ///
+    /// The `lookup` table maps field names to their position in the `Vec`
+    /// of `fields`.
+    Record {
+        name: Name,
+        doc: Documentation,
+        fields: Vec<RecordField>,
+
+        // TODO: this does not look great.
+        // This is just a trick to avoid borrows of Schema into types::Record.
+        lookup: Rc<HashMap<String, usize>>,
+    },
+    /// An `enum` Avro schema.
     Enum {
         name: Name,
         doc: Documentation,
         symbols: Vec<String>,
     },
-    Fixed {
-        name: Name,
-        size: usize,
-    },
+    /// A `fixed` Avro schema.
+    Fixed { name: Name, size: usize },
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecordSchema {
-    pub name: Name,
-    pub doc: Documentation,
-    pub fields: Vec<RecordField>,
-    pub lookup: HashMap<String, usize>, // TODO: &'a str?
-}
-
-/*
-impl RecordSchema {
-    /*
-    pub fn lookup<'a>(&'a self) -> HashMap<&'a str, usize> {
-        let mut lookup: HashMap<&'a str, usize> = HashMap::new();
-        for ref field in self.fields.iter() {
-            lookup.insert(&(field.name), field.position);
-        }
-        lookup
-    }
-    */
-
-    /*
-    pub fn lookup(&self) -> HashMap<String, usize> {
-        let mut lookup = HashMap::new();
-        for ref field in self.fields.iter() {
-            lookup.insert(field.name.clone(), field.position);
-        }
-        lookup
-    }
-    */
-}
-*/
-
+/// Represents names for `record`, `enum` and `fixed` Avro schemas.
+///
+/// Each of these `Schema`s have a `fullname` composed of two parts:
+///   * a name
+///   * a namespace
+///
+/// `aliases` can also be defined, to facilitate schema evolution.
+///
+/// More information about schema names can be found in the
+/// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
 #[derive(Clone, Debug, PartialEq)]
 pub struct Name {
     pub name: String,
@@ -71,9 +87,12 @@ pub struct Name {
     pub aliases: Option<Vec<String>>,
 }
 
+/// Represents documentation for complex Avro schemas.
 pub type Documentation = Option<String>;
 
 impl Name {
+    /// Create a new `Name`.
+    /// No `namespace` nor `aliases` will be defined.
     pub fn new(name: &str) -> Name {
         Name {
             name: name.to_owned(),
@@ -82,6 +101,7 @@ impl Name {
         }
     }
 
+    /// Parse a `serde_json::Value` into a `Name`.
     fn parse(complex: &Map<String, Value>) -> Result<Self, Error> {
         let name = complex.name().ok_or_else(|| err_msg("No `name` field"))?;
 
@@ -105,32 +125,49 @@ impl Name {
         })
     }
 
-    /*
-    fn fullname(&self, default_namespace: Option<String>) -> String {
+    /// Return the `fullname` of this `Name`
+    ///
+    /// More information about fullnames can be found in the
+    /// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
+    pub fn fullname(&self, default_namespace: Option<&str>) -> String {
         if self.name.contains(".") {
             self.name.clone()
         } else {
-            // TODO: why is .clone() needed? :(
-            let namespace = self.namespace.clone().or(default_namespace);
+            let namespace = self.namespace
+                .as_ref()
+                .map(|s| s.as_ref())
+                .or(default_namespace);
+
             match namespace {
-                Some(namespace) => format!("{}.{}", namespace, self.name),
+                Some(ref namespace) => format!("{}.{}", namespace, self.name),
                 None => self.name.clone(),
             }
         }
     }
-    */
 }
 
+/// Represents a `field` in a `record` Avro schema.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordField {
+    /// Name of the field.
     pub name: String,
-    pub doc: Option<String>,
+    /// Documentation of the field.
+    pub doc: Documentation,
+    /// Default value of the field.
+    /// This value will be used when reading Avro datum if schema resolution
+    /// is enabled.
     pub default: Option<Value>,
+    /// Schema of the field.
     pub schema: Schema,
+    /// Order of the field.
+    ///
+    /// **NOTE** This currently has no effect.
     pub order: RecordFieldOrder,
+    /// Position of the field in the list of `field` of its parent `Schema`
     pub position: usize,
 }
 
+/// Represents any valid order for a `field` in a `record` Avro schema.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecordFieldOrder {
     Ascending,
@@ -139,6 +176,7 @@ pub enum RecordFieldOrder {
 }
 
 impl RecordField {
+    /// Parse a `serde_json::Value` into a `RecordField`.
     fn parse(field: &Map<String, Value>, position: usize) -> Result<Self, Error> {
         let name = field
             .name()
@@ -154,7 +192,7 @@ impl RecordField {
 
         let order = field
             .get("order")
-            .and_then(|o| o.as_str())
+            .and_then(|order| order.as_str())
             .and_then(|order| match order {
                 "ascending" => Some(RecordFieldOrder::Ascending),
                 "descending" => Some(RecordFieldOrder::Descending),
@@ -175,20 +213,27 @@ impl RecordField {
 }
 
 impl Schema {
+    /// Create a `Schema` from a string representing a JSON Avro schema.
     pub fn parse_str(input: &str) -> Result<Self, Error> {
         let value = serde_json::from_str(input)?;
         Self::parse(&value)
     }
 
+    /// Create a `Schema` from a `serde_json::Value` representing a JSON Avro
+    /// schema.
     pub fn parse(value: &Value) -> Result<Self, Error> {
         match *value {
             Value::String(ref t) => Schema::parse_primitive(t.as_str()),
             Value::Object(ref data) => Schema::parse_complex(data),
             Value::Array(ref data) => Schema::parse_union(data),
-            _ => Err(err_msg("Error")),
+            _ => Err(err_msg(
+                "Error parsing schema: must be a JSON string, object or array",
+            )),
         }
     }
 
+    /// Parse a `serde_json::Value` representing a primitive Avro type into a
+    /// `Schema`.
     fn parse_primitive(primitive: &str) -> Result<Self, Error> {
         match primitive {
             "null" => Ok(Schema::Null),
@@ -203,6 +248,11 @@ impl Schema {
         }
     }
 
+    /// Parse a `serde_json::Value` representing a complex Avro type into a
+    /// `Schema`.
+    ///
+    /// Avro supports "recursive" definition of types.
+    /// e.g: {"type": {"type": "string"}}
     fn parse_complex(complex: &Map<String, Value>) -> Result<Self, Error> {
         match complex.get("type") {
             Some(&Value::String(ref t)) => match t.as_str() {
@@ -221,6 +271,8 @@ impl Schema {
         }
     }
 
+    /// Parse a `serde_json::Value` representing a Avro record type into a
+    /// `Schema`.
     fn parse_record(complex: &Map<String, Value>) -> Result<Self, Error> {
         let name = Name::parse(complex)?;
 
@@ -243,14 +295,16 @@ impl Schema {
             lookup.insert(field.name.clone(), field.position);
         }
 
-        Ok(Schema::Record(Rc::new(RecordSchema {
+        Ok(Schema::Record {
             name,
             doc: complex.doc(),
             fields,
-            lookup,
-        })))
+            lookup: Rc::new(lookup),
+        })
     }
 
+    /// Parse a `serde_json::Value` representing a Avro enum type into a
+    /// `Schema`.
     fn parse_enum(complex: &Map<String, Value>) -> Result<Self, Error> {
         let name = Name::parse(complex)?;
 
@@ -273,6 +327,8 @@ impl Schema {
         })
     }
 
+    /// Parse a `serde_json::Value` representing a Avro array type into a
+    /// `Schema`.
     fn parse_array(complex: &Map<String, Value>) -> Result<Self, Error> {
         complex
             .get("items")
@@ -281,6 +337,8 @@ impl Schema {
             .map(|schema| Schema::Array(Rc::new(schema)))
     }
 
+    /// Parse a `serde_json::Value` representing a Avro map type into a
+    /// `Schema`.
     fn parse_map(complex: &Map<String, Value>) -> Result<Self, Error> {
         complex
             .get("values")
@@ -289,6 +347,8 @@ impl Schema {
             .map(|schema| Schema::Map(Rc::new(schema)))
     }
 
+    /// Parse a `serde_json::Value` representing a Avro union type into a
+    /// `Schema`.
     fn parse_union(items: &Vec<Value>) -> Result<Self, Error> {
         /*
         items.iter()
@@ -314,6 +374,8 @@ impl Schema {
         */
     }
 
+    /// Parse a `serde_json::Value` representing a Avro fixed type into a
+    /// `Schema`.
     fn parse_fixed(complex: &Map<String, Value>) -> Result<Self, Error> {
         let name = Name::parse(complex)?;
 
@@ -361,12 +423,16 @@ impl Serialize for Schema {
                 seq.serialize_element(&*inner.clone())?;
                 seq.end()
             },
-            Schema::Record(ref rschema) => {
+            Schema::Record {
+                ref name,
+                ref fields,
+                ..
+            } => {
                 let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("type", "record")?;
-                map.serialize_entry("name", &rschema.name.name)?;
+                map.serialize_entry("name", &name.name)?;
                 // TODO: namespace, etc...
-                map.serialize_entry("fields", &rschema.fields)?;
+                map.serialize_entry("fields", fields)?;
                 map.end()
             },
             Schema::Enum {
@@ -405,5 +471,152 @@ impl Serialize for RecordField {
         }
 
         map.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invalid_schema() {
+        assert!(Schema::parse_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_primitive_schema() {
+        assert_eq!(Schema::Null, Schema::parse_str("\"null\"").unwrap());
+        assert_eq!(Schema::Int, Schema::parse_str("\"int\"").unwrap());
+        assert_eq!(Schema::Double, Schema::parse_str("\"double\"").unwrap());
+    }
+
+    #[test]
+    fn test_array_schema() {
+        let schema = Schema::parse_str(r#"{"type": "array", "items": "string"}"#).unwrap();
+        assert_eq!(Schema::Array(Rc::new(Schema::String)), schema);
+    }
+
+    #[test]
+    fn test_map_schema() {
+        let schema = Schema::parse_str(r#"{"type": "map", "values": "double"}"#).unwrap();
+        assert_eq!(Schema::Map(Rc::new(Schema::Double)), schema);
+    }
+
+    #[test]
+    fn test_union_schema() {
+        let schema = Schema::parse_str(r#"["null", "int"]"#).unwrap();
+        assert_eq!(Schema::Union(Rc::new(Schema::Int)), schema);
+    }
+
+    #[test]
+    fn test_union_unsupported_schema() {
+        let schema = Schema::parse_str(r#"["null", "int", "string"]"#);
+        assert!(schema.is_err());
+    }
+
+    #[test]
+    fn test_record_schema() {
+        let schema = Schema::parse_str(
+            r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "a", "type": "long", "default": 42},
+                    {"name": "b", "type": "string"}
+                ]
+            }
+        "#,
+        ).unwrap();
+
+        let mut lookup = HashMap::new();
+        lookup.insert("a".to_owned(), 0);
+        lookup.insert("b".to_owned(), 1);
+
+        let expected = Schema::Record {
+            name: Name::new("test"),
+            doc: None,
+            fields: vec![
+                RecordField {
+                    name: "a".to_string(),
+                    doc: None,
+                    default: Some(Value::Number(42i64.into())),
+                    schema: Schema::Long,
+                    order: RecordFieldOrder::Ascending,
+                    position: 0,
+                },
+                RecordField {
+                    name: "b".to_string(),
+                    doc: None,
+                    default: None,
+                    schema: Schema::String,
+                    order: RecordFieldOrder::Ascending,
+                    position: 1,
+                },
+            ],
+            lookup: Rc::new(lookup),
+        };
+
+        assert_eq!(expected, schema);
+    }
+
+    #[test]
+    fn test_enum_schema() {
+        let schema = Schema::parse_str(
+            r#"{"type": "enum", "name": "Suit", "symbols": ["diamonds", "spades", "clubs", "hearts"]}"#,
+        ).unwrap();
+
+        let expected = Schema::Enum {
+            name: Name::new("Suit"),
+            doc: None,
+            symbols: vec![
+                "diamonds".to_owned(),
+                "spades".to_owned(),
+                "clubs".to_owned(),
+                "hearts".to_owned(),
+            ],
+        };
+
+        assert_eq!(expected, schema);
+    }
+
+    #[test]
+    fn test_fixed_schema() {
+        let schema = Schema::parse_str(r#"{"type": "fixed", "name": "test", "size": 16}"#).unwrap();
+
+        let expected = Schema::Fixed {
+            name: Name::new("test"),
+            size: 16usize,
+        };
+
+        assert_eq!(expected, schema);
+    }
+
+    #[test]
+    fn test_no_documentation() {
+        let schema = Schema::parse_str(
+            r#"{"type": "enum", "name": "Coin", "symbols": ["heads", "tails"]}"#,
+        ).unwrap();
+
+        let doc = match schema {
+            Schema::Enum { doc, .. } => doc,
+            _ => return assert!(false),
+        };
+
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn test_documentation() {
+        let schema = Schema::parse_str(
+            r#"{"type": "enum", "name": "Coin", "doc": "Some documentation", "symbols": ["heads", "tails"]}"#
+        ).unwrap();
+
+        let doc = match schema {
+            Schema::Enum { doc, .. } => doc,
+            _ => None,
+        };
+
+        assert_eq!("Some documentation".to_owned(), doc.unwrap());
     }
 }
