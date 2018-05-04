@@ -1,6 +1,7 @@
 //! Logic handling writing in Avro format at user level.
 use std::collections::HashMap;
 use std::io::Write;
+use std::rc::Rc;
 
 use failure::{err_msg, Error};
 use rand::random;
@@ -191,7 +192,8 @@ impl<'a, W: Write> Writer<'a, W> {
         let num_values = self.num_values;
         let stream_len = self.buffer.len();
 
-        let num_bytes = self.append_raw(num_values.avro())? + self.append_raw(stream_len.avro())?
+        let num_bytes = self.append_raw(num_values.avro(), &Schema::Long)?
+            + self.append_raw(stream_len.avro(), &Schema::Long)?
             + self.writer.write(self.buffer.as_ref())?
             + self.append_marker()?;
 
@@ -217,8 +219,8 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     /// Append a raw Avro Value to the payload avoiding to encode it again.
-    fn append_raw(&mut self, value: Value) -> Result<usize, Error> {
-        self.append_bytes(encode_to_vec(value).as_ref())
+    fn append_raw(&mut self, value: Value, schema: &Schema) -> Result<usize, Error> {
+        self.append_bytes(encode_to_vec(value, schema).as_ref())
     }
 
     /// Append pure bytes to the payload.
@@ -236,7 +238,11 @@ impl<'a, W: Write> Writer<'a, W> {
 
         let mut header = Vec::new();
         header.extend_from_slice(AVRO_OBJECT_HEADER);
-        encode(metadata.avro(), &mut header);
+        encode(
+            metadata.avro(),
+            &Schema::Map(Rc::new(Schema::Bytes)),
+            &mut header,
+        );
         header.extend_from_slice(&self.marker);
 
         Ok(header)
@@ -257,8 +263,7 @@ fn write_avro_datum<T: ToAvro>(
     if !avro.validate(schema) {
         return Err(err_msg("value does not match schema"))
     }
-    // TODO: this resolve call is super-expensive, try to pass the schema to avro() instead
-    Ok(encode(avro.resolve(schema)?, buffer))
+    Ok(encode(avro, schema, buffer))
 }
 
 /// Encode a compatible value (implementing the `ToAvro` trait) into Avro format, also
