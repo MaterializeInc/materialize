@@ -42,7 +42,7 @@ pub enum Schema {
     ///
     /// `Union` holds a counted reference (`Rc`) to its non-`null` `Schema`.
     ///
-    /// **NOTE** Only \["null", "< type >"`] unions are currently supported.
+    /// **NOTE** Only `["null", "< type >"]` unions are currently supported.
     /// Any other combination of `Schema`s contained in a `union` will be
     /// considered invalid and errors will be reported when trying to parse
     /// such a schema.

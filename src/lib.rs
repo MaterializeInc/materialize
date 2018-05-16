@@ -1,15 +1,446 @@
+//! # avro-rs
+//! **[Apache Avro](https://avro.apache.org/)** is a data serialization system which provides rich
+//! data structures and a compact, fast, binary data format.
+//!
+//! All data in Avro is schematized, as in the following example:
+//!
+//! ```text
+//! {
+//!     "type": "record",
+//!     "name": "test",
+//!     "fields": [
+//!         {"name": "a", "type": "long", "default": 42},
+//!         {"name": "b", "type": "string"}
+//!     ]
+//! }
+//! ```
+//!
+//! There are basically two ways of handling Avro data in Rust:
+//!
+//! * **as Avro-specialized data types** based on an Avro schema;
+//! * **as generic Rust serde-compatible types** implementing/deriving `Serialize` and
+//! `Deserialize`;
+//!
+//! **avro-rs** provides a way to read and write both these data representations easily and
+//! efficiently.
+//!
+//! # Installing the library
+//!
+//!
+//! Add to your `Cargo.toml`:
+//!
+//! ```text
+//! [dependencies]
+//! avro-rs = "0.1"
+//! ```
+//!
+//! Or in case you want to leverage the **Snappy** codec:
+//!
+//! ```text
+//! [dependencies.avro-rs]
+//! version = "0.1"
+//! features = ["snappy"]
+//! ```
+//!
+//! To use the library,  just add at the top of the crate:
+//!
+//! ```
+//! extern crate avro;
+//! ```
+//!
+//! # Defining a schema
+//!
+//! An Avro data cannot exist without an Avro schema. Schemas **must** be used while writing and
+//! **can** be used while reading and they carry the information regarding the type of data we are
+//! handling. Avro schemas are used for both schema validation and resolution of Avro data.
+//!
+//! Avro schemas are defined in **JSON** format and can just be parsed out of a raw string:
+//!
+//! ```
+//! # extern crate avro;
+//! use avro::Schema;
+//!
+//! let raw_schema = r#"
+//!     {
+//!         "type": "record",
+//!         "name": "test",
+//!         "fields": [
+//!             {"name": "a", "type": "long", "default": 42},
+//!             {"name": "b", "type": "string"}
+//!         ]
+//!     }
+//! "#;
+//!
+//! // if the schema is not valid, this function will return an error
+//! let schema = Schema::parse_str(raw_schema).unwrap();
+//!
+//! // schemas can be printed for debugging
+//! println!("{:?}", schema);
+//! ```
+//!
+//! The library provides also a programmatic interface to define schemas without encoding them in
+//! JSON (for advanced use), but we highly recommend the JSON interface. Please read the API
+//! reference in case you are interested.
+//!
+//! For more information about schemas and what kind of information you can encapsulate in them,
+//! please refer to the appropriate section of the
+//! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
+//!
+//! # Writing data
+//!
+//! Once we have defined a schema, we are ready to serialize data in Avro, validating them against
+//! the provided schema in the process. As mentioned before, there are two ways of handling Avro
+//! data in Rust.
+//!
+//! **NOTE:** The library also provides a low-level interface for encoding a single datum in Avro
+//! bytecode without generating markers and headers (for advanced use), but we highly recommend the
+//! `Writer` interface to be totally Avro-compatible. Please read the API reference in case you are
+//! interested.
+//!
+//! ## The avro way
+//!
+//! Given that the schema we defined above is that of an Avro *Record*, we are going to use the
+//! associated type provided by the library to specify the data we want to serialize:
+//!
+//! ```
+//! # extern crate avro;
+//! # use avro::Schema;
+//! use avro::types::Record;
+//! use avro::Writer;
+//! #
+//! # let raw_schema = r#"
+//! #     {
+//! #         "type": "record",
+//! #         "name": "test",
+//! #         "fields": [
+//! #             {"name": "a", "type": "long", "default": 42},
+//! #             {"name": "b", "type": "string"}
+//! #         ]
+//! #     }
+//! # "#;
+//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! // a writer needs a schema and something to write to
+//! let mut writer = Writer::new(&schema, Vec::new());
+//!
+//! // the Record type models our Record schema
+//! let mut record = Record::new(writer.schema()).unwrap();
+//! record.put("a", 27i64);
+//! record.put("b", "foo");
+//!
+//! // schema validation happens here
+//! writer.append(record).unwrap();
+//!
+//! // flushing makes sure that all data gets encoded
+//! writer.flush().unwrap();
+//!
+//! // this is how to get back the resulting avro bytecode
+//! let encoded = writer.into_inner();
+//! ```
+//!
+//! The vast majority of the times, schemas tend to define a record as a top-level container
+//! encapsulating all the values to convert as fields and providing documentation for them, but in
+//! case we want to directly define an Avro value, the library offers that capability via the
+//! `Value` interface.
+//!
+//! ```
+//! # extern crate avro;
+//! use avro::types::Value;
+//!
+//! let mut value = Value::String("foo".to_string());
+//! ```
+//!
+//! ## The serde way
+//!
+//! Given that the schema we defined above is an Avro *Record*, we can directly use a Rust struct
+//! deriving `Serialize` to model our data:
+//!
+//! ```
+//! # extern crate avro;
+//! #[macro_use]
+//! extern crate serde_derive;
+//!
+//! # use avro::Schema;
+//! use avro::Writer;
+//!
+//! #[derive(Debug, Serialize)]
+//! struct Test {
+//!     a: i64,
+//!     b: String,
+//! }
+//!
+//! # fn main() {
+//! # let raw_schema = r#"
+//! #     {
+//! #         "type": "record",
+//! #         "name": "test",
+//! #         "fields": [
+//! #             {"name": "a", "type": "long", "default": 42},
+//! #             {"name": "b", "type": "string"}
+//! #         ]
+//! #     }
+//! # "#;
+//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! // a writer needs a schema and something to write to
+//! let mut writer = Writer::new(&schema, Vec::new());
+//!
+//! // the structure models our Record schema
+//! let test = Test {
+//!     a: 27,
+//!     b: "foo".to_owned(),
+//! };
+//!
+//! // schema validation happens here
+//! writer.append_ser(test).unwrap();
+//!
+//! // flushing makes sure that all data gets encoded
+//! writer.flush().unwrap();
+//!
+//! // this is how to get back the resulting avro bytecode
+//! let encoded = writer.into_inner();
+//! # }
+//! ```
+//!
+//! The vast majority of the times, schemas tend to define a record as a top-level container
+//! encapsulating all the values to convert as fields and providing documentation for them, but in
+//! case we want to directly define an Avro value, any type implementing `Serialize` should work.
+//!
+//! ```
+//! # extern crate avro;
+//!
+//! let mut value = "foo".to_string();
+//! ```
+//!
+//! ## Using codecs to compress data
+//!
+//! Avro supports three different compression codecs when encoding data:
+//!
+//! * **Null**: leaves data uncompressed;
+//! * **Deflate: writes the data block using the deflate algorithm as specified in RFC 1951, and
+//! typically implemented using the zlib library. Note that this format (unlike the "zlib format" in
+//! RFC 1950) does not have a checksum.
+//! * **Snappy**: uses Google's [Snappy](http://google.github.io/snappy/) compression library. Each
+//! compressed block is followed by the 4-byte, big-endianCRC32 checksum of the uncompressed data in
+//! the block. You must enable the `snappy` feature to use this codec.
+//!
+//! To specify a codec to use to compress data, just specify it while creating a `Writer`:
+//! ```
+//! # extern crate avro;
+//! # use avro::Schema;
+//! use avro::Writer;
+//! use avro::Codec;
+//! #
+//! # let raw_schema = r#"
+//! #     {
+//! #         "type": "record",
+//! #         "name": "test",
+//! #         "fields": [
+//! #             {"name": "a", "type": "long", "default": 42},
+//! #             {"name": "b", "type": "string"}
+//! #         ]
+//! #     }
+//! # "#;
+//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! let mut writer = Writer::with_codec(&schema, Vec::new(), Codec::Deflate);
+//! ```
+//!
+//! # Reading data
+//!
+//! As far as reading Avro encoded data goes, we can just use the schema encoded with the data to
+//! read them. The library will do it automatically for us, as it already does for the compression
+//! codec:
+//!
+//! ```
+//! # extern crate avro;
+//! use avro::Reader;
+//! # use avro::Schema;
+//! # use avro::types::Record;
+//! # use avro::Writer;
+//! #
+//! # let raw_schema = r#"
+//! #     {
+//! #         "type": "record",
+//! #         "name": "test",
+//! #         "fields": [
+//! #             {"name": "a", "type": "long", "default": 42},
+//! #             {"name": "b", "type": "string"}
+//! #         ]
+//! #     }
+//! # "#;
+//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let mut writer = Writer::new(&schema, Vec::new());
+//! # let mut record = Record::new(writer.schema()).unwrap();
+//! # record.put("a", 27i64);
+//! # record.put("b", "foo");
+//! # writer.append(record).unwrap();
+//! # writer.flush().unwrap();
+//! # let input = writer.into_inner();
+//! // reader creation can fail in case the input to read from is not Avro-compatible or malformed
+//! let reader = Reader::new(&input[..]).unwrap();
+//! ```
+//!
+//! In case, instead, we want to specify a different (but compatible) reader schema from the schema
+//! the data has been written with, we can just do as the following:
+//! ```
+//! # extern crate avro;
+//! use avro::Schema;
+//! use avro::Reader;
+//! # use avro::types::Record;
+//! # use avro::Writer;
+//! #
+//! # let writer_raw_schema = r#"
+//! #     {
+//! #         "type": "record",
+//! #         "name": "test",
+//! #         "fields": [
+//! #             {"name": "a", "type": "long", "default": 42},
+//! #             {"name": "b", "type": "string"}
+//! #         ]
+//! #     }
+//! # "#;
+//! # let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
+//! # let mut writer = Writer::new(&writer_schema, Vec::new());
+//! # let mut record = Record::new(writer.schema()).unwrap();
+//! # record.put("a", 27i64);
+//! # record.put("b", "foo");
+//! # writer.append(record).unwrap();
+//! # writer.flush().unwrap();
+//! # let input = writer.into_inner();
+//!
+//! let reader_raw_schema = r#"
+//!     {
+//!         "type": "record",
+//!         "name": "test",
+//!         "fields": [
+//!             {"name": "a", "type": "long", "default": 42},
+//!             {"name": "b", "type": "string"},
+//!             {"name": "c", "type": "long", "default": 43}
+//!         ]
+//!     }
+//! "#;
+//!
+//! let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
+//!
+//! // reader creation can fail in case the input to read from is not Avro-compatible or malformed
+//! let reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
+//! ```
+//!
+//! The library will also automatically perform schema resolution while reading the data.
+//!
+//! For more information about schema compatibility and resolution, please refer to the
+//! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
+//!
+//! As usual, there are two ways to handle Avro data in Rust, as you can see below.
+//!
+//! **NOTE:** The library also provides a low-level interface for decoding a single datum in Avro
+//! bytecode without markers and header (for advanced use), but we highly recommend the `Reader`
+//! interface to leverage all Avro features. Please read the API reference in case you are
+//! interested.
+//!
+//!
+//! ## The avro way
+//!
+//! We can just read directly instances of `Value` out of the `Reader` iterator:
+//!
+//! ```
+//! # extern crate avro;
+//! # use avro::Schema;
+//! # use avro::types::Record;
+//! # use avro::Writer;
+//! use avro::Reader;
+//! #
+//! # let raw_schema = r#"
+//! #     {
+//! #         "type": "record",
+//! #         "name": "test",
+//! #         "fields": [
+//! #             {"name": "a", "type": "long", "default": 42},
+//! #             {"name": "b", "type": "string"}
+//! #         ]
+//! #     }
+//! # "#;
+//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let mut writer = Writer::new(&schema, Vec::new());
+//! # let mut record = Record::new(writer.schema()).unwrap();
+//! # record.put("a", 27i64);
+//! # record.put("b", "foo");
+//! # writer.append(record).unwrap();
+//! # writer.flush().unwrap();
+//! # let input = writer.into_inner();
+//! let reader = Reader::new(&input[..]).unwrap();
+//!
+//! // value is a Result  of an Avro Value in case the read operation fails
+//! for value in reader {
+//!     println!("{:?}", value.unwrap());
+//! }
+//!
+//! ```
+//!
+//! ## The serde way
+//!
+//! Alternatively, we can use a Rust type implementing `Deserialize` and representing our schema to
+//! read the data into:
+//!
+//! ```
+//! # extern crate avro;
+//! #[macro_use]
+//! extern crate serde_derive;
+//!
+//! # use avro::Schema;
+//! # use avro::Writer;
+//! use avro::Reader;
+//! use avro::from_value;
+//!
+//! # #[derive(Serialize)]
+//! #[derive(Debug, Deserialize)]
+//! struct Test {
+//!     a: i64,
+//!     b: String,
+//! }
+//!
+//! # fn main() {
+//! # let raw_schema = r#"
+//! #     {
+//! #         "type": "record",
+//! #         "name": "test",
+//! #         "fields": [
+//! #             {"name": "a", "type": "long", "default": 42},
+//! #             {"name": "b", "type": "string"}
+//! #         ]
+//! #     }
+//! # "#;
+//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let mut writer = Writer::new(&schema, Vec::new());
+//! # let test = Test {
+//! #     a: 27,
+//! #     b: "foo".to_owned(),
+//! # };
+//! # writer.append_ser(test).unwrap();
+//! # writer.flush().unwrap();
+//! # let input = writer.into_inner();
+//! let reader = Reader::new(&input[..]).unwrap();
+//!
+//! // value is a Result in case the read operation fails
+//! for value in reader {
+//!     println!("{:?}", from_value::<Test>(&value.unwrap()));
+//! }
+//! # }
+//! ```
+//!
+//! # Putting everything together
+//!
+//! The following is an example of how to combine everything showed so far and it is meant to be a
+//! quick reference of the library interface:
+//!
 //! ```
 //! extern crate avro;
 //!
 //! #[macro_use]
 //! extern crate serde_derive;
+//! extern crate failure;
 //!
-//! use avro::Codec;
-//! use avro::from_value;
-//! use avro::Reader;
-//! use avro::schema::Schema;
-//! use avro::types::Record;
-//! use avro::Writer;
+//! use avro::{Codec, Reader, Schema, Writer, from_value, types::Record};
+//! use failure::Error;
 //!
 //! #[derive(Debug, Deserialize, Serialize)]
 //! struct Test {
@@ -17,7 +448,7 @@
 //!     b: String,
 //! }
 //!
-//! fn main() {
+//! fn main() -> Result<(), Error> {
 //!     let raw_schema = r#"
 //!         {
 //!             "type": "record",
@@ -29,7 +460,7 @@
 //!         }
 //!     "#;
 //!
-//!     let schema = Schema::parse_str(raw_schema).unwrap();
+//!     let schema = Schema::parse_str(raw_schema)?;
 //!
 //!     println!("{:?}", schema);
 //!
@@ -39,23 +470,24 @@
 //!     record.put("a", 27i64);
 //!     record.put("b", "foo");
 //!
-//!     writer.append(record).unwrap();
+//!     writer.append(record)?;
 //!
 //!     let test = Test {
 //!         a: 27,
 //!         b: "foo".to_owned(),
 //!     };
 //!
-//!     writer.append_ser(test).unwrap();
+//!     writer.append_ser(test)?;
 //!
-//!     writer.flush().unwrap();
+//!     writer.flush()?;
 //!
 //!     let input = writer.into_inner();
-//!     let reader = Reader::with_schema(&schema, &input[..]).unwrap();
+//!     let reader = Reader::with_schema(&schema, &input[..])?;
 //!
 //!     for record in reader {
-//!         println!("{:?}", from_value::<Test>(&record.unwrap()));
+//!         println!("{:?}", from_value::<Test>(&record?));
 //!     }
+//!     Ok(())
 //! }
 //! ```
 
@@ -90,6 +522,7 @@ pub use codec::Codec;
 pub use de::from_value;
 pub use reader::Reader;
 pub use writer::{to_avro_datum, Writer};
+pub use schema::Schema;
 
 #[cfg(test)]
 mod tests {
