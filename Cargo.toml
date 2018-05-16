@@ -1,7 +1,11 @@
 [package]
 name = "avro"
 version = "0.1.0"
-authors = ["Flavien Raynaud <flavien.raynaud@gmail.com>"]
+authors = ["Flavien Raynaud <flavien.raynaud@gmail.com>", "Antonio Verardi <antonio.uccio.verardi@gmail.com>"]
+description = "Library for working with Apache Avro in Rust"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/flavray/avro-rs"
 
 [features]
 snappy = ["snap"]
