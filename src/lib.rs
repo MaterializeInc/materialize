@@ -45,7 +45,7 @@
 //! To use the library,  just add at the top of the crate:
 //!
 //! ```
-//! extern crate avro;
+//! extern crate avro_rs;
 //! ```
 //!
 //! # Defining a schema
@@ -57,8 +57,8 @@
 //! Avro schemas are defined in **JSON** format and can just be parsed out of a raw string:
 //!
 //! ```
-//! # extern crate avro;
-//! use avro::Schema;
+//! # extern crate avro_rs;
+//! use avro_rs::Schema;
 //!
 //! let raw_schema = r#"
 //!     {
@@ -103,10 +103,10 @@
 //! associated type provided by the library to specify the data we want to serialize:
 //!
 //! ```
-//! # extern crate avro;
-//! # use avro::Schema;
-//! use avro::types::Record;
-//! use avro::Writer;
+//! # extern crate avro_rs;
+//! # use avro_rs::Schema;
+//! use avro_rs::types::Record;
+//! use avro_rs::Writer;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -143,8 +143,8 @@
 //! `Value` interface.
 //!
 //! ```
-//! # extern crate avro;
-//! use avro::types::Value;
+//! # extern crate avro_rs;
+//! use avro_rs::types::Value;
 //!
 //! let mut value = Value::String("foo".to_string());
 //! ```
@@ -155,12 +155,12 @@
 //! deriving `Serialize` to model our data:
 //!
 //! ```
-//! # extern crate avro;
+//! # extern crate avro_rs;
 //! #[macro_use]
 //! extern crate serde_derive;
 //!
-//! # use avro::Schema;
-//! use avro::Writer;
+//! # use avro_rs::Schema;
+//! use avro_rs::Writer;
 //!
 //! #[derive(Debug, Serialize)]
 //! struct Test {
@@ -205,7 +205,7 @@
 //! case we want to directly define an Avro value, any type implementing `Serialize` should work.
 //!
 //! ```
-//! # extern crate avro;
+//! # extern crate avro_rs;
 //!
 //! let mut value = "foo".to_string();
 //! ```
@@ -224,10 +224,10 @@
 //!
 //! To specify a codec to use to compress data, just specify it while creating a `Writer`:
 //! ```
-//! # extern crate avro;
-//! # use avro::Schema;
-//! use avro::Writer;
-//! use avro::Codec;
+//! # extern crate avro_rs;
+//! # use avro_rs::Schema;
+//! use avro_rs::Writer;
+//! use avro_rs::Codec;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -250,11 +250,11 @@
 //! codec:
 //!
 //! ```
-//! # extern crate avro;
-//! use avro::Reader;
-//! # use avro::Schema;
-//! # use avro::types::Record;
-//! # use avro::Writer;
+//! # extern crate avro_rs;
+//! use avro_rs::Reader;
+//! # use avro_rs::Schema;
+//! # use avro_rs::types::Record;
+//! # use avro_rs::Writer;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -281,11 +281,11 @@
 //! In case, instead, we want to specify a different (but compatible) reader schema from the schema
 //! the data has been written with, we can just do as the following:
 //! ```
-//! # extern crate avro;
-//! use avro::Schema;
-//! use avro::Reader;
-//! # use avro::types::Record;
-//! # use avro::Writer;
+//! # extern crate avro_rs;
+//! use avro_rs::Schema;
+//! use avro_rs::Reader;
+//! # use avro_rs::types::Record;
+//! # use avro_rs::Writer;
 //! #
 //! # let writer_raw_schema = r#"
 //! #     {
@@ -342,11 +342,11 @@
 //! We can just read directly instances of `Value` out of the `Reader` iterator:
 //!
 //! ```
-//! # extern crate avro;
-//! # use avro::Schema;
-//! # use avro::types::Record;
-//! # use avro::Writer;
-//! use avro::Reader;
+//! # extern crate avro_rs;
+//! # use avro_rs::Schema;
+//! # use avro_rs::types::Record;
+//! # use avro_rs::Writer;
+//! use avro_rs::Reader;
 //! #
 //! # let raw_schema = r#"
 //! #     {
@@ -382,14 +382,14 @@
 //! read the data into:
 //!
 //! ```
-//! # extern crate avro;
+//! # extern crate avro_rs;
 //! #[macro_use]
 //! extern crate serde_derive;
 //!
-//! # use avro::Schema;
-//! # use avro::Writer;
-//! use avro::Reader;
-//! use avro::from_value;
+//! # use avro_rs::Schema;
+//! # use avro_rs::Writer;
+//! use avro_rs::Reader;
+//! use avro_rs::from_value;
 //!
 //! # #[derive(Serialize)]
 //! #[derive(Debug, Deserialize)]
@@ -433,13 +433,13 @@
 //! quick reference of the library interface:
 //!
 //! ```
-//! extern crate avro;
+//! extern crate avro_rs;
 //!
 //! #[macro_use]
 //! extern crate serde_derive;
 //! extern crate failure;
 //!
-//! use avro::{Codec, Reader, Schema, Writer, from_value, types::Record};
+//! use avro_rs::{Codec, Reader, Schema, Writer, from_value, types::Record};
 //! use failure::Error;
 //!
 //! #[derive(Debug, Deserialize, Serialize)]

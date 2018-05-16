@@ -17,7 +17,7 @@ use Codec;
 /// To be used as an iterator:
 ///
 /// ```no_run
-/// # use avro::Reader;
+/// # use avro_rs::Reader;
 /// # use std::io::Cursor;
 /// # let input = Cursor::new(Vec::<u8>::new());
 /// for value in Reader::new(input).unwrap() {

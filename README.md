@@ -22,13 +22,13 @@ avro-rs = "0.1"
 Then try to write and read in Avro format like below:
 
 ```rust
-extern crate avro;
+extern crate avro_rs;
 
 #[macro_use]
 extern crate serde_derive;
 extern crate failure;
 
-use avro::{Codec, Reader, Schema, Writer, from_value, types::Record};
+use avro_rs::{Codec, Reader, Schema, Writer, from_value, types::Record};
 use failure::Error;
 
 #[derive(Debug, Deserialize, Serialize)]
