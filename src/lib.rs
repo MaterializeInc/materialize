@@ -215,7 +215,7 @@
 //! Avro supports three different compression codecs when encoding data:
 //!
 //! * **Null**: leaves data uncompressed;
-//! * **Deflate: writes the data block using the deflate algorithm as specified in RFC 1951, and
+//! * **Deflate**: writes the data block using the deflate algorithm as specified in RFC 1951, and
 //! typically implemented using the zlib library. Note that this format (unlike the "zlib format" in
 //! RFC 1950) does not have a checksum.
 //! * **Snappy**: uses Google's [Snappy](http://google.github.io/snappy/) compression library. Each
@@ -520,9 +520,9 @@ pub mod types;
 
 pub use codec::Codec;
 pub use de::from_value;
-pub use reader::Reader;
-pub use writer::{to_avro_datum, Writer};
+pub use reader::{from_avro_datum, Reader};
 pub use schema::Schema;
+pub use writer::{to_avro_datum, Writer};
 
 #[cfg(test)]
 mod tests {

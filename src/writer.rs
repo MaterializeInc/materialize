@@ -112,9 +112,8 @@ impl<'a, W: Write> Writer<'a, W> {
     ///
     /// Return the number of bytes written.
     ///
-    /// **NOTE** This function is not guaranteed to perform any actual write, since it relies on
-    /// internal buffering for performance reasons. If you want to be sure the value has been
-    /// written, then call [`flush`](struct.Writer.html#method.flush).
+    /// **NOTE** This function forces the written data to be flushed (an implicit
+    /// call to [`flush`](struct.Writer.html#method.flush) is performed).
     pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
     where
         I: Iterator<Item = T>,
@@ -148,9 +147,8 @@ impl<'a, W: Write> Writer<'a, W> {
     ///
     /// Return the number of bytes written.
     ///
-    /// **NOTE** This function is not guaranteed to perform any actual write, since it relies on
-    /// internal buffering for performance reasons. If you want to be sure the value has been
-    /// written, then call [`flush`](struct.Writer.html#method.flush).
+    /// **NOTE** This function forces the written data to be flushed (an implicit
+    /// call to [`flush`](struct.Writer.html#method.flush) is performed).
     pub fn extend_ser<I, T: Serialize>(&mut self, values: I) -> Result<usize, Error>
     where
         I: Iterator<Item = T>,

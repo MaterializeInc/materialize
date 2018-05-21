@@ -385,6 +385,10 @@ impl<'de> de::Deserializer<'de> for StringDeserializer {
     }
 }
 
+/// Interpret a `Value` as an instance of type `D`.
+///
+/// This conversion can fail if the structure of the `Value` does not match the
+/// structure expected by `D`.
 pub fn from_value<'de, D: Deserialize<'de>>(value: &'de Value) -> Result<D, Error> {
     let mut de = Deserializer::new(value);
     D::deserialize(&mut de)
