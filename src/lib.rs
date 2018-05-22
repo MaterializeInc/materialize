@@ -31,14 +31,14 @@
 //!
 //! ```text
 //! [dependencies]
-//! avro-rs = "0.1"
+//! avro-rs = "x.y"
 //! ```
 //!
 //! Or in case you want to leverage the **Snappy** codec:
 //!
 //! ```text
 //! [dependencies.avro-rs]
-//! version = "0.1"
+//! version = "x.y"
 //! features = ["snappy"]
 //! ```
 //!
