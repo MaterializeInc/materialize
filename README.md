@@ -1,6 +1,6 @@
 # avro-rs
 
-[![GitHub version](https://badge.fury.io/gh/flavray%2Favro-rs.svg)](https://badge.fury.io/gh/flavray%2Favro-rs)
+[![Latest Version](https://img.shields.io/crates/v/avro-rs.svg)](https://crates.io/crates/avro-rs)
 [![Build Status](https://travis-ci.org/flavray/avro-rs.svg?branch=master)](https://travis-ci.org/flavray/avro-rs)
 [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/flavray/avro-rs/blob/master/LICENSE)
 
