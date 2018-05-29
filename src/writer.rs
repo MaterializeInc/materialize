@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 
-use failure::{err_msg, Error};
+use failure::Error;
 use rand::random;
 use serde::Serialize;
 use serde_json;
@@ -18,6 +18,20 @@ const SYNC_SIZE: usize = 16;
 const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
 
 const AVRO_OBJECT_HEADER: &'static [u8] = &[b'O', b'b', b'j', 1u8];
+
+/// Describes errors happened while validating Avro data.
+#[derive(Fail, Debug)]
+#[fail(display = "Decoding error: {}", _0)]
+pub struct ValidationError(String);
+
+impl ValidationError {
+    pub fn new<S>(msg: S) -> ValidationError
+    where
+        S: Into<String>,
+    {
+        ValidationError(msg.into())
+    }
+}
 
 /// Main interface for writing Avro formatted values.
 pub struct Writer<'a, W> {
@@ -259,7 +273,7 @@ fn write_avro_datum<T: ToAvro>(
 ) -> Result<(), Error> {
     let avro = value.avro();
     if !avro.validate(schema) {
-        return Err(err_msg("value does not match schema"))
+        return Err(ValidationError::new("value does not match schema").into())
     }
     Ok(encode(avro, schema, buffer))
 }

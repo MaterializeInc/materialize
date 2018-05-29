@@ -1,7 +1,21 @@
 use std::io::Read;
 
-use failure::{err_msg, Error};
+use failure::Error;
 use serde_json::{Map, Value};
+
+/// Describes errors happened while decoding Avro data.
+#[derive(Fail, Debug)]
+#[fail(display = "Decoding error: {}", _0)]
+pub struct DecodeError(String);
+
+impl DecodeError {
+    pub fn new<S>(msg: S) -> DecodeError
+    where
+        S: Into<String>,
+    {
+        DecodeError(msg.into())
+    }
+}
 
 pub trait MapHelper {
     fn string(&self, key: &str) -> Option<String>;
@@ -34,7 +48,7 @@ pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
 pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, Error> {
     let i = zag_i64(reader)?;
     if i < i32::min_value() as i64 || i > i32::max_value() as i64 {
-        Err(err_msg("int out of range"))
+        Err(DecodeError::new("int out of range").into())
     } else {
         Ok(i as i32)
     }
@@ -81,9 +95,14 @@ fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn test_zigzag() {
-        // assert_eq!(zig_i32(42i32), zig_i64(42i64))
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        zig_i32(42i32, &mut a);
+        zig_i64(42i64, &mut b);
+        assert_eq!(a, b);
     }
 }

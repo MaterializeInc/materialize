@@ -12,6 +12,7 @@ snappy = ["snap"]
 
 [dependencies]
 failure = "0.1.1"
+failure_derive = "0.1.1"
 libflate = "0.1"
 rand = "0.3"
 serde = "1.0"

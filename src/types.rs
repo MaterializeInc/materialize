@@ -2,10 +2,24 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use failure::{err_msg, Error};
+use failure::Error;
 use serde_json::Value as JsonValue;
 
 use schema::{RecordField, Schema};
+
+/// Describes errors happened while performing schema resolution on Avro data.
+#[derive(Fail, Debug)]
+#[fail(display = "Decoding error: {}", _0)]
+pub struct SchemaResolutionError(String);
+
+impl SchemaResolutionError {
+    pub fn new<S>(msg: S) -> SchemaResolutionError
+    where
+        S: Into<String>,
+    {
+        SchemaResolutionError(msg.into())
+    }
+}
 
 /// Represents any valid Avro value
 /// More information about Avro values can be found in the
@@ -314,14 +328,18 @@ impl Value {
     fn resolve_null(self) -> Result<Self, Error> {
         match self {
             Value::Null => Ok(Value::Null),
-            other => Err(err_msg(format!("Null expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("Null expected, got {:?}", other)).into())
+            },
         }
     }
 
     fn resolve_boolean(self) -> Result<Self, Error> {
         match self {
             Value::Boolean(b) => Ok(Value::Boolean(b)),
-            other => Err(err_msg(format!("Boolean expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("Boolean expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -329,7 +347,9 @@ impl Value {
         match self {
             Value::Int(n) => Ok(Value::Int(n)),
             Value::Long(n) => Ok(Value::Int(n as i32)),
-            other => Err(err_msg(format!("Int expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("Int expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -337,7 +357,9 @@ impl Value {
         match self {
             Value::Int(n) => Ok(Value::Long(n as i64)),
             Value::Long(n) => Ok(Value::Long(n)),
-            other => Err(err_msg(format!("Long expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("Long expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -347,7 +369,9 @@ impl Value {
             Value::Long(n) => Ok(Value::Float(n as f32)),
             Value::Float(x) => Ok(Value::Float(x)),
             Value::Double(x) => Ok(Value::Float(x as f32)),
-            other => Err(err_msg(format!("Float expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("Float expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -357,7 +381,9 @@ impl Value {
             Value::Long(n) => Ok(Value::Double(n as f64)),
             Value::Float(x) => Ok(Value::Double(x as f64)),
             Value::Double(x) => Ok(Value::Double(x)),
-            other => Err(err_msg(format!("Double expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("Double expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -365,7 +391,9 @@ impl Value {
         match self {
             Value::Bytes(bytes) => Ok(Value::Bytes(bytes)),
             Value::String(s) => Ok(Value::Bytes(s.into_bytes())),
-            other => Err(err_msg(format!("Bytes expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("Bytes expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -373,7 +401,9 @@ impl Value {
         match self {
             Value::String(s) => Ok(Value::String(s)),
             Value::Bytes(bytes) => Ok(Value::String(String::from_utf8(bytes)?)),
-            other => Err(err_msg(format!("String expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("String expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -382,12 +412,14 @@ impl Value {
             Value::Fixed(n, bytes) => if n == size {
                 Ok(Value::Fixed(n, bytes))
             } else {
-                Err(err_msg(format!(
+                Err(SchemaResolutionError::new(format!(
                     "Fixed size mismatch, {} expected, got {}",
                     size, n
-                )))
+                )).into())
             },
-            other => Err(err_msg(format!("String expected, got {:?}", other))),
+            other => {
+                Err(SchemaResolutionError::new(format!("String expected, got {:?}", other)).into())
+            },
         }
     }
 
@@ -396,10 +428,10 @@ impl Value {
             if let Some(index) = symbols.iter().position(|ref item| item == &&symbol) {
                 Ok(Value::Enum(index as i32, symbol))
             } else {
-                Err(err_msg(format!(
+                Err(SchemaResolutionError::new(format!(
                     "Enum default {} is not among allowed symbols {:?}",
                     symbol, symbols,
-                )))
+                )).into())
             }
         };
 
@@ -407,17 +439,17 @@ impl Value {
             Value::Enum(i, s) => if i > 0 && i < symbols.len() as i32 {
                 validate_symbol(s, symbols)
             } else {
-                Err(err_msg(format!(
+                Err(SchemaResolutionError::new(format!(
                     "Enum value {} is out of bound {}",
                     i,
                     symbols.len() as i32
-                )))
+                )).into())
             },
             Value::String(s) => validate_symbol(s, symbols),
-            other => Err(err_msg(format!(
+            other => Err(SchemaResolutionError::new(format!(
                 "Enum({:?}) expected, got {:?}",
                 symbols, other
-            ))),
+            )).into()),
         }
     }
 
@@ -425,10 +457,10 @@ impl Value {
         match self {
             Value::Union(None) => Ok(Value::Union(None)),
             Value::Union(Some(inner)) => Ok(Value::Union(Some(Box::new(inner.resolve(schema)?)))),
-            other => Err(err_msg(format!(
+            other => Err(SchemaResolutionError::new(format!(
                 "Union({:?}) expected, got {:?}",
                 schema, other
-            ))),
+            )).into()),
         }
     }
 
@@ -438,10 +470,10 @@ impl Value {
                 .into_iter()
                 .map(|item| item.resolve(schema))
                 .collect::<Result<Vec<_>, _>>()?)),
-            other => Err(err_msg(format!(
+            other => Err(SchemaResolutionError::new(format!(
                 "Array({:?}) expected, got {:?}",
                 schema, other
-            ))),
+            )).into()),
         }
     }
 
@@ -451,10 +483,10 @@ impl Value {
                 .into_iter()
                 .map(|(key, value)| value.resolve(schema).map(|value| (key, value)))
                 .collect::<Result<HashMap<_, _>, _>>()?)),
-            other => Err(err_msg(format!(
+            other => Err(SchemaResolutionError::new(format!(
                 "Map({:?}) expected, got {:?}",
                 schema, other
-            ))),
+            )).into()),
         }
     }
 
@@ -462,10 +494,10 @@ impl Value {
         let mut items = match self {
             Value::Map(items) => Ok(items),
             Value::Record(fields) => Ok(fields.into_iter().collect::<HashMap<_, _>>()),
-            other => Err(err_msg(format!(
+            other => Err(Error::from(SchemaResolutionError::new(format!(
                 "Record({:?}) expected, got {:?}",
                 fields, other
-            ))),
+            )))),
         }?;
 
         let new_fields = fields
@@ -480,7 +512,12 @@ impl Value {
                             },
                             _ => value.clone().avro(),
                         },
-                        _ => return Err(err_msg(format!("missing field {} in record", field.name))),
+                        _ => {
+                            return Err(SchemaResolutionError::new(format!(
+                                "missing field {} in record",
+                                field.name
+                            )).into())
+                        },
                     },
                 };
                 value

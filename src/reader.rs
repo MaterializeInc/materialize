@@ -8,8 +8,10 @@ use failure::{err_msg, Error};
 use serde_json::from_slice;
 
 use decode::decode;
+use schema::ParseSchemaError;
 use schema::Schema;
 use types::Value;
+use util::DecodeError;
 use Codec;
 
 /// Main interface for reading Avro formatted values.
@@ -93,10 +95,11 @@ impl<'a, R: Read> Reader<'a, R> {
         self.reader.read_exact(&mut buf)?;
 
         if buf != ['O' as u8, 'b' as u8, 'j' as u8, 1u8] {
-            return Err(err_msg("wrong magic in header"))
+            return Err(DecodeError::new("wrong magic in header").into())
         }
 
         if let Value::Map(meta) = decode(&meta_schema, &mut self.reader)? {
+            // TODO: surface original parse schema errors instead of coalescing them here
             let schema = meta.get("avro.schema")
                 .and_then(|bytes| {
                     if let &Value::Bytes(ref bytes) = bytes {
@@ -109,7 +112,7 @@ impl<'a, R: Read> Reader<'a, R> {
             if let Some(schema) = schema {
                 self.writer_schema = schema;
             } else {
-                return Err(err_msg("unable to parse schema"))
+                return Err(ParseSchemaError::new("unable to parse schema").into())
             }
 
             if let Some(codec) = meta.get("avro.codec")
@@ -125,7 +128,7 @@ impl<'a, R: Read> Reader<'a, R> {
                 self.codec = codec;
             }
         } else {
-            return Err(err_msg("no metadata in header"))
+            return Err(DecodeError::new("no metadata in header").into())
         }
 
         let mut buf = [0u8; 16];
@@ -149,7 +152,9 @@ impl<'a, R: Read> Reader<'a, R> {
                         self.reader.read_exact(&mut marker)?;
 
                         if marker != self.marker {
-                            return Err(err_msg("block marker does not match header marker"))
+                            return Err(DecodeError::new(
+                                "block marker does not match header marker",
+                            ).into())
                         }
 
                         self.codec.decompress(&mut bytes)?;
@@ -176,7 +181,7 @@ impl<'a, R: Read> Reader<'a, R> {
                 _ => (),
             },
         };
-        Err(err_msg("unable to read block"))
+        Err(DecodeError::new("unable to read block").into())
     }
 }
 

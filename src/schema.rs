@@ -2,11 +2,25 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use failure::{err_msg, Error};
+use failure::Error;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::{self, Map, Value};
 
 use util::MapHelper;
+
+/// Describes errors happened while parsing Avro schemas.
+#[derive(Fail, Debug)]
+#[fail(display = "Failed to parse schema: {}", _0)]
+pub struct ParseSchemaError(String);
+
+impl ParseSchemaError {
+    pub fn new<S>(msg: S) -> ParseSchemaError
+    where
+        S: Into<String>,
+    {
+        ParseSchemaError(msg.into())
+    }
+}
 
 /// Represents any valid Avro schema
 /// More information about Avro schemas can be found in the
@@ -103,7 +117,9 @@ impl Name {
 
     /// Parse a `serde_json::Value` into a `Name`.
     fn parse(complex: &Map<String, Value>) -> Result<Self, Error> {
-        let name = complex.name().ok_or_else(|| err_msg("No `name` field"))?;
+        let name = complex
+            .name()
+            .ok_or_else(|| ParseSchemaError::new("No `name` field"))?;
 
         let namespace = complex.string("namespace");
 
@@ -180,12 +196,12 @@ impl RecordField {
     fn parse(field: &Map<String, Value>, position: usize) -> Result<Self, Error> {
         let name = field
             .name()
-            .ok_or_else(|| err_msg("No `name` in record field"))?;
+            .ok_or_else(|| ParseSchemaError::new("No `name` in record field"))?;
 
         // TODO: "type" = "<record name>"
         let schema = field
             .get("type")
-            .ok_or_else(|| err_msg("No `type` in record field"))
+            .ok_or_else(|| ParseSchemaError::new("No `type` in record field").into())
             .and_then(|type_| Schema::parse(type_))?;
 
         let default = field.get("default").map(|f| f.clone());
@@ -226,9 +242,7 @@ impl Schema {
             Value::String(ref t) => Schema::parse_primitive(t.as_str()),
             Value::Object(ref data) => Schema::parse_complex(data),
             Value::Array(ref data) => Schema::parse_union(data),
-            _ => Err(err_msg(
-                "Error parsing schema: must be a JSON string, object or array",
-            )),
+            _ => Err(ParseSchemaError::new("Must be a JSON string, object or array").into()),
         }
     }
 
@@ -244,7 +258,7 @@ impl Schema {
             "float" => Ok(Schema::Float),
             "bytes" => Ok(Schema::Bytes),
             "string" => Ok(Schema::String),
-            other => Err(err_msg(format!("Unknown type: {}", other))),
+            other => Err(ParseSchemaError::new(format!("Unknown type: {}", other)).into()),
         }
     }
 
@@ -265,9 +279,11 @@ impl Schema {
             },
             Some(&Value::Object(ref data)) => match data.get("type") {
                 Some(ref value) => Schema::parse(value),
-                None => Err(err_msg(format!("Unknown complex type: {:?}", complex))),
+                None => Err(
+                    ParseSchemaError::new(format!("Unknown complex type: {:?}", complex)).into(),
+                ),
             },
-            _ => Err(err_msg("No `type` in complex type")),
+            _ => Err(ParseSchemaError::new("No `type` in complex type").into()),
         }
     }
 
@@ -281,7 +297,7 @@ impl Schema {
         let fields: Vec<RecordField> = complex
             .get("fields")
             .and_then(|fields| fields.as_array())
-            .ok_or_else(|| err_msg("No `fields` in record"))
+            .ok_or_else(|| ParseSchemaError::new("No `fields` in record").into())
             .and_then(|fields| {
                 fields
                     .iter()
@@ -311,13 +327,13 @@ impl Schema {
         let symbols = complex
             .get("symbols")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| err_msg("No `symbols` field in enum"))
+            .ok_or_else(|| ParseSchemaError::new("No `symbols` field in enum"))
             .and_then(|symbols| {
                 symbols
                     .iter()
                     .map(|symbol| symbol.as_str().map(|s| s.to_string()))
                     .collect::<Option<_>>()
-                    .ok_or_else(|| err_msg("Unable to parse `symbols` in enum"))
+                    .ok_or_else(|| ParseSchemaError::new("Unable to parse `symbols` in enum"))
             })?;
 
         Ok(Schema::Enum {
@@ -332,7 +348,7 @@ impl Schema {
     fn parse_array(complex: &Map<String, Value>) -> Result<Self, Error> {
         complex
             .get("items")
-            .ok_or_else(|| err_msg("No `items` in array"))
+            .ok_or_else(|| ParseSchemaError::new("No `items` in array").into())
             .and_then(|items| Schema::parse(items))
             .map(|schema| Schema::Array(Rc::new(schema)))
     }
@@ -342,7 +358,7 @@ impl Schema {
     fn parse_map(complex: &Map<String, Value>) -> Result<Self, Error> {
         complex
             .get("values")
-            .ok_or_else(|| err_msg("No `values` in map"))
+            .ok_or_else(|| ParseSchemaError::new("No `values` in map").into())
             .and_then(|items| Schema::parse(items))
             .map(|schema| Schema::Map(Rc::new(schema)))
     }
@@ -360,7 +376,7 @@ impl Schema {
         if items.len() == 2 && items[0] == Value::String("null".to_owned()) {
             Schema::parse(&items[1]).map(|s| Schema::Union(Rc::new(s)))
         } else {
-            Err(err_msg("Unions only support null and type"))
+            Err(ParseSchemaError::new("Unions only support null and type").into())
         }
 
         /*
@@ -369,7 +385,7 @@ impl Schema {
             &[Value::String(ref null), ref x] if null == "null" => {
                 Schema::parse(&x).map(|s| Schema::Union(Rc::new(s)))
             },
-            _ => Err(err_msg("Unions only support null and type")),
+            _ => Err(ParseSchemaError::new("Unions only support null and type")),
         }
         */
     }
@@ -382,7 +398,7 @@ impl Schema {
         let size = complex
             .get("size")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| err_msg("No `size` in fixed"))?;
+            .ok_or_else(|| ParseSchemaError::new("No `size` in fixed"))?;
 
         Ok(Schema::Fixed {
             name,

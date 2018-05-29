@@ -8,6 +8,7 @@ use libflate::deflate::{Decoder, Encoder};
 use snap::{Reader, Writer};
 
 use types::{ToAvro, Value};
+use util::DecodeError;
 
 /// The compression codec used to compress blocks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,7 +41,7 @@ impl ToAvro for Codec {
 }
 
 impl FromStr for Codec {
-    type Err = ();
+    type Err = DecodeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -48,7 +49,7 @@ impl FromStr for Codec {
             "deflate" => Ok(Codec::Deflate),
             #[cfg(feature = "snappy")]
             "snappy" => Ok(Codec::Snappy),
-            _ => Err(()),
+            _ => Err(DecodeError::new("unrecognized codec")),
         }
     }
 }

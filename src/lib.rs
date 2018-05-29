@@ -492,6 +492,8 @@
 //! ```
 
 extern crate failure;
+#[macro_use]
+extern crate failure_derive;
 extern crate libflate;
 extern crate rand;
 #[macro_use]
@@ -521,8 +523,10 @@ pub mod types;
 pub use codec::Codec;
 pub use de::from_value;
 pub use reader::{from_avro_datum, Reader};
-pub use schema::Schema;
-pub use writer::{to_avro_datum, Writer};
+pub use schema::{ParseSchemaError, Schema};
+pub use types::SchemaResolutionError;
+pub use util::DecodeError;
+pub use writer::{to_avro_datum, ValidationError, Writer};
 
 #[cfg(test)]
 mod tests {

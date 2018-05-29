@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::mem::transmute;
 
-use failure::{err_msg, Error};
+use failure::Error;
 
 use schema::Schema;
 use types::Value;
-use util::{zag_i32, zag_i64};
+use util::{zag_i32, zag_i64, DecodeError};
 
 /// Decode a `Value` from avro format given its `Schema`.
 pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> {
@@ -19,7 +19,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             match buf[0] {
                 0u8 => Ok(Value::Boolean(false)),
                 1u8 => Ok(Value::Boolean(true)),
-                _ => Err(err_msg("not a bool")),
+                _ => Err(DecodeError::new("not a bool").into()),
             }
         },
         &Schema::Int => zag_i32(reader).map(Value::Int),
@@ -40,7 +40,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                 reader.read_exact(&mut buf)?;
                 Ok(Value::Bytes(buf))
             } else {
-                Err(err_msg("bytes len not found"))
+                Err(DecodeError::new("bytes len not found").into())
             }
         },
         &Schema::String => {
@@ -51,10 +51,10 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                 reader.read_exact(&mut buf)?;
 
                 String::from_utf8(buf)
-                    .map_err(|_| err_msg("not a valid utf-8 string"))
                     .map(Value::String)
+                    .map_err(|_| DecodeError::new("not a valid utf-8 string").into())
             } else {
-                Err(err_msg("string len not found"))
+                Err(DecodeError::new("string len not found").into())
             }
         },
         &Schema::Fixed { size, .. } => {
@@ -78,7 +78,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                         items.push(decode(inner, reader)?);
                     }
                 } else {
-                    return Err(err_msg("array len not found"))
+                    return Err(DecodeError::new("array len not found").into())
                 }
             }
 
@@ -101,11 +101,11 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                             let value = decode(inner, reader)?;
                             items.insert(key, value);
                         } else {
-                            return Err(err_msg("map key is not a string"))
+                            return Err(DecodeError::new("map key is not a string").into())
                         }
                     }
                 } else {
-                    return Err(err_msg("map len not found"))
+                    return Err(DecodeError::new("map len not found").into())
                 }
             }
 
@@ -118,7 +118,7 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             match buf[0] {
                 0u8 => Ok(Value::Union(None)),
                 1u8 => decode(inner, reader),
-                _ => Err(err_msg("union index out of bounds")),
+                _ => Err(DecodeError::new("union index out of bounds").into()),
             }
         },
         &Schema::Record { ref fields, .. } => fields
@@ -132,10 +132,10 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
                     let symbol = symbols[index as usize].clone();
                     Ok(Value::Enum(index, symbol))
                 } else {
-                    Err(err_msg("enum symbol index out of bounds"))
+                    Err(DecodeError::new("enum symbol index out of bounds").into())
                 }
             } else {
-                Err(err_msg("enum symbol not found"))
+                Err(DecodeError::new("enum symbol not found").into())
             }
         },
     }
