@@ -162,10 +162,11 @@ impl<'a, R: Read> Reader<'a, R> {
                         self.items.clear();
                         self.items.reserve_exact(block_len as usize);
 
+                        let mut block_bytes = &bytes[..];
                         for _ in 0..block_len {
                             let item = from_avro_datum(
                                 &self.writer_schema,
-                                &mut &bytes[..],
+                                &mut block_bytes,
                                 self.reader_schema,
                             )?;
                             self.items.push_back(item)
@@ -254,8 +255,8 @@ mod tests {
         110u8, 103u8, 34u8, 125u8, 93u8, 125u8, 20u8, 97u8, 118u8, 114u8, 111u8, 46u8, 99u8, 111u8,
         100u8, 101u8, 99u8, 8u8, 110u8, 117u8, 108u8, 108u8, 0u8, 94u8, 61u8, 54u8, 221u8, 190u8,
         207u8, 108u8, 180u8, 158u8, 57u8, 114u8, 40u8, 173u8, 199u8, 228u8, 239u8, 4u8, 20u8, 54u8,
-        6u8, 102u8, 111u8, 111u8, 54u8, 6u8, 102u8, 111u8, 111u8, 94u8, 61u8, 54u8, 221u8, 190u8,
-        207u8, 108u8, 180u8, 158u8, 57u8, 114u8, 40u8, 173u8, 199u8, 228u8, 239,
+        6u8, 102u8, 111u8, 111u8, 84u8, 6u8, 98u8, 97u8, 114u8, 94u8, 61u8, 54u8, 221u8, 190u8,
+        207u8, 108u8, 180u8, 158u8, 57u8, 114u8, 40u8, 173u8, 199u8, 228u8, 239u8,
     ];
 
     #[test]
@@ -279,13 +280,18 @@ mod tests {
         let schema = Schema::parse_str(SCHEMA).unwrap();
         let reader = Reader::with_schema(&schema, ENCODED).unwrap();
 
-        let mut record = Record::new(&schema).unwrap();
-        record.put("a", 27i64);
-        record.put("b", "foo");
-        let expected = record.avro();
+        let mut record1 = Record::new(&schema).unwrap();
+        record1.put("a", 27i64);
+        record1.put("b", "foo");
 
-        for value in reader {
-            assert_eq!(value.unwrap(), expected);
+        let mut record2 = Record::new(&schema).unwrap();
+        record2.put("a", 42i64);
+        record2.put("b", "bar");
+
+        let expected = vec![record1.avro(), record2.avro()];
+
+        for (i, value) in reader.enumerate() {
+            assert_eq!(value.unwrap(), expected[i]);
         }
     }
 
