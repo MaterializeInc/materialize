@@ -16,7 +16,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-avro-rs = "0.2"
+avro-rs = "0.3"
 ```
 
 Then try to write and read in Avro format like below:
