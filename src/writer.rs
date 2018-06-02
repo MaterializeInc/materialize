@@ -306,6 +306,9 @@ mod tests {
                 ]
             }
         "#;
+    static UNION_SCHEMA: &'static str = r#"
+            ["null", "long"]
+        "#;
 
     #[test]
     fn test_to_avro_datum() {
@@ -321,6 +324,19 @@ mod tests {
 
         assert_eq!(to_avro_datum(&schema, record).unwrap(), expected);
     }
+
+    #[test]
+    fn test_union() {
+        let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
+        let union = Value::Union(Some(Box::new(Value::Long(3))));
+
+        let mut expected = Vec::new();
+        zig_i64(1, &mut expected);
+        zig_i64(3, &mut expected);
+
+        assert_eq!(to_avro_datum(&schema, union).unwrap(), expected);   
+    }
+
 
     #[test]
     fn test_writer_append() {

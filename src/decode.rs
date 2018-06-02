@@ -112,12 +112,11 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             Ok(Value::Map(items))
         },
         &Schema::Union(ref inner) => {
-            let mut buf = [0u8; 1];
-            reader.read_exact(&mut buf)?;
+            let index = zag_i64(reader)?;
 
-            match buf[0] {
-                0u8 => Ok(Value::Union(None)),
-                1u8 => decode(inner, reader),
+            match index {
+                0 => Ok(Value::Union(None)),
+                1 => decode(inner, reader).map(|x| Value::Union(Some(Box::new(x)))),
                 _ => Err(DecodeError::new("union index out of bounds").into()),
             }
         },

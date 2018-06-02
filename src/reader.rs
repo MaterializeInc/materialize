@@ -242,6 +242,9 @@ mod tests {
                 ]
             }
         "#;
+    static UNION_SCHEMA: &'static str = r#"
+            ["null", "long"]
+        "#;
     static ENCODED: &'static [u8] = &[
         79u8, 98u8, 106u8, 1u8, 4u8, 22u8, 97u8, 118u8, 114u8, 111u8, 46u8, 115u8, 99u8, 104u8,
         101u8, 109u8, 97u8, 222u8, 1u8, 123u8, 34u8, 116u8, 121u8, 112u8, 101u8, 34u8, 58u8, 34u8,
@@ -274,6 +277,18 @@ mod tests {
             expected
         );
     }
+
+    #[test]
+    fn test_union() {
+        let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
+        let mut encoded: &'static [u8] = &[2,0];
+
+        assert_eq!(
+            from_avro_datum(&schema, &mut encoded, None).unwrap(),
+            Value::Union(Some(Box::new(Value::Long(0))))
+        );
+    }
+
 
     #[test]
     fn test_reader_iterator() {

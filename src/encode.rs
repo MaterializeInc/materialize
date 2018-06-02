@@ -38,7 +38,7 @@ pub fn encode(value: Value, schema: &Schema, buffer: &mut Vec<u8>) {
         Value::Union(None) => buffer.push(0u8),
         Value::Union(Some(item)) => {
             if let &Schema::Union(ref inner) = schema {
-                buffer.push(1u8);
+                encode(Value::Long(1), &Schema::Long, buffer);
                 encode(*item, inner, buffer);
             }
         },
