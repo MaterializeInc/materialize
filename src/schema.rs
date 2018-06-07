@@ -441,13 +441,22 @@ impl Serialize for Schema {
             },
             Schema::Record {
                 ref name,
+                ref doc,
                 ref fields,
                 ..
             } => {
                 let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("type", "record")?;
+                if let Some(ref n) = name.namespace {
+                    map.serialize_entry("namespace", n)?;
+                }
                 map.serialize_entry("name", &name.name)?;
-                // TODO: namespace, etc...
+                if let Some(ref docstr) = doc {
+                    map.serialize_entry("doc", docstr)?;
+                }
+                if let Some(ref aliases) = name.aliases {
+                    map.serialize_entry("aliases", aliases)?;
+                }
                 map.serialize_entry("fields", fields)?;
                 map.end()
             },
