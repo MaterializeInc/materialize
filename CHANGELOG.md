@@ -5,6 +5,12 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.2] - 2018-06-07
+### Added
+- Some missing serialization fields for Schema::Record
+
+## [0.3.1] - 2018-06-02
 ### Fixed
 - Encode/decode Union values with a leading zig-zag long
 
