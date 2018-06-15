@@ -37,6 +37,10 @@ impl MapHelper for Map<String, Value> {
     }
 }
 
+pub fn read_long<R: Read>(reader: &mut R) -> Result<i64, Error> {
+    zag_i64(reader)
+}
+
 pub fn zig_i32(n: i32, buffer: &mut Vec<u8>) {
     encode_variable(((n << 1) ^ (n >> 31)) as i64, buffer)
 }

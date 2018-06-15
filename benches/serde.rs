@@ -160,30 +160,48 @@ fn make_records(record: &Value, count: usize) -> Vec<Value> {
     records
 }
 
-fn write(schema: &Schema, records: Vec<Value>) -> Vec<u8> {
+fn write(schema: &Schema, records: &[Value]) -> Vec<u8> {
     let mut writer = Writer::new(&schema, Vec::new());
-    writer.extend(records.into_iter()).unwrap();
+    writer.extend_from_slice(records).unwrap();
     writer.into_inner()
 }
 
-fn read(schema: &Schema, bytes: Vec<u8>) {
-    let reader = Reader::with_schema(schema, &bytes[..]);
+fn read(schema: &Schema, bytes: &[u8]) {
+    let reader = Reader::with_schema(schema, bytes).unwrap();
+
     for record in reader {
-        let _ = record;
+        let _ = record.unwrap();
+    }
+}
+
+fn read_schemaless(bytes: &[u8]) {
+    let reader = Reader::new(bytes).unwrap();
+
+    for record in reader {
+        let _ = record.unwrap();
     }
 }
 
 fn bench_write(b: &mut test::Bencher, make_record: &Fn() -> (Schema, Value), n_records: usize) {
     let (schema, record) = make_record();
     let records = make_records(&record, n_records);
-    b.iter(|| write(&schema, records.clone()));
+    b.iter(|| write(&schema, &records));
 }
 
 fn bench_read(b: &mut test::Bencher, make_record: &Fn() -> (Schema, Value), n_records: usize) {
     let (schema, record) = make_record();
     let records = make_records(&record, n_records);
-    let bytes = write(&schema, records);
-    b.iter(|| read(&schema, bytes.clone()));
+    let bytes = write(&schema, &records);
+    println!("bytes.len() = {}", bytes.len());
+    println!("records.len() = {}", records.len());
+    b.iter(|| read(&schema, &bytes));
+}
+
+fn bench_from_file(b: &mut test::Bencher, file_path: &str) {
+    use std::fs;
+    let bytes = fs::read(file_path).unwrap();
+    println!("{} had {} bytes", file_path, bytes.len());
+    b.iter(|| read_schemaless(&bytes));
 }
 
 #[bench]
@@ -244,4 +262,18 @@ fn bench_big_schema_read_100_record(b: &mut test::Bencher) {
 #[bench]
 fn bench_big_schema_read_10000_record(b: &mut test::Bencher) {
     bench_read(b, &make_big_record, 10000);
+}
+
+#[bench]
+fn bench_big_schema_read_100000_record(b: &mut test::Bencher) {
+    bench_read(b, &make_big_record, 100000);
+}
+
+// This benchmark reads from the `benches/quickstop-null.avro` file, which was pulled from
+// the `goavro` project benchmarks:
+// https://github.com/linkedin/goavro/blob/master/fixtures/quickstop-null.avro
+// This was done for the sake of comparing this crate against the `goavro` implementation.
+#[bench]
+fn bench_file_quickstop_null(b: &mut test::Bencher) {
+    bench_from_file(b, "benches/quickstop-null.avro");
 }

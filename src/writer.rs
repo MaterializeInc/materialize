@@ -8,7 +8,7 @@ use rand::random;
 use serde::Serialize;
 use serde_json;
 
-use encode::{encode, encode_to_vec};
+use encode::{encode, encode_ref, encode_to_vec};
 use schema::Schema;
 use ser::Serializer;
 use types::{ToAvro, Value};
@@ -96,12 +96,41 @@ impl<'a, W: Write> Writer<'a, W> {
             0
         };
 
-        write_avro_datum(self.schema, value, &mut self.buffer)?;
+        let avro = value.avro();
+        write_value_ref(self.schema, &avro, &mut self.buffer)?;
 
         self.num_values += 1;
 
         if self.buffer.len() >= SYNC_INTERVAL {
-            return self.flush().map(|b| b + n)
+            return self.flush().map(|b| b + n);
+        }
+
+        Ok(n)
+    }
+
+    /// Append a compatible value to a `Writer`, also performing schema validation.
+    ///
+    /// Return the number of bytes written (it might be 0, see below).
+    ///
+    /// **NOTE** This function is not guaranteed to perform any actual write, since it relies on
+    /// internal buffering for performance reasons. If you want to be sure the value has been
+    /// written, then call [`flush`](struct.Writer.html#method.flush).
+    pub fn append_value_ref(&mut self, value: &Value) -> Result<usize, Error> {
+        let n = if !self.has_header {
+            let header = self.header()?;
+            let n = self.append_bytes(header.as_ref())?;
+            self.has_header = true;
+            n
+        } else {
+            0
+        };
+
+        write_value_ref(self.schema, value, &mut self.buffer)?;
+
+        self.num_values += 1;
+
+        if self.buffer.len() >= SYNC_INTERVAL {
+            return self.flush().map(|b| b + n);
         }
 
         Ok(n)
@@ -130,7 +159,7 @@ impl<'a, W: Write> Writer<'a, W> {
     /// call to [`flush`](struct.Writer.html#method.flush) is performed).
     pub fn extend<I, T: ToAvro>(&mut self, values: I) -> Result<usize, Error>
     where
-        I: Iterator<Item = T>,
+        I: IntoIterator<Item = T>,
     {
         /*
         https://github.com/rust-lang/rfcs/issues/811 :(
@@ -165,7 +194,7 @@ impl<'a, W: Write> Writer<'a, W> {
     /// call to [`flush`](struct.Writer.html#method.flush) is performed).
     pub fn extend_ser<I, T: Serialize>(&mut self, values: I) -> Result<usize, Error>
     where
-        I: Iterator<Item = T>,
+        I: IntoIterator<Item = T>,
     {
         /*
         https://github.com/rust-lang/rfcs/issues/811 :(
@@ -190,13 +219,30 @@ impl<'a, W: Write> Writer<'a, W> {
         Ok(num_bytes)
     }
 
+    /// Extend a `Writer` by appending each `Value` from a slice, while also performing schema
+    /// validation on each value appended.
+    ///
+    /// Return the number of bytes written.
+    ///
+    /// **NOTE** This function forces the written data to be flushed (an implicit
+    /// call to [`flush`](struct.Writer.html#method.flush) is performed).
+    pub fn extend_from_slice(&mut self, values: &[Value]) -> Result<usize, Error> {
+        let mut num_bytes = 0;
+        for value in values {
+            num_bytes += self.append_value_ref(value)?;
+        }
+        num_bytes += self.flush()?;
+
+        Ok(num_bytes)
+    }
+
     /// Flush the content appended to a `Writer`. Call this function to make sure all the content
     /// has been written before releasing the `Writer`.
     ///
     /// Return the number of bytes written.
     pub fn flush(&mut self) -> Result<usize, Error> {
         if self.num_values == 0 {
-            return Ok(0)
+            return Ok(0);
         }
 
         self.codec.compress(&mut self.buffer)?;
@@ -273,9 +319,16 @@ fn write_avro_datum<T: ToAvro>(
 ) -> Result<(), Error> {
     let avro = value.avro();
     if !avro.validate(schema) {
-        return Err(ValidationError::new("value does not match schema").into())
+        return Err(ValidationError::new("value does not match schema").into());
     }
     Ok(encode(avro, schema, buffer))
+}
+
+fn write_value_ref(schema: &Schema, value: &Value, buffer: &mut Vec<u8>) -> Result<(), Error> {
+    if !value.validate(schema) {
+        return Err(ValidationError::new("value does not match schema").into());
+    }
+    Ok(encode_ref(value, schema, buffer))
 }
 
 /// Encode a compatible value (implementing the `ToAvro` trait) into Avro format, also
@@ -334,9 +387,8 @@ mod tests {
         zig_i64(1, &mut expected);
         zig_i64(3, &mut expected);
 
-        assert_eq!(to_avro_datum(&schema, union).unwrap(), expected);   
+        assert_eq!(to_avro_datum(&schema, union).unwrap(), expected);
     }
-
 
     #[test]
     fn test_writer_append() {
