@@ -57,15 +57,15 @@ impl FromStr for Codec {
 impl Codec {
     /// Compress a stream of bytes in-place.
     pub fn compress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
-        match self {
-            &Codec::Null => (),
-            &Codec::Deflate => {
+        match *self {
+            Codec::Null => (),
+            Codec::Deflate => {
                 let mut encoder = Encoder::new(Vec::new());
                 encoder.write_all(stream)?;
                 *stream = encoder.finish().into_result()?;
             },
             #[cfg(feature = "snappy")]
-            &Codec::Snappy => {
+            Codec::Snappy => {
                 let mut writer = Writer::new(Vec::new());
                 writer.write_all(stream)?;
                 *stream = writer.into_inner()?; // .into_inner() will also call .flush()
@@ -77,9 +77,9 @@ impl Codec {
 
     /// Decompress a stream of bytes in-place.
     pub fn decompress(&self, stream: &mut Vec<u8>) -> Result<(), Error> {
-        match self {
-            &Codec::Null => (),
-            &Codec::Deflate => {
+        match *self {
+            Codec::Null => (),
+            Codec::Deflate => {
                 let mut decoded = Vec::new();
                 {
                     // either the compiler or I is dumb
@@ -89,7 +89,7 @@ impl Codec {
                 *stream = decoded;
             },
             #[cfg(feature = "snappy")]
-            &Codec::Snappy => {
+            Codec::Snappy => {
                 let mut read = Vec::new();
                 {
                     let mut reader = Reader::new(&stream[..]);

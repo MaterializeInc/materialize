@@ -146,10 +146,11 @@ impl Name {
     /// More information about fullnames can be found in the
     /// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
     pub fn fullname(&self, default_namespace: Option<&str>) -> String {
-        if self.name.contains(".") {
+        if self.name.contains('.') {
             self.name.clone()
         } else {
-            let namespace = self.namespace
+            let namespace = self
+                .namespace
                 .as_ref()
                 .map(|s| s.as_ref())
                 .or(default_namespace);
@@ -204,7 +205,7 @@ impl RecordField {
             .ok_or_else(|| ParseSchemaError::new("No `type` in record field").into())
             .and_then(|type_| Schema::parse(type_))?;
 
-        let default = field.get("default").map(|f| f.clone());
+        let default = field.get("default").cloned();
 
         let order = field
             .get("order")
@@ -307,7 +308,7 @@ impl Schema {
                     .collect::<Result<_, _>>()
             })?;
 
-        for field in fields.iter() {
+        for field in &fields {
             lookup.insert(field.name.clone(), field.position);
         }
 
@@ -365,7 +366,7 @@ impl Schema {
 
     /// Parse a `serde_json::Value` representing a Avro union type into a
     /// `Schema`.
-    fn parse_union(items: &Vec<Value>) -> Result<Self, Error> {
+    fn parse_union(items: &[Value]) -> Result<Self, Error> {
         /*
         items.iter()
             .map(|item| Schema::parse(item))

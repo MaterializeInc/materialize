@@ -8,7 +8,7 @@ use serde::ser::{self, Error as SerdeError, Serialize};
 
 use types::Value;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Serializer {}
 
 pub struct SeqSerializer {
@@ -46,12 +46,6 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn description(&self) -> &str {
         &self.message
-    }
-}
-
-impl Serializer {
-    pub fn new() -> Serializer {
-        Serializer {}
     }
 }
 
@@ -101,11 +95,11 @@ impl<'b> ser::Serializer for &'b mut Serializer {
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok, Self::Error> {
-        self.serialize_i32(v as i32)
+        self.serialize_i32(i32::from(v))
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok, Self::Error> {
-        self.serialize_i32(v as i32)
+        self.serialize_i32(i32::from(v))
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok, Self::Error> {
@@ -117,18 +111,18 @@ impl<'b> ser::Serializer for &'b mut Serializer {
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok, Self::Error> {
-        self.serialize_i32(v as i32)
+        self.serialize_i32(i32::from(v))
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok, Self::Error> {
-        self.serialize_i32(v as i32)
+        self.serialize_i32(i32::from(v))
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok, Self::Error> {
         if v <= i32::max_value() as u32 {
             self.serialize_i32(v as i32)
         } else {
-            self.serialize_i64(v as i64)
+            self.serialize_i64(i64::from(v))
         }
     }
 
@@ -168,7 +162,7 @@ impl<'b> ser::Serializer for &'b mut Serializer {
     where
         T: Serialize,
     {
-        let v = value.serialize(&mut Serializer::new())?;
+        let v = value.serialize(&mut Serializer::default())?;
         Ok(Value::Union(Some(Box::new(v))))
     }
 
@@ -270,7 +264,8 @@ impl<'a> ser::SerializeSeq for SeqSerializer {
     where
         T: Serialize,
     {
-        self.items.push(value.serialize(&mut Serializer::new())?);
+        self.items
+            .push(value.serialize(&mut Serializer::default())?);
         Ok(())
     }
 
@@ -335,7 +330,7 @@ impl ser::SerializeMap for MapSerializer {
     where
         T: Serialize,
     {
-        let key = key.serialize(&mut Serializer::new())?;
+        let key = key.serialize(&mut Serializer::default())?;
 
         if let Value::String(key) = key {
             self.indices.insert(key, self.values.len());
@@ -349,13 +344,14 @@ impl ser::SerializeMap for MapSerializer {
     where
         T: Serialize,
     {
-        self.values.push(value.serialize(&mut Serializer::new())?);
+        self.values
+            .push(value.serialize(&mut Serializer::default())?);
         Ok(())
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
         let mut items = HashMap::new();
-        for (key, index) in self.indices.into_iter() {
+        for (key, index) in self.indices {
             if let Some(value) = self.values.get(index) {
                 items.insert(key, value.clone());
             }
@@ -377,8 +373,10 @@ impl ser::SerializeStruct for StructSerializer {
     where
         T: Serialize,
     {
-        self.fields
-            .push((name.to_owned(), value.serialize(&mut Serializer::new())?));
+        self.fields.push((
+            name.to_owned(),
+            value.serialize(&mut Serializer::default())?,
+        ));
         Ok(())
     }
 

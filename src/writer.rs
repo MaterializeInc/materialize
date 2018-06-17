@@ -17,7 +17,7 @@ use Codec;
 const SYNC_SIZE: usize = 16;
 const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
 
-const AVRO_OBJECT_HEADER: &'static [u8] = &[b'O', b'b', b'j', 1u8];
+const AVRO_OBJECT_HEADER: &[u8] = &[b'O', b'b', b'j', 1u8];
 
 /// Describes errors happened while validating Avro data.
 #[derive(Fail, Debug)]
@@ -63,7 +63,7 @@ impl<'a, W: Write> Writer<'a, W> {
 
         Writer {
             schema,
-            serializer: Serializer::new(),
+            serializer: Serializer::default(),
             writer,
             buffer: Vec::with_capacity(SYNC_INTERVAL),
             num_values: 0,
@@ -102,7 +102,7 @@ impl<'a, W: Write> Writer<'a, W> {
         self.num_values += 1;
 
         if self.buffer.len() >= SYNC_INTERVAL {
-            return self.flush().map(|b| b + n);
+            return self.flush().map(|b| b + n)
         }
 
         Ok(n)
@@ -130,7 +130,7 @@ impl<'a, W: Write> Writer<'a, W> {
         self.num_values += 1;
 
         if self.buffer.len() >= SYNC_INTERVAL {
-            return self.flush().map(|b| b + n);
+            return self.flush().map(|b| b + n)
         }
 
         Ok(n)
@@ -242,7 +242,7 @@ impl<'a, W: Write> Writer<'a, W> {
     /// Return the number of bytes written.
     pub fn flush(&mut self) -> Result<usize, Error> {
         if self.num_values == 0 {
-            return Ok(0);
+            return Ok(0)
         }
 
         self.codec.compress(&mut self.buffer)?;
@@ -250,8 +250,8 @@ impl<'a, W: Write> Writer<'a, W> {
         let num_values = self.num_values;
         let stream_len = self.buffer.len();
 
-        let num_bytes = self.append_raw(num_values.avro(), &Schema::Long)?
-            + self.append_raw(stream_len.avro(), &Schema::Long)?
+        let num_bytes = self.append_raw(&num_values.avro(), &Schema::Long)?
+            + self.append_raw(&stream_len.avro(), &Schema::Long)?
             + self.writer.write(self.buffer.as_ref())?
             + self.append_marker()?;
 
@@ -277,8 +277,8 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     /// Append a raw Avro Value to the payload avoiding to encode it again.
-    fn append_raw(&mut self, value: Value, schema: &Schema) -> Result<usize, Error> {
-        self.append_bytes(encode_to_vec(value, schema).as_ref())
+    fn append_raw(&mut self, value: &Value, schema: &Schema) -> Result<usize, Error> {
+        self.append_bytes(encode_to_vec(&value, schema).as_ref())
     }
 
     /// Append pure bytes to the payload.
@@ -297,7 +297,7 @@ impl<'a, W: Write> Writer<'a, W> {
         let mut header = Vec::new();
         header.extend_from_slice(AVRO_OBJECT_HEADER);
         encode(
-            metadata.avro(),
+            &metadata.avro(),
             &Schema::Map(Rc::new(Schema::Bytes)),
             &mut header,
         );
@@ -319,16 +319,18 @@ fn write_avro_datum<T: ToAvro>(
 ) -> Result<(), Error> {
     let avro = value.avro();
     if !avro.validate(schema) {
-        return Err(ValidationError::new("value does not match schema").into());
+        return Err(ValidationError::new("value does not match schema").into())
     }
-    Ok(encode(avro, schema, buffer))
+    encode(&avro, schema, buffer);
+    Ok(())
 }
 
 fn write_value_ref(schema: &Schema, value: &Value, buffer: &mut Vec<u8>) -> Result<(), Error> {
     if !value.validate(schema) {
-        return Err(ValidationError::new("value does not match schema").into());
+        return Err(ValidationError::new("value does not match schema").into())
     }
-    Ok(encode_ref(value, schema, buffer))
+    encode_ref(value, schema, buffer);
+    Ok(())
 }
 
 /// Encode a compatible value (implementing the `ToAvro` trait) into Avro format, also

@@ -42,7 +42,7 @@ pub fn read_long<R: Read>(reader: &mut R) -> Result<i64, Error> {
 }
 
 pub fn zig_i32(n: i32, buffer: &mut Vec<u8>) {
-    encode_variable(((n << 1) ^ (n >> 31)) as i64, buffer)
+    encode_variable(i64::from((n << 1) ^ (n >> 31)), buffer)
 }
 
 pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
@@ -51,7 +51,7 @@ pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
 
 pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, Error> {
     let i = zag_i64(reader)?;
-    if i < i32::min_value() as i64 || i > i32::max_value() as i64 {
+    if i < i64::from(i32::min_value()) || i > i64::from(i32::max_value()) {
         Err(DecodeError::new("int out of range").into())
     } else {
         Ok(i as i32)
@@ -86,7 +86,7 @@ fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
     let mut j = 0;
     loop {
         reader.read_exact(&mut buf[..])?;
-        i |= ((buf[0] & 0x7F) as u64) << (j * 7); // TODO overflow
+        i |= (u64::from(buf[0] & 0x7F)) << (j * 7); // TODO overflow
         if (buf[0] >> 7) == 0 {
             break
         } else {
