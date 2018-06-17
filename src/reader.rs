@@ -147,15 +147,15 @@ impl<R: Read> Block<R> {
         Err(DecodeError::new("unable to read block").into())
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.message_count
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    pub fn read_next(&mut self, read_schema: Option<&Schema>) -> Result<Option<Value>, Error> {
+    fn read_next(&mut self, read_schema: Option<&Schema>) -> Result<Option<Value>, Error> {
         if self.is_empty() {
             self.read_block_next()?;
             if self.is_empty() {
