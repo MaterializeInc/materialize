@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2018-06-17
+### Changed
+- Many performance improvements to both encoding and decoding
+### Added
+- New public method extend_from_slice for Writer
+- serde_json benchmark for comparison
+- bench_from_file function and a file from the goavro repository for comparison
+
 ## [0.3.2] - 2018-06-07
 ### Added
 - Some missing serialization fields for Schema::Record
