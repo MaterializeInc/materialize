@@ -18,7 +18,9 @@ clean-env:
 .PHONY: install-hooks
 install-hooks: $(VENV) .pre-commit-config.yaml
 	$(VENV)/bin/pre-commit install -f --install-hooks
-	cargo fmt --help > /dev/null || rustup component add rustfmt-preview
+	cargo +nightly fmt --help > /dev/null || rustup component add rustfmt-preview --toolchain nightly
+	cargo +nightly clippy --help > /dev/null || cargo +nightly install clippy
+
 
 .PHONY: clean-hooks
 clean-hooks:
