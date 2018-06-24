@@ -54,7 +54,7 @@ fn benchmark(schema: &Schema, record: &Value, s: &str, count: usize, runs: usize
 
     for _ in 0..runs {
         let start = Instant::now();
-        let reader = Reader::with_schema(schema, &bytes[..]);
+        let reader = Reader::with_schema(schema, &bytes[..]).unwrap();
 
         let mut read_records = Vec::with_capacity(count);
         for record in reader {
@@ -64,7 +64,7 @@ fn benchmark(schema: &Schema, record: &Value, s: &str, count: usize, runs: usize
         let duration = Instant::now().duration_since(start);
         durations.push(duration);
 
-        // assert_eq!(count, read_records.len());
+        assert_eq!(count, read_records.len());
     }
 
     let total_duration_read = durations.into_iter().fold(0u64, |a, b| a + nanos(b));

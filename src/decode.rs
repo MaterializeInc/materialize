@@ -6,7 +6,7 @@ use failure::Error;
 
 use schema::Schema;
 use types::Value;
-use util::{zag_i32, zag_i64, DecodeError};
+use util::{safe_len, zag_i32, zag_i64, DecodeError};
 
 #[inline]
 fn decode_long<R: Read>(reader: &mut R) -> Result<Value, Error> {
@@ -16,6 +16,11 @@ fn decode_long<R: Read>(reader: &mut R) -> Result<Value, Error> {
 #[inline]
 fn decode_int<R: Read>(reader: &mut R) -> Result<Value, Error> {
     zag_i32(reader).map(Value::Int)
+}
+
+#[inline]
+fn decode_len<R: Read>(reader: &mut R) -> Result<usize, Error> {
+    zag_i64(reader).and_then(|len| safe_len(len as usize))
 }
 
 /// Decode a `Value` from avro format given its `Schema`.
@@ -45,33 +50,25 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             Ok(Value::Double(unsafe { transmute::<[u8; 8], f64>(buf) }))
         },
         Schema::Bytes => {
-            if let Value::Long(len) = decode_long(reader)? {
-                let len = len as usize;
-                let mut buf = Vec::with_capacity(len);
-                unsafe {
-                    buf.set_len(len);
-                }
-                reader.read_exact(&mut buf)?;
-                Ok(Value::Bytes(buf))
-            } else {
-                Err(DecodeError::new("bytes len not found").into())
+            let len = decode_len(reader)?;
+            let mut buf = Vec::with_capacity(len);
+            unsafe {
+                buf.set_len(len);
             }
+            reader.read_exact(&mut buf)?;
+            Ok(Value::Bytes(buf))
         },
         Schema::String => {
-            if let Value::Long(len) = decode_long(reader)? {
-                let len = len as usize;
-                let mut buf = Vec::with_capacity(len);
-                unsafe {
-                    buf.set_len(len);
-                }
-                reader.read_exact(&mut buf)?;
-
-                String::from_utf8(buf)
-                    .map(Value::String)
-                    .map_err(|_| DecodeError::new("not a valid utf-8 string").into())
-            } else {
-                Err(DecodeError::new("string len not found").into())
+            let len = decode_len(reader)?;
+            let mut buf = Vec::with_capacity(len);
+            unsafe {
+                buf.set_len(len);
             }
+            reader.read_exact(&mut buf)?;
+
+            String::from_utf8(buf)
+                .map(Value::String)
+                .map_err(|_| DecodeError::new("not a valid utf-8 string").into())
         },
         Schema::Fixed { size, .. } => {
             let mut buf = vec![0u8; size as usize];
@@ -82,19 +79,16 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             let mut items = Vec::new();
 
             loop {
-                if let Value::Long(len) = decode_long(reader)? {
-                    // arrays are 0-terminated, 0i64 is also encoded as 0 in Avro
-                    // reading a length of 0 means the end of the array
-                    if len == 0 {
-                        break
-                    }
+                let len = decode_len(reader)?;
+                // arrays are 0-terminated, 0i64 is also encoded as 0 in Avro
+                // reading a length of 0 means the end of the array
+                if len == 0 {
+                    break
+                }
 
-                    items.reserve(len as usize);
-                    for _ in 0..len {
-                        items.push(decode(inner, reader)?);
-                    }
-                } else {
-                    return Err(DecodeError::new("array len not found").into())
+                items.reserve(len as usize);
+                for _ in 0..len {
+                    items.push(decode(inner, reader)?);
                 }
             }
 
@@ -104,24 +98,21 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             let mut items = HashMap::new();
 
             loop {
-                if let Value::Long(len) = decode_long(reader)? {
-                    // maps are 0-terminated, 0i64 is also encoded as 0 in Avro
-                    // reading a length of 0 means the end of the map
-                    if len == 0 {
-                        break
-                    }
+                let len = decode_len(reader)?;
+                // maps are 0-terminated, 0i64 is also encoded as 0 in Avro
+                // reading a length of 0 means the end of the map
+                if len == 0 {
+                    break
+                }
 
-                    items.reserve(len as usize);
-                    for _ in 0..len {
-                        if let Value::String(key) = decode(&Schema::String, reader)? {
-                            let value = decode(inner, reader)?;
-                            items.insert(key, value);
-                        } else {
-                            return Err(DecodeError::new("map key is not a string").into())
-                        }
+                items.reserve(len as usize);
+                for _ in 0..len {
+                    if let Value::String(key) = decode(&Schema::String, reader)? {
+                        let value = decode(inner, reader)?;
+                        items.insert(key, value);
+                    } else {
+                        return Err(DecodeError::new("map key is not a string").into())
                     }
-                } else {
-                    return Err(DecodeError::new("map len not found").into())
                 }
             }
 

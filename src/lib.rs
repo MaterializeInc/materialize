@@ -525,7 +525,7 @@ pub use de::from_value;
 pub use reader::{from_avro_datum, Reader};
 pub use schema::{ParseSchemaError, Schema};
 pub use types::SchemaResolutionError;
-pub use util::DecodeError;
+pub use util::{max_allocation_bytes, DecodeError};
 pub use writer::{to_avro_datum, ValidationError, Writer};
 
 #[cfg(test)]
@@ -727,5 +727,27 @@ mod tests {
                 ("c".to_string(), Value::Enum(2, "clubs".to_string())),
             ])
         );
+    }
+
+    #[test]
+    fn test_illformed_length() {
+        let raw_schema = r#"
+            {
+                "type": "record",
+                "name": "test",
+                "fields": [
+                    {"name": "a", "type": "long", "default": 42},
+                    {"name": "b", "type": "string"}
+                ]
+            }
+        "#;
+
+        let schema = Schema::parse_str(raw_schema).unwrap();
+
+        // Would allocated 18446744073709551605 bytes
+        let illformed: &[u8] = &[0x3e, 0x15, 0xff, 0x1f, 0x15, 0xff];
+
+        let value = from_avro_datum(&schema, &mut &illformed[..], None);
+        assert!(value.is_err());
     }
 }

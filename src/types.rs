@@ -457,12 +457,10 @@ impl Value {
 
     fn resolve_array(self, schema: &Schema) -> Result<Self, Error> {
         match self {
-            Value::Array(items) => Ok(Value::Array(
-                items
-                    .into_iter()
-                    .map(|item| item.resolve(schema))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
+            Value::Array(items) => Ok(Value::Array(items
+                .into_iter()
+                .map(|item| item.resolve(schema))
+                .collect::<Result<Vec<_>, _>>()?)),
             other => Err(SchemaResolutionError::new(format!(
                 "Array({:?}) expected, got {:?}",
                 schema, other
@@ -472,12 +470,10 @@ impl Value {
 
     fn resolve_map(self, schema: &Schema) -> Result<Self, Error> {
         match self {
-            Value::Map(items) => Ok(Value::Map(
-                items
-                    .into_iter()
-                    .map(|(key, value)| value.resolve(schema).map(|value| (key, value)))
-                    .collect::<Result<HashMap<_, _>, _>>()?,
-            )),
+            Value::Map(items) => Ok(Value::Map(items
+                .into_iter()
+                .map(|(key, value)| value.resolve(schema).map(|value| (key, value)))
+                .collect::<Result<HashMap<_, _>, _>>()?)),
             other => Err(SchemaResolutionError::new(format!(
                 "Map({:?}) expected, got {:?}",
                 schema, other
@@ -655,33 +651,25 @@ mod tests {
             ]).validate(&schema)
         );
 
-        assert!(
-            !Value::Record(vec![
-                ("b".to_string(), Value::String("foo".to_string())),
-                ("a".to_string(), Value::Long(42i64)),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("b".to_string(), Value::String("foo".to_string())),
+            ("a".to_string(), Value::Long(42i64)),
+        ]).validate(&schema));
 
-        assert!(
-            !Value::Record(vec![
-                ("a".to_string(), Value::Boolean(false)),
-                ("b".to_string(), Value::String("foo".to_string())),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Boolean(false)),
+            ("b".to_string(), Value::String("foo".to_string())),
+        ]).validate(&schema));
 
-        assert!(
-            !Value::Record(vec![
-                ("a".to_string(), Value::Long(42i64)),
-                ("c".to_string(), Value::String("foo".to_string())),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Long(42i64)),
+            ("c".to_string(), Value::String("foo".to_string())),
+        ]).validate(&schema));
 
-        assert!(
-            !Value::Record(vec![
-                ("a".to_string(), Value::Long(42i64)),
-                ("b".to_string(), Value::String("foo".to_string())),
-                ("c".to_string(), Value::Null),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Long(42i64)),
+            ("b".to_string(), Value::String("foo".to_string())),
+            ("c".to_string(), Value::Null),
+        ]).validate(&schema));
     }
 }
