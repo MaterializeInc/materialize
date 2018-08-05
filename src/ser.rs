@@ -400,3 +400,35 @@ impl ser::SerializeStructVariant for StructSerializer {
         unimplemented!()
     }
 }
+
+/// Interpret a serializeable instance as a `Value`.
+///
+/// This conversion can fail if the value is not valid as per the Avro specification.
+/// e.g: HashMap with non-string keys
+pub fn to_value<S: Serialize>(value: S) -> Result<Value, Error> {
+    let mut serializer = Serializer::default();
+    value.serialize(&mut serializer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Deserialize, Serialize)]
+    struct Test {
+        a: i64,
+        b: String,
+    }
+
+    #[test]
+    fn test_to_value() {
+        let test = Test { a: 27, b: "foo".to_owned() };
+        let expected = Value::Record(
+            vec![
+                ("a".to_owned(), Value::Long(27)),
+                ("b".to_owned(), Value::String("foo".to_owned())),
+            ]);
+
+        assert_eq!(to_value(test).unwrap(), expected);
+    }
+}
