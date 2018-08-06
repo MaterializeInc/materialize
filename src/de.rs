@@ -172,8 +172,8 @@ impl<'a, 'de> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         V: Visitor<'de>,
     {
         match *self.input {
-            Value::Union(Some(ref inner)) => visitor.visit_some(&mut Deserializer::new(inner)),
-            Value::Union(None) => visitor.visit_none(),
+            Value::Union(ref inner) if inner.as_ref() == &Value::Null => visitor.visit_none(),
+            Value::Union(ref inner) => visitor.visit_some(&mut Deserializer::new(inner)),
             _ => Err(Error::custom("not a union")),
         }
     }
@@ -316,9 +316,11 @@ impl<'de> de::MapAccess<'de> for MapDeserializer<'de> {
         K: DeserializeSeed<'de>,
     {
         match self.input_keys.next() {
-            Some(ref key) => seed.deserialize(StringDeserializer {
-                input: (*key).clone(),
-            }).map(Some),
+            Some(ref key) => {
+                seed.deserialize(StringDeserializer {
+                    input: (*key).clone(),
+                }).map(Some)
+            },
             None => Ok(None),
         }
     }

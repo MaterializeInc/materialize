@@ -6,7 +6,7 @@ use std::iter::once;
 
 use serde::ser::{self, Error as SerdeError, Serialize};
 
-use types::Value;
+use types::{ToAvro, Value};
 
 #[derive(Clone, Default)]
 pub struct Serializer {}
@@ -155,7 +155,7 @@ impl<'b> ser::Serializer for &'b mut Serializer {
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        Ok(Value::Union(None))
+        Ok(ToAvro::avro(None::<Self::Ok>))
     }
 
     fn serialize_some<T: ?Sized>(self, value: &T) -> Result<Self::Ok, Self::Error>
@@ -163,7 +163,7 @@ impl<'b> ser::Serializer for &'b mut Serializer {
         T: Serialize,
     {
         let v = value.serialize(&mut Serializer::default())?;
-        Ok(Value::Union(Some(Box::new(v))))
+        Ok(ToAvro::avro(Some(v)))
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {

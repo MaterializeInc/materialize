@@ -57,7 +57,8 @@ impl<R: Read> Block<R> {
 
         if let Value::Map(meta) = decode(&meta_schema, &mut self.reader)? {
             // TODO: surface original parse schema errors instead of coalescing them here
-            let schema = meta.get("avro.schema")
+            let schema = meta
+                .get("avro.schema")
                 .and_then(|bytes| {
                     if let Value::Bytes(ref bytes) = *bytes {
                         from_slice(bytes.as_ref()).ok()
@@ -72,7 +73,8 @@ impl<R: Read> Block<R> {
                 return Err(ParseSchemaError::new("unable to parse schema").into())
             }
 
-            if let Some(codec) = meta.get("avro.codec")
+            if let Some(codec) = meta
+                .get("avro.codec")
                 .and_then(|codec| {
                     if let Value::Bytes(ref bytes) = *codec {
                         from_utf8(bytes.as_ref()).ok()
@@ -337,13 +339,13 @@ mod tests {
     }
 
     #[test]
-    fn test_union() {
+    fn test_null_union() {
         let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
         let mut encoded: &'static [u8] = &[2, 0];
 
         assert_eq!(
             from_avro_datum(&schema, &mut encoded, None).unwrap(),
-            Value::Union(Some(Box::new(Value::Long(0))))
+            Value::Union(Box::new(Value::Long(0)))
         );
     }
 

@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn test_union() {
         let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
-        let union = Value::Union(Some(Box::new(Value::Long(3))));
+        let union = Value::Union(Box::new(Value::Long(3)));
 
         let mut expected = Vec::new();
         zig_i64(1, &mut expected);

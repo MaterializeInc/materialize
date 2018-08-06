@@ -7,6 +7,7 @@ use failure::Error;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::{self, Map, Value};
 
+use types;
 use util::MapHelper;
 
 /// Describes errors happened while parsing Avro schemas.
@@ -54,14 +55,7 @@ pub enum Schema {
     /// `Map` keys are assumed to be `string`.
     Map(Rc<Schema>),
     /// A `union` Avro schema.
-    ///
-    /// `Union` holds a counted reference (`Rc`) to its non-`null` `Schema`.
-    ///
-    /// **NOTE** Only `["null", "< type >"]` unions are currently supported.
-    /// Any other combination of `Schema`s contained in a `union` will be
-    /// considered invalid and errors will be reported when trying to parse
-    /// such a schema.
-    Union(Rc<Schema>),
+    Union(UnionSchema),
     /// A `record` Avro schema.
     ///
     /// The `lookup` table maps field names to their position in the `Vec`
@@ -83,6 +77,77 @@ pub enum Schema {
     },
     /// A `fixed` Avro schema.
     Fixed { name: Name, size: usize },
+}
+
+/// This type is used to simplify enum variant comparison between `Schema` and `types::Value`.
+/// It may have utility as part of the public API, but defining as `pub(crate)` for now.
+///
+/// **NOTE** This type was introduced due to a limitation of `mem::discriminant` requiring a _value_
+/// be constructed in order to get the discriminant, which makes it difficult to implement a
+/// function that maps from `Discriminant<Schema> -> Discriminant<Value>`. Conversion into this
+/// intermediate type should be especially fast, as the number of enum variants is small, which
+/// _should_ compile into a jump-table for the conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SchemaKind {
+    Null,
+    Boolean,
+    Int,
+    Long,
+    Float,
+    Double,
+    Bytes,
+    String,
+    Array,
+    Map,
+    Union,
+    Record,
+    Enum,
+    Fixed,
+}
+
+impl<'a> From<&'a Schema> for SchemaKind {
+    #[inline(always)]
+    fn from(schema: &'a Schema) -> SchemaKind {
+        // NOTE: I _believe_ this will always be fast as it should convert into a jump table.
+        match schema {
+            Schema::Null => SchemaKind::Null,
+            Schema::Boolean => SchemaKind::Boolean,
+            Schema::Int => SchemaKind::Int,
+            Schema::Long => SchemaKind::Long,
+            Schema::Float => SchemaKind::Float,
+            Schema::Double => SchemaKind::Double,
+            Schema::Bytes => SchemaKind::Bytes,
+            Schema::String => SchemaKind::String,
+            Schema::Array(_) => SchemaKind::Array,
+            Schema::Map(_) => SchemaKind::Map,
+            Schema::Union(_) => SchemaKind::Union,
+            Schema::Record { .. } => SchemaKind::Record,
+            Schema::Enum { .. } => SchemaKind::Enum,
+            Schema::Fixed { .. } => SchemaKind::Fixed,
+        }
+    }
+}
+
+impl<'a> From<&'a types::Value> for SchemaKind {
+    #[inline(always)]
+    fn from(value: &'a types::Value) -> SchemaKind {
+        match value {
+            types::Value::Null => SchemaKind::Null,
+            types::Value::Boolean(_) => SchemaKind::Boolean,
+            types::Value::Int(_) => SchemaKind::Int,
+            types::Value::Long(_) => SchemaKind::Long,
+            types::Value::Float(_) => SchemaKind::Float,
+            types::Value::Double(_) => SchemaKind::Double,
+            types::Value::Bytes(_) => SchemaKind::Bytes,
+            types::Value::String(_) => SchemaKind::String,
+            types::Value::Array(_) => SchemaKind::Array,
+            types::Value::Map(_) => SchemaKind::Map,
+            types::Value::Union(_) => SchemaKind::Union,
+            types::Value::Record(_) => SchemaKind::Record,
+            types::Value::Enum(_, _) => SchemaKind::Enum,
+            types::Value::Fixed(_, _) => SchemaKind::Fixed,
+        }
+    }
 }
 
 /// Represents names for `record`, `enum` and `fixed` Avro schemas.
@@ -227,6 +292,66 @@ impl RecordField {
             order,
             position,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnionSchema {
+    schemas: Vec<Schema>,
+    // Used to ensure uniqueness of schema inputs, and provide constant time finding of the
+    // schema index given a value.
+    // **NOTE** that this approach does not work for named types, and will have to be modified
+    // to support that. A simple solution is to also keep a mapping of the names used.
+    variant_index: HashMap<SchemaKind, usize>,
+}
+
+impl UnionSchema {
+    pub(crate) fn new(schemas: Vec<Schema>) -> Result<Self, Error> {
+        let mut vindex = HashMap::new();
+        for (i, schema) in schemas.iter().enumerate() {
+            if let Schema::Union(_) = schema {
+                Err(ParseSchemaError::new(
+                    "Unions may not directly contain a union",
+                ))?;
+            }
+            let kind = SchemaKind::from(schema);
+            if vindex.insert(kind, i).is_some() {
+                Err(ParseSchemaError::new(
+                    "Unions cannot contain duplicate types",
+                ))?;
+            }
+        }
+        Ok(UnionSchema {
+            schemas,
+            variant_index: vindex,
+        })
+    }
+
+    /// Returns a slice to all variants of this schema.
+    pub fn variants(&self) -> &[Schema] {
+        &self.schemas
+    }
+
+    /// Returns true if the first variant of this `UnionSchema` is `Null`.
+    pub fn is_nullable(&self) -> bool {
+        !self.schemas.is_empty() && self.schemas[0] == Schema::Null
+    }
+
+    /// Optionally returns a reference to the schema matched by this value, as well as its position
+    /// within this enum.
+    pub fn find_schema(&self, value: &::types::Value) -> Option<(usize, &Schema)> {
+        let kind = SchemaKind::from(value);
+        self.variant_index
+            .get(&kind)
+            .cloned()
+            .map(|i| (i, &self.schemas[i]))
+    }
+}
+
+// No need to compare variant_index, it is derivative of schemas.
+impl PartialEq for UnionSchema {
+    fn eq(&self, other: &UnionSchema) -> bool {
+        self.schemas.eq(&other.schemas)
     }
 }
 
@@ -377,28 +502,11 @@ impl Schema {
     /// Parse a `serde_json::Value` representing a Avro union type into a
     /// `Schema`.
     fn parse_union(items: &[Value]) -> Result<Self, Error> {
-        /*
-        items.iter()
-            .map(|item| Schema::parse(item))
-            .collect::<Result<_, _>>()
-            .map(|schemas| Schema::Union(schemas))
-        */
-
-        if items.len() == 2 && items[0] == Value::String("null".to_owned()) {
-            Schema::parse(&items[1]).map(|s| Schema::Union(Rc::new(s)))
-        } else {
-            Err(ParseSchemaError::new("Unions only support null and type").into())
-        }
-
-        /*
-        match items.as_slice() {
-            // &[Value::String(ref null), ref x] | &[ref x, Value::String(ref null)] if null == "null" => {
-            &[Value::String(ref null), ref x] if null == "null" => {
-                Schema::parse(&x).map(|s| Schema::Union(Rc::new(s)))
-            },
-            _ => Err(ParseSchemaError::new("Unions only support null and type")),
-        }
-        */
+        items
+            .iter()
+            .map(Schema::parse)
+            .collect::<Result<Vec<_>, _>>()
+            .and_then(|schemas| Ok(Schema::Union(UnionSchema::new(schemas)?)))
     }
 
     /// Parse a `serde_json::Value` representing a Avro fixed type into a
@@ -445,9 +553,11 @@ impl Serialize for Schema {
                 map.end()
             },
             Schema::Union(ref inner) => {
-                let mut seq = serializer.serialize_seq(Some(2))?;
-                seq.serialize_element("null")?;
-                seq.serialize_element(&*inner.clone())?;
+                let variants = inner.variants();
+                let mut seq = serializer.serialize_seq(Some(variants.len()))?;
+                for v in variants {
+                    seq.serialize_element(v)?;
+                }
                 seq.end()
             },
             Schema::Record {
@@ -641,13 +751,45 @@ mod tests {
     #[test]
     fn test_union_schema() {
         let schema = Schema::parse_str(r#"["null", "int"]"#).unwrap();
-        assert_eq!(Schema::Union(Rc::new(Schema::Int)), schema);
+        assert_eq!(
+            Schema::Union(UnionSchema::new(vec![Schema::Null, Schema::Int]).unwrap()),
+            schema
+        );
     }
 
     #[test]
     fn test_union_unsupported_schema() {
-        let schema = Schema::parse_str(r#"["null", "int", "string"]"#);
+        let schema = Schema::parse_str(r#"["null", ["null", "int"], "string"]"#);
         assert!(schema.is_err());
+    }
+
+    #[test]
+    fn test_multi_union_schema() {
+        let schema = Schema::parse_str(r#"["null", "int", "float", "string", "bytes"]"#);
+        assert!(schema.is_ok());
+        let schema = schema.unwrap();
+        assert_eq!(SchemaKind::from(&schema), SchemaKind::Union);
+        let union_schema = match schema {
+            Schema::Union(u) => u,
+            _ => unreachable!(),
+        };
+        assert_eq!(union_schema.variants().len(), 5);
+        let mut variants = union_schema.variants().iter();
+        assert_eq!(SchemaKind::from(variants.next().unwrap()), SchemaKind::Null);
+        assert_eq!(SchemaKind::from(variants.next().unwrap()), SchemaKind::Int);
+        assert_eq!(
+            SchemaKind::from(variants.next().unwrap()),
+            SchemaKind::Float
+        );
+        assert_eq!(
+            SchemaKind::from(variants.next().unwrap()),
+            SchemaKind::String
+        );
+        assert_eq!(
+            SchemaKind::from(variants.next().unwrap()),
+            SchemaKind::Bytes
+        );
+        assert_eq!(variants.next(), None);
     }
 
     #[test]
