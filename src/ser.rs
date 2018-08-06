@@ -422,12 +422,14 @@ mod tests {
 
     #[test]
     fn test_to_value() {
-        let test = Test { a: 27, b: "foo".to_owned() };
-        let expected = Value::Record(
-            vec![
-                ("a".to_owned(), Value::Long(27)),
-                ("b".to_owned(), Value::String("foo".to_owned())),
-            ]);
+        let test = Test {
+            a: 27,
+            b: "foo".to_owned(),
+        };
+        let expected = Value::Record(vec![
+            ("a".to_owned(), Value::Long(27)),
+            ("b".to_owned(), Value::String("foo".to_owned())),
+        ]);
 
         assert_eq!(to_value(test).unwrap(), expected);
     }

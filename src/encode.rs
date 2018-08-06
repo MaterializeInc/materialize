@@ -67,19 +67,23 @@ pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
         },
         Value::Array(items) => {
             if let Schema::Array(ref inner) = *schema {
-                encode_long(items.len() as i64, buffer);
-                for item in items.iter() {
-                    encode_ref(item, inner, buffer);
+                if items.len() > 0 {
+                    encode_long(items.len() as i64, buffer);
+                    for item in items.iter() {
+                        encode_ref(item, inner, buffer);
+                    }
                 }
                 buffer.push(0u8);
             }
         },
         Value::Map(items) => {
             if let Schema::Map(ref inner) = *schema {
-                encode_long(items.len() as i64, buffer);
-                for (key, value) in items {
-                    encode_bytes(key, buffer);
-                    encode_ref(value, inner, buffer);
+                if items.len() > 0 {
+                    encode_long(items.len() as i64, buffer);
+                    for (key, value) in items {
+                        encode_bytes(key, buffer);
+                        encode_ref(value, inner, buffer);
+                    }
                 }
                 buffer.push(0u8);
             }
@@ -102,4 +106,35 @@ pub fn encode_to_vec(value: &Value, schema: &Schema) -> Vec<u8> {
     let mut buffer = Vec::new();
     encode(&value, schema, &mut buffer);
     buffer
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    #[test]
+    fn test_encode_empty_array() {
+        let mut buf = Vec::new();
+        let empty: Vec<Value> = Vec::new();
+        encode(
+            &Value::Array(empty),
+            &Schema::Array(Rc::new(Schema::Int)),
+            &mut buf,
+        );
+        assert_eq!(vec![0u8], buf);
+    }
+
+    #[test]
+    fn test_encode_empty_map() {
+        let mut buf = Vec::new();
+        let empty: HashMap<String, Value> = HashMap::new();
+        encode(
+            &Value::Map(empty),
+            &Schema::Map(Rc::new(Schema::Int)),
+            &mut buf,
+        );
+        assert_eq!(vec![0u8], buf);
+    }
 }

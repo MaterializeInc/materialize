@@ -14,7 +14,10 @@ struct Test {
 }
 
 fn main() -> Result<(), Error> {
-    let test = Test { a: 27, b: "foo".to_owned() };
+    let test = Test {
+        a: 27,
+        b: "foo".to_owned(),
+    };
     println!("{:?}", to_value(test)?);
 
     Ok(())
