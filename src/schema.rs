@@ -1,7 +1,6 @@
 //! Logic for parsing and interacting with schemas in Avro format.
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use failure::Error;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
@@ -47,13 +46,13 @@ pub enum Schema {
     /// A `string` Avro schema.
     /// `String` represents a unicode character sequence.
     String,
-    /// A `array` Avro schema.
-    /// `Array` holds a counted reference (`Rc`) to the `Schema` of its items.
-    Array(Rc<Schema>),
+    /// A `array` Avro schema. Avro arrays are required to have the same type for each element.
+    /// This variant holds the `Schema` for the array element type.
+    Array(Box<Schema>),
     /// A `map` Avro schema.
-    /// `Map` holds a counted reference (`Rc`) to the `Schema` of its values.
+    /// `Map` holds a pointer to the `Schema` of its values, which must all be the same schema.
     /// `Map` keys are assumed to be `string`.
-    Map(Rc<Schema>),
+    Map(Box<Schema>),
     /// A `union` Avro schema.
     Union(UnionSchema),
     /// A `record` Avro schema.
@@ -64,10 +63,7 @@ pub enum Schema {
         name: Name,
         doc: Documentation,
         fields: Vec<RecordField>,
-
-        // TODO: this does not look great.
-        // This is just a trick to avoid borrows of Schema into types::Record.
-        lookup: Rc<HashMap<String, usize>>,
+        lookup: HashMap<String, usize>,
     },
     /// An `enum` Avro schema.
     Enum {
@@ -281,8 +277,7 @@ impl RecordField {
                 "descending" => Some(RecordFieldOrder::Descending),
                 "ignore" => Some(RecordFieldOrder::Ignore),
                 _ => None,
-            })
-            .unwrap_or_else(|| RecordFieldOrder::Ascending);
+            }).unwrap_or_else(|| RecordFieldOrder::Ascending);
 
         Ok(RecordField {
             name,
@@ -451,7 +446,7 @@ impl Schema {
             name,
             doc: complex.doc(),
             fields,
-            lookup: Rc::new(lookup),
+            lookup,
         })
     }
 
@@ -486,7 +481,7 @@ impl Schema {
             .get("items")
             .ok_or_else(|| ParseSchemaError::new("No `items` in array").into())
             .and_then(|items| Schema::parse(items))
-            .map(|schema| Schema::Array(Rc::new(schema)))
+            .map(|schema| Schema::Array(Box::new(schema)))
     }
 
     /// Parse a `serde_json::Value` representing a Avro map type into a
@@ -496,7 +491,7 @@ impl Schema {
             .get("values")
             .ok_or_else(|| ParseSchemaError::new("No `values` in map").into())
             .and_then(|items| Schema::parse(items))
-            .map(|schema| Schema::Map(Rc::new(schema)))
+            .map(|schema| Schema::Map(Box::new(schema)))
     }
 
     /// Parse a `serde_json::Value` representing a Avro union type into a
@@ -739,13 +734,13 @@ mod tests {
     #[test]
     fn test_array_schema() {
         let schema = Schema::parse_str(r#"{"type": "array", "items": "string"}"#).unwrap();
-        assert_eq!(Schema::Array(Rc::new(Schema::String)), schema);
+        assert_eq!(Schema::Array(Box::new(Schema::String)), schema);
     }
 
     #[test]
     fn test_map_schema() {
         let schema = Schema::parse_str(r#"{"type": "map", "values": "double"}"#).unwrap();
-        assert_eq!(Schema::Map(Rc::new(Schema::Double)), schema);
+        assert_eq!(Schema::Map(Box::new(Schema::Double)), schema);
     }
 
     #[test]
@@ -832,7 +827,7 @@ mod tests {
                     position: 1,
                 },
             ],
-            lookup: Rc::new(lookup),
+            lookup,
         };
 
         assert_eq!(expected, schema);
@@ -872,9 +867,9 @@ mod tests {
 
     #[test]
     fn test_no_documentation() {
-        let schema = Schema::parse_str(
-            r#"{"type": "enum", "name": "Coin", "symbols": ["heads", "tails"]}"#,
-        ).unwrap();
+        let schema =
+            Schema::parse_str(r#"{"type": "enum", "name": "Coin", "symbols": ["heads", "tails"]}"#)
+                .unwrap();
 
         let doc = match schema {
             Schema::Enum { doc, .. } => doc,
@@ -896,5 +891,24 @@ mod tests {
         };
 
         assert_eq!("Some documentation".to_owned(), doc.unwrap());
+    }
+
+    // Tests to ensure Schema is Send + Sync. These tests don't need to _do_ anything, if they can
+    // compile, they pass.
+    #[test]
+    fn test_schema_is_send() {
+        fn send<S: Send>(_s: S) {}
+
+        let schema = Schema::Null;
+        send(schema);
+    }
+
+    #[test]
+    fn test_schema_is_sync() {
+        fn sync<S: Sync>(_s: S) {}
+
+        let schema = Schema::Null;
+        sync(&schema);
+        sync(schema);
     }
 }

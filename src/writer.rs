@@ -1,7 +1,6 @@
 //! Logic handling writing in Avro format at user level.
 use std::collections::HashMap;
 use std::io::Write;
-use std::rc::Rc;
 
 use failure::Error;
 use rand::random;
@@ -298,7 +297,7 @@ impl<'a, W: Write> Writer<'a, W> {
         header.extend_from_slice(AVRO_OBJECT_HEADER);
         encode(
             &metadata.avro(),
-            &Schema::Map(Rc::new(Schema::Bytes)),
+            &Schema::Map(Box::new(Schema::Bytes)),
             &mut header,
         );
         header.extend_from_slice(&self.marker);

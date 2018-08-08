@@ -112,7 +112,6 @@ pub fn encode_to_vec(value: &Value, schema: &Schema) -> Vec<u8> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::rc::Rc;
 
     #[test]
     fn test_encode_empty_array() {
@@ -120,7 +119,7 @@ mod tests {
         let empty: Vec<Value> = Vec::new();
         encode(
             &Value::Array(empty),
-            &Schema::Array(Rc::new(Schema::Int)),
+            &Schema::Array(Box::new(Schema::Int)),
             &mut buf,
         );
         assert_eq!(vec![0u8], buf);
@@ -132,7 +131,7 @@ mod tests {
         let empty: HashMap<String, Value> = HashMap::new();
         encode(
             &Value::Map(empty),
-            &Schema::Map(Rc::new(Schema::Int)),
+            &Schema::Map(Box::new(Schema::Int)),
             &mut buf,
         );
         assert_eq!(vec![0u8], buf);

@@ -1,7 +1,6 @@
 //! Logic handling the intermediate representation of Avro values.
 use std::collections::HashMap;
 use std::hash::BuildHasher;
-use std::rc::Rc;
 
 use failure::Error;
 use serde_json::Value as JsonValue;
@@ -173,15 +172,15 @@ impl<S: Serialize> ToAvro for S {
 
 /// Utility interface to build `Value::Record` objects.
 #[derive(Debug, Clone)]
-pub struct Record {
+pub struct Record<'a> {
     /// List of fields contained in the record.
     /// Ordered according to the fields in the schema given to create this
     /// `Record` object. Any unset field defaults to `Value::Null`.
     pub fields: Vec<(String, Value)>,
-    schema_lookup: Rc<HashMap<String, usize>>,
+    schema_lookup: &'a HashMap<String, usize>,
 }
 
-impl Record {
+impl<'a> Record<'a> {
     /// Create a `Record` given a `Schema`.
     ///
     /// If the `Schema` is not a `Schema::Record` variant, `None` will be returned.
@@ -199,7 +198,7 @@ impl Record {
 
                 Some(Record {
                     fields,
-                    schema_lookup: schema_lookup.clone(),
+                    schema_lookup,
                 })
             },
             _ => None,
@@ -221,7 +220,7 @@ impl Record {
     }
 }
 
-impl ToAvro for Record {
+impl<'a> ToAvro for Record<'a> {
     fn avro(self) -> Value {
         Value::Record(self.fields)
     }
@@ -281,12 +280,11 @@ impl Value {
                 items.iter().all(|(_, value)| value.validate(inner))
             },
             (&Value::Record(ref record_fields), &Schema::Record { ref fields, .. }) => {
-                fields.len() == record_fields.len()
-                    && fields.iter().zip(record_fields.iter()).all(
-                        |(field, &(ref name, ref value))| {
-                            field.name == *name && value.validate(&field.schema)
-                        },
-                    )
+                fields.len() == record_fields.len() && fields.iter().zip(record_fields.iter()).all(
+                    |(field, &(ref name, ref value))| {
+                        field.name == *name && value.validate(&field.schema)
+                    },
+                )
             },
             _ => false,
         }
@@ -533,8 +531,7 @@ impl Value {
                 value
                     .resolve(&field.schema)
                     .map(|value| (field.name.clone(), value))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            }).collect::<Result<Vec<_>, _>>()?;
 
         Ok(Value::Record(new_fields))
     }
@@ -543,9 +540,6 @@ impl Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use std::rc::Rc;
-
     use schema::{Name, RecordField, RecordFieldOrder, UnionSchema};
 
     #[test]
@@ -582,12 +576,12 @@ mod tests {
             ),
             (
                 Value::Array(vec![Value::Long(42i64)]),
-                Schema::Array(Rc::new(Schema::Long)),
+                Schema::Array(Box::new(Schema::Long)),
                 true,
             ),
             (
                 Value::Array(vec![Value::Boolean(true)]),
-                Schema::Array(Rc::new(Schema::Long)),
+                Schema::Array(Box::new(Schema::Long)),
                 false,
             ),
             (Value::Record(vec![]), Schema::Null, false),
@@ -672,7 +666,7 @@ mod tests {
                     position: 1,
                 },
             ],
-            lookup: Rc::new(HashMap::new()),
+            lookup: HashMap::new(),
         };
 
         assert!(

@@ -316,11 +316,10 @@ impl<'de> de::MapAccess<'de> for MapDeserializer<'de> {
         K: DeserializeSeed<'de>,
     {
         match self.input_keys.next() {
-            Some(ref key) => {
-                seed.deserialize(StringDeserializer {
+            Some(ref key) => seed
+                .deserialize(StringDeserializer {
                     input: (*key).clone(),
-                }).map(Some)
-            },
+                }).map(Some),
             None => Ok(None),
         }
     }
