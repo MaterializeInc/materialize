@@ -5,9 +5,19 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## Added
+
+## [0.6.0]- 2018-08-11
+### Added
+- impl Send+Sync for Schema (non-backwards compatible)
+
+## [0.5.0] - 2018-08-06
+### Added
+- A maximum allocation size when decoding
 - Support for Parsing Canonical Form
 - `to_value` to serialize anything that implements Serialize into a Value
+- Full support for union types (non-backwards compatible)
+### Fixed
+- Encoding of empty containers (array/map)
 
 ## [0.4.1] - 2018-06-17
 ### Changed
