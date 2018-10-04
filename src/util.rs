@@ -64,7 +64,7 @@ pub fn read_long<R: Read>(reader: &mut R) -> Result<i64, Error> {
 }
 
 pub fn zig_i32(n: i32, buffer: &mut Vec<u8>) {
-    encode_variable(i64::from((n << 1) ^ (n >> 31)), buffer)
+    zig_i64(n as i64, buffer)
 }
 
 pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
@@ -182,6 +182,33 @@ mod tests {
         s.clear();
         zig_i64(-2147483649i64, &mut s);
         assert_eq!(s, [129, 128, 128, 128, 16]);
+    }
+
+    #[test]
+    fn test_zig_i32() {
+        let mut s = Vec::new();
+        zig_i32(1073741823i32, &mut s);
+        assert_eq!(s, [254, 255, 255, 255, 7]);
+
+        s.clear();
+        zig_i32(-1073741824i32, &mut s);
+        assert_eq!(s, [255, 255, 255, 255, 7]);
+
+        s.clear();
+        zig_i32(1073741824i32, &mut s);
+        assert_eq!(s, [128, 128, 128, 128, 8]);
+
+        s.clear();
+        zig_i32(-1073741825i32, &mut s);
+        assert_eq!(s, [129, 128, 128, 128, 8]);
+
+        s.clear();
+        zig_i32(2147483647i32, &mut s);
+        assert_eq!(s, [254, 255, 255, 255, 15]);
+
+        s.clear();
+        zig_i32(-2147483648i32, &mut s);
+        assert_eq!(s, [255, 255, 255, 255, 15]);
     }
 
     #[test]
