@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1]- 2018-10-07
+### Fixed
+- Encoding of i32/i64
+
 ## [0.6.0]- 2018-08-11
 ### Added
 - impl Send+Sync for Schema (non-backwards compatible)
