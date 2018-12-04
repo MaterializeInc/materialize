@@ -502,6 +502,10 @@ extern crate serde;
 extern crate serde_json;
 #[cfg(feature = "snappy")]
 extern crate snap;
+#[cfg(feature = "snappy")]
+extern crate byteorder;
+#[cfg(feature = "snappy")]
+extern crate crc;
 
 // test dependency
 #[cfg(test)]

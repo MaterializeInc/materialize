@@ -5,7 +5,9 @@ use std::str::FromStr;
 use failure::Error;
 use libflate::deflate::{Decoder, Encoder};
 #[cfg(feature = "snappy")]
-use snap::{Reader, Writer};
+use byteorder;
+#[cfg(feature = "snappy")]
+use crc;
 
 use types::{ToAvro, Value};
 use util::DecodeError;
@@ -66,9 +68,16 @@ impl Codec {
             },
             #[cfg(feature = "snappy")]
             Codec::Snappy => {
-                let mut writer = Writer::new(Vec::new());
-                writer.write_all(stream)?;
-                *stream = writer.into_inner()?; // .into_inner() will also call .flush()
+                use byteorder::ByteOrder;
+
+                let mut encoded: Vec<u8> = vec!(0; snap::max_compress_len(stream.len()));
+                let compressed_size = snap::Encoder::new().compress(&stream[..], &mut encoded[..])?;
+
+                let crc = crc::crc32::checksum_ieee(&stream[..]);
+                byteorder::BigEndian::write_u32(&mut encoded[compressed_size..], crc);
+                encoded.truncate(compressed_size + 4);
+
+                *stream = encoded;
             },
         };
 
@@ -90,12 +99,21 @@ impl Codec {
             },
             #[cfg(feature = "snappy")]
             Codec::Snappy => {
-                let mut read = Vec::new();
-                {
-                    let mut reader = Reader::new(&stream[..]);
-                    reader.read_to_end(&mut read)?;
+                use byteorder::ByteOrder;
+
+                let decompressed_size = snap::decompress_len(&stream[..stream.len() - 4])?;
+                let mut decoded = vec!(0; decompressed_size);
+                snap::Decoder::new().decompress(&stream[..stream.len() - 4], &mut decoded[..])?;
+
+                let expected_crc = byteorder::BigEndian::read_u32(&stream[stream.len() - 4..]);
+                let actual_crc = crc::crc32::checksum_ieee(&decoded);
+
+                if expected_crc != actual_crc {
+                    return Err(DecodeError::new(format!("bad Snappy CRC32; expected {:x} but got {:x}",
+                                                        expected_crc,
+                                                        actual_crc)).into());
                 }
-                *stream = read;
+                *stream = decoded;
             },
         };
 
