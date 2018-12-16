@@ -9,8 +9,8 @@ use byteorder;
 #[cfg(feature = "snappy")]
 use crc;
 
-use types::{ToAvro, Value};
-use util::DecodeError;
+use crate::types::{ToAvro, Value};
+use crate::util::DecodeError;
 
 /// The compression codec used to compress blocks.
 #[derive(Clone, Copy, Debug, PartialEq)]

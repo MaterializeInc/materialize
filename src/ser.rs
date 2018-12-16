@@ -6,7 +6,7 @@ use std::iter::once;
 
 use serde::ser::{self, Error as SerdeError, Serialize};
 
-use types::{ToAvro, Value};
+use crate::types::{ToAvro, Value};
 
 #[derive(Clone, Default)]
 pub struct Serializer {}

@@ -524,21 +524,21 @@ mod writer;
 pub mod schema;
 pub mod types;
 
-pub use codec::Codec;
-pub use de::from_value;
-pub use reader::{from_avro_datum, Reader};
-pub use schema::{ParseSchemaError, Schema};
-pub use ser::to_value;
-pub use types::SchemaResolutionError;
-pub use util::{max_allocation_bytes, DecodeError};
-pub use writer::{to_avro_datum, ValidationError, Writer};
+pub use crate::codec::Codec;
+pub use crate::de::from_value;
+pub use crate::reader::{from_avro_datum, Reader};
+pub use crate::schema::{ParseSchemaError, Schema};
+pub use crate::ser::to_value;
+pub use crate::types::SchemaResolutionError;
+pub use crate::util::{max_allocation_bytes, DecodeError};
+pub use crate::writer::{to_avro_datum, ValidationError, Writer};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reader::Reader;
-    use schema::Schema;
-    use types::{Record, Value};
+    use crate::reader::Reader;
+    use crate::schema::Schema;
+    use crate::types::{Record, Value};
 
     //TODO: move where it fits better
     #[test]

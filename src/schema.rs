@@ -6,8 +6,8 @@ use failure::Error;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::{self, Map, Value};
 
-use types;
-use util::MapHelper;
+use crate::types;
+use crate::util::MapHelper;
 
 /// Describes errors happened while parsing Avro schemas.
 #[derive(Fail, Debug)]
@@ -334,7 +334,7 @@ impl UnionSchema {
 
     /// Optionally returns a reference to the schema matched by this value, as well as its position
     /// within this enum.
-    pub fn find_schema(&self, value: &::types::Value) -> Option<(usize, &Schema)> {
+    pub fn find_schema(&self, value: &crate::types::Value) -> Option<(usize, &Schema)> {
         let kind = SchemaKind::from(value);
         self.variant_index
             .get(&kind)

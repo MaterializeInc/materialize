@@ -4,9 +4,9 @@ use std::mem::transmute;
 
 use failure::Error;
 
-use schema::Schema;
-use types::Value;
-use util::{safe_len, zag_i32, zag_i64, DecodeError};
+use crate::schema::Schema;
+use crate::types::Value;
+use crate::util::{safe_len, zag_i32, zag_i64, DecodeError};
 
 #[inline]
 fn decode_long<R: Read>(reader: &mut R) -> Result<Value, Error> {

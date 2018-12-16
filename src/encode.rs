@@ -1,8 +1,8 @@
 use std::mem::transmute;
 
-use schema::Schema;
-use types::Value;
-use util::{zig_i32, zig_i64};
+use crate::schema::Schema;
+use crate::types::Value;
+use crate::util::{zig_i32, zig_i64};
 
 /// Encode a `Value` into avro format.
 ///

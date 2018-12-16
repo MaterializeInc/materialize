@@ -7,11 +7,11 @@ use rand::random;
 use serde::Serialize;
 use serde_json;
 
-use encode::{encode, encode_ref, encode_to_vec};
-use schema::Schema;
-use ser::Serializer;
-use types::{ToAvro, Value};
-use Codec;
+use crate::encode::{encode, encode_ref, encode_to_vec};
+use crate::schema::Schema;
+use crate::ser::Serializer;
+use crate::types::{ToAvro, Value};
+use crate::Codec;
 
 const SYNC_SIZE: usize = 16;
 const SYNC_INTERVAL: usize = 1000 * SYNC_SIZE; // TODO: parametrize in Writer
@@ -347,8 +347,8 @@ pub fn to_avro_datum<T: ToAvro>(schema: &Schema, value: T) -> Result<Vec<u8>, Er
 #[cfg(test)]
 mod tests {
     use super::*;
-    use types::Record;
-    use util::zig_i64;
+    use crate::types::Record;
+    use crate::util::zig_i64;
 
     static SCHEMA: &'static str = r#"
             {

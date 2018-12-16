@@ -7,7 +7,7 @@ use std::slice::Iter;
 
 use serde::de::{self, Deserialize, DeserializeSeed, Error as SerdeError, Visitor};
 
-use types::Value;
+use crate::types::Value;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Error {

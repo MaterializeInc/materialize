@@ -5,12 +5,12 @@ use std::str::{from_utf8, FromStr};
 use failure::Error;
 use serde_json::from_slice;
 
-use decode::decode;
-use schema::ParseSchemaError;
-use schema::Schema;
-use types::Value;
-use util::{self, DecodeError};
-use Codec;
+use crate::decode::decode;
+use crate::schema::ParseSchemaError;
+use crate::schema::Schema;
+use crate::types::Value;
+use crate::util::{self, DecodeError};
+use crate::Codec;
 
 // Internal Block reader.
 #[derive(Debug, Clone)]
@@ -288,8 +288,8 @@ pub fn from_avro_datum<R: Read>(
 mod tests {
     use super::*;
     use std::io::Cursor;
-    use types::{Record, ToAvro};
-    use Reader;
+    use crate::types::{Record, ToAvro};
+    use crate::Reader;
 
     static SCHEMA: &'static str = r#"
             {

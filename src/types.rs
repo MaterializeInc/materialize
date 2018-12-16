@@ -5,7 +5,7 @@ use std::hash::BuildHasher;
 use failure::Error;
 use serde_json::Value as JsonValue;
 
-use schema::{RecordField, Schema, SchemaKind, UnionSchema};
+use crate::schema::{RecordField, Schema, SchemaKind, UnionSchema};
 
 /// Describes errors happened while performing schema resolution on Avro data.
 #[derive(Fail, Debug)]
@@ -540,7 +540,7 @@ impl Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use schema::{Name, RecordField, RecordFieldOrder, UnionSchema};
+    use crate::schema::{Name, RecordField, RecordFieldOrder, UnionSchema};
 
     #[test]
     fn validate() {
