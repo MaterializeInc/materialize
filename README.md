@@ -84,6 +84,46 @@ fn main() -> Result<(), Error> {
 }
 ```
 
+### Calculate Avro schema fingerprint
+
+This library supports calculating the following fingerprints:
+
+ - SHA-256
+ - MD5
+
+Note: Rabin fingerprinting is NOT SUPPORTED yet.
+
+An example of fingerprinting for the supported fingerprints:
+
+```rust
+extern crate avro_rs;
+extern crate failure;
+extern crate md5;
+extern crate sha2;
+
+use avro_rs::Schema;
+use failure::Error;
+use md5::Md5;
+use sha2::Sha256;
+
+fn main() -> Result<(), Error> {
+    let raw_schema = r#"
+        {
+            "type": "record",
+            "name": "test",
+            "fields": [
+                {"name": "a", "type": "long", "default": 42},
+                {"name": "b", "type": "string"}
+            ]
+        }
+    "#;
+    let schema = Schema::parse_str(raw_schema)?;
+    println!("{}", schema.fingerprint::<Sha256>());
+    println!("{}", schema.fingerprint::<Md5>());
+    Ok(())
+}
+```
+
 ### Ill-formed data
 
 In order to ease decoding, the Binary Encoding specification of Avro data

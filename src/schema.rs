@@ -1,7 +1,9 @@
 //! Logic for parsing and interacting with schemas in Avro format.
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 
+use digest::Digest;
 use failure::Error;
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::{self, Map, Value};
@@ -20,6 +22,27 @@ impl ParseSchemaError {
         S: Into<String>,
     {
         ParseSchemaError(msg.into())
+    }
+}
+
+/// Represents an Avro schema fingerprint
+/// More information about Avro schema fingerprints can be found in the
+/// [Avro Schema Fingerprint documentation](https://avro.apache.org/docs/current/spec.html#schema_fingerprints)
+pub struct SchemaFingerprint {
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Display for SchemaFingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.bytes
+                .iter()
+                .map(|byte| format!("{:02x}", byte))
+                .collect::<Vec<String>>()
+                .join("")
+        )
     }
 }
 
@@ -377,6 +400,20 @@ impl Schema {
         parsing_canonical_form(&json)
     }
 
+    /// Generate [fingerprint] of Schema's [Parsing Canonical Form].
+    ///
+    /// [Parsing Canonical Form]:
+    /// https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas
+    /// [fingerprint]:
+    /// https://avro.apache.org/docs/current/spec.html#schema_fingerprints
+    pub fn fingerprint<D: Digest>(&self) -> SchemaFingerprint {
+        let mut d = D::new();
+        d.input(self.canonical_form());
+        SchemaFingerprint {
+            bytes: d.result().to_vec(),
+        }
+    }
+
     /// Parse a `serde_json::Value` representing a primitive Avro type into a
     /// `Schema`.
     fn parse_primitive(primitive: &str) -> Result<Self, Error> {
@@ -717,6 +754,9 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    extern crate md5;
+    extern crate sha2;
+
     use super::*;
 
     #[test]
@@ -911,4 +951,33 @@ mod tests {
         sync(&schema);
         sync(schema);
     }
+
+    #[test]
+    fn test_schema_fingerprint() {
+        use self::md5::Md5;
+        use self::sha2::Sha256;
+
+        let raw_schema = r#"
+    {
+        "type": "record",
+        "name": "test",
+        "fields": [
+            {"name": "a", "type": "long", "default": 42},
+            {"name": "b", "type": "string"}
+        ]
+    }
+"#;
+
+        let schema = Schema::parse_str(raw_schema).unwrap();
+        assert_eq!(
+            "c4d97949770866dec733ae7afa3046757e901d0cfea32eb92a8faeadcc4de153",
+            format!("{}", schema.fingerprint::<Sha256>())
+        );
+
+        assert_eq!(
+            "7bce8188f28e66480a45ffbdc3615b7d",
+            format!("{}", schema.fingerprint::<Md5>())
+        );
+    }
+
 }
