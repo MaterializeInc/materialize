@@ -1,6 +1,6 @@
 [package]
 name = "avro-rs"
-version = "0.6.2"
+version = "0.6.3"
 authors = ["Flavien Raynaud <flavien.raynaud@gmail.com>", "Antonio Verardi <antonio.uccio.verardi@gmail.com>"]
 description = "Library for working with Apache Avro in Rust"
 license = "MIT"

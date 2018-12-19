@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3]- 2018-12-19
+### Added
+- Schema fingerprint (md5, sha256) generation
+
 ## [0.6.2]- 2018-12-04
 ### Fixed
 - Snappy codec
