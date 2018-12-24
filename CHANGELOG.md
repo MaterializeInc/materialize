@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2018-12-24
+### Fixed
+- Variable-length encoding for big i64 numbers
+
 ## [0.6.3]- 2018-12-19
 ### Added
 - Schema fingerprint (md5, sha256) generation
