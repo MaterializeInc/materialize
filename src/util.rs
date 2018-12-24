@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::sync::{Once, ONCE_INIT};
+use std::i64;
 
 use failure::Error;
 use serde_json::{Map, Value};
@@ -68,7 +69,7 @@ pub fn zig_i32(n: i32, buffer: &mut Vec<u8>) {
 }
 
 pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
-    encode_variable((n << 1) ^ (n >> 63), buffer)
+    encode_variable(((n << 1) ^ (n >> 63)) as u64, buffer)
 }
 
 pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, Error> {
@@ -89,7 +90,7 @@ pub fn zag_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
     })
 }
 
-fn encode_variable(mut z: i64, buffer: &mut Vec<u8>) {
+fn encode_variable(mut z: u64, buffer: &mut Vec<u8>) {
     loop {
         if z <= 0x7F {
             buffer.push((z & 0x7F) as u8);
@@ -182,6 +183,14 @@ mod tests {
         s.clear();
         zig_i64(-2147483649i64, &mut s);
         assert_eq!(s, [129, 128, 128, 128, 16]);
+
+        s.clear();
+        zig_i64(i64::MAX, &mut s);
+        assert_eq!(s, [254, 255, 255, 255, 255, 255, 255, 255, 255, 1]);
+
+        s.clear();
+        zig_i64(i64::MIN, &mut s);
+        assert_eq!(s, [255, 255, 255, 255, 255, 255, 255, 255, 255, 1]);
     }
 
     #[test]
