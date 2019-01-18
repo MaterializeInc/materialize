@@ -6,6 +6,7 @@ description = "Library for working with Apache Avro in Rust"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/flavray/avro-rs"
+edition = "2018"
 
 [features]
 snappy = ["byteorder", "crc", "snap"]
