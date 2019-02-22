@@ -1,0 +1,16 @@
+[package]
+name = "ore"
+version = "0.1.0"
+authors = ["Nikhil Benesch <nikhil.benesch@gmail.com>"]
+edition = "2018"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+env_logger = "0.6.1"
+futures = "0.1"
+log = "0.4"
+slog = { version = "2.4.1", features = ["max_level_trace"] }
+tokio = "0.1"
+smallvec = "0.6"

@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "src/metastore",
+    "src/materialize",
+    "src/ore",
+]
