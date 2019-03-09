@@ -437,7 +437,7 @@ impl Value {
         };
 
         match self {
-            Value::Enum(i, s) => if i > 0 && i < symbols.len() as i32 {
+            Value::Enum(i, s) => if i >= 0 && i < symbols.len() as i32 {
                 validate_symbol(s, symbols)
             } else {
                 Err(SchemaResolutionError::new(format!(
