@@ -123,7 +123,7 @@ fn test_default_value() {
 
         let reader_schema = Schema::parse_str(&raw_reader_schema)
             .expect(&format!("failed to parse schema: {}", raw_reader_schema));
-        
+
         let mut cursor = Cursor::new(encoded);
         let decoded = from_avro_datum(&writer_schema, &mut cursor, Some(&reader_schema))
             .expect("failed to decode value");
