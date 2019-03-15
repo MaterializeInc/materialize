@@ -208,13 +208,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterRecvQuery<A>, io::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         let state = state.take();
-        let send_tx = match msg {
+        match msg {
             FrontendMessage::Query { query } => tokio_threadpool::blocking(|| {
                 state.tx.send(dataflow::Command::CreateQuery {
                     name: "foo".to_string(),
                     query: String::from_utf8_lossy(&query).to_string(),
                 })
-            }),
+            }).unwrap(), // TODO(benesch): handle if tokio_threadpool returns NotReady
             _ => transition!(SendError {
                 tx: state.tx,
                 send: conn.send(BackendMessage::ErrorResponse {
@@ -247,7 +247,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendError<A>>,
     ) -> Poll<AfterSendError, io::Error> {
         try_ready!(state.send.poll());
-        let state = state.take();
         transition!(Done(()))
     }
 }

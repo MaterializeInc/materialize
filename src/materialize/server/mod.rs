@@ -17,7 +17,7 @@ use tokio::prelude::*;
 
 use self::error::Error;
 use crate::dataflow;
-use crate::dataflow::{CommandReceiver, CommandSender};
+use crate::dataflow::CommandSender;
 use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::SniffingStream;

@@ -66,7 +66,7 @@ impl<Value: Data + Hash> Command<Value> {
     pub fn execute<A: Allocate>(self, manager: &mut Manager<Value>, worker: &mut Worker<A>) {
         match self {
             Command::NotImplementedYet(_) => {}
-            Command::CreateQuery { name, query } => {
+            Command::CreateQuery { query, .. } => {
                 worker.dataflow::<Time, _, _>(|scope| {
                     manager
                         .build_dataflow(parse_query(&query).unwrap(), scope)
@@ -172,9 +172,9 @@ impl<Value: Data + Hash> Manager<Value> {
     {
         match stmt {
             SQLStatement::SQLCreateView {
-                name,
                 query,
                 materialized: true,
+                ..
             } => self.build_dataflow_expr(query, scope),
             SQLStatement::SQLCreateView {
                 materialized: false,
