@@ -1,3 +1,8 @@
+// Copyright 2019 Timely Data, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Timely Data, Inc.
+
 use failure::bail;
 use lazy_static::lazy_static;
 use sqlparser::dialect::AnsiSqlDialect;
@@ -8,7 +13,7 @@ use sqlparser::sqlast::{
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashMap;
 
-use crate::dataflow::{Dataflow, Expr, Plan, Schema, Type, View};
+use crate::dataflow::{Dataflow, Expr, Plan, Schema, Source, Type, View};
 
 lazy_static! {
     static ref DUAL_SCHEMA: Schema = Schema(vec![(Some("x".into()), Type::String)]);
@@ -50,6 +55,17 @@ impl Parser {
                     name: self.parse_sql_object_name(name)?,
                     plan: plan,
                     schema: schema,
+                }))
+            }
+            SQLStatement::SQLCreateDataSource {
+                name,
+                url,
+                schema,
+            } => {
+                Ok(Dataflow::Source(Source {
+                    name: self.parse_sql_object_name(name)?,
+                    url: url,
+                    schema: self.parse_avro_schema(schema)?,
                 }))
             }
             _ => bail!("only CREATE MATERIALIZED VIEW AS allowed"),
@@ -154,6 +170,25 @@ impl Parser {
         }
         Ok(n.to_string())
     }
+
+    fn parse_avro_schema(&self, schema: String) -> Result<Schema, failure::Error> {
+        use avro_rs::Schema as AvroSchema;
+        let schema = AvroSchema::parse_str(&schema)?;
+        let mut out = Vec::new();
+        match schema {
+            AvroSchema::Record { fields, .. } => {
+                for f in fields {
+                    match f.schema {
+                        AvroSchema::Long => out.push((Some(f.name), Type::Int)),
+                        AvroSchema::String => out.push((Some(f.name), Type::String)),
+                        _ => bail!("avro schemas do not yet support data types besides long and string")
+                    }
+                }
+            }
+            _ => bail!("avro schemas must have exactly one record")
+        }
+        Ok(Schema(out))
+    }
 }
 
 #[cfg(test)]
@@ -161,7 +196,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_basic() -> Result<(), failure::Error> {
+    fn test_basic_view() -> Result<(), failure::Error> {
         let schema = Schema(vec![
             (None, Type::Int),
             (Some("a".into()), Type::String),
@@ -180,6 +215,36 @@ mod tests {
                     input: Box::new(Plan::Source("src".into())),
                 },
                 schema: Schema(vec![(Some("b".into()), Type::String)])
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_basic_source() -> Result<(), failure::Error> {
+        let parser = Parser::new(vec![]);
+
+        let dataflow = parser.parse_statement(r#"
+            CREATE DATA SOURCE s FROM 'kafka://somewhere'
+            USING SCHEMA '{
+                "type": "record",
+                "name": "foo",
+                "fields": [
+                    {"name": "a", "type": "long", "default": 42},
+                    {"name": "b", "type": "string"}
+                ]
+            }'
+        "#)?;
+        assert_eq!(
+            dataflow,
+            Dataflow::Source(Source {
+                name: "s".into(),
+                url: "kafka://somewhere".into(),
+                schema: Schema(vec![
+                    (Some("a".into()), Type::Int),
+                    (Some("b".into()), Type::String),
+                ])
             })
         );
 
