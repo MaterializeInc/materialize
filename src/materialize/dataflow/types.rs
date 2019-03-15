@@ -122,7 +122,10 @@ mod tests {
                     ])))),
                 }),
             },
-            schema: Schema(Vec::new()), // XXX
+            schema: Schema(vec![
+              (Some("name".into()), Type::String),
+              (Some("quantity".into()), Type::Int),
+            ]),
         });
 
         let encoded = r#"{
@@ -130,9 +133,13 @@ mod tests {
     "name": "report",
     "plan": {
       "project": {
-        "indices": [
-          2,
-          3
+        "outputs": [
+          {
+            "column": 1
+          },
+          {
+            "column": 2
+          }
         ],
         "input": {
           "join": {
@@ -160,7 +167,17 @@ mod tests {
           }
         }
       }
-    }
+    },
+    "schema": [
+      [
+        "name",
+        "string"
+      ],
+      [
+        "quantity",
+        "int"
+      ]
+    ]
   }
 }"#;
         assert_eq!(encoded, serde_json::to_string_pretty(&dataflow)?);
