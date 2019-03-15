@@ -25,7 +25,9 @@ use timely::dataflow::Scope;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker;
 
-mod dataflow;
+mod types;
+
+pub use types::*;
 
 pub type CommandSender = std::sync::mpsc::Sender<Command<Value>>;
 pub type CommandReceiver = std::sync::mpsc::Receiver<Command<Value>>;

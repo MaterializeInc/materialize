@@ -86,7 +86,10 @@ impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static {}
 #[derive(Smf)]
 pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
-    Start { stream: A, tx: dataflow::CommandSender },
+    Start {
+        stream: A,
+        tx: dataflow::CommandSender,
+    },
 
     #[state_machine_future(transitions(SendAuthenticationOk, SendError, Error))]
     RecvStartup {
