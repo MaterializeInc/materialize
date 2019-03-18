@@ -178,7 +178,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterSendAuthenticationOk<A>, io::Error> {
         let conn = try_ready!(state.send.poll());
-        // let state = state.take();
         transition!(SendReadyForQuery {
             send: conn.send(BackendMessage::ReadyForQuery),
         })
@@ -189,7 +188,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterSendReadyForQuery<A>, io::Error> {
         let conn = try_ready!(state.send.poll());
-        // let state = state.take();
         transition!(RecvQuery {
             recv: conn.recv()
         })
@@ -200,7 +198,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterRecvQuery<A>, io::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
-        // let state = state.take();
         match msg {
             FrontendMessage::Query { query } => {
                 let parser = crate::sql::Parser::new(vec![]);
@@ -225,7 +222,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterSendResults<A>, io::Error> {
         let conn = try_ready!(state.send.poll());
-        // let state = state.take();
         transition!(SendReadyForQuery {
             send: conn.send(BackendMessage::ReadyForQuery),
         })
