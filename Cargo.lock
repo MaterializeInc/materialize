@@ -1158,7 +1158,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "sqlparser"
 version = "0.2.2-alpha.0"
-source = "git+ssh://git@github.com/timelydata/sqlparser.git#116b48ebe6e790ed4a77085d34e3fc91ee037809"
+source = "git+ssh://git@github.com/timelydata/sqlparser.git#eb99b7b9ed4bd0b99797b878d952bbc614d31837"
 dependencies = [
  "chrono 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",

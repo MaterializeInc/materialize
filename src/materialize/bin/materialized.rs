@@ -16,7 +16,7 @@
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    simplelog::TermLogger::init(simplelog::LevelFilter::Debug, simplelog::Config::default())?;
+    ore::log::init();
 
     materialize::server::serve()
 }

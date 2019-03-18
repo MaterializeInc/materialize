@@ -49,7 +49,7 @@ pub enum BackendMessage {
     ErrorResponse {
         severity: Severity,
         code: &'static str,
-        message: &'static str,
+        message: String,
         detail: Option<String>,
     },
 }

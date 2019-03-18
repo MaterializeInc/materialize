@@ -3,14 +3,14 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-use failure::format_err;
+use failure::{bail, format_err};
 use futures::{future, stream, Future, Stream};
 use lazy_static::lazy_static;
 use log::error;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::net::SocketAddr;
 use std::sync::mpsc;
@@ -90,9 +90,34 @@ where
         ms
     }
 
-    pub fn dataflows(&self) -> Vec<D> {
-        let inner = self.inner.lock().unwrap();
-        inner.dataflows.clone()
+    pub fn read_dataflows(&self, dataflows: Vec<String>) -> impl Future<Item = HashMap<String, D>, Error = failure::Error> {
+        let addr = self.addr.clone();
+        let prefix = self.prefix.clone();
+        self.wait_for_setup()
+            .and_then(move |_| connect(&addr))
+            .and_then(move |(zk, _)| {
+                let mut futures = Vec::new();
+                for name in dataflows {
+                    futures.push(zk.clone()
+                        .get_data(&format!("/{}/dataflows/{}", prefix, name))
+                        .map(|(zk, data)| (zk, name, data)))
+                }
+                stream::futures_unordered(futures)
+                    .and_then(|(_zk, name, data)| {
+                        match data {
+                            Some((bytes, _stat)) => Ok((name, bytes)),
+                            None => bail!("dataflow {} does not exist", name),
+                        }
+                    })
+                    .fold(HashMap::new(), move |mut out, (name, bytes)| {
+                        let dataflow: D = match BINCODER.deserialize(&bytes) {
+                            Ok(d) => d,
+                            Err(err) => return Err(failure::Error::from_boxed_compat(err)),
+                        };
+                        out.insert(name.to_owned(), dataflow);
+                        Ok(out)
+                    })
+            })
     }
 
     pub fn register_dataflow_watch(&self) -> Receiver<D> {
@@ -105,12 +130,14 @@ where
         rx
     }
 
+    // TODO: this needs to maintain consistency by running a transaction that
+    // checks that all dependent dataflows have the correct version.
     pub fn new_dataflow(
         &self,
         name: &str,
-        dataflow: D,
+        dataflow: &D,
     ) -> impl Future<Item = (), Error = failure::Error> {
-        let encoded = match BINCODER.serialize(&dataflow) {
+        let encoded = match BINCODER.serialize(dataflow) {
             Ok(encoded) => encoded,
             Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
         };

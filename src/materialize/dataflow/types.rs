@@ -14,6 +14,22 @@ pub enum Dataflow {
     View(View),
 }
 
+impl Dataflow {
+  pub fn name(&self) -> &str {
+    match self {
+      Dataflow::Source(src) => &src.name,
+      Dataflow::View(view) => &view.name,
+    }
+  }
+
+  pub fn schema(&self) -> &Schema {
+    match self {
+      Dataflow::Source(src) => &src.schema,
+      Dataflow::View(view) => &view.schema,
+    }
+  }
+}
+
 /// A data source materializes data. It typically represents an external source
 /// of data, like a topic from Apache Kafka.
 #[serde(rename_all = "snake_case")]

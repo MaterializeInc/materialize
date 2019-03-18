@@ -5,7 +5,7 @@
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::sink::Send;
-use futures::{try_ready, Future, Poll, Sink, Stream};
+use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
 use tokio::codec::Framed;
@@ -107,9 +107,15 @@ pub enum StateMachine<A: Conn + 'static> {
         send: Send<A>,
     },
 
-    #[state_machine_future(transitions(SendResults, SendError, Error))]
+    #[state_machine_future(transitions(HandleQuery, SendError, Error))]
     RecvQuery {
         recv: Recv<A>,
+    },
+
+    #[state_machine_future(transitions(SendResults, SendError, Error))]
+    HandleQuery {
+        handle: Box<Future<Item = (), Error = failure::Error> + std::marker::Send>,
+        conn: A,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, Error))]
@@ -117,9 +123,10 @@ pub enum StateMachine<A: Conn + 'static> {
         send: Send<A>,
     },
 
-    #[state_machine_future(transitions(Done, Error))]
+    #[state_machine_future(transitions(SendReadyForQuery, Done, Error))]
     SendError {
         send: Send<A>,
+        fatal: bool,
     },
 
     #[state_machine_future(ready)]
@@ -151,9 +158,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
                     code: "08P01",
-                    message: "invalid frontend message flow",
+                    message: "invalid frontend message flow".into(),
                     detail: None,
-                })
+                }),
+                fatal: true,
             }),
         };
 
@@ -162,9 +170,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
                     code: "08004",
-                    message: "server does not support SSL",
+                    message: "server does not support SSL".into(),
                     detail: None,
-                })
+                }),
+                fatal: true,
             })
         }
 
@@ -195,23 +204,51 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_recv_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvQuery<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>
+        conn_state: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterRecvQuery<A>, io::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         match msg {
             FrontendMessage::Query { query } => {
-                let parser = crate::sql::Parser::new(vec![]);
+                transition!(HandleQuery {
+                    handle: Box::new(crate::sql::handle_query(String::from(String::from_utf8_lossy(&query)), conn_state)),
+                    conn: conn,
+                })
             }
             _ => transition!(SendError {
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
                     code: "08P01",
-                    message: "invalid frontend message flow",
+                    message: "invalid frontend message flow".into(),
                     detail: None,
-                })
+                }),
+                fatal: true,
             }),
         };
-        let send = conn.send(BackendMessage::CommandComplete { tag: "SELECT 0" });
+
+    }
+
+    fn poll_handle_query<'s, 'c>(
+        state: &'s mut RentToOwn<'s, HandleQuery<A>>,
+        conn_state: &'c mut RentToOwn<'c, ConnState>,
+    ) -> Poll<AfterHandleQuery<A>, io::Error> {
+        match state.handle.poll() {
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Ok(Async::Ready(())) => (),
+            Err(err) => {
+                let state = state.take();
+                transition!(SendError {
+                    send: state.conn.send(BackendMessage::ErrorResponse {
+                        severity: Severity::Error,
+                        code: "99999",
+                        message: err.to_string(),
+                        detail: None,
+                    }),
+                    fatal: false,
+                });
+            }
+        }
+        let state = state.take();
+        let send = state.conn.send(BackendMessage::CommandComplete { tag: "SELECT 0" });
         transition!(SendResults {
             send: send,
         })
@@ -230,8 +267,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     fn poll_send_error<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendError<A>>,
         _: &'c mut RentToOwn<'c, ConnState>
-    ) -> Poll<AfterSendError, io::Error> {
-        try_ready!(state.send.poll());
-        transition!(Done(()))
+    ) -> Poll<AfterSendError<A>, io::Error> {
+        let conn = try_ready!(state.send.poll());
+        if state.fatal {
+            transition!(Done(()))
+        } else {
+            transition!(SendReadyForQuery {
+                send: conn.send(BackendMessage::ReadyForQuery),
+            })
+        }
     }
 }
