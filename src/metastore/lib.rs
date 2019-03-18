@@ -4,7 +4,6 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use failure::format_err;
-use futures::sync::oneshot;
 use futures::{future, stream, Future, Stream};
 use lazy_static::lazy_static;
 use log::error;
@@ -30,6 +29,7 @@ use ore::future::FutureExt;
 ///
 /// At the moment, it uses ZooKeeper as its backend, but care has been taken to
 /// avoid tightly coupling its API to the ZooKeeper API.
+#[derive(Clone)]
 pub struct MetaStore<D> {
     prefix: Cow<'static, str>,
     addr: SocketAddr,
@@ -39,7 +39,7 @@ pub struct MetaStore<D> {
     // This field ties the lifetime of this channel to the lifetime of this
     // struct, which makes for a convenient cancel signal when the struct is
     // dropped.
-    _cancel_tx: oneshot::Sender<()>,
+    _cancel_tx: futures::sync::mpsc::Sender<()>,
 }
 
 struct Inner<D> {
@@ -77,7 +77,7 @@ where
             Ok(())
         }));
 
-        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (cancel_tx, cancel_rx) = futures::sync::mpsc::channel(0);
 
         let ms = MetaStore {
             prefix: prefix,
@@ -88,6 +88,11 @@ where
         };
         ms.start_watching(cancel_rx);
         ms
+    }
+
+    pub fn dataflows(&self) -> Vec<D> {
+        let inner = self.inner.lock().unwrap();
+        inner.dataflows.clone()
     }
 
     pub fn register_dataflow_watch(&self) -> Receiver<D> {
@@ -123,7 +128,7 @@ where
             .right()
     }
 
-    fn start_watching(&self, cancel_signal: oneshot::Receiver<()>) {
+    fn start_watching(&self, cancel_signal: futures::sync::mpsc::Receiver<()>) {
         let dataflow_path = format!("/{}/dataflows", self.prefix);
         let prefix = self.prefix.to_string();
         let inner = self.inner.clone();
@@ -158,7 +163,7 @@ where
                         .discard()
                 })
                 .map_err(|e| fatal!("{}", e))
-                .watch_for_cancel(cancel_signal);
+                .watch_for_cancel(cancel_signal.into_future().discard());
         tokio::spawn(fut);
     }
 

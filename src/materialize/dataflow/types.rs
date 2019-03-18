@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// A named stream of data.
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Dataflow {
     Source(Source),
     /// A view is a named transformation from one dataflow to another.
@@ -17,7 +17,7 @@ pub enum Dataflow {
 /// A data source materializes data. It typically represents an external source
 /// of data, like a topic from Apache Kafka.
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     pub name: String,
     pub url: String,
@@ -26,7 +26,7 @@ pub struct Source {
 
 /// A view transforms one dataflow into another.
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub name: String,
     pub plan: Plan,
@@ -34,7 +34,7 @@ pub struct View {
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Plan {
     /// Source data from another dataflow.
     Source(String),
@@ -60,14 +60,14 @@ pub enum Plan {
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Column(usize),
     Literal(Scalar),
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Scalar {
     // TODO(benesch): expand these to support the full set of Avro datatypes,
     // at the very least.
@@ -76,7 +76,7 @@ pub enum Scalar {
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Schema(pub Vec<(Option<String>, Type)>);
 
 impl Schema {

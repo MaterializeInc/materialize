@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::dataflow;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
+use crate::server::ConnState;
 use ore::future::{Recv, StreamExt};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -80,51 +81,45 @@ impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static {}
 ///
 /// Much of the state machine boilerplate is generated automatically with the
 /// help of the [`state_machine_future`] package. There is a bit too much magic
-/// in this approach for my taste, but attempting to write a futures-driven server
-/// without it is unbelievably painful. Consider revisiting once async/await
-/// support lands in stable.
+/// in this approach for my taste, but attempting to write a futures-driven
+/// server without it is unbelievably painful. Consider revisiting once
+/// async/await support lands in stable.
 #[derive(Smf)]
+#[state_machine_future(context = "ConnState")]
 pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
     Start {
         stream: A,
-        tx: dataflow::CommandSender,
     },
 
     #[state_machine_future(transitions(SendAuthenticationOk, SendError, Error))]
     RecvStartup {
         recv: Recv<A>,
-        tx: dataflow::CommandSender,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, SendError, Error))]
     SendAuthenticationOk {
         send: Send<A>,
-        tx: dataflow::CommandSender,
     },
 
     #[state_machine_future(transitions(RecvQuery, SendError, Error))]
     SendReadyForQuery {
         send: Send<A>,
-        tx: dataflow::CommandSender,
     },
 
     #[state_machine_future(transitions(SendResults, SendError, Error))]
     RecvQuery {
         recv: Recv<A>,
-        tx: dataflow::CommandSender,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, Error))]
     SendResults {
         send: Send<A>,
-        tx: dataflow::CommandSender,
     },
 
     #[state_machine_future(transitions(Done, Error))]
     SendError {
         send: Send<A>,
-        tx: dataflow::CommandSender,
     },
 
     #[state_machine_future(ready)]
@@ -137,23 +132,22 @@ pub enum StateMachine<A: Conn + 'static> {
 impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     fn poll_start<'s, 'c>(
         state: &'s mut RentToOwn<'s, Start<A>>,
+        _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterStart<A>, io::Error> {
         let state = state.take();
         transition!(RecvStartup {
             recv: state.stream.recv(),
-            tx: state.tx,
         })
     }
 
     fn poll_recv_startup<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvStartup<A>>,
+        _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterRecvStartup<A>, io::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
-        let state = state.take();
         let version = match msg {
             FrontendMessage::Startup { version } => version,
             _ => transition!(SendError {
-                tx: state.tx,
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
                     code: "08P01",
@@ -165,7 +159,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
         if version != VERSION_3 {
             transition!(SendError {
-                tx: state.tx,
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
                     code: "08004",
@@ -176,47 +169,43 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         }
 
         transition!(SendAuthenticationOk {
-            tx: state.tx,
             send: conn.send(BackendMessage::AuthenticationOk)
         })
     }
 
     fn poll_send_authentication_ok<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendAuthenticationOk<A>>,
+        _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterSendAuthenticationOk<A>, io::Error> {
         let conn = try_ready!(state.send.poll());
-        let state = state.take();
+        // let state = state.take();
         transition!(SendReadyForQuery {
-            tx: state.tx,
             send: conn.send(BackendMessage::ReadyForQuery),
         })
     }
 
-    fn poll_send_ready_for_query<'s>(
+    fn poll_send_ready_for_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendReadyForQuery<A>>,
+        _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterSendReadyForQuery<A>, io::Error> {
         let conn = try_ready!(state.send.poll());
-        let state = state.take();
+        // let state = state.take();
         transition!(RecvQuery {
-            tx: state.tx,
             recv: conn.recv()
         })
     }
 
-    fn poll_recv_query<'s>(
+    fn poll_recv_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvQuery<A>>,
+        _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterRecvQuery<A>, io::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
-        let state = state.take();
+        // let state = state.take();
         match msg {
-            FrontendMessage::Query { query } => tokio_threadpool::blocking(|| {
-                state.tx.send(dataflow::Command::CreateQuery {
-                    name: "foo".to_string(),
-                    query: String::from_utf8_lossy(&query).to_string(),
-                })
-            }).unwrap(), // TODO(benesch): handle if tokio_threadpool returns NotReady
+            FrontendMessage::Query { query } => {
+                let parser = crate::sql::Parser::new(vec![]);
+            }
             _ => transition!(SendError {
-                tx: state.tx,
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
                     code: "08P01",
@@ -227,24 +216,24 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         };
         let send = conn.send(BackendMessage::CommandComplete { tag: "SELECT 0" });
         transition!(SendResults {
-            tx: state.tx,
             send: send,
         })
     }
 
-    fn poll_send_results<'s>(
+    fn poll_send_results<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendResults<A>>,
+        _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterSendResults<A>, io::Error> {
         let conn = try_ready!(state.send.poll());
-        let state = state.take();
+        // let state = state.take();
         transition!(SendReadyForQuery {
-            tx: state.tx,
             send: conn.send(BackendMessage::ReadyForQuery),
         })
     }
 
-    fn poll_send_error<'s>(
+    fn poll_send_error<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendError<A>>,
+        _: &'c mut RentToOwn<'c, ConnState>
     ) -> Poll<AfterSendError, io::Error> {
         try_ready!(state.send.poll());
         transition!(Done(()))

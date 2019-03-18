@@ -20,7 +20,7 @@ lazy_static! {
 }
 
 #[allow(dead_code)]
-struct Parser {
+pub struct Parser {
     dataflows: HashMap<String, (usize, Schema)>,
 }
 

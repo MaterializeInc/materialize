@@ -15,8 +15,8 @@ pub use pgwire::match_handshake;
 
 pub fn handle_connection<A: AsyncRead + AsyncWrite + 'static>(
     a: A,
-    command_tx: dataflow::CommandSender,
+    conn_state: super::ConnState,
 ) -> impl Future<Item = (), Error = io::Error> {
     let stream = Framed::new(a, pgwire::Codec::new());
-    pgwire::StateMachine::start(stream, command_tx)
+    pgwire::StateMachine::start(stream, conn_state)
 }
