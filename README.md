@@ -1,7 +1,7 @@
 # Material
 
-Material provides streaming SQL materialized views on top of [differential
-dataflow].
+Material provides streaming SQL materialized views on top of
+[differential dataflow].
 
 ⚠️ Material is a work in progress. Expect things to break frequently. ⚠️
 
