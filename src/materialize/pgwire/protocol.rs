@@ -4,7 +4,7 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use byteorder::{ByteOrder, NetworkEndian};
-use futures::sink::Send;
+use futures::sink::Send as SinkSend;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
@@ -12,7 +12,6 @@ use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::dataflow;
 use crate::dataflow::Scalar;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage, Severity};
@@ -74,15 +73,15 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 pub trait Conn:
     Stream<Item = FrontendMessage, Error = io::Error>
     + Sink<SinkItem = BackendMessage, SinkError = io::Error>
-    + std::marker::Send
+    + Send
 {
 }
 
-impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + std::marker::Send {}
+impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Send {}
 
-type RowStream = Box<dyn Stream<Item = Vec<Scalar>, Error = failure::Error> + std::marker::Send>;
-type RowStream2 =
-    Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + std::marker::Send>;
+type RowStream = Box<dyn Stream<Item = Vec<Scalar>, Error = failure::Error> + Send>;
+
+type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
 
 /// A state machine that drives the pgwire backend.
 ///
@@ -101,10 +100,10 @@ pub enum StateMachine<A: Conn + 'static> {
     RecvStartup { recv: Recv<A> },
 
     #[state_machine_future(transitions(SendReadyForQuery, SendError, Error))]
-    SendAuthenticationOk { send: Send<A> },
+    SendAuthenticationOk { send: SinkSend<A> },
 
     #[state_machine_future(transitions(RecvQuery, SendError, Error))]
-    SendReadyForQuery { send: Send<A> },
+    SendReadyForQuery { send: SinkSend<A> },
 
     #[state_machine_future(transitions(HandleQuery, SendError, Error, Done))]
     RecvQuery { recv: Recv<A> },
@@ -116,23 +115,23 @@ pub enum StateMachine<A: Conn + 'static> {
         Error
     ))]
     HandleQuery {
-        handle: Box<Future<Item = QueryResponse, Error = failure::Error> + std::marker::Send>,
+        handle: Box<Future<Item = QueryResponse, Error = failure::Error> + Send>,
         conn: A,
     },
 
     #[state_machine_future(transitions(SendRows, Error))]
-    SendRowDescription { send: Send<A>, rows: RowStream },
+    SendRowDescription { send: SinkSend<A>, rows: RowStream },
 
     #[state_machine_future(transitions(SendCommandComplete, SendError, Error))]
     SendRows {
-        send: Box<dyn Future<Item = (RowStream2, A), Error = failure::Error> + std::marker::Send>,
+        send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, Error))]
-    SendCommandComplete { send: Send<A> },
+    SendCommandComplete { send: SinkSend<A> },
 
     #[state_machine_future(transitions(SendReadyForQuery, Done, Error))]
-    SendError { send: Send<A>, fatal: bool },
+    SendError { send: SinkSend<A>, fatal: bool },
 
     #[state_machine_future(ready)]
     Done(()),
@@ -233,7 +232,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_handle_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, HandleQuery<A>>,
-        conn_state: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, ConnState>,
     ) -> Poll<AfterHandleQuery<A>, failure::Error> {
         match state.handle.poll() {
             Ok(Async::NotReady) => return Ok(Async::NotReady),
@@ -277,11 +276,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_row_description<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
-        conn_state: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, ConnState>,
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        let stream: RowStream2 = Box::new(state.rows.map(|row| {
+        let stream: MessageStream = Box::new(state.rows.map(|row| {
             BackendMessage::DataRow(row.into_iter().map(|s| FieldValue::Scalar(s)).collect())
         }));
         transition!(SendRows {
@@ -291,7 +290,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_rows<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendRows<A>>,
-        conn_state: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, ConnState>,
     ) -> Poll<AfterSendRows<A>, failure::Error> {
         let (_, conn) = try_ready!(state.send.poll());
         transition!(SendCommandComplete {

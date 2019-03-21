@@ -46,22 +46,27 @@ impl Encoder for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Write type byte.
+        dst.put(match msg {
+            BackendMessage::AuthenticationOk => b'R',
+            BackendMessage::RowDescription(_) => b'T',
+            BackendMessage::DataRow(_) => b'D',
+            BackendMessage::CommandComplete { .. } => b'C',
+            BackendMessage::EmptyQueryResponse => panic!("unimplemented"),
+            BackendMessage::ReadyForQuery => b'Z',
+            BackendMessage::ErrorResponse { .. } => b'E',
+        });
+
+        // Write message length placeholder. The true length is filled in later.
+        let start_len = dst.len();
+        dst.put_u32_be(0);
+
+        // Write message contents.
         match msg {
             BackendMessage::AuthenticationOk => {
-                let len = 8;
-                dst.reserve(len);
-                dst.put(b'R');
-                dst.put_u32_be(len as u32); // XXX cast
                 dst.put_u32_be(0);
             }
             BackendMessage::RowDescription(fields) => {
-                let mut len = 4 + 2 + (4 + 2 + 4 + 2 + 4 + 2) * fields.len();
-                for f in &fields {
-                    len += f.name.len() + 1;
-                }
-                dst.reserve(len);
-                dst.put(b'T');
-                dst.put_u32_be(len as u32);
                 dst.put_u16_be(fields.len() as u16);
                 for f in &fields {
                     dst.put_string(&f.name);
@@ -74,9 +79,6 @@ impl Encoder for Codec {
                 }
             }
             BackendMessage::DataRow(fields) => {
-                dst.put(b'D');
-                let startlen = dst.len();
-                dst.put_u32_be(0); // len to be filled in later
                 dst.put_u16_be(fields.len() as u16);
                 for f in fields {
                     match f {
@@ -93,22 +95,12 @@ impl Encoder for Codec {
                         }
                     }
                 }
-                let len = dst.len() - startlen;
-                NetworkEndian::write_u32(&mut dst[startlen..startlen + 4], len as u32);
             }
             BackendMessage::CommandComplete { tag } => {
-                let len = 4 + tag.len() + 1;
-                dst.reserve(len);
-                dst.put(b'C');
-                dst.put_u32_be(len as u32); // XXX cast
                 dst.put_string(tag);
             }
             BackendMessage::EmptyQueryResponse => panic!("unimplemented"),
             BackendMessage::ReadyForQuery => {
-                let len = 5;
-                dst.reserve(len);
-                dst.put(b'Z');
-                dst.put_u32_be(len as u32); // XXX cast
                 dst.put(b'I'); // transaction indicator
             }
             BackendMessage::ErrorResponse {
@@ -117,13 +109,6 @@ impl Encoder for Codec {
                 message,
                 detail,
             } => {
-                let mut len =
-                    4 + severity.string().len() + 2 + code.len() + 2 + message.len() + 2 + 1;
-                if let Some(ref detail) = detail {
-                    len += detail.len() + 2;
-                }
-                dst.put(b'E');
-                dst.put_u32_be(len as u32); // XXX cast
                 dst.put(b'S');
                 dst.put_string(severity.string());
                 dst.put(b'C');
@@ -137,6 +122,11 @@ impl Encoder for Codec {
                 dst.put(b'\0');
             }
         }
+
+        // Overwrite length placeholder with true length.
+        let len = dst.len() - start_len;
+        NetworkEndian::write_u32(&mut dst[start_len..start_len + 4], len as u32);
+
         Ok(())
     }
 }
