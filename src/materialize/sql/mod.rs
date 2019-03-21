@@ -11,7 +11,7 @@ use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, SQLObjectName, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLStatement,
-    TableFactor, Value
+    TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashMap;
@@ -327,13 +327,18 @@ impl Parser {
                 let typ = schema.0[i].1;
                 Ok((Some(name), expr, typ))
             }
-            ASTNode::SQLValue(val) => {
-                match val {
-                    Value::Long(i) => Ok((None, Expr::Literal(Scalar::Int(*i)), Type::Int)),
-                    Value::SingleQuotedString(s) => Ok((None, Expr::Literal(Scalar::String(s.to_string())), Type::String)),
-                    _ => bail!("complicated literals are not yet supported: {}", val.to_string()),
-                }
-            }
+            ASTNode::SQLValue(val) => match val {
+                Value::Long(i) => Ok((None, Expr::Literal(Scalar::Int(*i)), Type::Int)),
+                Value::SingleQuotedString(s) => Ok((
+                    None,
+                    Expr::Literal(Scalar::String(s.to_string())),
+                    Type::String,
+                )),
+                _ => bail!(
+                    "complicated literals are not yet supported: {}",
+                    val.to_string()
+                ),
+            },
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
