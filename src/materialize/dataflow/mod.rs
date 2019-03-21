@@ -7,7 +7,7 @@
 //!
 //! This module is very much a work in progress. Don't look too closely yet.
 
-use differential_dataflow::collection::AsCollection;
+use differential_dataflow::collection::{Collection, AsCollection};
 use differential_dataflow::input::InputSession;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -285,12 +285,44 @@ fn build_dataflow<A: Allocate>(
                     })
                     .as_collection()
                     .arrange_by_self();
-
                 manager.insert_input(src.name, arrangement.trace);
             }
-            _ => panic!("oh noooooo i can't handle dataflows yet"),
+            Dataflow::View(view) => {
+                let arrangement = build_plan(&view.plan, manager, scope)
+                    .arrange_by_self();
+                manager.insert_input(view.name, arrangement.trace);
+            }
         }
     })
+}
+
+fn build_plan<S: Scope<Timestamp = Time>>(
+    plan: &Plan,
+    manager: &mut Manager<Scalar>,
+    scope: &mut S,
+) -> Collection<S, Vec<Scalar>, Diff> {
+    match plan {
+        Plan::Source(name) => {
+            manager.traces
+                .get_unkeyed(name.to_owned())
+                .unwrap()
+                .import(scope)
+                .as_collection(|k,()| k.to_vec())
+        }
+        Plan::Project { outputs, input } => {
+            let outputs = outputs.clone();
+            build_plan(&input, manager, scope)
+                .map(move |tuple| outputs.iter().map(|expr| {
+                    match expr {
+                        Expr::Column(i) => tuple[*i].clone(),
+                        Expr::Literal(s) => s.clone(),
+                    }
+                }).collect())
+        }
+        Plan::Distinct(_) => unimplemented!(),
+        Plan::UnionAll(_) => unimplemented!(),
+        Plan::Join { .. } => unimplemented!(),
+    }
 }
 
 pub fn serve(
