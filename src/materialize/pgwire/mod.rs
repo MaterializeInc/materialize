@@ -18,6 +18,7 @@
 
 mod codec;
 mod message;
+mod oid;
 mod protocol;
 
 pub use codec::Codec;

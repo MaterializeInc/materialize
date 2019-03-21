@@ -13,10 +13,10 @@ use crate::pgwire;
 
 pub use pgwire::match_handshake;
 
-pub fn handle_connection<A: AsyncRead + AsyncWrite + 'static>(
+pub fn handle_connection<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
     conn_state: super::ConnState,
-) -> impl Future<Item = (), Error = io::Error> {
+) -> impl Future<Item = (), Error = failure::Error> {
     let stream = Framed::new(a, pgwire::Codec::new());
     pgwire::StateMachine::start(stream, conn_state)
 }

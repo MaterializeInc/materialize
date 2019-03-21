@@ -8,7 +8,8 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FrontendMessage};
+use crate::dataflow::Scalar;
+use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage};
 use ore::netio;
 
 /// A Tokio codec to encode and decode pgwire frames.
@@ -52,6 +53,48 @@ impl Encoder for Codec {
                 dst.put(b'R');
                 dst.put_u32_be(len as u32); // XXX cast
                 dst.put_u32_be(0);
+            }
+            BackendMessage::RowDescription(fields) => {
+                let mut len = 4 + 2 + (4 + 2 + 4 + 2 + 4 + 2) * fields.len();
+                for f in &fields {
+                    len += f.name.len() + 1;
+                }
+                dst.reserve(len);
+                dst.put(b'T');
+                dst.put_u32_be(len as u32);
+                dst.put_u16_be(fields.len() as u16);
+                for f in &fields {
+                    dst.put_string(&f.name);
+                    dst.put_u32_be(f.table_id);
+                    dst.put_u16_be(f.column_id);
+                    dst.put_u32_be(f.type_oid);
+                    dst.put_i16_be(f.type_len);
+                    dst.put_i32_be(f.type_mod);
+                    dst.put_u16_be(f.format as u16);
+                }
+            }
+            BackendMessage::DataRow(fields) => {
+                dst.put(b'D');
+                let startlen = dst.len();
+                dst.put_u32_be(0); // len to be filled in later
+                dst.put_u16_be(fields.len() as u16);
+                for f in fields {
+                    match f {
+                        FieldValue::Null => {
+                            dst.put_i32_be(-1);
+                        }
+                        FieldValue::Scalar(s) => {
+                            let s = match s {
+                                Scalar::Int(i) => format!("{}", i),
+                                Scalar::String(s) => s,
+                            };
+                            dst.put_u32_be(s.len() as u32);
+                            dst.put(s);
+                        }
+                    }
+                }
+                let len = dst.len() - startlen;
+                NetworkEndian::write_u32(&mut dst[startlen..startlen + 4], len as u32);
             }
             BackendMessage::CommandComplete { tag } => {
                 let len = 4 + tag.len() + 1;
@@ -164,6 +207,7 @@ impl Decoder for Codec {
                         b'Q' => FrontendMessage::Query {
                             query: buf.slice_to(frame_len - 1),
                         },
+                        b'X' => FrontendMessage::Terminate,
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,

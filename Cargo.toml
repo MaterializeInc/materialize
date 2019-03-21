@@ -4,3 +4,7 @@ members = [
     "src/materialize",
     "src/ore",
 ]
+
+# TODO(benesch): remove this when rdkafka is updated upstream.
+[patch."https://github.com/benesch/timely-dataflow.git"]
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git" }

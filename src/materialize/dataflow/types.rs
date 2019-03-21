@@ -15,19 +15,19 @@ pub enum Dataflow {
 }
 
 impl Dataflow {
-  pub fn name(&self) -> &str {
-    match self {
-      Dataflow::Source(src) => &src.name,
-      Dataflow::View(view) => &view.name,
+    pub fn name(&self) -> &str {
+        match self {
+            Dataflow::Source(src) => &src.name,
+            Dataflow::View(view) => &view.name,
+        }
     }
-  }
 
-  pub fn schema(&self) -> &Schema {
-    match self {
-      Dataflow::Source(src) => &src.schema,
-      Dataflow::View(view) => &view.schema,
+    pub fn schema(&self) -> &Schema {
+        match self {
+            Dataflow::Source(src) => &src.schema,
+            Dataflow::View(view) => &view.schema,
+        }
     }
-  }
 }
 
 /// A data source materializes data. It typically represents an external source
@@ -36,8 +36,16 @@ impl Dataflow {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     pub name: String,
-    pub url: String,
+    pub connector: Connector,
     pub schema: Schema,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Connector {
+    Kafka {
+        addr: std::net::SocketAddr,
+        topic: String,
+    },
 }
 
 /// A view transforms one dataflow into another.
@@ -83,7 +91,7 @@ pub enum Expr {
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Scalar {
     // TODO(benesch): expand these to support the full set of Avro datatypes,
     // at the very least.
@@ -105,6 +113,42 @@ impl Schema {
         }
         use failure::bail;
         bail!("unknown column {}", name)
+    }
+
+    pub fn to_avro(&self) -> avro_rs::schema::Schema {
+        use avro_rs::schema::*;
+
+        let fields: Vec<_> = self
+            .0
+            .iter()
+            .enumerate()
+            .map(|(i, (name, typ))| RecordField {
+                name: name.to_owned().unwrap(),
+                doc: None,
+                default: None,
+                schema: match typ {
+                    Type::Int => Schema::Long,
+                    Type::String => Schema::String,
+                },
+                order: RecordFieldOrder::Ignore,
+                position: i,
+            })
+            .collect();
+        let lookup = fields
+            .iter()
+            .map(|f| (f.name.to_owned(), f.position))
+            .collect();
+
+        Schema::Record {
+            name: Name {
+                name: "(n/a)".into(),
+                namespace: None,
+                aliases: None,
+            },
+            doc: None,
+            fields,
+            lookup,
+        }
     }
 }
 
@@ -139,8 +183,8 @@ mod tests {
                 }),
             },
             schema: Schema(vec![
-              (Some("name".into()), Type::String),
-              (Some("quantity".into()), Type::Int),
+                (Some("name".into()), Type::String),
+                (Some("quantity".into()), Type::Int),
             ]),
         });
 

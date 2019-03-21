@@ -90,7 +90,10 @@ where
         ms
     }
 
-    pub fn read_dataflows(&self, dataflows: Vec<String>) -> impl Future<Item = HashMap<String, D>, Error = failure::Error> {
+    pub fn read_dataflows(
+        &self,
+        dataflows: Vec<String>,
+    ) -> impl Future<Item = HashMap<String, D>, Error = failure::Error> {
         let addr = self.addr.clone();
         let prefix = self.prefix.clone();
         self.wait_for_setup()
@@ -98,16 +101,16 @@ where
             .and_then(move |(zk, _)| {
                 let mut futures = Vec::new();
                 for name in dataflows {
-                    futures.push(zk.clone()
-                        .get_data(&format!("/{}/dataflows/{}", prefix, name))
-                        .map(|(zk, data)| (zk, name, data)))
+                    futures.push(
+                        zk.clone()
+                            .get_data(&format!("/{}/dataflows/{}", prefix, name))
+                            .map(|(zk, data)| (zk, name, data)),
+                    )
                 }
                 stream::futures_unordered(futures)
-                    .and_then(|(_zk, name, data)| {
-                        match data {
-                            Some((bytes, _stat)) => Ok((name, bytes)),
-                            None => bail!("dataflow {} does not exist", name),
-                        }
+                    .and_then(|(_zk, name, data)| match data {
+                        Some((bytes, _stat)) => Ok((name, bytes)),
+                        None => bail!("dataflow {} does not exist", name),
                     })
                     .fold(HashMap::new(), move |mut out, (name, bytes)| {
                         let dataflow: D = match BINCODER.deserialize(&bytes) {

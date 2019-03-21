@@ -5,35 +5,42 @@
 
 //! The implementation of the materialized server.
 
-use futures::future;
-use futures::Future;
+use futures::sync::mpsc::UnboundedSender;
+use futures::{future, Future};
 use log::error;
 use std::boxed::Box;
+use std::collections::HashMap;
 use std::error::Error as StdError;
 use std::net::SocketAddr;
-use std::sync::mpsc;
+use std::sync::{Arc, RwLock};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
-use self::error::Error;
 use crate::dataflow;
-use crate::dataflow::{CommandSender, Dataflow};
+use crate::dataflow::Dataflow;
 use metastore::MetaStore;
 use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::SniffingStream;
 
-mod error;
 mod http;
 mod pgwire;
 
-pub struct ConnState {
-    pub command_tx: CommandSender,
-    pub meta_store: MetaStore<Dataflow>,
+pub struct ServerState {
+    pub peek_results: HashMap<uuid::Uuid, (UnboundedSender<Vec<dataflow::Scalar>>, usize)>,
 }
 
-fn handle_connection(tcp_stream: TcpStream, state: ConnState) -> impl Future<Item = (), Error = ()> {
+pub struct ConnState {
+    pub meta_store: MetaStore<Dataflow>,
+    pub cmd_tx: dataflow::CommandSender,
+    pub server_state: Arc<RwLock<ServerState>>,
+}
+
+fn handle_connection(
+    tcp_stream: TcpStream,
+    state: ConnState,
+) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
     // protocols with small handshakes, like pgwire. Read too few bytes and
@@ -46,18 +53,14 @@ fn handle_connection(tcp_stream: TcpStream, state: ConnState) -> impl Future<Ite
         .and_then(move |(ss, buf, nread)| {
             let buf = &buf[..nread];
             if pgwire::match_handshake(buf) {
-                pgwire::handle_connection(ss.into_sniffed(), state)
-                    .err_into()
-                    .either_a()
+                pgwire::handle_connection(ss.into_sniffed(), state).either_a()
             } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed())
-                    .err_into()
-                    .either_b()
+                http::handle_connection(ss.into_sniffed(), state).either_b()
             } else {
                 reject_connection(ss.into_sniffed()).err_into().either_c()
             }
         })
-        .map_err(|err: Error| error!("error handling request: {}", err))
+        .map_err(|err| error!("error handling request: {}", err))
 }
 
 fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::Error> {
@@ -66,10 +69,6 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 
 /// Start the materialized server.
 pub fn serve() -> Result<(), Box<dyn StdError>> {
-    let (command_tx, command_rx) = mpsc::channel();
-
-    let _dd_workers = dataflow::serve(command_rx);
-
     let zookeeper_addr: SocketAddr = "127.0.0.1:2181".parse()?;
     let listen_addr: SocketAddr = "127.0.0.1:6875".parse()?;
 
@@ -78,12 +77,24 @@ pub fn serve() -> Result<(), Box<dyn StdError>> {
     let start = future::lazy(move || {
         let meta_store = MetaStore::new(&zookeeper_addr, "materialized");
 
-        let server = listener.incoming()
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let _dd_workers = dataflow::serve(meta_store.clone(), cmd_rx);
+
+        let server_state = Arc::new(RwLock::new(ServerState {
+            peek_results: HashMap::new(),
+        }));
+
+        let server = listener
+            .incoming()
             .for_each(move |stream| {
-                tokio::spawn(handle_connection(stream, ConnState {
-                    command_tx: command_tx.clone(),
-                    meta_store: meta_store.clone(),
-                }));
+                tokio::spawn(handle_connection(
+                    stream,
+                    ConnState {
+                        meta_store: meta_store.clone(),
+                        cmd_tx: cmd_tx.clone(),
+                        server_state: server_state.clone(),
+                    },
+                ));
                 Ok(())
             })
             .map_err(|err| error!("error accepting connection: {}", err));

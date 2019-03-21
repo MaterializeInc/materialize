@@ -4,51 +4,131 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use failure::{bail, format_err};
-use futures::{future, Future};
+use futures::{future, Future, Stream};
 use lazy_static::lazy_static;
 use sqlparser::dialect::AnsiSqlDialect;
+use sqlparser::sqlast::visit;
+use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, SQLObjectName, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLStatement,
     TableFactor,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
-use sqlparser::sqlast::visit;
-use sqlparser::sqlast::visit::Visit;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
-use crate::dataflow::{Dataflow, Expr, Plan, Schema, Source, Type, View};
-use crate::server::ConnState;
+use crate::dataflow::{
+    Command, CommandSender, Connector, Dataflow, Expr, Plan, Scalar, Schema, Source, Type, View,
+};
+use crate::server::{ConnState, ServerState};
+use metastore::MetaStore;
 use ore::future::FutureExt;
 
 lazy_static! {
     static ref DUAL_SCHEMA: Schema = Schema(vec![(Some("x".into()), Type::String)]);
 }
 
-pub fn handle_query(stmt: String, conn_state: &ConnState) -> impl Future<Item = (), Error = failure::Error> {
+pub enum QueryResponse {
+    CreatedDataSource,
+    CreatedView,
+    StreamingRows {
+        schema: Schema,
+        rows: Box<dyn Stream<Item = Vec<Scalar>, Error = failure::Error> + Send>,
+    },
+}
+
+pub fn handle_query(
+    stmt: String,
+    conn_state: &ConnState,
+) -> impl Future<Item = QueryResponse, Error = failure::Error> {
     let meta_store = conn_state.meta_store.clone();
-    future::lazy(move || {
+    let cmd_tx = conn_state.cmd_tx.clone();
+    let server_state = conn_state.server_state.clone();
+    future::lazy(|| {
         let mut stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, stmt)?;
         if stmts.len() != 1 {
             bail!("expected one statement, but got {}", stmts.len());
         }
-        let stmt = stmts.remove(0);
+        Ok(stmts.remove(0))
+    })
+    .and_then(|stmt| match stmt {
+        SQLStatement::SQLPeek { mut name } => {
+            let name = std::mem::replace(&mut name, SQLObjectName(Vec::new()));
+            handle_peek(name, cmd_tx, server_state, meta_store).left()
+        }
+        SQLStatement::SQLTail { name } => unimplemented!(),
+        SQLStatement::SQLCreateDataSource { .. } | SQLStatement::SQLCreateView { .. } => {
+            handle_create_dataflow(stmt, meta_store).right()
+        }
+        _ => unimplemented!(),
+    })
+}
 
+fn handle_create_dataflow(
+    stmt: SQLStatement,
+    meta_store: MetaStore<Dataflow>,
+) -> impl Future<Item = QueryResponse, Error = failure::Error> {
+    future::lazy(move || {
         let mut visitor = ObjectNameVisitor::new();
         visitor.visit_statement(&stmt);
-        visitor.into_result().map(|object_names| (stmt, object_names))
+        visitor
+            .into_result()
+            .map(|object_names| (stmt, object_names))
     })
-    .and_then(move |(stmt, object_names)| {
-        meta_store.read_dataflows(object_names).map(|dataflows| (stmt, dataflows))
+    .and_then(|(stmt, object_names)| {
+        meta_store
+            .read_dataflows(object_names)
+            .map(|dataflows| (stmt, dataflows))
             .map(|(stmt, dataflows)| (meta_store, stmt, dataflows))
     })
     .and_then(|(meta_store, stmt, dataflows)| {
-        let parser = Parser::new(dataflows.into_iter().map(|(n, d)| (n, (0, d.schema().to_owned()))));
+        let parser = Parser::new(
+            dataflows
+                .into_iter()
+                .map(|(n, d)| (n, (0, d.schema().to_owned()))),
+        );
         let dataflow = match parser.parse_statement(&stmt) {
             Ok(dataflow) => dataflow,
             Err(err) => return future::err(err).left(),
         };
-        meta_store.new_dataflow(dataflow.name(), &dataflow).right()
+        meta_store
+            .new_dataflow(dataflow.name(), &dataflow)
+            .map(|_| stmt)
+            .right()
     })
+    .and_then(|stmt| {
+        Ok(match stmt {
+            SQLStatement::SQLCreateDataSource { .. } => QueryResponse::CreatedDataSource,
+            SQLStatement::SQLCreateView { .. } => QueryResponse::CreatedView,
+            _ => unreachable!(),
+        })
+    })
+}
+
+fn handle_peek(
+    name: SQLObjectName,
+    cmd_tx: CommandSender,
+    server_state: Arc<RwLock<ServerState>>,
+    meta_store: metastore::MetaStore<Dataflow>,
+) -> impl Future<Item = QueryResponse, Error = failure::Error> {
+    let name = name.to_string();
+    let names = vec![name.clone()];
+    meta_store
+        .read_dataflows(names)
+        .and_then(move |mut dataflows| {
+            let dataflow = dataflows.remove(&name).unwrap();
+            let uuid = uuid::Uuid::new_v4();
+            let (tx, rx) = futures::sync::mpsc::unbounded();
+            {
+                let mut server_state = server_state.write().unwrap();
+                server_state.peek_results.insert(uuid, (tx, 4 /* XXX */));
+            }
+            cmd_tx.send(Command::Peek(name.to_string(), uuid)).unwrap();
+            future::ok(QueryResponse::StreamingRows {
+                schema: dataflow.schema().to_owned(),
+                rows: Box::new(rx.map_err(|_| format_err!("unreachable"))),
+            })
+        })
 }
 
 struct ObjectNameVisitor {
@@ -82,10 +162,13 @@ impl<'ast> Visit<'ast> for ObjectNameVisitor {
 
     fn visit_object_name(&mut self, object_name: &'ast SQLObjectName) {
         if self.err.is_some() || !self.recording {
-            return
+            return;
         }
         if object_name.0.len() != 1 {
-            self.err = Some(format_err!("qualified names are not yet supported: {}", object_name.to_string()))
+            self.err = Some(format_err!(
+                "qualified names are not yet supported: {}",
+                object_name.to_string()
+            ))
         } else {
             self.object_names.push(object_name.0[0].to_owned())
         }
@@ -122,14 +205,36 @@ impl Parser {
                     schema: schema,
                 }))
             }
-            SQLStatement::SQLCreateDataSource {
-                name,
-                url,
-                schema,
-            } => {
+            SQLStatement::SQLCreateDataSource { name, url, schema } => {
+                use std::net::ToSocketAddrs;
+
+                let url: url::Url = url.parse()?;
+                if url.scheme() != "kafka" {
+                    bail!("only kafka:// data sources are supported: {}", url);
+                } else if !url.has_host() {
+                    bail!("data source URL missing hostname: {}", url)
+                }
+                let topic = match url.path_segments() {
+                    None => bail!("data source URL missing topic path: {}"),
+                    Some(segments) => {
+                        let segments: Vec<_> = segments.collect();
+                        if segments.len() != 1 {
+                            bail!(
+                                "data source URL should have exactly one path segment: {}",
+                                url
+                            );
+                        }
+                        segments[0].to_owned()
+                    }
+                };
+                let url = url.with_default_port(|_| Ok(9092))?; // we already checked for kafka scheme above, so safe to assume scheme
+
                 Ok(Dataflow::Source(Source {
                     name: self.parse_sql_object_name(name)?,
-                    url: url.to_owned(),
+                    connector: Connector::Kafka {
+                        addr: url.to_socket_addrs()?.next().unwrap(),
+                        topic,
+                    },
                     schema: self.parse_avro_schema(schema)?,
                 }))
             }
@@ -246,11 +351,13 @@ impl Parser {
                     match f.schema {
                         AvroSchema::Long => out.push((Some(f.name), Type::Int)),
                         AvroSchema::String => out.push((Some(f.name), Type::String)),
-                        _ => bail!("avro schemas do not yet support data types besides long and string")
+                        _ => bail!(
+                            "avro schemas do not yet support data types besides long and string"
+                        ),
                     }
                 }
             }
-            _ => bail!("avro schemas must have exactly one record")
+            _ => bail!("avro schemas must have exactly one record"),
         }
         Ok(Schema(out))
     }
@@ -270,8 +377,10 @@ mod tests {
         let version = 1;
         let parser = Parser::new(vec![("src".into(), (version, schema))]);
 
-        let stmts = SQLParser::parse_sql(&AnsiSqlDialect {},
-            "CREATE MATERIALIZED VIEW v AS SELECT b FROM src".into())?;
+        let stmts = SQLParser::parse_sql(
+            &AnsiSqlDialect {},
+            "CREATE MATERIALIZED VIEW v AS SELECT b FROM src".into(),
+        )?;
         let dataflow = parser.parse_statement(&stmts[0])?;
         assert_eq!(
             dataflow,
@@ -292,9 +401,10 @@ mod tests {
     fn test_basic_source() -> Result<(), failure::Error> {
         let parser = Parser::new(vec![]);
 
-        let stmts = SQLParser::parse_sql(&AnsiSqlDialect {},
+        let stmts = SQLParser::parse_sql(
+            &AnsiSqlDialect {},
             r#"
-                CREATE DATA SOURCE s FROM 'kafka://somewhere'
+                CREATE DATA SOURCE s FROM 'kafka://localhost/topic'
                 USING SCHEMA '{
                     "type": "record",
                     "name": "foo",
@@ -303,13 +413,18 @@ mod tests {
                         {"name": "b", "type": "string"}
                     ]
                 }'
-            "#.into())?;
+            "#
+            .into(),
+        )?;
         let dataflow = parser.parse_statement(&stmts[0])?;
         assert_eq!(
             dataflow,
             Dataflow::Source(Source {
                 name: "s".into(),
-                url: "kafka://somewhere".into(),
+                connector: Connector::Kafka {
+                    addr: "[::1]:9092".parse()?,
+                    topic: "topic".into(),
+                },
                 schema: Schema(vec![
                     (Some("a".into()), Type::Int),
                     (Some("b".into()), Type::String),
