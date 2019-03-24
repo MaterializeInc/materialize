@@ -1,12 +1,12 @@
-extern crate avro_rs;
-#[macro_use]
-extern crate lazy_static;
-
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use avro_rs::types::{ToAvro, Value};
-use avro_rs::{from_avro_datum, to_avro_datum, Schema};
+use avro_rs::{
+    from_avro_datum, to_avro_datum,
+    types::{ToAvro, Value},
+    Schema,
+};
+use lazy_static::lazy_static;
 
 // See https://github.com/apache/avro/blob/5af5e399/lang/py/test/test_io.py#L28
 lazy_static! {

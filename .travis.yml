@@ -4,3 +4,7 @@ rust:
   - nightly
 cache: cargo
 script: ./scripts/travis-test.sh
+matrix:
+  allow_failures:
+    - rust: nightly
+  fast_finish: true

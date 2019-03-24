@@ -42,12 +42,6 @@
 //! features = ["snappy"]
 //! ```
 //!
-//! To use the library,  just add at the top of the crate:
-//!
-//! ```
-//! extern crate avro_rs;
-//! ```
-//!
 //! # Defining a schema
 //!
 //! An Avro data cannot exist without an Avro schema. Schemas **must** be used while writing and
@@ -57,7 +51,6 @@
 //! Avro schemas are defined in **JSON** format and can just be parsed out of a raw string:
 //!
 //! ```
-//! # extern crate avro_rs;
 //! use avro_rs::Schema;
 //!
 //! let raw_schema = r#"
@@ -103,7 +96,6 @@
 //! associated type provided by the library to specify the data we want to serialize:
 //!
 //! ```
-//! # extern crate avro_rs;
 //! # use avro_rs::Schema;
 //! use avro_rs::types::Record;
 //! use avro_rs::Writer;
@@ -143,7 +135,6 @@
 //! `Value` interface.
 //!
 //! ```
-//! # extern crate avro_rs;
 //! use avro_rs::types::Value;
 //!
 //! let mut value = Value::String("foo".to_string());
@@ -155,11 +146,8 @@
 //! deriving `Serialize` to model our data:
 //!
 //! ```
-//! # extern crate avro_rs;
-//! #[macro_use]
-//! extern crate serde_derive;
-//!
 //! # use avro_rs::Schema;
+//! # use serde::Serialize;
 //! use avro_rs::Writer;
 //!
 //! #[derive(Debug, Serialize)]
@@ -205,8 +193,6 @@
 //! case we want to directly define an Avro value, any type implementing `Serialize` should work.
 //!
 //! ```
-//! # extern crate avro_rs;
-//!
 //! let mut value = "foo".to_string();
 //! ```
 //!
@@ -224,7 +210,6 @@
 //!
 //! To specify a codec to use to compress data, just specify it while creating a `Writer`:
 //! ```
-//! # extern crate avro_rs;
 //! # use avro_rs::Schema;
 //! use avro_rs::Writer;
 //! use avro_rs::Codec;
@@ -250,7 +235,6 @@
 //! codec:
 //!
 //! ```
-//! # extern crate avro_rs;
 //! use avro_rs::Reader;
 //! # use avro_rs::Schema;
 //! # use avro_rs::types::Record;
@@ -281,7 +265,6 @@
 //! In case, instead, we want to specify a different (but compatible) reader schema from the schema
 //! the data has been written with, we can just do as the following:
 //! ```
-//! # extern crate avro_rs;
 //! use avro_rs::Schema;
 //! use avro_rs::Reader;
 //! # use avro_rs::types::Record;
@@ -342,7 +325,6 @@
 //! We can just read directly instances of `Value` out of the `Reader` iterator:
 //!
 //! ```
-//! # extern crate avro_rs;
 //! # use avro_rs::Schema;
 //! # use avro_rs::types::Record;
 //! # use avro_rs::Writer;
@@ -382,12 +364,9 @@
 //! read the data into:
 //!
 //! ```
-//! # extern crate avro_rs;
-//! #[macro_use]
-//! extern crate serde_derive;
-//!
 //! # use avro_rs::Schema;
 //! # use avro_rs::Writer;
+//! # use serde::{Deserialize, Serialize};
 //! use avro_rs::Reader;
 //! use avro_rs::from_value;
 //!
@@ -433,14 +412,9 @@
 //! quick reference of the library interface:
 //!
 //! ```
-//! extern crate avro_rs;
-//!
-//! #[macro_use]
-//! extern crate serde_derive;
-//! extern crate failure;
-//!
 //! use avro_rs::{Codec, Reader, Schema, Writer, from_value, types::Record};
 //! use failure::Error;
+//! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Debug, Deserialize, Serialize)]
 //! struct Test {
@@ -490,28 +464,6 @@
 //!     Ok(())
 //! }
 //! ```
-
-extern crate digest;
-extern crate failure;
-#[macro_use]
-extern crate failure_derive;
-extern crate libflate;
-extern crate rand;
-#[macro_use]
-extern crate serde;
-
-extern crate serde_json;
-#[cfg(feature = "snappy")]
-extern crate snap;
-#[cfg(feature = "snappy")]
-extern crate byteorder;
-#[cfg(feature = "snappy")]
-extern crate crc;
-
-// test dependency
-#[cfg(test)]
-#[macro_use]
-extern crate serde_derive;
 
 mod codec;
 mod de;

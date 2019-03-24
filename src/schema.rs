@@ -4,8 +4,11 @@ use std::collections::HashMap;
 use std::fmt;
 
 use digest::Digest;
-use failure::Error;
-use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
+use failure::{Error, Fail};
+use serde::{
+    ser::{SerializeMap, SerializeSeq},
+    Serialize, Serializer,
+};
 use serde_json::{self, Map, Value};
 
 use crate::types;
@@ -300,7 +303,8 @@ impl RecordField {
                 "descending" => Some(RecordFieldOrder::Descending),
                 "ignore" => Some(RecordFieldOrder::Ignore),
                 _ => None,
-            }).unwrap_or_else(|| RecordFieldOrder::Ascending);
+            })
+            .unwrap_or_else(|| RecordFieldOrder::Ascending);
 
         Ok(RecordField {
             name,
@@ -577,13 +581,13 @@ impl Serialize for Schema {
                 map.serialize_entry("type", "array")?;
                 map.serialize_entry("items", &*inner.clone())?;
                 map.end()
-            },
+            }
             Schema::Map(ref inner) => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("type", "map")?;
                 map.serialize_entry("values", &*inner.clone())?;
                 map.end()
-            },
+            }
             Schema::Union(ref inner) => {
                 let variants = inner.variants();
                 let mut seq = serializer.serialize_seq(Some(variants.len()))?;
@@ -591,7 +595,7 @@ impl Serialize for Schema {
                     seq.serialize_element(v)?;
                 }
                 seq.end()
-            },
+            }
             Schema::Record {
                 ref name,
                 ref doc,
@@ -612,7 +616,7 @@ impl Serialize for Schema {
                 }
                 map.serialize_entry("fields", fields)?;
                 map.end()
-            },
+            }
             Schema::Enum {
                 ref name,
                 ref symbols,
@@ -623,14 +627,14 @@ impl Serialize for Schema {
                 map.serialize_entry("name", &name.name)?;
                 map.serialize_entry("symbols", symbols)?;
                 map.end()
-            },
+            }
             Schema::Fixed { ref name, ref size } => {
                 let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("type", "fixed")?;
                 map.serialize_entry("name", &name.name)?;
                 map.serialize_entry("size", size)?;
                 map.end()
-            },
+            }
         }
     }
 }
@@ -672,13 +676,13 @@ fn pcf_map(schema: &Map<String, serde_json::Value>) -> String {
         if schema.len() == 1 && k == "type" {
             // Invariant: function is only callable from a valid schema, so this is acceptable.
             if let serde_json::Value::String(s) = v {
-                return pcf_string(s)
+                return pcf_string(s);
             }
         }
 
         // Strip out unused fields ([STRIP] rule)
         if field_ordering_position(k).is_none() {
-            continue
+            continue;
         }
 
         // Fully qualify the name, if it isn't already ([FULLNAMES] rule).
@@ -688,12 +692,12 @@ fn pcf_map(schema: &Map<String, serde_json::Value>) -> String {
             let n = match ns {
                 Some(namespace) if !name.contains('.') => {
                     Cow::Owned(format!("{}.{}", namespace, name))
-                },
+                }
                 _ => Cow::Borrowed(name),
             };
 
             fields.push((k, format!("{}:{}", pcf_string(k), pcf_string(&*n))));
-            continue
+            continue;
         }
 
         // Strip off quotes surrounding "size" type, if they exist ([INTEGERS] rule).
@@ -703,7 +707,7 @@ fn pcf_map(schema: &Map<String, serde_json::Value>) -> String {
                 None => v.as_i64().unwrap(),
             };
             fields.push((k, format!("{}:{}", pcf_string(k), i)));
-            continue
+            continue;
         }
 
         // For anything else, recursively process the result.
@@ -754,9 +758,6 @@ fn field_ordering_position(field: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    extern crate md5;
-    extern crate sha2;
-
     use super::*;
 
     #[test]
@@ -840,7 +841,8 @@ mod tests {
                 ]
             }
         "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut lookup = HashMap::new();
         lookup.insert("a".to_owned(), 0);
@@ -954,8 +956,8 @@ mod tests {
 
     #[test]
     fn test_schema_fingerprint() {
-        use self::md5::Md5;
-        use self::sha2::Sha256;
+        use md5::Md5;
+        use sha2::Sha256;
 
         let raw_schema = r#"
     {

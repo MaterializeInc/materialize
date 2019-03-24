@@ -1,12 +1,10 @@
-extern crate avro_rs;
+use std::time::{Duration, Instant};
 
-use std::time::Duration;
-use std::time::Instant;
-
-use avro_rs::schema::Schema;
-use avro_rs::types::{Record, ToAvro, Value};
-use avro_rs::Reader;
-use avro_rs::Writer;
+use avro_rs::{
+    schema::Schema,
+    types::{Record, ToAvro, Value},
+    Reader, Writer,
+};
 
 fn nanos(duration: Duration) -> u64 {
     duration.as_secs() * 1_000_000_000 + duration.subsec_nanos() as u64

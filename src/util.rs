@@ -1,8 +1,8 @@
+use std::i64;
 use std::io::Read;
 use std::sync::{Once, ONCE_INIT};
-use std::i64;
 
-use failure::Error;
+use failure::{Error, Fail};
 use serde_json::{Map, Value};
 
 /// Maximum number of bytes that can be allocated when decoding
@@ -94,7 +94,7 @@ fn encode_variable(mut z: u64, buffer: &mut Vec<u8>) {
     loop {
         if z <= 0x7F {
             buffer.push((z & 0x7F) as u8);
-            break
+            break;
         } else {
             buffer.push((0x80 | (z & 0x7F)) as u8);
             z >>= 7;
@@ -110,12 +110,12 @@ fn decode_variable<R: Read>(reader: &mut R) -> Result<u64, Error> {
     loop {
         if j > 9 {
             // if j * 7 > 64
-            return Err(DecodeError::new("Overflow when decoding integer value").into())
+            return Err(DecodeError::new("Overflow when decoding integer value").into());
         }
         reader.read_exact(&mut buf[..])?;
         i |= (u64::from(buf[0] & 0x7F)) << (j * 7);
         if (buf[0] >> 7) == 0 {
-            break
+            break;
         } else {
             j += 1;
         }
@@ -149,7 +149,8 @@ pub fn safe_len(len: usize) -> Result<usize, Error> {
         Err(AllocationError::new(format!(
             "Unable to allocate {} bytes (Maximum allowed: {})",
             len, max_bytes
-        )).into())
+        ))
+        .into())
     }
 }
 

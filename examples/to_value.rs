@@ -1,11 +1,6 @@
-extern crate avro_rs;
-
-#[macro_use]
-extern crate serde_derive;
-extern crate failure;
-
 use avro_rs::to_value;
 use failure::Error;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Test {

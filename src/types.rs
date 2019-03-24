@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::u8;
 
-use failure::Error;
+use failure::{Error, Fail};
 use serde_json::Value as JsonValue;
 
 use crate::schema::{RecordField, Schema, SchemaKind, UnionSchema};
@@ -201,7 +201,7 @@ impl<'a> Record<'a> {
                     fields,
                     schema_lookup,
                 })
-            },
+            }
             _ => None,
         }
     }
@@ -238,7 +238,7 @@ impl ToAvro for JsonValue {
             JsonValue::String(s) => Value::String(s),
             JsonValue::Array(items) => {
                 Value::Array(items.into_iter().map(|item| item.avro()).collect::<_>())
-            },
+            }
             JsonValue::Object(items) => Value::Map(
                 items
                     .into_iter()
@@ -273,20 +273,21 @@ impl Value {
             // (&Value::Union(None), &Schema::Union(_)) => true,
             (&Value::Union(ref value), &Schema::Union(ref inner)) => {
                 inner.find_schema(value).is_some()
-            },
+            }
             (&Value::Array(ref items), &Schema::Array(ref inner)) => {
                 items.iter().all(|item| item.validate(inner))
-            },
+            }
             (&Value::Map(ref items), &Schema::Map(ref inner)) => {
                 items.iter().all(|(_, value)| value.validate(inner))
-            },
+            }
             (&Value::Record(ref record_fields), &Schema::Record { ref fields, .. }) => {
-                fields.len() == record_fields.len() && fields.iter().zip(record_fields.iter()).all(
-                    |(field, &(ref name, ref value))| {
-                        field.name == *name && value.validate(&field.schema)
-                    },
-                )
-            },
+                fields.len() == record_fields.len()
+                    && fields.iter().zip(record_fields.iter()).all(
+                        |(field, &(ref name, ref value))| {
+                            field.name == *name && value.validate(&field.schema)
+                        },
+                    )
+            }
             _ => false,
         }
     }
@@ -332,7 +333,7 @@ impl Value {
             Value::Null => Ok(Value::Null),
             other => {
                 Err(SchemaResolutionError::new(format!("Null expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -341,7 +342,7 @@ impl Value {
             Value::Boolean(b) => Ok(Value::Boolean(b)),
             other => {
                 Err(SchemaResolutionError::new(format!("Boolean expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -351,7 +352,7 @@ impl Value {
             Value::Long(n) => Ok(Value::Int(n as i32)),
             other => {
                 Err(SchemaResolutionError::new(format!("Int expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -361,7 +362,7 @@ impl Value {
             Value::Long(n) => Ok(Value::Long(n)),
             other => {
                 Err(SchemaResolutionError::new(format!("Long expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -373,7 +374,7 @@ impl Value {
             Value::Double(x) => Ok(Value::Float(x as f32)),
             other => {
                 Err(SchemaResolutionError::new(format!("Float expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -385,7 +386,7 @@ impl Value {
             Value::Double(x) => Ok(Value::Double(x)),
             other => {
                 Err(SchemaResolutionError::new(format!("Double expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -401,7 +402,7 @@ impl Value {
             )),
             other => {
                 Err(SchemaResolutionError::new(format!("Bytes expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -411,23 +412,26 @@ impl Value {
             Value::Bytes(bytes) => Ok(Value::String(String::from_utf8(bytes)?)),
             other => {
                 Err(SchemaResolutionError::new(format!("String expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
     fn resolve_fixed(self, size: usize) -> Result<Self, Error> {
         match self {
-            Value::Fixed(n, bytes) => if n == size {
-                Ok(Value::Fixed(n, bytes))
-            } else {
-                Err(SchemaResolutionError::new(format!(
-                    "Fixed size mismatch, {} expected, got {}",
-                    size, n
-                )).into())
-            },
+            Value::Fixed(n, bytes) => {
+                if n == size {
+                    Ok(Value::Fixed(n, bytes))
+                } else {
+                    Err(SchemaResolutionError::new(format!(
+                        "Fixed size mismatch, {} expected, got {}",
+                        size, n
+                    ))
+                    .into())
+                }
+            }
             other => {
                 Err(SchemaResolutionError::new(format!("String expected, got {:?}", other)).into())
-            },
+            }
         }
     }
 
@@ -439,25 +443,30 @@ impl Value {
                 Err(SchemaResolutionError::new(format!(
                     "Enum default {} is not among allowed symbols {:?}",
                     symbol, symbols,
-                )).into())
+                ))
+                .into())
             }
         };
 
         match self {
-            Value::Enum(i, s) => if i >= 0 && i < symbols.len() as i32 {
-                validate_symbol(s, symbols)
-            } else {
-                Err(SchemaResolutionError::new(format!(
-                    "Enum value {} is out of bound {}",
-                    i,
-                    symbols.len() as i32
-                )).into())
-            },
+            Value::Enum(i, s) => {
+                if i >= 0 && i < symbols.len() as i32 {
+                    validate_symbol(s, symbols)
+                } else {
+                    Err(SchemaResolutionError::new(format!(
+                        "Enum value {} is out of bound {}",
+                        i,
+                        symbols.len() as i32
+                    ))
+                    .into())
+                }
+            }
             Value::String(s) => validate_symbol(s, symbols),
             other => Err(SchemaResolutionError::new(format!(
                 "Enum({:?}) expected, got {:?}",
                 symbols, other
-            )).into()),
+            ))
+            .into()),
         }
     }
 
@@ -486,7 +495,8 @@ impl Value {
             other => Err(SchemaResolutionError::new(format!(
                 "Array({:?}) expected, got {:?}",
                 schema, other
-            )).into()),
+            ))
+            .into()),
         }
     }
 
@@ -501,7 +511,8 @@ impl Value {
             other => Err(SchemaResolutionError::new(format!(
                 "Map({:?}) expected, got {:?}",
                 schema, other
-            )).into()),
+            ))
+            .into()),
         }
     }
 
@@ -524,21 +535,23 @@ impl Value {
                         Some(ref value) => match field.schema {
                             Schema::Enum { ref symbols, .. } => {
                                 value.clone().avro().resolve_enum(symbols)?
-                            },
+                            }
                             _ => value.clone().avro(),
                         },
                         _ => {
                             return Err(SchemaResolutionError::new(format!(
                                 "missing field {} in record",
                                 field.name
-                            )).into())
-                        },
+                            ))
+                            .into());
+                        }
                     },
                 };
                 value
                     .resolve(&field.schema)
                     .map(|value| (field.name.clone(), value))
-            }).collect::<Result<Vec<_>, _>>()?;
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Value::Record(new_fields))
     }
@@ -547,15 +560,11 @@ impl Value {
         let int = self.resolve(&Schema::Int)?;
         if let Value::Int(n) = int {
             if n >= 0 && n <= i32::from(u8::MAX) {
-                return Ok(n as u8)
+                return Ok(n as u8);
             }
         }
 
-        Err(
-            SchemaResolutionError::new(
-                format!("Unable to convert to u8, got {:?}", int)
-            ).into()
-        )
+        Err(SchemaResolutionError::new(format!("Unable to convert to u8, got {:?}", int)).into())
     }
 }
 
@@ -592,7 +601,8 @@ mod tests {
                         Schema::Double,
                         Schema::String,
                         Schema::Int,
-                    ]).unwrap(),
+                    ])
+                    .unwrap(),
                 ),
                 true,
             ),
@@ -691,41 +701,36 @@ mod tests {
             lookup: HashMap::new(),
         };
 
-        assert!(
-            Value::Record(vec![
-                ("a".to_string(), Value::Long(42i64)),
-                ("b".to_string(), Value::String("foo".to_string())),
-            ]).validate(&schema)
-        );
+        assert!(Value::Record(vec![
+            ("a".to_string(), Value::Long(42i64)),
+            ("b".to_string(), Value::String("foo".to_string())),
+        ])
+        .validate(&schema));
 
-        assert!(
-            !Value::Record(vec![
-                ("b".to_string(), Value::String("foo".to_string())),
-                ("a".to_string(), Value::Long(42i64)),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("b".to_string(), Value::String("foo".to_string())),
+            ("a".to_string(), Value::Long(42i64)),
+        ])
+        .validate(&schema));
 
-        assert!(
-            !Value::Record(vec![
-                ("a".to_string(), Value::Boolean(false)),
-                ("b".to_string(), Value::String("foo".to_string())),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Boolean(false)),
+            ("b".to_string(), Value::String("foo".to_string())),
+        ])
+        .validate(&schema));
 
-        assert!(
-            !Value::Record(vec![
-                ("a".to_string(), Value::Long(42i64)),
-                ("c".to_string(), Value::String("foo".to_string())),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Long(42i64)),
+            ("c".to_string(), Value::String("foo".to_string())),
+        ])
+        .validate(&schema));
 
-        assert!(
-            !Value::Record(vec![
-                ("a".to_string(), Value::Long(42i64)),
-                ("b".to_string(), Value::String("foo".to_string())),
-                ("c".to_string(), Value::Null),
-            ]).validate(&schema)
-        );
+        assert!(!Value::Record(vec![
+            ("a".to_string(), Value::Long(42i64)),
+            ("b".to_string(), Value::String("foo".to_string())),
+            ("c".to_string(), Value::Null),
+        ])
+        .validate(&schema));
     }
 
     #[test]

@@ -1,11 +1,7 @@
-extern crate avro_rs;
-#[macro_use]
-extern crate lazy_static;
-
 use std::io::Cursor;
 
-use avro_rs::types::Value;
-use avro_rs::{from_avro_datum, to_avro_datum, Schema};
+use avro_rs::{from_avro_datum, to_avro_datum, types::Value, Schema};
+use lazy_static::lazy_static;
 
 lazy_static! {
     static ref RAW_RECORD_SCHEMA: &'static str = r#"

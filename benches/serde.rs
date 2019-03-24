@@ -1,12 +1,11 @@
 #![feature(test)]
-
 extern crate test;
 
-extern crate avro_rs;
-use avro_rs::schema::Schema;
-use avro_rs::types::{Record, ToAvro, Value};
-use avro_rs::Reader;
-use avro_rs::Writer;
+use avro_rs::{
+    schema::Schema,
+    types::{Record, ToAvro, Value},
+    Reader, Writer,
+};
 
 static RAW_SMALL_SCHEMA: &'static str = r#"
 {

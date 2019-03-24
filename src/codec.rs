@@ -2,12 +2,12 @@
 use std::io::{Read, Write};
 use std::str::FromStr;
 
-use failure::Error;
-use libflate::deflate::{Decoder, Encoder};
 #[cfg(feature = "snappy")]
 use byteorder;
 #[cfg(feature = "snappy")]
 use crc;
+use failure::Error;
+use libflate::deflate::{Decoder, Encoder};
 
 use crate::types::{ToAvro, Value};
 use crate::util::DecodeError;
@@ -36,8 +36,9 @@ impl ToAvro for Codec {
                 Codec::Deflate => "deflate",
                 #[cfg(feature = "snappy")]
                 Codec::Snappy => "snappy",
-            }.to_owned()
-                .into_bytes(),
+            }
+            .to_owned()
+            .into_bytes(),
         )
     }
 }
@@ -65,20 +66,21 @@ impl Codec {
                 let mut encoder = Encoder::new(Vec::new());
                 encoder.write_all(stream)?;
                 *stream = encoder.finish().into_result()?;
-            },
+            }
             #[cfg(feature = "snappy")]
             Codec::Snappy => {
                 use byteorder::ByteOrder;
 
-                let mut encoded: Vec<u8> = vec!(0; snap::max_compress_len(stream.len()));
-                let compressed_size = snap::Encoder::new().compress(&stream[..], &mut encoded[..])?;
+                let mut encoded: Vec<u8> = vec![0; snap::max_compress_len(stream.len())];
+                let compressed_size =
+                    snap::Encoder::new().compress(&stream[..], &mut encoded[..])?;
 
                 let crc = crc::crc32::checksum_ieee(&stream[..]);
                 byteorder::BigEndian::write_u32(&mut encoded[compressed_size..], crc);
                 encoded.truncate(compressed_size + 4);
 
                 *stream = encoded;
-            },
+            }
         };
 
         Ok(())
@@ -96,25 +98,27 @@ impl Codec {
                     decoder.read_to_end(&mut decoded)?;
                 }
                 *stream = decoded;
-            },
+            }
             #[cfg(feature = "snappy")]
             Codec::Snappy => {
                 use byteorder::ByteOrder;
 
                 let decompressed_size = snap::decompress_len(&stream[..stream.len() - 4])?;
-                let mut decoded = vec!(0; decompressed_size);
+                let mut decoded = vec![0; decompressed_size];
                 snap::Decoder::new().decompress(&stream[..stream.len() - 4], &mut decoded[..])?;
 
                 let expected_crc = byteorder::BigEndian::read_u32(&stream[stream.len() - 4..]);
                 let actual_crc = crc::crc32::checksum_ieee(&decoded);
 
                 if expected_crc != actual_crc {
-                    return Err(DecodeError::new(format!("bad Snappy CRC32; expected {:x} but got {:x}",
-                                                        expected_crc,
-                                                        actual_crc)).into());
+                    return Err(DecodeError::new(format!(
+                        "bad Snappy CRC32; expected {:x} but got {:x}",
+                        expected_crc, actual_crc
+                    ))
+                    .into());
                 }
                 *stream = decoded;
-            },
+            }
         };
 
         Ok(())

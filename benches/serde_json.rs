@@ -1,7 +1,6 @@
 //! Benchmarks for comparing `avro-rs` to `serde_json`. These benchmarks are meant to be
 //! comparable to those found in `benches/serde.rs`.
 #![feature(test)]
-extern crate serde_json;
 extern crate test;
 
 use serde_json::Value;
