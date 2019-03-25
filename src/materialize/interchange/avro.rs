@@ -3,101 +3,101 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-use avro_rs::Schema;
+use avro_rs::Schema as AvroSchema;
 use failure::Error;
 
-use crate::repr::{FType, Type};
+use crate::repr::{Type, Schema};
 use ore::vec::VecExt;
 
-/// Convert an Apache Avro schema into a [`repr::Type`].
-pub fn parse_schema(schema: &str) -> Result<Type, Error> {
-    let schema = Schema::parse_str(schema)?;
-    Ok(Type {
+/// Convert an Apache Avro schema into a [`repr::Schema`].
+pub fn parse_schema(schema: &str) -> Result<Schema, Error> {
+    let avro_schema = AvroSchema::parse_str(schema)?;
+    Ok(Schema {
         name: None,
-        nullable: is_nullable(&schema),
-        ftype: parse_schema_1(&schema),
+        nullable: is_nullable(&avro_schema),
+        typ: parse_schema_1(&avro_schema),
     })
 }
 
-fn parse_schema_1(schema: &Schema) -> FType {
-    match schema {
-        Schema::Null => FType::Null,
-        Schema::Boolean => FType::Bool,
-        Schema::Int => FType::Int32,
-        Schema::Long => FType::Int64,
-        Schema::Float => FType::Float32,
-        Schema::Double => FType::Float64,
-        Schema::Bytes | Schema::Fixed { .. } => FType::Bytes,
-        Schema::String | Schema::Enum { .. } => FType::String,
+fn parse_schema_1(avro_schema: &AvroSchema) -> Type {
+    match avro_schema {
+        AvroSchema::Null => Type::Null,
+        AvroSchema::Boolean => Type::Bool,
+        AvroSchema::Int => Type::Int32,
+        AvroSchema::Long => Type::Int64,
+        AvroSchema::Float => Type::Float32,
+        AvroSchema::Double => Type::Float64,
+        AvroSchema::Bytes | AvroSchema::Fixed { .. } => Type::Bytes,
+        AvroSchema::String | AvroSchema::Enum { .. } => Type::String,
 
-        Schema::Array(schema) => {
-            let el_type = Type {
+        AvroSchema::Array(schema) => {
+            let el_type = Schema {
                 name: None,
                 nullable: is_nullable(schema),
-                ftype: parse_schema_1(schema),
+                typ: parse_schema_1(schema),
             };
 
-            FType::Array(Box::new(el_type))
+            Type::Array(Box::new(el_type))
         }
 
-        Schema::Map(s) => {
-            FType::Tuple(vec![
-                Type {
+        AvroSchema::Map(s) => {
+            Type::Tuple(vec![
+                Schema {
                     name: Some("key".into()),
                     nullable: false,
-                    ftype: FType::String,
+                    typ: Type::String,
                 },
-                Type {
+                Schema {
                     name: Some("value".into()),
                     nullable: is_nullable(s),
-                    ftype: parse_schema_1(s),
+                    typ: parse_schema_1(s),
                 }
             ])
         }
 
-        Schema::Union(us) => {
+        AvroSchema::Union(us) => {
             let utypes: Vec<_> = us.variants().iter()
                 // Null variants are handled by is_nullable, which makes
                 // the entire union nullable in the presence of a null
                 // variant.
                 .filter(|s| !is_null(s))
-                .map(|s| Type {
+                .map(|s| Schema {
                     name: None,
                     nullable: is_nullable(s),
-                    ftype: parse_schema_1(s),
+                    typ: parse_schema_1(s),
                 })
                 .collect();
 
             if utypes.len() == 1 {
-                utypes.into_element().ftype
+                utypes.into_element().typ
             } else {
-                FType::Tuple(utypes)
+                Type::Tuple(utypes)
             }
         }
 
-        Schema::Record { fields, .. } => {
-            let ftypes = fields.iter().map(|f| Type {
+        AvroSchema::Record { fields, .. } => {
+            let ftypes = fields.iter().map(|f| Schema {
                 name: Some(f.name.clone()),
                 nullable: is_nullable(&f.schema),
-                ftype: parse_schema_1(&f.schema),
+                typ: parse_schema_1(&f.schema),
             }).collect();
 
-            FType::Tuple(ftypes)
+            Type::Tuple(ftypes)
         }
     }
 }
 
-fn is_nullable(schema: &Schema) -> bool {
+fn is_nullable(schema: &AvroSchema) -> bool {
     match schema {
-        Schema::Null => true,
-        Schema::Union(us) => us.variants().iter().any(|v| is_null(v)),
+        AvroSchema::Null => true,
+        AvroSchema::Union(us) => us.variants().iter().any(|v| is_null(v)),
         _ => false,
     }
 }
 
-fn is_null(schema: &Schema) -> bool {
+fn is_null(schema: &AvroSchema) -> bool {
     match schema {
-        Schema::Null => true,
+        AvroSchema::Null => true,
         _ => false,
     }
 }
@@ -109,13 +109,13 @@ mod tests {
     use serde::Deserialize;
     use std::fs::File;
 
-    use crate::repr::Type;
+    use crate::repr::Schema;
 
     #[derive(Deserialize)]
     struct TestCase {
         name: String,
         input: serde_json::Value,
-        expected: Type,
+        expected: Schema,
     }
 
     #[test]
