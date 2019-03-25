@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::repr::{Datum, Schema, Type};
+
 /// A named stream of data.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -38,6 +40,7 @@ pub struct Source {
     pub name: String,
     pub connector: Connector,
     pub schema: Schema,
+    pub raw_schema: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -87,76 +90,7 @@ pub enum Plan {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Column(usize),
-    Literal(Scalar),
-}
-
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum Scalar {
-    // TODO(benesch): expand these to support the full set of Avro datatypes,
-    // at the very least.
-    Int(i64),
-    String(String),
-}
-
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Schema(pub Vec<(Option<String>, Type)>);
-
-impl Schema {
-    pub fn index(&self, name: &str) -> Result<usize, failure::Error> {
-        for (i, (n, _)) in self.0.iter().enumerate() {
-            match n {
-                Some(n) if n == name => return Ok(i),
-                _ => (),
-            }
-        }
-        use failure::bail;
-        bail!("unknown column {}", name)
-    }
-
-    pub fn to_avro(&self) -> avro_rs::schema::Schema {
-        use avro_rs::schema::*;
-
-        let fields: Vec<_> = self
-            .0
-            .iter()
-            .enumerate()
-            .map(|(i, (name, typ))| RecordField {
-                name: name.to_owned().unwrap(),
-                doc: None,
-                default: None,
-                schema: match typ {
-                    Type::Int => Schema::Long,
-                    Type::String => Schema::String,
-                },
-                order: RecordFieldOrder::Ignore,
-                position: i,
-            })
-            .collect();
-        let lookup = fields
-            .iter()
-            .map(|f| (f.name.to_owned(), f.position))
-            .collect();
-
-        Schema::Record {
-            name: Name {
-                name: "(n/a)".into(),
-                namespace: None,
-                aliases: None,
-            },
-            doc: None,
-            fields,
-            lookup,
-        }
-    }
-}
-
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Type {
-    Int,
-    String,
+    Literal(Datum),
 }
 
 #[cfg(test)]
@@ -182,10 +116,22 @@ mod tests {
                     ])))),
                 }),
             },
-            schema: Schema(vec![
-                (Some("name".into()), Type::String),
-                (Some("quantity".into()), Type::Int),
-            ]),
+            schema: Schema {
+              name: None,
+              nullable: false,
+              typ: Type::Tuple(vec![
+                Schema {
+                  name: Some("name".into()),
+                  nullable: false,
+                  typ: Type::String,
+                },
+                Schema {
+                  name: Some("quantity".into()),
+                  nullable: false,
+                  typ: Type::Int32,
+                }
+              ]),
+            },
         });
 
         let encoded = r#"{

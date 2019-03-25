@@ -6,7 +6,7 @@
 use bytes::Bytes;
 
 use super::oid;
-use crate::dataflow::{Scalar, Schema, Type};
+use crate::repr::{Datum, Schema, Type};
 
 #[derive(Debug)]
 pub enum Severity {
@@ -81,27 +81,32 @@ pub enum FieldFormat {
 #[derive(Debug)]
 pub enum FieldValue {
     Null,
-    Scalar(Scalar),
+    Datum(Datum),
 }
 
 pub fn row_description_from_schema(schema: &Schema) -> Vec<FieldDescription> {
-    schema
-        .0
-        .iter()
-        .map(|(name, typ)| FieldDescription {
-            name: name.as_ref().unwrap_or(&"?column?".into()).to_owned(),
-            table_id: 0,
-            column_id: 0,
-            type_oid: match typ {
-                Type::String => oid::STRING,
-                Type::Int => oid::INT,
-            },
-            type_len: match typ {
-                Type::String => -1,
-                Type::Int => 8,
-            },
-            type_mod: -1,
-            format: FieldFormat::Text,
-        })
-        .collect()
+    match &schema.typ {
+        Type::Tuple(schemas) => {
+            schemas.iter()
+                .map(|schema| FieldDescription {
+                    name: schema.name.as_ref().unwrap_or(&"?column?".into()).to_owned(),
+                    table_id: 0,
+                    column_id: 0,
+                    type_oid: match schema.typ {
+                        Type::String => oid::STRING,
+                        Type::Int64 => oid::INT,
+                        _ => unimplemented!(),
+                    },
+                    type_len: match schema.typ {
+                        Type::String => -1,
+                        Type::Int64 => 8,
+                        _ => unimplemented!(),
+                    },
+                    type_mod: -1,
+                    format: FieldFormat::Text,
+                })
+                .collect()
+        },
+        _ => unimplemented!()
+    }
 }

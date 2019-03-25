@@ -8,7 +8,7 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::dataflow::Scalar;
+use crate::repr::Datum;
 use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage};
 use ore::netio;
 
@@ -85,13 +85,15 @@ impl Encoder for Codec {
                         FieldValue::Null => {
                             dst.put_i32_be(-1);
                         }
-                        FieldValue::Scalar(s) => {
-                            let s = match s {
-                                Scalar::Int(i) => format!("{}", i),
-                                Scalar::String(s) => s,
+                        FieldValue::Datum(d) => {
+                            let d = match d {
+                                Datum::Int32(i) => format!("{}", i),
+                                Datum::Int64(i) => format!("{}", i),
+                                Datum::String(s) => s,
+                                _ => unimplemented!(),
                             };
-                            dst.put_u32_be(s.len() as u32);
-                            dst.put(s);
+                            dst.put_u32_be(d.len() as u32);
+                            dst.put(d);
                         }
                     }
                 }

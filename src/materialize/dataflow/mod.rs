@@ -26,6 +26,8 @@ use timely::dataflow::Scope;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker;
 
+use avro_rs::Schema as AvroSchema;
+use crate::repr::Datum;
 use metastore::MetaStore;
 
 mod types;
@@ -45,10 +47,10 @@ pub use types::*;
 pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<K, V, T, R, OrdValSpine<K, V, T, R>>;
-/// A key-only trace handle binding `Time` and `Diff` using `Vec<V>` as data.
-pub type KeysOnlyHandle<V> = TraceKeyHandle<Vec<V>, Time, Diff>;
-/// A key-value trace handle binding `Time` and `Diff` using `Vec<V>` as data.
-pub type KeysValsHandle<V> = TraceValHandle<Vec<V>, Vec<V>, Time, Diff>;
+/// A key-only trace handle binding `Time` and `Diff` using `V` as data.
+pub type KeysOnlyHandle<V> = TraceKeyHandle<V, Time, Diff>;
+/// A key-value trace handle binding `Time` and `Diff` using `V` as data.
+pub type KeysValsHandle<V> = TraceValHandle<V, V, Time, Diff>;
 
 /// System-wide notion of time.
 pub type Time = std::time::Duration;
@@ -219,7 +221,7 @@ where
 
 fn build_dataflow<A: Allocate>(
     dataflow: Dataflow,
-    manager: &mut Manager<Scalar>,
+    manager: &mut Manager<Datum>,
     worker: &mut Worker<A>,
 ) {
     worker.dataflow::<Time, _, _>(|scope| {
@@ -249,7 +251,7 @@ fn build_dataflow<A: Allocate>(
                 consumer.subscribe(&[&topic]).unwrap();
 
                 let then = std::time::Instant::now();
-                let schema = src.schema.to_avro();
+                let schema = AvroSchema::parse_str(&src.raw_schema).unwrap();
 
                 let arrangement =
                     kafka_source(scope, &src.name, consumer, move |mut bytes, cap, output| {
@@ -269,8 +271,8 @@ fn build_dataflow<A: Allocate>(
                             avro_rs::types::Value::Record(cols) => {
                                 for (_field_name, col) in cols {
                                     row.push(match col {
-                                        avro_rs::types::Value::Long(i) => Scalar::Int(i),
-                                        avro_rs::types::Value::String(s) => Scalar::String(s),
+                                        avro_rs::types::Value::Long(i) => Datum::Int64(i),
+                                        avro_rs::types::Value::String(s) => Datum::String(s),
                                         _ => panic!("avro deserialization went wrong"),
                                     })
                                 }
@@ -278,7 +280,7 @@ fn build_dataflow<A: Allocate>(
                             _ => panic!("avro deserialization went wrong"),
                         }
                         let time = cap.time().clone();
-                        output.session(cap).give((row, time, 1));
+                        output.session(cap).give((Datum::Tuple(row), time, 1));
 
                         // Indicate that we are not yet done.
                         false
@@ -297,26 +299,31 @@ fn build_dataflow<A: Allocate>(
 
 fn build_plan<S: Scope<Timestamp = Time>>(
     plan: &Plan,
-    manager: &mut Manager<Scalar>,
+    manager: &mut Manager<Datum>,
     scope: &mut S,
-) -> Collection<S, Vec<Scalar>, Diff> {
+) -> Collection<S, Datum, Diff> {
     match plan {
         Plan::Source(name) => manager
             .traces
             .get_unkeyed(name.to_owned())
             .unwrap()
             .import(scope)
-            .as_collection(|k, ()| k.to_vec()),
+            .as_collection(|k, ()| k.to_owned()),
         Plan::Project { outputs, input } => {
             let outputs = outputs.clone();
             build_plan(&input, manager, scope).map(move |tuple| {
-                outputs
+                Datum::Tuple(outputs
                     .iter()
                     .map(|expr| match expr {
-                        Expr::Column(i) => tuple[*i].clone(),
+                        Expr::Column(i) => match &tuple {
+                            Datum::Tuple(t) => {
+                                t[*i].clone()
+                            }
+                            _ => panic!("type error")
+                        },
                         Expr::Literal(s) => s.clone(),
                     })
-                    .collect()
+                    .collect())
             })
         }
         Plan::Distinct(_) => unimplemented!(),

@@ -19,6 +19,7 @@ use tokio::prelude::*;
 
 use crate::dataflow;
 use crate::dataflow::Dataflow;
+use crate::repr::Datum;
 use metastore::MetaStore;
 use ore::future::FutureExt;
 use ore::netio;
@@ -28,7 +29,7 @@ mod http;
 mod pgwire;
 
 pub struct ServerState {
-    pub peek_results: HashMap<uuid::Uuid, (UnboundedSender<Vec<dataflow::Scalar>>, usize)>,
+    pub peek_results: HashMap<uuid::Uuid, (UnboundedSender<Datum>, usize)>,
 }
 
 pub struct ConnState {

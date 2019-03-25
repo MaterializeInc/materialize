@@ -18,14 +18,25 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use crate::dataflow::{
-    Command, CommandSender, Connector, Dataflow, Expr, Plan, Scalar, Schema, Source, Type, View,
+    Command, CommandSender, Connector, Dataflow, Expr, Plan, Source, View,
 };
+use crate::repr::{Datum, Schema, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
 use ore::future::FutureExt;
 
 lazy_static! {
-    static ref DUAL_SCHEMA: Schema = Schema(vec![(Some("x".into()), Type::String)]);
+    static ref DUAL_SCHEMA: Schema = Schema {
+        name: Some("dual".into()),
+        nullable: false,
+        typ: Type::Tuple(vec![
+            Schema {
+                name: Some("x".into()),
+                nullable: false,
+                typ: Type::String,
+            }
+        ]),
+    };
 }
 
 pub enum QueryResponse {
@@ -33,7 +44,7 @@ pub enum QueryResponse {
     CreatedView,
     StreamingRows {
         schema: Schema,
-        rows: Box<dyn Stream<Item = Vec<Scalar>, Error = failure::Error> + Send>,
+        rows: Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>,
     },
 }
 
@@ -235,7 +246,8 @@ impl Parser {
                         addr: url.to_socket_addrs()?.next().unwrap(),
                         topic,
                     },
-                    schema: self.parse_avro_schema(schema)?,
+                    schema: crate::interchange::avro::parse_schema(schema)?,
+                    raw_schema: schema.clone(),
                 }))
             }
             _ => bail!("only CREATE MATERIALIZED VIEW AS allowed"),
@@ -286,11 +298,15 @@ impl Parser {
         };
 
         let mut outputs = Vec::new();
-        let mut pschema = Schema(Vec::new());
+        let mut pschema = Vec::new();
         for p in &s.projection {
             let (name, expr, typ) = self.parse_select_item(p, schema)?;
             outputs.push(expr);
-            pschema.0.push((name.map(|s| s.to_owned()), typ));
+            pschema.push(Schema {
+                name: name.map(|s| s.to_owned()),
+                nullable: false,
+                typ: typ,
+            });
         }
 
         let plan = Plan::Project {
@@ -298,7 +314,11 @@ impl Parser {
             input: Box::new(plan),
         };
 
-        Ok((plan, pschema))
+        Ok((plan, Schema {
+            name: None,
+            nullable: false,
+            typ: Type::Tuple(pschema)
+        }))
     }
 
     fn parse_select_item<'a>(
@@ -322,16 +342,28 @@ impl Parser {
     ) -> Result<(Option<&'a str>, Expr, Type), failure::Error> {
         match e {
             ASTNode::SQLIdentifier(name) => {
-                let i = schema.index(name)?;
+                let i = match &schema.typ {
+                    Type::Tuple(t) => {
+                        t.iter().position(|f| f.name == Some(name.clone()))
+                    }
+                    _ => unimplemented!()
+                };
+                let i = match i {
+                    Some(i) => i,
+                    None => bail!("unknown column {}", name),
+                };
                 let expr = Expr::Column(i);
-                let typ = schema.0[i].1;
+                let typ = match &schema.typ {
+                    Type::Tuple(t) => t[i].typ.clone(),
+                    _ => unreachable!(),
+                };
                 Ok((Some(name), expr, typ))
             }
             ASTNode::SQLValue(val) => match val {
-                Value::Long(i) => Ok((None, Expr::Literal(Scalar::Int(*i)), Type::Int)),
+                Value::Long(i) => Ok((None, Expr::Literal(Datum::Int64(*i)), Type::Int64)),
                 Value::SingleQuotedString(s) => Ok((
                     None,
-                    Expr::Literal(Scalar::String(s.to_string())),
+                    Expr::Literal(Datum::String(s.to_string())),
                     Type::String,
                 )),
                 _ => bail!(
@@ -351,27 +383,6 @@ impl Parser {
             bail!("qualified names are not yet supported: {}", n.to_string())
         }
         Ok(n.to_string())
-    }
-
-    fn parse_avro_schema(&self, schema: &str) -> Result<Schema, failure::Error> {
-        use avro_rs::Schema as AvroSchema;
-        let schema = AvroSchema::parse_str(schema)?;
-        let mut out = Vec::new();
-        match schema {
-            AvroSchema::Record { fields, .. } => {
-                for f in fields {
-                    match f.schema {
-                        AvroSchema::Long => out.push((Some(f.name), Type::Int)),
-                        AvroSchema::String => out.push((Some(f.name), Type::String)),
-                        _ => bail!(
-                            "avro schemas do not yet support data types besides long and string"
-                        ),
-                    }
-                }
-            }
-            _ => bail!("avro schemas must have exactly one record"),
-        }
-        Ok(Schema(out))
     }
 }
 

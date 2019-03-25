@@ -12,9 +12,9 @@ use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::dataflow::Scalar;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage, Severity};
+use crate::repr::Datum;
 use crate::server::ConnState;
 use crate::sql::QueryResponse;
 use ore::future::{Recv, StreamExt};
@@ -79,7 +79,7 @@ pub trait Conn:
 
 impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Send {}
 
-type RowStream = Box<dyn Stream<Item = Vec<Scalar>, Error = failure::Error> + Send>;
+type RowStream = Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>;
 
 type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
 
@@ -281,7 +281,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         let stream: MessageStream = Box::new(state.rows.map(|row| {
-            BackendMessage::DataRow(row.into_iter().map(|s| FieldValue::Scalar(s)).collect())
+            BackendMessage::DataRow(match row {
+                Datum::Tuple(t) => t.into_iter().map(|d| FieldValue::Datum(d)).collect(),
+                _ => unimplemented!(),
+            })
         }));
         transition!(SendRows {
             send: Box::new(stream.forward(conn)),

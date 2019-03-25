@@ -29,7 +29,7 @@ use std::cmp::Ordering;
 /// Note that datums may be scalar, like [`Datum::Int32`], or composite, like
 /// [`Datum::Tuple`], but they are always constant.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum Datum {
     /// An unknown value.
     Null,

@@ -111,7 +111,7 @@ fn handle_peek_result(
         .and_then(|(tx, req)| {
             use futures::stream::Stream;
             req.into_body().concat2().err_into().and_then(|body| {
-                let rows: Vec<Vec<crate::dataflow::Scalar>> = bincode::deserialize(&body).unwrap();
+                let rows: Vec<crate::repr::Datum> = bincode::deserialize(&body).unwrap();
                 futures::stream::iter_ok(rows).forward(tx)
             })
         })
