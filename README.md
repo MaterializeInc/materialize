@@ -12,7 +12,7 @@ Material provides streaming SQL materialized views on top of
 Assuming you have ZooKeeper, Kafka, and the Confluent Schema Registry running
 on your local machine on the default ports:
 
-```
+```bash
 $ zookeeper-shell localhost:2181 <<< 'rmr /materialized'
 $ kafka-topics --zookeeper localhost:2181 --delete --topic quotes
 $ curl -X DELETE http://localhost:8081/subjects/quotes-value
@@ -25,7 +25,7 @@ $ kafka-avro-console-producer --topic quotes --broker-list localhost:9092 --prop
 
 Then, in another shell:
 
-```
+```bash
 $ psql -h localhost -p 6875
 > CREATE DATA SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "quote", "type": "string"}]}';
 > PEEK quotes;
