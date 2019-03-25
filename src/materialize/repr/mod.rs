@@ -55,6 +55,49 @@ pub enum Datum {
 /// An ordered, unnamed collection of heterogeneous [`Datum`]s.
 pub type Tuple = Vec<Datum>;
 
+/// The type of a [`Datum`].
+///
+/// [`Type`] bundles information about the fundamental type of a datum (e.g.,
+/// Int32 or String) with additional attributes, like its default value and its
+/// nullability.
+///
+/// It is not possible to construct a `Type` directly from a `Datum`, as it is
+/// impossible to determine anything but the type's `ftype`. Consider: a naked
+/// `Datum` provides no information about its name, default value, or
+/// nullability.
+pub struct Type {
+    /// The name of this datum. Perhaps surprisingly, expressions in SQL can
+    /// have names, as in `SELECT 1 AS blah`.
+    pub name: Option<String>,
+    /// The default value for this datum, if omitted.
+    pub default: Option<Datum>,
+    /// Whether this datum can be null.
+    pub nullable: bool,
+    /// The fundamental type (e.g., Int32 or String) of this datum.
+    pub ftype: FType,
+}
+
+/// The fundamental type of a [`Datum`].
+///
+/// A fundamental type is what is typically thought of as a type, like "Int32"
+/// or "String." The full [`Type`] struct bundles additional information, like
+/// an optional default value and nullability, that must also be considered part
+/// of a datum's type.
+pub enum FType {
+    Unknown,
+    Bool,
+    Int32,
+    Int64,
+    Float32,
+    Float64,
+    Bytes,
+    String,
+    Tuple(TypeTuple),
+}
+
+/// The type of a [`Datum::Tuple`].
+pub type TypeTuple = Vec<Type>;
+
 /// A 32-bit floating integer that implements [`Eq`] and [`Ord`].
 ///
 /// The transitivity of the equivalence relation is provided by treating NaN
