@@ -10,5 +10,6 @@
 
 pub mod dataflow;
 pub mod pgwire;
+pub mod repr;
 pub mod server;
 pub mod sql;
