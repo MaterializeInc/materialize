@@ -1,0 +1,296 @@
+[
+    {
+        "name": "bare null",
+        "input": "null",
+        "expected": { "nullable": true, "ftype": "null" }
+    },
+
+    {
+        "name": "bare bool",
+        "input": "boolean",
+        "expected": { "nullable": false, "ftype": "bool" }
+    },
+
+    {
+        "name": "bare int32",
+        "input": "int",
+        "expected": { "nullable": false, "ftype": "int32" }
+    },
+
+    {
+        "name": "bare int64",
+        "input": "long",
+        "expected": { "nullable": false, "ftype": "int64" }
+    },
+
+    {
+        "name": "bare float32",
+        "input": "float",
+        "expected": { "nullable": false, "ftype": "float32" }
+    },
+
+    {
+        "name": "bare float64",
+        "input": "double",
+        "expected": { "nullable": false, "ftype": "float64" }
+    },
+
+    {
+        "name": "bare bytes",
+        "input": "bytes",
+        "expected": { "nullable": false, "ftype": "bytes" }
+    },
+
+    {
+        "name": "bare string",
+        "input": "string",
+        "expected": { "nullable": false, "ftype": "string" }
+    },
+
+    {
+        "name": "bare null - long form",
+        "input": { "type": "null" },
+        "expected": { "nullable": true, "ftype": "null" }
+    },
+
+    {
+        "name": "bare bool - long form",
+        "input": { "type": "boolean" },
+        "expected": { "nullable": false, "ftype": "bool" }
+    },
+
+    {
+        "name": "bare int32 - long form",
+        "input": { "type": "int" },
+        "expected": { "nullable": false, "ftype": "int32" }
+    },
+
+    {
+        "name": "bare int64 - long form",
+        "input": { "type": "long" },
+        "expected": { "nullable": false, "ftype": "int64" }
+    },
+
+    {
+        "name": "bare float32 - long form",
+        "input": { "type": "float" },
+        "expected": { "nullable": false, "ftype": "float32" }
+    },
+
+    {
+        "name": "bare float64 - long form",
+        "input": { "type": "double" },
+        "expected": { "nullable": false, "ftype": "float64" }
+    },
+
+    {
+        "name": "bare bytes - long form",
+        "input": { "type": "bytes" },
+        "expected": { "nullable": false, "ftype": "bytes" }
+    },
+
+    {
+        "name": "bare string - long form",
+        "input": { "type": "string" },
+        "expected": { "nullable": false, "ftype": "string" }
+    },
+
+    {
+        "name": "record without fields",
+        "input": {
+            "type": "record",
+            "name": "test",
+            "fields": []
+        },
+        "expected": {
+            "nullable": false,
+            "ftype": {
+                "tuple": []
+            }
+        }
+    },
+
+    {
+        "name": "basic record",
+        "input": {
+            "type": "record",
+            "name": "test",
+            "fields": [
+                { "name": "f1", "type": "int" },
+                { "name": "f2", "type": "string" }
+            ]
+        },
+        "expected": {
+            "nullable": false,
+            "ftype": {
+                "tuple": [
+                    { "name": "f1", "ftype": "int32", "nullable": false },
+                    { "name": "f2", "ftype": "string", "nullable": false }
+                ]
+            }
+        }
+    },
+
+    {
+        "name": "basic array",
+        "input": { "type": "array", "items": "int" },
+        "expected": {
+            "nullable": false,
+            "ftype": {
+                "array": { "nullable": false, "ftype": "int32" }
+            }
+        }
+    },
+
+    {
+        "name": "basic nullable a",
+        "input": ["null", "int"],
+        "expected": { "nullable": true, "ftype": "int32" }
+    },
+
+    {
+        "name": "basic nullable b",
+        "input": ["int", "null"],
+        "expected": { "nullable": true, "ftype": "int32" }
+    },
+
+    {
+        "name": "basic non-nullable union",
+        "input": ["int", "long"],
+        "expected": {
+            "nullable": false,
+            "ftype": {
+                "tuple": [
+                    { "nullable": false, "ftype": "int32" },
+                    { "nullable": false, "ftype": "int64" }
+                ]
+            }
+        }
+    },
+
+    {
+        "name": "basic nullable union",
+        "input": ["int", "null", "long"],
+        "expected": {
+            "nullable": true,
+            "ftype": {
+                "tuple": [
+                    { "nullable": false, "ftype": "int32" },
+                    { "nullable": false, "ftype": "int64" }
+                ]
+            }
+        }
+    },
+
+    {
+        "name": "basic enum",
+        "input": { "type": "enum", "name": "enum", "symbols": ["a", "b", "c"] },
+        "expected": {
+            "nullable": false,
+            "ftype": "string"
+        }
+    },
+
+    {
+        "name": "basic map",
+        "input": { "type": "map", "values": "int" },
+        "expected": {
+            "nullable": false,
+            "ftype": {
+                "tuple": [
+                    { "name": "key", "nullable": false, "ftype": "string" },
+                    { "name": "value", "nullable": false, "ftype": "int32" }
+                ]
+            }
+        }
+    },
+
+    {
+        "name": "kitchen sink",
+        "input": [
+            "null",
+            "int",
+            { "type": "long" },
+            {
+                "type": "map",
+                "values": [
+                    "null",
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "record",
+                            "name": "record",
+                            "fields": [
+                                {
+                                    "name": "one",
+                                    "type": { "type": "enum", "name": "enum", "symbols": ["a"] }
+                                },
+                                {
+                                    "name": "two",
+                                    "type": "string"
+                                },
+                                {
+                                    "name": "three",
+                                    "type": [
+                                        { "type": "fixed", "name": "fixed", "size": 128 },
+                                        { "type": "map", "values": "null" }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ],
+        "expected": {
+            "nullable": true,
+            "ftype": {
+                "tuple": [
+                    { "nullable": false, "ftype": "int32" },
+                    { "nullable": false, "ftype": "int64" },
+                    {
+                        "nullable": false,
+                        "ftype": {
+                            "tuple": [
+                                { "name": "key", "nullable": false, "ftype": "string" },
+                                {
+                                    "name": "value",
+                                    "nullable": true,
+                                    "ftype": {
+                                        "array": {
+                                            "nullable": false,
+                                            "ftype": {
+                                                "tuple": [
+                                                    { "name": "one", "nullable": false, "ftype": "string" },
+                                                    { "name": "two", "nullable": false, "ftype": "string" },
+                                                    {
+                                                        "name": "three",
+                                                        "nullable": false,
+                                                        "ftype": {
+                                                            "tuple": [
+                                                                { "nullable": false, "ftype": "bytes" },
+                                                                {
+                                                                    "nullable": false,
+                                                                    "ftype": {
+                                                                        "tuple": [
+                                                                            { "name": "key", "nullable": false, "ftype": "string" },
+                                                                            { "name": "value", "nullable": true, "ftype": "null" }
+                                                                        ]
+                                                                    }
+                                                                }
+                                                            ]
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    }
+]

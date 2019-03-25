@@ -65,12 +65,11 @@ pub type Tuple = Vec<Datum>;
 /// impossible to determine anything but the type's `ftype`. Consider: a naked
 /// `Datum` provides no information about its name, default value, or
 /// nullability.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Type {
     /// The name of this datum. Perhaps surprisingly, expressions in SQL can
     /// have names, as in `SELECT 1 AS blah`.
     pub name: Option<String>,
-    /// The default value for this datum, if omitted.
-    pub default: Option<Datum>,
     /// Whether this datum can be null.
     pub nullable: bool,
     /// The fundamental type (e.g., Int32 or String) of this datum.
@@ -83,8 +82,14 @@ pub struct Type {
 /// or "String." The full [`Type`] struct bundles additional information, like
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum FType {
     Unknown,
+    /// The type of a datum that can only be null.
+    ///
+    /// This is uncommon. Most [`Datum:Null`]s appear with a different type.
+    Null,
     Bool,
     Int32,
     Int64,
@@ -92,11 +97,10 @@ pub enum FType {
     Float64,
     Bytes,
     String,
-    Tuple(TypeTuple),
+    Tuple(Vec<Type>),
+    Array(Box<Type>),
+    OneOf(Vec<Type>),
 }
-
-/// The type of a [`Datum::Tuple`].
-pub type TypeTuple = Vec<Type>;
 
 /// A 32-bit floating integer that implements [`Eq`] and [`Ord`].
 ///
