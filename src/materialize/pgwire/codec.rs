@@ -8,8 +8,8 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::repr::Datum;
 use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage};
+use crate::repr::Datum;
 use ore::netio;
 
 /// A Tokio codec to encode and decode pgwire frames.

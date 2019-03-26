@@ -117,20 +117,20 @@ mod tests {
                 }),
             },
             schema: Schema {
-              name: None,
-              nullable: false,
-              typ: Type::Tuple(vec![
-                Schema {
-                  name: Some("name".into()),
-                  nullable: false,
-                  typ: Type::String,
-                },
-                Schema {
-                  name: Some("quantity".into()),
-                  nullable: false,
-                  typ: Type::Int32,
-                }
-              ]),
+                name: None,
+                nullable: false,
+                typ: Type::Tuple(vec![
+                    Schema {
+                        name: Some("name".into()),
+                        nullable: false,
+                        typ: Type::String,
+                    },
+                    Schema {
+                        name: Some("quantity".into()),
+                        nullable: false,
+                        typ: Type::Int32,
+                    },
+                ]),
             },
         });
 

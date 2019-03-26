@@ -17,9 +17,7 @@ use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use crate::dataflow::{
-    Command, CommandSender, Connector, Dataflow, Expr, Plan, Source, View,
-};
+use crate::dataflow::{Command, CommandSender, Connector, Dataflow, Expr, Plan, Source, View};
 use crate::repr::{Datum, Schema, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
@@ -29,13 +27,11 @@ lazy_static! {
     static ref DUAL_SCHEMA: Schema = Schema {
         name: Some("dual".into()),
         nullable: false,
-        typ: Type::Tuple(vec![
-            Schema {
-                name: Some("x".into()),
-                nullable: false,
-                typ: Type::String,
-            }
-        ]),
+        typ: Type::Tuple(vec![Schema {
+            name: Some("x".into()),
+            nullable: false,
+            typ: Type::String,
+        }]),
     };
 }
 
@@ -314,11 +310,14 @@ impl Parser {
             input: Box::new(plan),
         };
 
-        Ok((plan, Schema {
-            name: None,
-            nullable: false,
-            typ: Type::Tuple(pschema)
-        }))
+        Ok((
+            plan,
+            Schema {
+                name: None,
+                nullable: false,
+                typ: Type::Tuple(pschema),
+            },
+        ))
     }
 
     fn parse_select_item<'a>(
@@ -343,10 +342,8 @@ impl Parser {
         match e {
             ASTNode::SQLIdentifier(name) => {
                 let i = match &schema.typ {
-                    Type::Tuple(t) => {
-                        t.iter().position(|f| f.name == Some(name.clone()))
-                    }
-                    _ => unimplemented!()
+                    Type::Tuple(t) => t.iter().position(|f| f.name == Some(name.clone())),
+                    _ => unimplemented!(),
                 };
                 let i = match i {
                     Some(i) => i,

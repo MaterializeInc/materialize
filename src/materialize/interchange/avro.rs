@@ -6,7 +6,7 @@
 use avro_rs::Schema as AvroSchema;
 use failure::Error;
 
-use crate::repr::{Type, Schema};
+use crate::repr::{Schema, Type};
 use ore::vec::VecExt;
 
 /// Convert an Apache Avro schema into a [`repr::Schema`].
@@ -40,23 +40,23 @@ fn parse_schema_1(avro_schema: &AvroSchema) -> Type {
             Type::Array(Box::new(el_type))
         }
 
-        AvroSchema::Map(s) => {
-            Type::Tuple(vec![
-                Schema {
-                    name: Some("key".into()),
-                    nullable: false,
-                    typ: Type::String,
-                },
-                Schema {
-                    name: Some("value".into()),
-                    nullable: is_nullable(s),
-                    typ: parse_schema_1(s),
-                }
-            ])
-        }
+        AvroSchema::Map(s) => Type::Tuple(vec![
+            Schema {
+                name: Some("key".into()),
+                nullable: false,
+                typ: Type::String,
+            },
+            Schema {
+                name: Some("value".into()),
+                nullable: is_nullable(s),
+                typ: parse_schema_1(s),
+            },
+        ]),
 
         AvroSchema::Union(us) => {
-            let utypes: Vec<_> = us.variants().iter()
+            let utypes: Vec<_> = us
+                .variants()
+                .iter()
                 // Null variants are handled by is_nullable, which makes
                 // the entire union nullable in the presence of a null
                 // variant.
@@ -76,11 +76,14 @@ fn parse_schema_1(avro_schema: &AvroSchema) -> Type {
         }
 
         AvroSchema::Record { fields, .. } => {
-            let ftypes = fields.iter().map(|f| Schema {
-                name: Some(f.name.clone()),
-                nullable: is_nullable(&f.schema),
-                typ: parse_schema_1(&f.schema),
-            }).collect();
+            let ftypes = fields
+                .iter()
+                .map(|f| Schema {
+                    name: Some(f.name.clone()),
+                    nullable: is_nullable(&f.schema),
+                    typ: parse_schema_1(&f.schema),
+                })
+                .collect();
 
             Type::Tuple(ftypes)
         }
@@ -122,8 +125,8 @@ mod tests {
     fn test_schema_parsing() -> Result<(), failure::Error> {
         let file = File::open("interchange/testdata/avro-schema.json")
             .context("opening test data file")?;
-        let test_cases: Vec<TestCase> = serde_json::from_reader(file)
-            .context("parsing JSON test data")?;
+        let test_cases: Vec<TestCase> =
+            serde_json::from_reader(file).context("parsing JSON test data")?;
 
         for tc in test_cases {
             // Stringifying the JSON we just parsed is rather silly, but it

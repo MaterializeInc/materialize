@@ -86,27 +86,30 @@ pub enum FieldValue {
 
 pub fn row_description_from_schema(schema: &Schema) -> Vec<FieldDescription> {
     match &schema.typ {
-        Type::Tuple(schemas) => {
-            schemas.iter()
-                .map(|schema| FieldDescription {
-                    name: schema.name.as_ref().unwrap_or(&"?column?".into()).to_owned(),
-                    table_id: 0,
-                    column_id: 0,
-                    type_oid: match schema.typ {
-                        Type::String => oid::STRING,
-                        Type::Int64 => oid::INT,
-                        _ => unimplemented!(),
-                    },
-                    type_len: match schema.typ {
-                        Type::String => -1,
-                        Type::Int64 => 8,
-                        _ => unimplemented!(),
-                    },
-                    type_mod: -1,
-                    format: FieldFormat::Text,
-                })
-                .collect()
-        },
-        _ => unimplemented!()
+        Type::Tuple(schemas) => schemas
+            .iter()
+            .map(|schema| FieldDescription {
+                name: schema
+                    .name
+                    .as_ref()
+                    .unwrap_or(&"?column?".into())
+                    .to_owned(),
+                table_id: 0,
+                column_id: 0,
+                type_oid: match schema.typ {
+                    Type::String => oid::STRING,
+                    Type::Int64 => oid::INT,
+                    _ => unimplemented!(),
+                },
+                type_len: match schema.typ {
+                    Type::String => -1,
+                    Type::Int64 => 8,
+                    _ => unimplemented!(),
+                },
+                type_mod: -1,
+                format: FieldFormat::Text,
+            })
+            .collect(),
+        _ => unimplemented!(),
     }
 }

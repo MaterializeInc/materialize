@@ -26,8 +26,8 @@ use timely::dataflow::Scope;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker;
 
-use avro_rs::Schema as AvroSchema;
 use crate::repr::Datum;
+use avro_rs::Schema as AvroSchema;
 use metastore::MetaStore;
 
 mod types;
@@ -312,18 +312,18 @@ fn build_plan<S: Scope<Timestamp = Time>>(
         Plan::Project { outputs, input } => {
             let outputs = outputs.clone();
             build_plan(&input, manager, scope).map(move |tuple| {
-                Datum::Tuple(outputs
-                    .iter()
-                    .map(|expr| match expr {
-                        Expr::Column(i) => match &tuple {
-                            Datum::Tuple(t) => {
-                                t[*i].clone()
-                            }
-                            _ => panic!("type error")
-                        },
-                        Expr::Literal(s) => s.clone(),
-                    })
-                    .collect())
+                Datum::Tuple(
+                    outputs
+                        .iter()
+                        .map(|expr| match expr {
+                            Expr::Column(i) => match &tuple {
+                                Datum::Tuple(t) => t[*i].clone(),
+                                _ => panic!("type error"),
+                            },
+                            Expr::Literal(s) => s.clone(),
+                        })
+                        .collect(),
+                )
             })
         }
         Plan::Distinct(_) => unimplemented!(),

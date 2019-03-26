@@ -21,7 +21,7 @@
 //! [`Datum::Tuple`]: repr::Datum::Tuple
 
 use ordered_float::OrderedFloat;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
 /// A literal value.
