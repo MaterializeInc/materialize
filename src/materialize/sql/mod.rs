@@ -252,7 +252,7 @@ impl Parser {
     }
 
     fn parse_view_query(&self, q: &SQLQuery) -> Result<(Plan, Schema), failure::Error> {
-        if q.ctes.is_empty() {
+        if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
         if q.limit.is_some() {
@@ -272,7 +272,7 @@ impl Parser {
             bail!("HAVING is not yet supported");
         } else if s.group_by.is_some() {
             bail!("GROUP BY is not yet supported");
-        } else if s.joins.is_empty() {
+        } else if !s.joins.is_empty() {
             bail!("JOIN is not yet supported");
         }
 
@@ -390,11 +390,15 @@ mod tests {
 
     #[test]
     fn test_basic_view() -> Result<(), failure::Error> {
-        let schema = Schema(vec![
-            (None, Type::Int),
-            (Some("a".into()), Type::String),
-            (Some("b".into()), Type::String),
-        ]);
+        let schema = Schema {
+            name: None,
+            nullable: false,
+            typ: Type::Tuple(vec![
+                Schema { name: None, nullable: false, typ: Type::Int64 },
+                Schema { name: Some("a".into()), nullable: false, typ: Type::String },
+                Schema { name: Some("b".into()), nullable: false, typ: Type::String },
+            ]),
+        };
         let version = 1;
         let parser = Parser::new(vec![("src".into(), (version, schema))]);
 
@@ -411,7 +415,13 @@ mod tests {
                     outputs: vec![Expr::Column(2)],
                     input: Box::new(Plan::Source("src".into())),
                 },
-                schema: Schema(vec![(Some("b".into()), Type::String)])
+                schema: Schema {
+                    name: None,
+                    nullable: false,
+                    typ: Type::Tuple(vec![
+                        Schema { name: Some("b".into()), nullable: false, typ: Type::String },
+                    ]),
+                }
             })
         );
 
@@ -422,20 +432,18 @@ mod tests {
     fn test_basic_source() -> Result<(), failure::Error> {
         let parser = Parser::new(vec![]);
 
+        let raw_schema = r#"{
+    "type": "record",
+    "name": "foo",
+    "fields": [
+        {"name": "a", "type": "long", "default": 42},
+        {"name": "b", "type": "string"}
+    ]
+}"#;
+
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},
-            r#"
-                CREATE DATA SOURCE s FROM 'kafka://localhost/topic'
-                USING SCHEMA '{
-                    "type": "record",
-                    "name": "foo",
-                    "fields": [
-                        {"name": "a", "type": "long", "default": 42},
-                        {"name": "b", "type": "string"}
-                    ]
-                }'
-            "#
-            .into(),
+            format!("CREATE DATA SOURCE s FROM 'kafka://localhost/topic' USING SCHEMA '{}'", raw_schema)
         )?;
         let dataflow = parser.parse_statement(&stmts[0])?;
         assert_eq!(
@@ -446,10 +454,15 @@ mod tests {
                     addr: "[::1]:9092".parse()?,
                     topic: "topic".into(),
                 },
-                schema: Schema(vec![
-                    (Some("a".into()), Type::Int),
-                    (Some("b".into()), Type::String),
-                ])
+                schema: Schema {
+                    name: None,
+                    nullable: false,
+                    typ: Type::Tuple(vec![
+                        Schema { name: Some("a".into()), nullable: false, typ: Type::Int64 },
+                        Schema { name: Some("b".into()), nullable: false, typ: Type::String },
+                    ]),
+                },
+                raw_schema: raw_schema.to_owned(),
             })
         );
 

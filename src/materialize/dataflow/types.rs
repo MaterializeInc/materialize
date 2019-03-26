@@ -104,6 +104,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::error::Error;
 
+  use crate::repr::Type;
     use super::*;
 
     /// Verify that a basic plan serializes and deserializes to JSON sensibly.
@@ -180,19 +181,27 @@ mod tests {
         }
       }
     },
-    "schema": [
-      [
-        "name",
-        "string"
-      ],
-      [
-        "quantity",
-        "int"
-      ]
-    ]
+    "schema": {
+      "name": null,
+      "nullable": false,
+      "typ": {
+        "tuple": [
+          {
+            "name": "name",
+            "nullable": false,
+            "typ": "string"
+          },
+          {
+            "name": "quantity",
+            "nullable": false,
+            "typ": "int32"
+          }
+        ]
+      }
+    }
   }
 }"#;
-        assert_eq!(encoded, serde_json::to_string_pretty(&dataflow)?);
+        assert_eq!(encoded, &serde_json::to_string_pretty(&dataflow)?);
 
         let decoded: Dataflow = serde_json::from_str(encoded)?;
         assert_eq!(decoded, dataflow);
