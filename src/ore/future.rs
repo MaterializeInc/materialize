@@ -50,19 +50,6 @@ pub trait FutureExt {
     where
         Self: Sized + Future;
 
-    /// Creates a future that will call [`into`](std::convert::Into::into) on
-    /// the wrapped future's error, if the wrapped future produces an error.
-    ///
-    /// It is roughly equivalent to:
-    ///
-    /// ```ignore
-    /// future.map_err(|e| e.into())
-    /// ```
-    fn err_into<E>(self) -> ErrInto<Self, E>
-    where
-        Self: Sized + Future,
-        E: From<Self::Error>;
-
     /// Wraps this future in a future that will abort the underlying future if
     /// `signal` completes. In other words, allows the underlying future to
     /// be canceled.
@@ -98,10 +85,6 @@ where
 
     fn discard(self) -> Map<Self, fn(T::Item) -> ()> {
         self.map(discard)
-    }
-
-    fn err_into<E>(self) -> ErrInto<Self, E> {
-        ErrInto(self, std::marker::PhantomData)
     }
 
     fn watch_for_cancel<S>(self, signal: S) -> Cancelable<Self, S> {
@@ -142,25 +125,6 @@ where
             Either3::A(ref mut a) => a.poll(),
             Either3::B(ref mut b) => b.poll(),
             Either3::C(ref mut c) => c.poll(),
-        }
-    }
-}
-
-/// The future returned by [`FutureExt::err_into`].
-pub struct ErrInto<T, E>(T, std::marker::PhantomData<E>);
-
-impl<T, E> Future for ErrInto<T, E>
-where
-    T: Future,
-    E: From<T::Error>,
-{
-    type Item = T::Item;
-    type Error = E;
-
-    fn poll(&mut self) -> Poll<T::Item, E> {
-        match self.0.poll() {
-            Ok(v) => Ok(v),
-            Err(e) => Err(e.into()),
         }
     }
 }

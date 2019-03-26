@@ -52,7 +52,7 @@ fn handle_connection(
     // new protocols.
     let ss = SniffingStream::new(tcp_stream);
     netio::read_exact_or_eof(ss, [0; 8])
-        .err_into()
+        .from_err()
         .and_then(move |(ss, buf, nread)| {
             let buf = &buf[..nread];
             if pgwire::match_handshake(buf) {
@@ -60,7 +60,7 @@ fn handle_connection(
             } else if http::match_handshake(buf) {
                 http::handle_connection(ss.into_sniffed(), state).either_b()
             } else {
-                reject_connection(ss.into_sniffed()).err_into().either_c()
+                reject_connection(ss.into_sniffed()).from_err().either_c()
             }
         })
         .map_err(|err| error!("error handling request: {}", err))

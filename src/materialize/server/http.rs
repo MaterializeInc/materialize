@@ -62,7 +62,7 @@ pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
             },
         );
     let http = hyper::server::conn::Http::new();
-    http.serve_connection(a, svc).err_into()
+    http.serve_connection(a, svc).from_err()
 }
 
 fn handle_home(_: Request<Body>) -> FutureResponse {
@@ -109,7 +109,7 @@ fn handle_peek_result(
         })
         .and_then(|(tx, req)| {
             use futures::stream::Stream;
-            req.into_body().concat2().err_into().and_then(|body| {
+            req.into_body().concat2().from_err().and_then(|body| {
                 let rows: Vec<crate::repr::Datum> = bincode::deserialize(&body).unwrap();
                 futures::stream::iter_ok(rows).forward(tx)
             })
