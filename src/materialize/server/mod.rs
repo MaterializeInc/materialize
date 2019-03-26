@@ -19,8 +19,10 @@ use tokio::prelude::*;
 
 use crate::dataflow;
 use crate::dataflow::Dataflow;
+use crate::dataflow::server::Command;
 use crate::repr::Datum;
 use metastore::MetaStore;
+use ore::closure;
 use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::SniffingStream;
@@ -34,7 +36,7 @@ pub struct ServerState {
 
 pub struct ConnState {
     pub meta_store: MetaStore<Dataflow>,
-    pub cmd_tx: dataflow::CommandSender,
+    pub cmd_tx: dataflow::server::CommandSender,
     pub server_state: Arc<RwLock<ServerState>>,
 }
 
@@ -79,10 +81,17 @@ pub fn serve() -> Result<(), Box<dyn StdError>> {
         let meta_store = MetaStore::new(&zookeeper_addr, "materialized");
 
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-        let _dd_workers = dataflow::serve(meta_store.clone(), cmd_rx);
+        let _dd_workers = dataflow::server::serve(cmd_rx);
 
         let server_state = Arc::new(RwLock::new(ServerState {
             peek_results: HashMap::new(),
+        }));
+
+        let dataflow_watcher = meta_store.register_dataflow_watch();
+        std::thread::spawn(closure!([clone cmd_tx] || {
+            while let Ok(dataflow) = dataflow_watcher.recv() {
+                cmd_tx.send(Command::CreateDataflow(dataflow)).unwrap()
+            }
         }));
 
         let server = listener

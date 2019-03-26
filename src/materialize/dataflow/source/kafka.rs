@@ -4,20 +4,15 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use differential_dataflow::Data;
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::Capability;
-use timely::dataflow::{Scope, Stream};
 use rdkafka::consumer::{BaseConsumer, ConsumerContext};
 use rdkafka::Message;
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::generic::source;
+use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, Stream};
 
-pub fn kafka<C, G, D, L>(
-    scope: &G,
-    name: &str,
-    consumer: BaseConsumer<C>,
-    logic: L,
-) -> Stream<G, D>
+pub fn kafka<C, G, D, L>(scope: &G, name: &str, consumer: BaseConsumer<C>, logic: L) -> Stream<G, D>
 where
     C: ConsumerContext + 'static,
     G: Scope<Timestamp = std::time::Duration>,

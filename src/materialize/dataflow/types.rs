@@ -5,7 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::repr::{Datum, Schema, Type};
+use crate::repr::{Datum, Schema};
+
+/// System-wide notion of time.
+pub type Time = std::time::Duration;
+
+/// System-wide update type.
+pub type Diff = isize;
 
 /// A named stream of data.
 #[serde(rename_all = "snake_case")]

@@ -17,7 +17,8 @@ use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use crate::dataflow::{Command, CommandSender, Connector, Dataflow, Expr, Plan, Source, View};
+use crate::dataflow::{Connector, Dataflow, Expr, Plan, Source, View};
+use crate::dataflow::server::{Command, CommandSender};
 use crate::repr::{Datum, Schema, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
