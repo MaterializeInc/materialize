@@ -306,7 +306,7 @@ fn build_plan<S: Scope<Timestamp = Time>>(
         Plan::Source(name) => manager
             .traces
             .get_unkeyed(name.to_owned())
-            .unwrap()
+            .expect("unable to find dataflow")
             .import(scope)
             .as_collection(|k, ()| k.to_owned()),
         Plan::Project { outputs, input } => {
