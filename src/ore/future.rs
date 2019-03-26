@@ -3,16 +3,16 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! Extra helpers for futures and streams.
+//! Future and stream utilities.
 //!
-//! This module provides future and stream combinators that are not present in
+//! This module provides future and stream combinators that are missing from
 //! the [`futures`](futures) crate.
 
 use futures::future::{Either, Map};
 use futures::{Async, Future, Poll, Stream};
 use std::io;
 
-/// Various extension methods for futures.
+/// Extension methods for futures.
 pub trait FutureExt {
     /// Wraps this future an [`Either`] future, with this future becoming the
     /// left variant.
@@ -187,7 +187,7 @@ where
     }
 }
 
-/// Various extension methods for streams.
+/// Extension methods for streams.
 pub trait StreamExt: Stream {
     /// Consumes this stream, returning an future that resolves with the pair
     /// of the next element of the stream and the remaining stream.
@@ -242,19 +242,3 @@ impl<S: Stream<Error = io::Error>> Future for Recv<S> {
         item.map(|v| Async::Ready((v, stream)))
     }
 }
-
-// Drive an asynchronous computation to completion and return its result.
-// pub fn async_block<F, R>(f: F) -> Result<R::Item, R::Error>
-// where
-//     F: FnOnce() -> R,
-//     R: IntoFuture,
-// {
-//     tokio::runtime::current_thread::block_on_all(future::lazy(f))
-// }
-
-// pub fn run<F>(f: F) -> Result<F::Item, F::Error>
-// where
-//     F: Future,
-// {
-//     tokio::runtime::current_thread::block_on_all(f)
-// }

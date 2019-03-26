@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! The implementation of the materialized server.
+//! Main materialized server.
 
 use futures::sync::mpsc::UnboundedSender;
 use futures::{future, Future};

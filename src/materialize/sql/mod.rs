@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
+//! SQL–dataflow translation.
+
 use failure::{bail, format_err};
 use futures::{future, Future, Stream};
 use lazy_static::lazy_static;

@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
+//! Threading and synchronization utilities.
+
 use std::sync::Mutex;
 
 /// A synchronized resource lottery.

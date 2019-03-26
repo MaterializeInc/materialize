@@ -5,7 +5,7 @@
 
 //! Internal utility libraries for Materialize.
 //!
-//! Ore: the raw material from which more valuable materials are extracted.
+//! **ore** (_n_): the raw material from which more valuable materials are extracted.
 //! Modules are included in this crate when they are broadly useful but too
 //! small to warrant their own crate.
 

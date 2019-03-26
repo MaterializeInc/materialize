@@ -12,6 +12,8 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
+//! Logging utilities.
+
 use slog::o;
 use slog::{Drain, Serializer, KV};
 use std::fmt;

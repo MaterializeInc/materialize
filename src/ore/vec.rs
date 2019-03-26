@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! Vector extensions.
+//! Vector utilities.
 
 /// Extension methods for [`std::vec::Vec`].
 pub trait VecExt<T> {

@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! The differential dataflow driver.
+//! Driver for timely/differential dataflow.
 //!
 //! This module is very much a work in progress. Don't look too closely yet.
 

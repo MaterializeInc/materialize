@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! An implementation of the PostgreSQL network ("wire") protocol.
+//! PostgreSQL network ("wire") protocol.
 //!
 //! For brevity, we often refer to the protocol as "pgwire," hence the name of
 //! this module. Beware that this name is only commonly used in the CockroachDB

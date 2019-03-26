@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! The fundamental representation of data in Materialize.
+//! Fundamental data representation.
 //!
 //! This module contains the types for representing data in Materialize that all
 //! layers of the stack can understand. Think of it as the _lingua franca_:

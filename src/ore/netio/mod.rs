@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! Utilities for network I/O.
+//! Network I/O utilities.
 
 mod framed;
 mod read_exact;

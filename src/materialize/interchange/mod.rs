@@ -3,6 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Timely Data, Inc.
 
-//! Interchange of different data formats.
+//! Translations for various data serialization formats.
 
 pub mod avro;
