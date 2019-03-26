@@ -38,7 +38,7 @@ const VERSION_3: u32 = 0x30000;
 const VERSION_SSL: u32 = (1234 << 16) + 5678;
 const VERSION_CANCEL: u32 = (1234 << 16) + 5679;
 
-const VERSIONS: &'static [u32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_SSL, VERSION_CANCEL];
+const VERSIONS: &[u32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_SSL, VERSION_CANCEL];
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -235,7 +235,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, ConnState>,
     ) -> Poll<AfterHandleQuery<A>, failure::Error> {
         match state.handle.poll() {
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(response)) => {
                 let state = state.take();
                 match response {
@@ -282,7 +282,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let state = state.take();
         let stream: MessageStream = Box::new(state.rows.map(|row| {
             BackendMessage::DataRow(match row {
-                Datum::Tuple(t) => t.into_iter().map(|d| FieldValue::Datum(d)).collect(),
+                Datum::Tuple(t) => t.into_iter().map(FieldValue::Datum).collect(),
                 _ => unimplemented!(),
             })
         }));

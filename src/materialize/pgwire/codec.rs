@@ -41,6 +41,12 @@ impl Codec {
     }
 }
 
+impl Default for Codec {
+    fn default() -> Codec {
+        Codec::new()
+    }
+}
+
 impl Encoder for Codec {
     type Item = BackendMessage;
     type Error = io::Error;
@@ -194,7 +200,7 @@ impl Decoder for Codec {
                     let msg = match msg_type {
                         b's' => {
                             let version = NetworkEndian::read_u32(&buf[..4]);
-                            FrontendMessage::Startup { version: version }
+                            FrontendMessage::Startup { version }
                         }
                         b'Q' => FrontendMessage::Query {
                             query: buf.slice_to(frame_len - 1),

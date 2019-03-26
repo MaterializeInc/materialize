@@ -4,11 +4,10 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use failure::{bail, format_err};
-use futures::{future, Future, IntoFuture, Poll};
+use futures::{future, Future, Poll};
 use hyper::service;
 use hyper::{Body, Method, Request, Response};
 use std::collections::hash_map::Entry;
-use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use ore::future::FutureExt;
@@ -88,7 +87,7 @@ fn handle_peek_result(
             let uuid = req
                 .headers()
                 .get("X-Materialize-Query-UUID")
-                .ok_or(format_err!("missing uuid header"))?;
+                .ok_or_else(|| format_err!("missing uuid header"))?;
             let uuid = uuid::Uuid::parse_str(uuid.to_str()?)?;
             let tx = {
                 let mut server_state = server_state.write().unwrap();

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# Copyright 2019 Timely Data, Inc.
+# Copyright 2019 Timely Data, Inc. All rights reserved.
+#
+# lint — complains about misformatted files.
 
 set -euo pipefail
 
@@ -9,7 +11,7 @@ cd "$(dirname "$0")/.."
 files=$(
     find . '(' -path './target' -o -path './.git' ')' -prune -o -type f \
         | sed 's,^.\/,,' \
-        | grep -vE '^\.git$|^\.gitignore$|^Cargo\.lock$|(^|/)Cargo\.toml$|^README.md$|^LICENSE$'
+        | grep -vE '^\.git$|^\.gitignore$|^Cargo\.lock$|(^|/)Cargo\.toml$|^README.md$|^LICENSE$|\.json$'
 )
 
 run() {

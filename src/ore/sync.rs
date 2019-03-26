@@ -1,3 +1,8 @@
+// Copyright 2019 Timely Data, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Timely Data, Inc.
+
 use std::sync::Mutex;
 
 /// A synchronized resource lottery.
@@ -46,7 +51,7 @@ where
     pub fn new(winner: T, losers: F) -> Lottery<T, F> {
         Lottery {
             winner: Mutex::new(Some(winner)),
-            losers: losers,
+            losers,
         }
     }
 

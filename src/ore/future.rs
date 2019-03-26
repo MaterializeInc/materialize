@@ -107,7 +107,7 @@ where
     fn watch_for_cancel<S>(self, signal: S) -> Cancelable<Self, S> {
         Cancelable {
             future: self,
-            signal: signal,
+            signal,
         }
     }
 }

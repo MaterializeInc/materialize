@@ -18,7 +18,7 @@ use super::types::Dataflow;
 use ore::sync::Lottery;
 
 pub fn serve(cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, String> {
-    let lottery = Lottery::new(cmd_rx, || dummy_command_receiver());
+    let lottery = Lottery::new(cmd_rx, dummy_command_receiver);
     timely::execute(timely::Configuration::Process(4), move |worker| {
         let cmd_rx = lottery.draw();
         Worker::new(worker, cmd_rx).run()

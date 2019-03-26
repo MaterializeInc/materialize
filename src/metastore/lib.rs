@@ -56,9 +56,9 @@ where
     where
         P: Into<Cow<'static, str>>,
     {
-        let addr = addr.clone();
+        let addr = *addr;
         let mut prefix = prefix.into();
-        if prefix.ends_with("/") {
+        if prefix.ends_with('/') {
             let _ = prefix.to_mut().pop();
         }
 
@@ -72,17 +72,16 @@ where
         tokio::spawn(setup.clone().then(|r| {
             match r {
                 Err(e) => fatal!("MetaStore setup failed: {}", e),
-                _ => (),
-            };
-            Ok(())
+                _ => Ok(()),
+            }
         }));
 
         let (cancel_tx, cancel_rx) = futures::sync::mpsc::channel(0);
 
         let ms = MetaStore {
-            prefix: prefix,
-            addr: addr,
-            setup: setup,
+            prefix,
+            addr,
+            setup,
             inner: inner.clone(),
             _cancel_tx: cancel_tx,
         };
@@ -94,7 +93,7 @@ where
         &self,
         dataflows: Vec<String>,
     ) -> impl Future<Item = HashMap<String, D>, Error = failure::Error> {
-        let addr = self.addr.clone();
+        let addr = self.addr;
         let prefix = self.prefix.clone();
         self.wait_for_setup()
             .and_then(move |_| connect(&addr))
@@ -145,7 +144,7 @@ where
             Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
         };
         let path = format!("/{}/dataflows/{}", self.prefix, name);
-        let addr = self.addr.clone();
+        let addr = self.addr;
         self.wait_for_setup()
             .and_then(move |_| connect(&addr))
             .and_then(move |(zk, _)| {
@@ -206,7 +205,7 @@ where
         self.setup
             .clone()
             .map(|_: future::SharedItem<()>| ())
-            .map_err(|e| failure::err_msg(e))
+            .map_err(failure::err_msg)
     }
 }
 

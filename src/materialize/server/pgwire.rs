@@ -5,10 +5,8 @@
 
 use futures::Future;
 use tokio::codec::Framed;
-use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::dataflow;
 use crate::pgwire;
 
 pub use pgwire::match_handshake;

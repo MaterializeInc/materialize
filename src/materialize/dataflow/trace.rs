@@ -27,7 +27,7 @@ impl TraceManager {
     }
 
     pub fn get_trace(&self, name: String) -> Option<KeysOnlyHandle> {
-        self.traces.get(&name).map(|handle| handle.clone())
+        self.traces.get(&name).cloned()
     }
 
     pub fn set_trace(&mut self, name: String, handle: &KeysOnlyHandle) {

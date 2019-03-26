@@ -64,7 +64,7 @@ pub fn handle_query(
             let name = std::mem::replace(&mut name, SQLObjectName(Vec::new()));
             handle_peek(name, cmd_tx, server_state, meta_store).left()
         }
-        SQLStatement::SQLTail { name } => unimplemented!(),
+        SQLStatement::SQLTail { .. } => unimplemented!(),
         SQLStatement::SQLCreateDataSource { .. } | SQLStatement::SQLCreateView { .. } => {
             handle_create_dataflow(stmt, meta_store).right()
         }
@@ -209,8 +209,8 @@ impl Parser {
                 let (plan, schema) = self.parse_view_query(query)?;
                 Ok(Dataflow::View(View {
                     name: self.parse_sql_object_name(name)?,
-                    plan: plan,
-                    schema: schema,
+                    plan,
+                    schema,
                 }))
             }
             SQLStatement::SQLCreateDataSource { name, url, schema } => {
@@ -252,7 +252,7 @@ impl Parser {
     }
 
     fn parse_view_query(&self, q: &SQLQuery) -> Result<(Plan, Schema), failure::Error> {
-        if q.ctes.len() != 0 {
+        if q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
         if q.limit.is_some() {
@@ -272,7 +272,7 @@ impl Parser {
             bail!("HAVING is not yet supported");
         } else if s.group_by.is_some() {
             bail!("GROUP BY is not yet supported");
-        } else if s.joins.len() != 0 {
+        } else if s.joins.is_empty() {
             bail!("JOIN is not yet supported");
         }
 
@@ -302,12 +302,12 @@ impl Parser {
             pschema.push(Schema {
                 name: name.map(|s| s.to_owned()),
                 nullable: false,
-                typ: typ,
+                typ,
             });
         }
 
         let plan = Plan::Project {
-            outputs: outputs,
+            outputs,
             input: Box::new(plan),
         };
 

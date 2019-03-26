@@ -46,7 +46,6 @@ pub fn build_dataflow<A: Allocate>(
                     consumer_config.create().unwrap();
                 consumer.subscribe(&[&topic]).unwrap();
 
-                let then = std::time::Instant::now();
                 let schema = AvroSchema::parse_str(&src.raw_schema).unwrap();
 
                 let arrangement =
@@ -75,7 +74,7 @@ pub fn build_dataflow<A: Allocate>(
                             }
                             _ => panic!("avro deserialization went wrong"),
                         }
-                        let time = cap.time().clone();
+                        let time = *cap.time();
                         output.session(cap).give((Datum::Tuple(row), time, 1));
 
                         // Indicate that we are not yet done.

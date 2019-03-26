@@ -28,8 +28,8 @@ struct LazyLogString<'a> {
 impl<'a> LazyLogString<'a> {
     fn new(info: &'a slog::Record, logger_values: &'a slog::OwnedKVList) -> Self {
         LazyLogString {
-            info: info,
-            logger_values: logger_values,
+            info,
+            logger_values,
         }
     }
 }
@@ -65,7 +65,7 @@ struct Ksv<W: io::Write> {
 
 impl<W: io::Write> Ksv<W> {
     fn new(io: W) -> Self {
-        Ksv { io: io }
+        Ksv { io }
     }
 
     fn into_inner(self) -> W {

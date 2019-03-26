@@ -51,8 +51,8 @@ where
 {
     ReadExactOrEof {
         state: State::Reading {
-            a: a,
-            buf: buf,
+            a,
+            buf,
             pos: 0,
         },
     }
