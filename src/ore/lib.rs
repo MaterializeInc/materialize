@@ -12,6 +12,7 @@
 pub mod future;
 pub mod log;
 pub mod netio;
+pub mod sync;
 pub mod vec;
 
 #[macro_export]

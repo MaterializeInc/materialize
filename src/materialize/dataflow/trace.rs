@@ -8,8 +8,8 @@ use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 use differential_dataflow::trace::TraceReader;
 use std::collections::HashMap;
 
-use crate::repr::Datum;
 use super::types::{Diff, Time};
+use crate::repr::Datum;
 
 pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
 
@@ -21,7 +21,9 @@ pub struct TraceManager {
 
 impl TraceManager {
     pub fn new() -> Self {
-        TraceManager { traces: HashMap::new(), }
+        TraceManager {
+            traces: HashMap::new(),
+        }
     }
 
     pub fn get_trace(&self, name: String) -> Option<KeysOnlyHandle> {

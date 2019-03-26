@@ -18,8 +18,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
 use crate::dataflow;
-use crate::dataflow::Dataflow;
 use crate::dataflow::server::Command;
+use crate::dataflow::Dataflow;
 use crate::repr::Datum;
 use metastore::MetaStore;
 use ore::closure;

@@ -15,3 +15,6 @@ log = "0.4"
 slog = { version = "2.4.1", features = ["max_level_trace"] }
 tokio = "0.1"
 smallvec = "0.6"
+
+[dev-dependencies]
+crossbeam = "0.7.1"

@@ -13,17 +13,14 @@ use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
 use super::render;
-use super::types::Dataflow;
 use super::trace::TraceManager;
+use super::types::Dataflow;
+use ore::sync::Lottery;
 
 pub fn serve(cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, String> {
-    let cmd_rx = std::sync::Mutex::new(Some(cmd_rx));
-
+    let lottery = Lottery::new(cmd_rx, || dummy_command_receiver());
     timely::execute(timely::Configuration::Process(4), move |worker| {
-        let cmd_rx = match cmd_rx.try_lock().ok() {
-            Some(mut guard) => guard.take().unwrap_or_else(|| dummy_command_receiver()),
-            None => dummy_command_receiver(),
-        };
+        let cmd_rx = lottery.draw();
         Worker::new(worker, cmd_rx).run()
     })
 }
@@ -93,8 +90,8 @@ where
             }
             Command::DropDataflow(_) => unimplemented!(),
             Command::Peek(name, uuid) => {
-                use differential_dataflow::trace::TraceReader;
                 use differential_dataflow::trace::cursor::Cursor;
+                use differential_dataflow::trace::TraceReader;
                 if let Some(mut trace) = self.traces.get_trace(name.clone()) {
                     let (mut cur, storage) = trace.cursor();
                     let mut out = Vec::new();

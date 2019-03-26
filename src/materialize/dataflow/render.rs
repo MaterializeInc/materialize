@@ -4,16 +4,16 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use avro_rs::Schema as AvroSchema;
-use differential_dataflow::{AsCollection, Collection};
 use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::repr::Datum;
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
+use crate::repr::Datum;
 
 pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
@@ -126,4 +126,3 @@ fn build_plan<S: Scope<Timestamp = Time>>(
         Plan::Join { .. } => unimplemented!(),
     }
 }
-

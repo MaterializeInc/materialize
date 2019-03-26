@@ -7,8 +7,8 @@
 //!
 //! This module is very much a work in progress. Don't look too closely yet.
 
-pub mod server;
 mod render;
+pub mod server;
 mod source;
 mod trace;
 mod types;
