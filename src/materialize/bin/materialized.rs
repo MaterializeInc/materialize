@@ -13,10 +13,51 @@
 //!
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
+use backtrace::Backtrace;
+use lazy_static::lazy_static;
+use std::panic;
+use std::panic::PanicInfo;
+use std::process;
+use std::sync::Mutex;
+use std::thread;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    panic::set_hook(Box::new(handle_panic));
     ore::log::init();
-
     materialize::server::serve()
+}
+
+lazy_static! {
+    static ref PANIC_MUTEX: Mutex<()> = Mutex::new(());
+}
+
+fn handle_panic(panic_info: &PanicInfo) {
+    let _guard = PANIC_MUTEX.lock();
+
+    let thr = thread::current();
+    let thr_name = thr.name().unwrap_or("<unnamed>");
+
+    let msg = match panic_info.payload().downcast_ref::<&'static str>() {
+        Some(s) => *s,
+        None => match panic_info.payload().downcast_ref::<String>() {
+            Some(s) => &s[..],
+            None => "Box<Any>",
+        }
+    };
+
+    let backtrace = Backtrace::new();
+
+    eprintln!(r#"materialized encountered an internal error and crashed.
+
+We rely on bug reports to diagnose and fix these errors. Please
+copy and paste the following details and mail them to bugs@materialize.io.
+To protect your privacy, we do not collect crash reports automatically.
+
+ thread: {}
+message: {}
+{:?}
+"#, thr_name, msg, backtrace);
+
+    process::exit(1);
 }
