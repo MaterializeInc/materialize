@@ -9,12 +9,17 @@
 //! Modules are included in this crate when they are broadly useful but too
 //! small to warrant their own crate.
 
+#![forbid(missing_docs)]
+
 pub mod future;
 pub mod log;
 pub mod netio;
 pub mod sync;
 pub mod vec;
 
+/// Logs a message to stderr and crashes the process.
+///
+/// TODO(benesch): examples.
 #[macro_export]
 macro_rules! fatal {
     ($($arg:tt)*) => {{
@@ -28,6 +33,9 @@ macro_rules! fatal {
     }}
 }
 
+/// Defines a closure that can easily clone variables.
+///
+/// TODO(benesch): examples.
 #[macro_export]
 macro_rules! closure {
     ([$($lvar:tt)*] $($closure:tt)*) => (

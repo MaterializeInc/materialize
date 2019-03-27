@@ -20,7 +20,7 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
-pub struct StdLog;
+struct StdLog;
 
 struct LazyLogString<'a> {
     info: &'a slog::Record<'a>,

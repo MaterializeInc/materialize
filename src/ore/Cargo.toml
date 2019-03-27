@@ -1,5 +1,6 @@
 [package]
 name = "ore"
+description = "Internal utility libraries for Materialize"
 version = "0.1.0"
 authors = ["Nikhil Benesch <nikhil.benesch@gmail.com>"]
 edition = "2018"
