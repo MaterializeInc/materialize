@@ -396,9 +396,21 @@ mod tests {
             name: None,
             nullable: false,
             typ: Type::Tuple(vec![
-                Schema { name: None, nullable: false, typ: Type::Int64 },
-                Schema { name: Some("a".into()), nullable: false, typ: Type::String },
-                Schema { name: Some("b".into()), nullable: false, typ: Type::String },
+                Schema {
+                    name: None,
+                    nullable: false,
+                    typ: Type::Int64,
+                },
+                Schema {
+                    name: Some("a".into()),
+                    nullable: false,
+                    typ: Type::String,
+                },
+                Schema {
+                    name: Some("b".into()),
+                    nullable: false,
+                    typ: Type::String,
+                },
             ]),
         };
         let version = 1;
@@ -420,9 +432,11 @@ mod tests {
                 schema: Schema {
                     name: None,
                     nullable: false,
-                    typ: Type::Tuple(vec![
-                        Schema { name: Some("b".into()), nullable: false, typ: Type::String },
-                    ]),
+                    typ: Type::Tuple(vec![Schema {
+                        name: Some("b".into()),
+                        nullable: false,
+                        typ: Type::String
+                    },]),
                 }
             })
         );
@@ -445,7 +459,10 @@ mod tests {
 
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},
-            format!("CREATE DATA SOURCE s FROM 'kafka://localhost/topic' USING SCHEMA '{}'", raw_schema)
+            format!(
+                "CREATE DATA SOURCE s FROM 'kafka://127.0.0.1/topic' USING SCHEMA '{}'",
+                raw_schema
+            ),
         )?;
         let dataflow = parser.parse_statement(&stmts[0])?;
         assert_eq!(
@@ -453,15 +470,23 @@ mod tests {
             Dataflow::Source(Source {
                 name: "s".into(),
                 connector: Connector::Kafka {
-                    addr: "[::1]:9092".parse()?,
+                    addr: "127.0.0.1:9092".parse()?,
                     topic: "topic".into(),
                 },
                 schema: Schema {
                     name: None,
                     nullable: false,
                     typ: Type::Tuple(vec![
-                        Schema { name: Some("a".into()), nullable: false, typ: Type::Int64 },
-                        Schema { name: Some("b".into()), nullable: false, typ: Type::String },
+                        Schema {
+                            name: Some("a".into()),
+                            nullable: false,
+                            typ: Type::Int64
+                        },
+                        Schema {
+                            name: Some("b".into()),
+                            nullable: false,
+                            typ: Type::String
+                        },
                     ]),
                 },
                 raw_schema: raw_schema.to_owned(),

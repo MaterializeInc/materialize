@@ -104,8 +104,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::error::Error;
 
-  use crate::repr::Type;
     use super::*;
+    use crate::repr::Type;
 
     /// Verify that a basic plan serializes and deserializes to JSON sensibly.
     #[test]

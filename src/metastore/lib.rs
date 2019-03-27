@@ -69,11 +69,9 @@ where
         }));
 
         let setup = setup(&prefix, &addr).shared();
-        tokio::spawn(setup.clone().then(|r| {
-            match r {
-                Err(e) => fatal!("MetaStore setup failed: {}", e),
-                _ => Ok(()),
-            }
+        tokio::spawn(setup.clone().then(|r| match r {
+            Err(e) => fatal!("MetaStore setup failed: {}", e),
+            _ => Ok(()),
         }));
 
         let (cancel_tx, cancel_rx) = futures::sync::mpsc::channel(0);

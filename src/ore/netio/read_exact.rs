@@ -50,11 +50,7 @@ where
     T: AsMut<[u8]>,
 {
     ReadExactOrEof {
-        state: State::Reading {
-            a,
-            buf,
-            pos: 0,
-        },
+        state: State::Reading { a, buf, pos: 0 },
     }
 }
 
