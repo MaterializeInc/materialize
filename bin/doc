@@ -13,7 +13,10 @@ cd "$(dirname "$0")/.."
 
 # Use nightly until stable supports intra-Rustdoc links.
 # https://github.com/rust-lang/rust/issues/43466
-cargo +nightly doc
+#
+# Consider removing `--no-deps` when num-traits no longer causes rustdoc to
+# overflow its stack: https://github.com/rust-lang/rust/issues/59502.
+cargo +nightly doc --no-deps
 
 crates=$(cargo metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")

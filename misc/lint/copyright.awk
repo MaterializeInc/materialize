@@ -14,7 +14,7 @@ function done()
     exit 0
 }
 
-/^#![ \t\n]*\//        { next }
-/^(\/\/|#).*Copyright/ { seen_copyright=1 }
-/^[ \t\n]*$/           { if (seen_nonblank) { done() } else { next } }
-!/^(\/\/|#)/           { done() }
+/^#![ \t\n]*\//         { next }
+/^(\/\/|#)?.*Copyright/ { seen_copyright=1 }
+/^[ \t\n]*$/            { next }
+!/^(<!--|\/\/|#)/       { done() }

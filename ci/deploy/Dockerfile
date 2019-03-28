@@ -1,0 +1,13 @@
+# Copyright 2019 Timely Data, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Timely Data, Inc.
+
+FROM rustlang/rust:nightly
+
+RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.1.0/autouseradd-1.1.0-amd64.tar.gz \
+    | tar xz -C /usr --strip-components 1
+
+RUN apt-get update && apt-get install -y jq rsync
+
+ENTRYPOINT ["autouseradd", "--user", "materialize"]

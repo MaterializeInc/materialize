@@ -22,7 +22,7 @@ try() {
 files=$(
     find . '(' -path './target' -o -path './.git' ')' -prune -o -type f \
         | sed 's,^.\/,,' \
-        | grep -vE '^target$|^\.git$|^\.gitignore$|^Cargo\.lock$|(^|/)Cargo\.toml$|^README.md$|^LICENSE$|\.json$|(^|/)\.DS_Store$'
+        | grep -vE '^target$|^\.git$|^\.gitignore$|^Cargo\.lock$|(^|/)Cargo\.toml$|^LICENSE$|\.json$|(^|/)\.DS_Store$|\.md$'
 )
 
 run() {
