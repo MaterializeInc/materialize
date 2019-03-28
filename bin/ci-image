@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+# Copyright 2019 Timely Data, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Timely Data, Inc.
+#
+# ci-image — builds and releases Docker containers for CI.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if [[ $# -lt 2 ]]
+then
+    echo "usage: $0 <build|push|run> <image> [<args>...]"
+    exit 1
+fi
+
+cmd=$1 && shift
+img=$1 && shift
+full_img=materialize/$img
+
+uid=$(id -u)
+gid=$(id -g)
+[[ "$uid" -lt 500 ]] && uid=501
+[[ "$gid" -lt 500 ]] && gid=$uid
+
+case "$cmd" in
+    build)
+        docker build --tag "$full_img" ci/"$img"
+        ;;
+    push)
+        tag=$(date +%Y%m%d-%H%M%S)
+        docker build --tag "$full_img:$tag" --tag "$full_img" ci/"$img"
+        docker push "$full_img:$tag"
+        ;;
+    run)
+        docker run -itu "$uid:$gid" -v "$(pwd):/workdir" --workdir /workdir --rm "$full_img" "$@"
+        ;;
+    *)
+        printf "unknown command %q" "$cmd"
+        exit 1
+        ;;
+esac

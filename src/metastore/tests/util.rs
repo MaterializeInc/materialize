@@ -6,14 +6,28 @@
 use futures::future;
 use futures::Future;
 use lazy_static::lazy_static;
-use std::net::SocketAddr;
+use std::env;
+use std::io;
+use std::net::{SocketAddr, ToSocketAddrs};
 use tokio_zookeeper::error::Delete;
 use tokio_zookeeper::ZooKeeper;
 
 use ore::closure;
 
 lazy_static! {
-    pub static ref ZOOKEEPER_ADDR: SocketAddr = "127.0.0.1:2181".parse().unwrap();
+    pub static ref ZOOKEEPER_ADDR: SocketAddr = match env::var("ZOOKEEPER_URL") {
+        Ok(addr) => parse_addr(&addr).expect("unable to parse ZOOKEEPER_URL"),
+        _ => "127.0.0.1:2181".parse().unwrap(),
+    };
+}
+
+fn parse_addr(addr: &str) -> io::Result<SocketAddr> {
+    addr.to_socket_addrs()?.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "input did not resolve to any addresses",
+        )
+    })
 }
 
 pub fn zk_delete_all(prefix: &str) -> Result<(), failure::Error> {

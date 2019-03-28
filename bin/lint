@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-#
+
 # Copyright 2019 Timely Data, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Timely Data, Inc.
 #
 # lint — complains about misformatted files.
 
@@ -8,14 +11,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+failed=false
+
+try() {
+    if ! "$@"; then
+        failed=true
+    fi
+}
+
 files=$(
     find . '(' -path './target' -o -path './.git' ')' -prune -o -type f \
         | sed 's,^.\/,,' \
-        | grep -vE '^\.git$|^\.gitignore$|^Cargo\.lock$|(^|/)Cargo\.toml$|^README.md$|^LICENSE$|\.json$'
+        | grep -vE '^target$|^\.git$|^\.gitignore$|^Cargo\.lock$|(^|/)Cargo\.toml$|^README.md$|^LICENSE$|\.json$|(^|/)\.DS_Store$'
 )
 
 run() {
     xargs "$@" <<< "$files"
 }
 
-run -n1 awk -f misc/lint/copyright.awk
+try run -n1 awk -f misc/lint/copyright.awk
+try run -n1 misc/lint/trailing-newline.sh
+
+if $failed; then
+    exit 1
+fi
