@@ -4,8 +4,7 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use failure::format_err;
-use futures::future;
-use futures::Future;
+use futures::{future, Future, Stream};
 use serde::{Deserialize, Serialize};
 
 use metastore::MetaStore;
@@ -52,6 +51,10 @@ fn test_basic() -> Result<(), failure::Error> {
     // Test creating a watch after dataflows are created.
     let watch1b = ms1.register_dataflow_watch();
 
+    let mut iter1a = watch1a.wait().map(|r| r.unwrap());
+    let mut iter1b = watch1b.wait().map(|r| r.unwrap());
+    let mut iter2 = watch2.wait().map(|r| r.unwrap());
+
     // Verify that all watchers saw all the expected events. Note that we don't
     // care about ordering.
     let expected_events = &[
@@ -63,9 +66,9 @@ fn test_basic() -> Result<(), failure::Error> {
         DummyDataflow("concurrent3".into()),
         DummyDataflow("concurrent4".into()),
     ];
-    let mut events1a: Vec<_> = watch1a.iter().take(7).collect();
-    let mut events1b: Vec<_> = watch1b.iter().take(7).collect();
-    let mut events2: Vec<_> = watch2.iter().take(7).collect();
+    let mut events1a: Vec<_> = (&mut iter1a).take(7).collect();
+    let mut events1b: Vec<_> = (&mut iter1b).take(7).collect();
+    let mut events2: Vec<_> = (&mut iter2).take(7).collect();
     events1a.sort();
     events1b.sort();
     events2.sort();
@@ -87,8 +90,8 @@ fn test_basic() -> Result<(), failure::Error> {
         .map_err(|()| format_err!("unreachable!"))?;
 
     // Verify that the watchers didn't produce any stray events.
-    assert_eq!(watch1a.iter().count(), 0);
-    assert_eq!(watch1b.iter().count(), 0);
-    assert_eq!(watch2.iter().count(), 0);
+    assert_eq!(iter1a.count(), 0);
+    assert_eq!(iter1b.count(), 0);
+    assert_eq!(iter2.count(), 0);
     Ok(())
 }

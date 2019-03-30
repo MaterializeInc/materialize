@@ -9,6 +9,7 @@
 //! the [`futures`](futures) crate.
 
 use futures::future::{Either, Map};
+use futures::try_ready;
 use futures::{Async, Future, Poll, Stream};
 use std::io;
 
@@ -153,6 +154,38 @@ where
 
 /// Extension methods for streams.
 pub trait StreamExt: Stream {
+    /// Discards all items produced by the stream.
+    ///
+    /// The returned future will resolve successfully when the entire stream is
+    /// exhausted, or resolve with an error, if the stream returns an error.
+    fn drain(self) -> Drain<Self>
+    where
+        Self: Sized,
+    {
+        Drain(self)
+    }
+}
+
+/// The stream returned by [`StreamExt::Stream`].
+pub struct Drain<S>(S);
+
+impl<S> Future for Drain<S>
+where
+    S: Stream,
+{
+    type Item = ();
+    type Error = S::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        while let Some(_) = try_ready!(self.0.poll()) {}
+        Ok(Async::Ready(()))
+    }
+}
+
+impl<S: Stream> StreamExt for S {}
+
+/// Extension methods for I/O streams.
+pub trait IOStreamExt: Stream {
     /// Consumes this stream, returning an future that resolves with the pair
     /// of the next element of the stream and the remaining stream.
     ///
@@ -160,7 +193,7 @@ pub trait StreamExt: Stream {
     /// this method:
     ///
     ///   1. `into_future` is a terrible name. `recv` is far more descriptive
-    ///      and discoverabl, and is symmetric with
+    ///      and discoverable, and is symmetric with
     ///      [`Sink::send`](futures::sink::Sink::send).
     ///
     ///   2. `recv` treats EOF as an error, and so does not need to wrap the
@@ -174,13 +207,13 @@ pub trait StreamExt: Stream {
         Self: Sized;
 }
 
-impl<S: Stream<Error = io::Error>> StreamExt for S {
+impl<S: Stream<Error = io::Error>> IOStreamExt for S {
     fn recv(self) -> Recv<Self> {
         Recv { inner: Some(self) }
     }
 }
 
-/// The future returned by [`StreamExt::recv`].
+/// The future returned by [`IOStreamExt::recv`].
 pub struct Recv<S> {
     inner: Option<S>,
 }

@@ -4,7 +4,10 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use failure::{bail, format_err};
-use futures::{future, stream, Future, Stream};
+use futures::stream::futures_unordered::FuturesUnordered;
+use futures::sync::mpsc;
+use futures::sync::mpsc::Sender;
+use futures::{future, stream, Future, Sink, Stream};
 use lazy_static::lazy_static;
 use log::error;
 use serde::de::DeserializeOwned;
@@ -13,8 +16,6 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::net::SocketAddr;
-use std::sync::mpsc;
-use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tokio_zookeeper::error::Create;
 use tokio_zookeeper::{
@@ -24,6 +25,7 @@ use tokio_zookeeper::{
 use ore::closure;
 use ore::fatal;
 use ore::future::FutureExt;
+use ore::future::StreamExt;
 
 /// MetaStore manages storage of persistent, distributed metadata.
 ///
@@ -39,7 +41,7 @@ pub struct MetaStore<D> {
     // This field ties the lifetime of this channel to the lifetime of this
     // struct, which makes for a convenient cancel signal when the struct is
     // dropped.
-    _cancel_tx: futures::sync::mpsc::Sender<()>,
+    _cancel_tx: Sender<()>,
 }
 
 struct Inner<D> {
@@ -120,14 +122,14 @@ where
             })
     }
 
-    pub fn register_dataflow_watch(&self) -> Receiver<D> {
-        let (tx, rx) = mpsc::channel();
-        let mut inner = self.inner.lock().unwrap();
-        for d in &inner.dataflows {
-            tx.send(d.to_owned()).unwrap();
-        }
-        inner.senders.push(tx);
-        rx
+    pub fn register_dataflow_watch(&self) -> impl Stream<Item = D, Error = ()> {
+        let (tx, rx) = mpsc::channel(0);
+        let dataflows = {
+            let mut inner = self.inner.lock().unwrap();
+            inner.senders.push(tx);
+            inner.dataflows.clone()
+        };
+        stream::iter_ok(dataflows).chain(rx)
     }
 
     // TODO: this needs to maintain consistency by running a transaction that
@@ -273,22 +275,33 @@ where
             .filter_map(|(_zk, name, data)| data.map(|(bytes, _stat)| (name, bytes)))
             .collect();
 
+        let mut send_futs = FuturesUnordered::new();
         {
             let mut inner = inner.lock().unwrap();
             for (name, bytes) in results {
                 let dataflow: D = match BINCODER.deserialize(&bytes) {
                     Ok(d) => d,
-                    Err(err) => return Err(failure::Error::from_boxed_compat(err)),
+                    Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
                 };
                 for tx in &inner.senders {
-                    let _ignore = tx.send(dataflow.clone());
+                    // TODO(benesch): we're ignoring send errors. That's not
+                    // wrong, because a send can only fail if the receiving end
+                    // hangs up. Ideally we'd remove the broken tx from
+                    // inner.senders, but the synchronization is rather tricky
+                    // to get right, and the only downside to ignoring the error
+                    // is that we do a bit of extra work on every event.
+                    let send_fut = tx
+                        .clone()
+                        .send(dataflow.clone())
+                        .discard()
+                        .or_else(|_| Ok(()));
+                    send_futs.push(send_fut);
                 }
                 inner.names.insert(name);
                 inner.dataflows.push(dataflow);
             }
         }
-
-        Ok((zk, inner, prefix))
+        send_futs.drain().map(|_| (zk, inner, prefix)).right()
     })
 }
 

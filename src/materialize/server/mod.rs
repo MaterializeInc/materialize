@@ -87,12 +87,14 @@ pub fn serve() -> Result<(), Box<dyn StdError>> {
             peek_results: HashMap::new(),
         }));
 
-        let dataflow_watcher = meta_store.register_dataflow_watch();
-        std::thread::spawn(closure!([clone cmd_tx] || {
-            while let Ok(dataflow) = dataflow_watcher.recv() {
-                cmd_tx.send(Command::CreateDataflow(dataflow)).unwrap()
-            }
-        }));
+        // TODO(benesch): only pipe the metastore watch to the dataflow
+        // on one machine, to avoid duplicating dataflows.
+        tokio::spawn(meta_store.register_dataflow_watch().for_each(
+            closure!([clone cmd_tx] |dataflow| {
+                cmd_tx.send(Command::CreateDataflow(dataflow)).unwrap();
+                Ok(())
+            }),
+        ));
 
         let server = listener
             .incoming()

@@ -26,7 +26,7 @@ $ kafka-avro-console-producer --topic quotes --broker-list localhost:9092 --prop
 Then, in another shell:
 
 ```bash
-$ psql -h localhost -p 6875
+$ psql -h localhost -p 6875 sslmode=disable
 > CREATE DATA SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "quote", "type": "string"}]}';
 > PEEK quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
