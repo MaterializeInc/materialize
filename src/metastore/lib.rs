@@ -35,7 +35,7 @@ use ore::future::StreamExt;
 pub struct MetaStore<D> {
     prefix: Cow<'static, str>,
     addr: SocketAddr,
-    setup: future::Shared<Box<dyn Future<Item = (), Error = failure::Error> + Send>>,
+    setup: future::Shared<Box<dyn Future<Item = ZooKeeper, Error = failure::Error> + Send>>,
     inner: Arc<Mutex<Inner<D>>>,
 
     // This field ties the lifetime of this channel to the lifetime of this
@@ -93,33 +93,30 @@ where
         &self,
         dataflows: Vec<String>,
     ) -> impl Future<Item = HashMap<String, D>, Error = failure::Error> {
-        let addr = self.addr;
         let prefix = self.prefix.clone();
-        self.wait_for_setup()
-            .and_then(move |_| connect(&addr))
-            .and_then(move |(zk, _)| {
-                let mut futures = Vec::new();
-                for name in dataflows {
-                    futures.push(
-                        zk.clone()
-                            .get_data(&format!("/{}/dataflows/{}", prefix, name))
-                            .map(|(zk, data)| (zk, name, data)),
-                    )
-                }
-                stream::futures_unordered(futures)
-                    .and_then(|(_zk, name, data)| match data {
-                        Some((bytes, _stat)) => Ok((name, bytes)),
-                        None => bail!("dataflow {} does not exist", name),
-                    })
-                    .fold(HashMap::new(), move |mut out, (name, bytes)| {
-                        let dataflow: D = match BINCODER.deserialize(&bytes) {
-                            Ok(d) => d,
-                            Err(err) => return Err(failure::Error::from_boxed_compat(err)),
-                        };
-                        out.insert(name.to_owned(), dataflow);
-                        Ok(out)
-                    })
-            })
+        self.wait_for_setup().and_then(move |zk| {
+            let mut futures = Vec::new();
+            for name in dataflows {
+                futures.push(
+                    zk.clone()
+                        .get_data(&format!("/{}/dataflows/{}", prefix, name))
+                        .map(|(zk, data)| (zk, name, data)),
+                )
+            }
+            stream::futures_unordered(futures)
+                .and_then(|(_zk, name, data)| match data {
+                    Some((bytes, _stat)) => Ok((name, bytes)),
+                    None => bail!("dataflow {} does not exist", name),
+                })
+                .fold(HashMap::new(), move |mut out, (name, bytes)| {
+                    let dataflow: D = match BINCODER.deserialize(&bytes) {
+                        Ok(d) => d,
+                        Err(err) => return Err(failure::Error::from_boxed_compat(err)),
+                    };
+                    out.insert(name.to_owned(), dataflow);
+                    Ok(out)
+                })
+        })
     }
 
     pub fn register_dataflow_watch(&self) -> impl Stream<Item = D, Error = ()> {
@@ -144,10 +141,8 @@ where
             Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
         };
         let path = format!("/{}/dataflows/{}", self.prefix, name);
-        let addr = self.addr;
         self.wait_for_setup()
-            .and_then(move |_| connect(&addr))
-            .and_then(move |(zk, _)| {
+            .and_then(move |zk| {
                 zk.create(&path, encoded, Acl::open_unsafe(), CreateMode::Persistent)
             })
             .and_then(|(_zk, res)| match res {
@@ -170,6 +165,9 @@ where
 
         let fut =
             self.wait_for_setup()
+                // TODO(benesch): it'd be nice to reuse the main connection
+                // here, but this code is much harder to write without a
+                // dedicated watch stream.
                 .and_then(move |_| connect)
                 .and_then(move |(zk, watch)| {
                     events
@@ -196,27 +194,19 @@ where
         tokio::spawn(fut);
     }
 
-    fn wait_for_setup(&self) -> impl Future<Item = (), Error = failure::Error> {
-        // NOTE(benesch): losing the structure of the underlying failure::Error
-        // is unfortunate, but since failure::Error isn't clonable, no better
-        // means presents itself.
-        //
-        // See: https://github.com/rust-lang-nursery/failure/issues/148
-        self.setup
-            .clone()
-            .map(|_: future::SharedItem<()>| ())
-            .map_err(failure::err_msg)
+    fn wait_for_setup(&self) -> impl Future<Item = ZooKeeper, Error = failure::Error> {
+        self.setup.clone().extract_shared()
     }
 }
 
 fn setup(
     prefix: &str,
     addr: &SocketAddr,
-) -> Box<dyn Future<Item = (), Error = failure::Error> + Send> {
+) -> Box<dyn Future<Item = ZooKeeper, Error = failure::Error> + Send> {
     let root1 = format!("/{}", prefix);
     let root2 = format!("/{}/dataflows", prefix);
     Box::new(
-        ZooKeeper::connect(addr)
+        connect(addr)
             .and_then(move |(zk, _watch)| {
                 zk.create(&root1, &b""[..], Acl::open_unsafe(), CreateMode::Persistent)
             })
@@ -227,8 +217,8 @@ fn setup(
             .and_then(move |zk| {
                 zk.create(&root2, &b""[..], Acl::open_unsafe(), CreateMode::Persistent)
             })
-            .and_then(move |(_zk, res)| match res {
-                Ok(_) | Err(Create::NodeExists) => Ok(()),
+            .and_then(move |(zk, res)| match res {
+                Ok(_) | Err(Create::NodeExists) => Ok(zk),
                 Err(err) => Err(err.into()),
             }),
     )
@@ -311,4 +301,55 @@ lazy_static! {
         c.limit(1 << 20);
         c
     };
+}
+
+// TODO(benesch): see if this helper can be moved into ore::future.
+use futures::{Async, Poll};
+use std::fmt;
+
+trait SharedFutureExt<T> {
+    fn extract_shared(self) -> ExtractShared<T>
+    where
+        T: Future;
+}
+
+impl<T, I, E> SharedFutureExt<T> for future::Shared<T>
+where
+    T: Future<Item = I, Error = E>,
+    I: Clone,
+    E: fmt::Debug,
+{
+    fn extract_shared(self) -> ExtractShared<T> {
+        ExtractShared { inner: self }
+    }
+}
+
+struct ExtractShared<T>
+where
+    T: Future,
+{
+    inner: future::Shared<T>,
+}
+
+impl<T, I, E> Future for ExtractShared<T>
+where
+    T: Future<Item = I, Error = E>,
+    I: Clone,
+    E: fmt::Debug,
+{
+    type Item = T::Item;
+    type Error = failure::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.inner.poll() {
+            Ok(Async::Ready(val)) => Ok(Async::Ready((*val).clone())),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            // NOTE(benesch): losing the structure of the underlying
+            // failure::Error is unfortunate, but since failure::Error isn't
+            // clonable, no better means presents itself.
+            //
+            // See: https://github.com/rust-lang-nursery/failure/issues/148
+            Err(err) => Err(failure::err_msg(format!("{:?}", err))),
+        }
+    }
 }
