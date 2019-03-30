@@ -268,16 +268,14 @@ where
         .collect();
 
     future::join_all(data_futs).and_then(move |results| {
-        // Sort by creation zxid to enforce a stable ordering.
-        let mut results: Vec<_> = results
+        let results: Vec<_> = results
             .into_iter()
-            .filter_map(|(_zk, name, data)| data.map(|(bytes, stat)| (stat.czxid, name, bytes)))
+            .filter_map(|(_zk, name, data)| data.map(|(bytes, _stat)| (name, bytes)))
             .collect();
-        results.sort_by_key(|r| r.0);
 
         {
             let mut inner = inner.lock().unwrap();
-            for (_czxid, name, bytes) in results {
+            for (name, bytes) in results {
                 let dataflow: D = match BINCODER.deserialize(&bytes) {
                     Ok(d) => d,
                     Err(err) => return Err(failure::Error::from_boxed_compat(err)),

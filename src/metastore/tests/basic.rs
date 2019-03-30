@@ -12,7 +12,7 @@ use metastore::MetaStore;
 
 mod util;
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 struct DummyDataflow(String);
 
 #[test]
@@ -37,7 +37,7 @@ fn test_basic() -> Result<(), failure::Error> {
                         })
                 })
                 .and_then(|(ms2, watch2)| {
-                    let futs: Vec<_> = (0..10)
+                    let futs: Vec<_> = (0..5)
                         .map(|i| {
                             let name = format!("concurrent{}", i);
                             ms2.new_dataflow(&name, &DummyDataflow(name.clone()))
@@ -52,27 +52,26 @@ fn test_basic() -> Result<(), failure::Error> {
     // Test creating a watch after dataflows are created.
     let watch1b = ms1.register_dataflow_watch();
 
-    // The first two dataflows were created sequentially. Verify that all
-    // watchers saw them in their known order of creation.
+    // Verify that all watchers saw all the expected events. Note that we don't
+    // care about ordering.
     let expected_events = &[
         DummyDataflow("basic".into()),
         DummyDataflow("basic2".into()),
+        DummyDataflow("concurrent0".into()),
+        DummyDataflow("concurrent1".into()),
+        DummyDataflow("concurrent2".into()),
+        DummyDataflow("concurrent3".into()),
+        DummyDataflow("concurrent4".into()),
     ];
-    let events1a: Vec<_> = watch1a.iter().take(2).collect();
-    let events1b: Vec<_> = watch1b.iter().take(2).collect();
-    let events2: Vec<_> = watch2.iter().take(2).collect();
+    let mut events1a: Vec<_> = watch1a.iter().take(7).collect();
+    let mut events1b: Vec<_> = watch1b.iter().take(7).collect();
+    let mut events2: Vec<_> = watch2.iter().take(7).collect();
+    events1a.sort();
+    events1b.sort();
+    events2.sort();
     assert_eq!(events1a, expected_events);
     assert_eq!(events1b, expected_events);
     assert_eq!(events2, expected_events);
-
-    // The remaining ten dataflows were created concurrently, so we don't know
-    // exactly what order they were created in. What we care about is whether
-    // all watchers agree on the order.
-    let events1a: Vec<_> = watch1a.iter().take(10).collect();
-    let events1b: Vec<_> = watch1b.iter().take(10).collect();
-    let events2: Vec<_> = watch2.iter().take(10).collect();
-    assert_eq!(events1a, events1b);
-    assert_eq!(events1a, events2);
 
     // Drop the MetaStores, which will cancel any background futures they've
     // spawned, so that we can cleanly shutdown.
