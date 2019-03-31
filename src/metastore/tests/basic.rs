@@ -6,8 +6,10 @@
 use failure::format_err;
 use futures::{future, Async, Future, Stream};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
-use metastore::MetaStore;
+use metastore::{DataflowEvent, MetaStore};
+use ore::closure;
 
 mod util;
 
@@ -48,30 +50,50 @@ fn test_basic() -> Result<(), failure::Error> {
         }))
         .unwrap();
 
-    // Test creating a watch after dataflows are created.
+    // Create a watch after dataflows are created.
     let mut watch1b = ms1.register_dataflow_watch();
 
-    // Verify that all watchers saw all the expected events. Note that we don't
-    // care about ordering.
-    let expected_events = &[
-        DummyDataflow("basic".into()),
-        DummyDataflow("basic2".into()),
-        DummyDataflow("concurrent0".into()),
-        DummyDataflow("concurrent1".into()),
-        DummyDataflow("concurrent2".into()),
-        DummyDataflow("concurrent3".into()),
-        DummyDataflow("concurrent4".into()),
-    ];
+    // Verify that all watches see the same events.
+    assert_events(
+        vec![&mut watch1a, &mut watch1b, &mut watch2],
+        &[
+            DataflowEvent::Created(DummyDataflow("basic".into())),
+            DataflowEvent::Created(DummyDataflow("basic2".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent0".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent1".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent2".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent3".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent4".into())),
+        ],
+    );
 
-    let results = future::join_all(vec![
-        watch1a.by_ref().take(7).collect(),
-        watch1b.by_ref().take(7).collect(),
-        watch2.by_ref().take(7).collect(),
-    ]).wait().unwrap();
-    for (i, mut res) in results.into_iter().enumerate() {
-        res.sort();
-        assert_eq!(res, expected_events, "{} event mismatch: {:?} vs {:?}", i, res, expected_events)
-    }
+    // Delete a dataflow.
+    runtime
+        .block_on(future::lazy(closure!([clone ms1] || {
+            ms1.delete_dataflow("basic")
+        })))
+        .unwrap();
+
+    // Verify that all watches see the deletion.
+    assert_events(
+        vec![&mut watch1a, &mut watch1b, &mut watch2],
+        &[DataflowEvent::Deleted("basic".into())],
+    );
+
+    // Create a new watch, after the deletion, and verify that it sees a
+    // compacted sequence of events.
+    let mut watch1c = ms1.register_dataflow_watch();
+    assert_events(
+        vec![&mut watch1c],
+        &[
+            DataflowEvent::Created(DummyDataflow("basic2".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent0".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent1".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent2".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent3".into())),
+            DataflowEvent::Created(DummyDataflow("concurrent4".into())),
+        ],
+    );
 
     // Drop the MetaStores, which will cancel any background futures they've
     // spawned, so that we can cleanly shutdown.
@@ -91,4 +113,19 @@ fn test_basic() -> Result<(), failure::Error> {
     assert_eq!(watch1b.poll(), Ok(Async::Ready(None)));
     assert_eq!(watch2.poll(), Ok(Async::Ready(None)));
     Ok(())
+}
+
+fn assert_events<S>(streams: S, events: &[DataflowEvent<DummyDataflow>])
+where
+    S: IntoIterator,
+    S::Item: Stream<Item = DataflowEvent<DummyDataflow>>,
+    <S::Item as Stream>::Error: fmt::Debug,
+{
+    let n = events.len() as u64;
+    let streams = streams.into_iter().map(|s| s.take(n).collect());
+    let results = future::join_all(streams).wait().unwrap();
+    for (i, mut res) in results.into_iter().enumerate() {
+        res.sort();
+        assert_eq!(res, events, "watcher {} event mismatch", i);
+    }
 }

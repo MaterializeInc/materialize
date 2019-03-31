@@ -45,9 +45,8 @@ pub struct MetaStore<D> {
 }
 
 struct Inner<D> {
-    names: HashSet<String>,
-    dataflows: Vec<D>,
-    senders: Vec<Sender<D>>,
+    dataflows: HashMap<String, D>,
+    senders: Vec<Sender<DataflowEvent<D>>>,
 }
 
 impl<D> MetaStore<D>
@@ -65,8 +64,7 @@ where
         }
 
         let inner = Arc::new(Mutex::new(Inner {
-            names: HashSet::new(),
-            dataflows: Vec::new(),
+            dataflows: HashMap::new(),
             senders: Vec::new(),
         }));
 
@@ -119,14 +117,18 @@ where
         })
     }
 
-    pub fn register_dataflow_watch(&self) -> impl Stream<Item = D, Error = ()> {
+    pub fn register_dataflow_watch(&self) -> impl Stream<Item = DataflowEvent<D>, Error = ()> {
         let (tx, rx) = mpsc::channel(0);
-        let dataflows = {
+        let events: Vec<_> = {
             let mut inner = self.inner.lock().unwrap();
             inner.senders.push(tx);
-            inner.dataflows.clone()
+            inner
+                .dataflows
+                .iter()
+                .map(|(_, dataflow)| DataflowEvent::Created(dataflow.clone()))
+                .collect()
         };
-        stream::iter_ok(dataflows).chain(rx)
+        stream::iter_ok(events).chain(rx)
     }
 
     // TODO: this needs to maintain consistency by running a transaction that
@@ -150,6 +152,18 @@ where
                 Err(err) => Err(err.into()),
             })
             .right()
+    }
+
+    // TODO: this needs to maintain consistency by verifying that nothing
+    // depends on this dataflow.
+    pub fn delete_dataflow(&self, name: &str) -> impl Future<Item = (), Error = failure::Error> {
+        let path = format!("/{}/dataflows/{}", self.prefix, name);
+        self.wait_for_setup()
+            .and_then(move |zk| zk.delete(&path, None))
+            .and_then(|(_zk, res)| match res {
+                Ok(()) => Ok(()),
+                Err(err) => Err(err.into()),
+            })
     }
 
     fn start_watching(&self, cancel_signal: futures::sync::mpsc::Receiver<()>) {
@@ -199,6 +213,12 @@ where
     }
 }
 
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum DataflowEvent<D> {
+    Created(D),
+    Deleted(String),
+}
+
 fn setup(
     prefix: &str,
     addr: &SocketAddr,
@@ -243,14 +263,21 @@ where
     D: Serialize + DeserializeOwned + Clone + Send + 'static,
 {
     // Determine which names are new.
-    let new_names = {
+    let (created_names, deleted_names) = {
+        // TODO(benesch): these should be HashSet<&String>s, not
+        // HashSet<String>s, but making that change causes the compiler to
+        // panic. https://github.com/rust-lang/rust/issues/58840
+        let new_names: HashSet<String> = children.into_iter().collect();
         let inner = inner.lock().unwrap();
-        &HashSet::from_iter(children) - &inner.names
+        let current_names = HashSet::from_iter(inner.dataflows.keys().cloned());
+        let created_names = &new_names - &current_names;
+        let deleted_names = &current_names - &new_names;
+        (created_names, deleted_names)
     };
 
     // Construct a vector of futures that will collectively read the contents of
-    // each new name.
-    let data_futs: Vec<_> = new_names
+    // each created name.
+    let data_futs: Vec<_> = created_names
         .into_iter()
         .map(closure!([clone zk, ref prefix] |name| {
             zk.clone()
@@ -265,7 +292,9 @@ where
             .filter_map(|(_zk, name, data)| data.map(|(bytes, _stat)| (name, bytes)))
             .collect();
 
-        let mut send_futs = FuturesUnordered::new();
+        let mut send_futs: FuturesUnordered<
+            Box<dyn Future<Item = (), Error = failure::Error> + Send>,
+        > = FuturesUnordered::new();
         {
             let mut inner = inner.lock().unwrap();
             for (name, bytes) in results {
@@ -282,13 +311,23 @@ where
                     // is that we do a bit of extra work on every event.
                     let send_fut = tx
                         .clone()
-                        .send(dataflow.clone())
+                        .send(DataflowEvent::Created(dataflow.clone()))
                         .discard()
                         .or_else(|_| Ok(()));
-                    send_futs.push(send_fut);
+                    send_futs.push(Box::new(send_fut));
                 }
-                inner.names.insert(name);
-                inner.dataflows.push(dataflow);
+                inner.dataflows.insert(name, dataflow);
+            }
+            for name in deleted_names {
+                for tx in &inner.senders {
+                    let send_fut = tx
+                        .clone()
+                        .send(DataflowEvent::Deleted(name.clone()))
+                        .discard()
+                        .or_else(|_| Ok(()));
+                    send_futs.push(Box::new(send_fut));
+                }
+                inner.dataflows.remove(&name);
             }
         }
         send_futs.drain().map(|_| (zk, inner, prefix)).right()

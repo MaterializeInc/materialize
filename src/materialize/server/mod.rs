@@ -21,7 +21,7 @@ use crate::dataflow;
 use crate::dataflow::server::Command;
 use crate::dataflow::Dataflow;
 use crate::repr::Datum;
-use metastore::MetaStore;
+use metastore::{DataflowEvent, MetaStore};
 use ore::closure;
 use ore::future::FutureExt;
 use ore::netio;
@@ -90,8 +90,11 @@ pub fn serve() -> Result<(), Box<dyn StdError>> {
         // TODO(benesch): only pipe the metastore watch to the dataflow
         // on one machine, to avoid duplicating dataflows.
         tokio::spawn(meta_store.register_dataflow_watch().for_each(
-            closure!([clone cmd_tx] |dataflow| {
-                cmd_tx.send(Command::CreateDataflow(dataflow)).unwrap();
+            closure!([clone cmd_tx] |event| {
+                cmd_tx.send(match event {
+                    DataflowEvent::Created(dataflow) => Command::CreateDataflow(dataflow),
+                    DataflowEvent::Deleted(_) => unimplemented!(),
+                }).unwrap();
                 Ok(())
             }),
         ));
