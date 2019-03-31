@@ -7,6 +7,10 @@ steps:
   - command: ci/deploy/deploy.sh
     plugins:
       - timelydata/docker#master:
-          image: materialize/deploy:20190328-153115
+          image: materialize/deploy:20190331-140439
           propagate-uid-gid: true
           mount-ssh-agent: true
+          volumes:
+            - "$HOME/.cache/sccache:/home/materialize/.cache/sccache"
+          env:
+            - RUSTC_WRAPPER=sccache
