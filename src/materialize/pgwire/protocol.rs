@@ -17,7 +17,7 @@ use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage, Severi
 use crate::repr::Datum;
 use crate::server::ConnState;
 use crate::sql::QueryResponse;
-use ore::future::{IOStreamExt, Recv};
+use ore::future::{StreamExt, Recv};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the

@@ -164,28 +164,7 @@ pub trait StreamExt: Stream {
     {
         Drain(self)
     }
-}
 
-/// The stream returned by [`StreamExt::Stream`].
-pub struct Drain<S>(S);
-
-impl<S> Future for Drain<S>
-where
-    S: Stream,
-{
-    type Item = ();
-    type Error = S::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        while let Some(_) = try_ready!(self.0.poll()) {}
-        Ok(Async::Ready(()))
-    }
-}
-
-impl<S: Stream> StreamExt for S {}
-
-/// Extension methods for I/O streams.
-pub trait IOStreamExt: Stream {
     /// Consumes this stream, returning an future that resolves with the pair
     /// of the next element of the stream and the remaining stream.
     ///
@@ -204,16 +183,32 @@ pub trait IOStreamExt: Stream {
     ///      to write more boilerplate.
     fn recv(self) -> Recv<Self>
     where
-        Self: Sized;
-}
-
-impl<S: Stream<Error = io::Error>> IOStreamExt for S {
-    fn recv(self) -> Recv<Self> {
+        Self: Stream<Error = io::Error>,
+        Self: Sized,
+    {
         Recv { inner: Some(self) }
     }
 }
 
-/// The future returned by [`IOStreamExt::recv`].
+impl<S: Stream> StreamExt for S {}
+
+/// The stream returned by [`StreamExt::drain`].
+pub struct Drain<S>(S);
+
+impl<S> Future for Drain<S>
+where
+    S: Stream,
+{
+    type Item = ();
+    type Error = S::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        while let Some(_) = try_ready!(self.0.poll()) {}
+        Ok(Async::Ready(()))
+    }
+}
+
+/// The future returned by [`StreamExt::recv`].
 pub struct Recv<S> {
     inner: Option<S>,
 }
