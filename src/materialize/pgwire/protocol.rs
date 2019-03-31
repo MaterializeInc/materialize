@@ -69,7 +69,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 /// for [`StateMachine`]. When trait aliases land ([#41517]), this trait can
 /// be replaced with a non-public trait alias.
 ///
-/// [#41587]: https://github.com/rust-lang/rust/issues/41517
+/// [#41517]: https://github.com/rust-lang/rust/issues/41517
 pub trait Conn:
     Stream<Item = FrontendMessage, Error = io::Error>
     + Sink<SinkItem = BackendMessage, SinkError = io::Error>
