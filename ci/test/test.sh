@@ -28,9 +28,11 @@ try() {
 }
 
 try bin/lint
-try bin/check
 try cargo fmt -- --check
 try cargo test
+# Intentionally run check last, since otherwise it won't use the cache.
+# https://github.com/rust-lang/rust-clippy/issues/3840
+try bin/check
 
 echo "$passed/$total commands passed"
 if ((passed != total)); then

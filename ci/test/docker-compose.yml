@@ -6,14 +6,16 @@
 version: '3'
 services:
   app:
-    image: materialize/test:20190328-122115
+    image: materialize/test:20190331-140411
     working_dir: /workdir
     volumes:
     - $SSH_AUTH_SOCK:/tmp/ssh-agent.sock
     - ../../:/workdir
+    - $HOME/.cache/sccache:/home/materialize/.cache/sccache
     environment:
       SSH_AUTH_SOCK: /tmp/ssh-agent.sock
       ZOOKEEPER_URL: zookeeper:2181
+      RUSTC_WRAPPER: sccache
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
     depends_on: [zookeeper]
   zookeeper:

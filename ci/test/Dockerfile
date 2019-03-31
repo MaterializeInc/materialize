@@ -10,4 +10,6 @@ RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.1.0/au
 
 RUN rustup component add clippy rustfmt
 
+COPY --from=materialize/sccache:0.2.8 /usr/local/bin/sccache /usr/local/bin/sccache
+
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
