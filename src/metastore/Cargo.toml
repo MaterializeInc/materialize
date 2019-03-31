@@ -1,6 +1,6 @@
 [package]
 name = "metastore"
-description = "Storage of persistent, distributed metadata"
+description = "Storage of persistent, distributed metadata."
 version = "0.1.0"
 authors = ["Nikhil Benesch <nikhil.benesch@gmail.com>"]
 edition = "2018"
