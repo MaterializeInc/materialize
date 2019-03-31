@@ -27,9 +27,9 @@ fn test_basic() -> Result<(), failure::Error> {
             let ms1 = MetaStore::new(&util::ZOOKEEPER_ADDR, prefix);
             let ms2 = MetaStore::new(&util::ZOOKEEPER_ADDR, prefix);
             let watch1a = ms1.register_dataflow_watch();
-            ms1.new_dataflow("basic", &DummyDataflow("basic".into()))
+            ms1.create_dataflow("basic", &DummyDataflow("basic".into()))
                 .and_then(move |_| {
-                    ms2.new_dataflow("basic2", &DummyDataflow("basic2".into()))
+                    ms2.create_dataflow("basic2", &DummyDataflow("basic2".into()))
                         .map(|_| {
                             let watch2 = ms2.register_dataflow_watch();
                             (ms2, watch2)
@@ -39,7 +39,7 @@ fn test_basic() -> Result<(), failure::Error> {
                     let futs: Vec<_> = (0..5)
                         .map(|i| {
                             let name = format!("concurrent{}", i);
-                            ms2.new_dataflow(&name, &DummyDataflow(name.clone()))
+                            ms2.create_dataflow(&name, &DummyDataflow(name.clone()))
                         })
                         .collect();
                     future::join_all(futs).map(move |_| (ms2, watch2))

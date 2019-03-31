@@ -102,7 +102,7 @@ fn handle_create_dataflow(
             Err(err) => return future::err(err).left(),
         };
         meta_store
-            .new_dataflow(dataflow.name(), &dataflow)
+            .create_dataflow(dataflow.name(), &dataflow)
             .map(|_| stmt)
             .right()
     })

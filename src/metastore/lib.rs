@@ -131,7 +131,7 @@ where
 
     // TODO: this needs to maintain consistency by running a transaction that
     // checks that all dependent dataflows have the correct version.
-    pub fn new_dataflow(
+    pub fn create_dataflow(
         &self,
         name: &str,
         dataflow: &D,
