@@ -4,7 +4,7 @@
 // distributed without the express permission of Timely Data, Inc.
 
 use failure::format_err;
-use futures::{future, Future, Stream};
+use futures::{future, Async, Future, Stream};
 use serde::{Deserialize, Serialize};
 
 use metastore::MetaStore;
@@ -22,7 +22,7 @@ fn test_basic() -> Result<(), failure::Error> {
     util::zk_delete_all(prefix)?;
 
     let mut runtime = tokio::runtime::Runtime::new().unwrap();
-    let (ms1, ms2, watch1a, watch2) = runtime
+    let (ms1, ms2, mut watch1a, mut watch2) = runtime
         .block_on(future::lazy(move || {
             let ms1 = MetaStore::new(&util::ZOOKEEPER_ADDR, prefix);
             let ms2 = MetaStore::new(&util::ZOOKEEPER_ADDR, prefix);
@@ -49,11 +49,7 @@ fn test_basic() -> Result<(), failure::Error> {
         .unwrap();
 
     // Test creating a watch after dataflows are created.
-    let watch1b = ms1.register_dataflow_watch();
-
-    let mut iter1a = watch1a.wait().map(|r| r.unwrap());
-    let mut iter1b = watch1b.wait().map(|r| r.unwrap());
-    let mut iter2 = watch2.wait().map(|r| r.unwrap());
+    let mut watch1b = ms1.register_dataflow_watch();
 
     // Verify that all watchers saw all the expected events. Note that we don't
     // care about ordering.
@@ -66,15 +62,16 @@ fn test_basic() -> Result<(), failure::Error> {
         DummyDataflow("concurrent3".into()),
         DummyDataflow("concurrent4".into()),
     ];
-    let mut events1a: Vec<_> = (&mut iter1a).take(7).collect();
-    let mut events1b: Vec<_> = (&mut iter1b).take(7).collect();
-    let mut events2: Vec<_> = (&mut iter2).take(7).collect();
-    events1a.sort();
-    events1b.sort();
-    events2.sort();
-    assert_eq!(events1a, expected_events);
-    assert_eq!(events1b, expected_events);
-    assert_eq!(events2, expected_events);
+
+    let results = future::join_all(vec![
+        watch1a.by_ref().take(7).collect(),
+        watch1b.by_ref().take(7).collect(),
+        watch2.by_ref().take(7).collect(),
+    ]).wait().unwrap();
+    for (i, mut res) in results.into_iter().enumerate() {
+        res.sort();
+        assert_eq!(res, expected_events, "{} event mismatch: {:?} vs {:?}", i, res, expected_events)
+    }
 
     // Drop the MetaStores, which will cancel any background futures they've
     // spawned, so that we can cleanly shutdown.
@@ -90,8 +87,8 @@ fn test_basic() -> Result<(), failure::Error> {
         .map_err(|()| format_err!("unreachable!"))?;
 
     // Verify that the watchers didn't produce any stray events.
-    assert_eq!(iter1a.count(), 0);
-    assert_eq!(iter1b.count(), 0);
-    assert_eq!(iter2.count(), 0);
+    assert_eq!(watch1a.poll(), Ok(Async::Ready(None)));
+    assert_eq!(watch1b.poll(), Ok(Async::Ready(None)));
+    assert_eq!(watch2.poll(), Ok(Async::Ready(None)));
     Ok(())
 }
