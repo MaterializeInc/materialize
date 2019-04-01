@@ -52,6 +52,77 @@ pub enum Datum {
     Tuple(Tuple),
 }
 
+impl Datum {
+    pub fn unwrap_bool(&self) -> bool {
+        match self {
+            Datum::False => false,
+            Datum::True => true,
+            _ => panic!("Datum::unwrap_bool called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_int32(&self) -> i32 {
+        match self {
+            Datum::Int32(i) => *i,
+            _ => panic!("Datum::unwrap_int32 called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_int64(&self) -> i64 {
+        match self {
+            Datum::Int64(i) => *i,
+            _ => panic!("Datum::unwrap_int64 called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_float32(&self) -> f32 {
+        match self {
+            Datum::Float32(f) => f.into_inner(),
+            _ => panic!("Datum::unwrap_float32 called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_float64(&self) -> f64 {
+        match self {
+            Datum::Float64(f) => f.into_inner(),
+            _ => panic!("Datum::unwrap_float64 called on {:?}", self),
+        }
+    }
+}
+
+impl From<bool> for Datum {
+    fn from(b: bool) -> Datum {
+        match b {
+            true => Datum::True,
+            false => Datum::False,
+        }
+    }
+}
+
+impl From<i32> for Datum {
+    fn from(i: i32) -> Datum {
+        Datum::Int32(i)
+    }
+}
+
+impl From<i64> for Datum {
+    fn from(i: i64) -> Datum {
+        Datum::Int64(i)
+    }
+}
+
+impl From<f32> for Datum {
+    fn from(f: f32) -> Datum {
+        Datum::Float32(OrderedFloat(f))
+    }
+}
+
+impl From<f64> for Datum {
+    fn from(f: f64) -> Datum {
+        Datum::Float64(OrderedFloat(f))
+    }
+}
+
 /// An ordered, unnamed collection of heterogeneous [`Datum`]s.
 pub type Tuple = Vec<Datum>;
 

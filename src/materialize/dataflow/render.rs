@@ -136,5 +136,14 @@ fn eval_expr(expr: &Expr, datum: &Datum) -> Datum {
             _ => unreachable!(),
         },
         Expr::Literal(datum) => datum.clone(),
+        Expr::CallUnary { func, expr } => {
+            let datum = eval_expr(expr, datum);
+            (func.func())(datum)
+        }
+        Expr::CallBinary { func, expr1, expr2 } => {
+            let datum1 = eval_expr(expr1, datum);
+            let datum2 = eval_expr(expr2, datum);
+            (func.func())(datum1, datum2)
+        }
     }
 }

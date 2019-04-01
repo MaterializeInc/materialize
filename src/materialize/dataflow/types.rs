@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::func::{BinaryFunc, UnaryFunc};
 use crate::repr::{Datum, Type};
 
 /// System-wide notion of time.
@@ -103,6 +104,19 @@ pub enum Expr {
     Column(usize, Box<Expr>),
     /// A literal value.
     Literal(Datum),
+    /// A function call that takes one expression as an argument.
+    CallUnary { func: UnaryFunc, expr: Box<Expr> },
+    /// A function call that takes two expressions as arguments.
+    CallBinary {
+        func: BinaryFunc,
+        expr1: Box<Expr>,
+        expr2: Box<Expr>,
+    },
+    // /// A function call that takes an arbitrary number of arguments.
+    // CallMany {
+    //     fn: fn(Vec<Datum>) -> Datum,
+    //     exprs: Vec<Expr>,
+    // }
 }
 
 #[cfg(test)]

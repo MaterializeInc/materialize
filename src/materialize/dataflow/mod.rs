@@ -7,6 +7,7 @@
 //!
 //! This module is very much a work in progress. Don't look too closely yet.
 
+pub mod func;
 mod render;
 pub mod server;
 mod source;

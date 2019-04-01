@@ -12,13 +12,14 @@ use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
-    ASTNode, SQLObjectName, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLStatement,
-    TableFactor, Value,
+    ASTNode, SQLObjectName, SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr,
+    SQLStatement, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use crate::dataflow::func::BinaryFunc;
 use crate::dataflow::server::{Command, CommandSender};
 use crate::dataflow::{Connector, Dataflow, Expr, Plan, Source, View};
 use crate::repr::{Datum, FType, Type};
@@ -359,11 +360,88 @@ impl Parser {
                 ))
             }
             ASTNode::SQLValue(val) => self.parse_literal(val),
+            ASTNode::SQLBinaryExpr { op, left, right } => {
+                self.parse_binary_expr(op, left, right, typ)
+            }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
             ),
         }
+    }
+
+    fn parse_binary_expr<'a>(
+        &self,
+        op: &'a SQLOperator,
+        left: &'a ASTNode,
+        right: &'a ASTNode,
+        typ: &Type,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let (lexpr, ltype) = self.parse_expr(left, typ)?;
+        let (rexpr, rtype) = self.parse_expr(right, typ)?;
+        // TODO(benesch): handle NULLs.
+        let (func, ftype) = match op {
+            SQLOperator::Plus => match (&ltype.ftype, &rtype.ftype) {
+                (FType::Int32, FType::Int32) => (BinaryFunc::AddInt32, FType::Int32),
+                (FType::Int64, FType::Int64) => (BinaryFunc::AddInt64, FType::Int64),
+                (FType::Float32, FType::Float32) => (BinaryFunc::AddFloat32, FType::Float32),
+                (FType::Float64, FType::Float64) => (BinaryFunc::AddFloat64, FType::Float64),
+                _ => bail!("no overload for {:?} + {:?}", ltype.ftype, rtype.ftype),
+            },
+            SQLOperator::Minus => match (&ltype.ftype, &rtype.ftype) {
+                (FType::Int32, FType::Int32) => (BinaryFunc::SubInt32, FType::Int32),
+                (FType::Int64, FType::Int64) => (BinaryFunc::SubInt64, FType::Int64),
+                (FType::Float32, FType::Float32) => (BinaryFunc::SubFloat32, FType::Float32),
+                (FType::Float64, FType::Float64) => (BinaryFunc::SubFloat64, FType::Float64),
+                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+            },
+            SQLOperator::Multiply => match (&ltype.ftype, &rtype.ftype) {
+                (FType::Int32, FType::Int32) => (BinaryFunc::MulInt32, FType::Int32),
+                (FType::Int64, FType::Int64) => (BinaryFunc::MulInt64, FType::Int64),
+                (FType::Float32, FType::Float32) => (BinaryFunc::MulFloat32, FType::Float32),
+                (FType::Float64, FType::Float64) => (BinaryFunc::MulFloat64, FType::Float64),
+                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+            },
+            SQLOperator::Divide => match (&ltype.ftype, &rtype.ftype) {
+                (FType::Int32, FType::Int32) => (BinaryFunc::DivInt32, FType::Int32),
+                (FType::Int64, FType::Int64) => (BinaryFunc::DivInt64, FType::Int64),
+                (FType::Float32, FType::Float32) => (BinaryFunc::DivFloat32, FType::Float32),
+                (FType::Float64, FType::Float64) => (BinaryFunc::DivFloat64, FType::Float64),
+                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+            },
+            SQLOperator::Modulus => match (&ltype.ftype, &rtype.ftype) {
+                (FType::Int32, FType::Int32) => (BinaryFunc::ModInt32, FType::Int32),
+                (FType::Int64, FType::Int64) => (BinaryFunc::ModInt64, FType::Int64),
+                (FType::Float32, FType::Float32) => (BinaryFunc::ModFloat32, FType::Float32),
+                (FType::Float64, FType::Float64) => (BinaryFunc::ModFloat64, FType::Float64),
+                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+            },
+            SQLOperator::Lt | SQLOperator::LtEq | SQLOperator::Gt | SQLOperator::GtEq => {
+                if ltype.ftype != rtype.ftype {
+                    bail!("{:?} and {:?} are not comparable", ltype.ftype, rtype.ftype)
+                }
+                let func = match op {
+                    SQLOperator::Lt => BinaryFunc::Lt,
+                    SQLOperator::LtEq => BinaryFunc::Lte,
+                    SQLOperator::Gt => BinaryFunc::Gt,
+                    SQLOperator::GtEq => BinaryFunc::Gte,
+                    _ => unreachable!(),
+                };
+                (func, FType::Bool)
+            }
+            _ => unimplemented!(),
+        };
+        let expr = Expr::CallBinary {
+            func,
+            expr1: Box::new(lexpr),
+            expr2: Box::new(rexpr),
+        };
+        let typ = Type {
+            name: None,
+            nullable: false, // TODO(benesch): make the functions declare this?
+            ftype,
+        };
+        Ok((expr, typ))
     }
 
     fn parse_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {
