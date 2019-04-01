@@ -22,7 +22,7 @@ try() {
     else
         # The command failed. Tell Buildkite to uncollapse this log section, so
         # that the errors are immediately visible.
-        echo "^^^ +++"
+        [[ "${BUILDKITE-}" ]] && echo "^^^ +++"
     fi
     ((++total))
 }
