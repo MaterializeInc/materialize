@@ -103,17 +103,25 @@ fn build_plan<S: Scope<Timestamp = Time>>(
             .expect("unable to find dataflow")
             .import(scope)
             .as_collection(|k, ()| k.to_owned()),
+
         Plan::Project { outputs, input } => {
             let outputs = outputs.clone();
             build_plan(&input, manager, scope).map(move |datum| {
-                Datum::Tuple(
-                    outputs
-                        .iter()
-                        .map(|expr| eval_expr(expr, &datum))
-                        .collect(),
-                )
+                Datum::Tuple(outputs.iter().map(|expr| eval_expr(expr, &datum)).collect())
             })
         }
+
+        Plan::Filter { predicate, input } => {
+            let predicate = predicate.clone();
+            build_plan(&input, manager, scope).filter(move |datum| {
+                match eval_expr(&predicate, &datum) {
+                    Datum::False => false,
+                    Datum::True => true,
+                    _ => unreachable!(),
+                }
+            })
+        }
+
         Plan::Distinct(_) => unimplemented!(),
         Plan::UnionAll(_) => unimplemented!(),
         Plan::Join { .. } => unimplemented!(),

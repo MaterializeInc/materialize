@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 
-use super::oid;
+use super::types::PgType;
 use crate::repr::{Datum, FType, Type};
 
 #[derive(Debug)]
@@ -51,7 +51,7 @@ pub enum BackendMessage {
     EmptyQueryResponse,
     ReadyForQuery,
     RowDescription(Vec<FieldDescription>),
-    DataRow(Vec<FieldValue>),
+    DataRow(Vec<Datum>),
     ErrorResponse {
         severity: Severity,
         code: &'static str,
@@ -78,36 +78,21 @@ pub enum FieldFormat {
     Binary = 1,
 }
 
-#[derive(Debug)]
-pub enum FieldValue {
-    Null,
-    Datum(Datum),
-}
-
 pub fn row_description_from_type(typ: &Type) -> Vec<FieldDescription> {
     match &typ.ftype {
         FType::Tuple(types) => types
             .iter()
-            .map(|typ| FieldDescription {
-                name: typ
-                    .name
-                    .as_ref()
-                    .unwrap_or(&"?column?".into())
-                    .to_owned(),
-                table_id: 0,
-                column_id: 0,
-                type_oid: match typ.ftype {
-                    FType::String => oid::STRING,
-                    FType::Int64 => oid::INT,
-                    _ => unimplemented!(),
-                },
-                type_len: match typ.ftype {
-                    FType::String => -1,
-                    FType::Int64 => 8,
-                    _ => unimplemented!(),
-                },
-                type_mod: -1,
-                format: FieldFormat::Text,
+            .map(|typ| {
+                let pg_type: PgType = (&typ.ftype).into();
+                FieldDescription {
+                    name: typ.name.as_ref().unwrap_or(&"?column?".into()).to_owned(),
+                    table_id: 0,
+                    column_id: 0,
+                    type_oid: pg_type.oid,
+                    type_len: pg_type.typlen,
+                    type_mod: -1,
+                    format: FieldFormat::Text,
+                }
             })
             .collect(),
         _ => unimplemented!(),

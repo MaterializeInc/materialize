@@ -18,8 +18,8 @@
 
 mod codec;
 mod message;
-mod oid;
 mod protocol;
+mod types;
 
 pub use codec::Codec;
 pub use protocol::{match_handshake, Conn, StateMachine};

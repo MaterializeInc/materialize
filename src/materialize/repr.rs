@@ -85,7 +85,6 @@ pub struct Type {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum FType {
-    Unknown,
     /// The type of a datum that can only be null.
     ///
     /// This is uncommon. Most [`Datum:Null`]s appear with a different type.

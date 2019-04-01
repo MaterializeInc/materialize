@@ -358,33 +358,40 @@ impl Parser {
                     },
                 ))
             }
-            ASTNode::SQLValue(val) => match val {
-                Value::Long(i) => Ok((
-                    Expr::Literal(Datum::Int64(*i)),
-                    Type {
-                        name: None,
-                        nullable: false,
-                        ftype: FType::Int64,
-                    },
-                )),
-                Value::SingleQuotedString(s) => Ok((
-                    Expr::Literal(Datum::String(s.to_string())),
-                    Type {
-                        name: None,
-                        nullable: false,
-                        ftype: FType::String,
-                    },
-                )),
-                _ => bail!(
-                    "complicated literals are not yet supported: {}",
-                    val.to_string()
-                ),
-            },
+            ASTNode::SQLValue(val) => self.parse_literal(val),
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
             ),
         }
+    }
+
+    fn parse_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {
+        let (datum, ftype) = match l {
+            Value::Long(i) => (Datum::Int64(*i), FType::Int64),
+            Value::Double(f) => (Datum::Float64((*f).into()), FType::Float64),
+            Value::SingleQuotedString(s) => (Datum::String(s.clone()), FType::String),
+            Value::NationalStringLiteral(_) => {
+                bail!("n'' string literals are not supported: {}", l.to_string())
+            }
+            Value::Boolean(b) => match b {
+                false => (Datum::False, FType::Bool),
+                true => (Datum::True, FType::Bool),
+            },
+            Value::Null => (Datum::Null, FType::Null),
+            Value::Date(_) | Value::DateTime(_) | Value::Timestamp(_) | Value::Time(_) => {
+                bail!("date/time types are not yet supported: {}", l.to_string())
+            }
+            Value::Uuid(_) => bail!("uuid types are not yet supported: {}", l.to_string()),
+        };
+        let nullable = datum == Datum::Null;
+        let expr = Expr::Literal(datum);
+        let typ = Type {
+            name: None,
+            nullable,
+            ftype,
+        };
+        Ok((expr, typ))
     }
 
     fn parse_sql_object_name(&self, n: &SQLObjectName) -> Result<String, failure::Error> {

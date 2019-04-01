@@ -5,10 +5,11 @@
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
+use std::borrow::Cow;
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage};
+use crate::pgwire::message::{BackendMessage, FrontendMessage};
 use crate::repr::Datum;
 use ore::netio;
 
@@ -87,21 +88,24 @@ impl Encoder for Codec {
             BackendMessage::DataRow(fields) => {
                 dst.put_u16_be(fields.len() as u16);
                 for f in fields {
-                    match f {
-                        FieldValue::Null => {
-                            dst.put_i32_be(-1);
-                        }
-                        FieldValue::Datum(d) => {
-                            let d = match d {
-                                Datum::Int32(i) => format!("{}", i),
-                                Datum::Int64(i) => format!("{}", i),
-                                Datum::String(s) => s,
-                                _ => unimplemented!(),
-                            };
-                            dst.put_u32_be(d.len() as u32);
-                            dst.put(d);
-                        }
+                    if f == Datum::Null {
+                        dst.put_i32_be(-1);
+                        continue
                     }
+                    let s: Cow<[u8]> = match f {
+                        Datum::Null => unreachable!(), // handled above
+                        Datum::False => b"f"[..].into(),
+                        Datum::True => b"t"[..].into(),
+                        Datum::Int32(i) => format!("{}", i).into_bytes().into(),
+                        Datum::Int64(i) => format!("{}", i).into_bytes().into(),
+                        Datum::Float32(f) => format!("{}", f).into_bytes().into(),
+                        Datum::Float64(f) => format!("{}", f).into_bytes().into(),
+                        Datum::Bytes(ref b) => b.into(),
+                        Datum::String(ref s) => s.as_bytes().into(),
+                        _ => unimplemented!(),
+                    };
+                    dst.put_u32_be(s.len() as u32);
+                    dst.put(&*s);
                 }
             }
             BackendMessage::CommandComplete { tag } => {

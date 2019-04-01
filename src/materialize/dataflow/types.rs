@@ -90,6 +90,8 @@ pub enum Plan {
         /// Plan for the right input.
         right: Box<Plan>,
     },
+    /// Filter records based on predicate.
+    Filter { predicate: Expr, input: Box<Plan> },
 }
 
 #[serde(rename_all = "snake_case")]
@@ -117,9 +119,15 @@ mod tests {
         let dataflow = Dataflow::View(View {
             name: "report".into(),
             plan: Plan::Project {
-                outputs: vec![Expr::Column(1, Box::new(Expr::Ambient)), Expr::Column(2, Box::new(Expr::Ambient))],
+                outputs: vec![
+                    Expr::Column(1, Box::new(Expr::Ambient)),
+                    Expr::Column(2, Box::new(Expr::Ambient)),
+                ],
                 input: Box::new(Plan::Join {
-                    keys: vec![(Expr::Column(0, Box::new(Expr::Ambient)), Expr::Column(0, Box::new(Expr::Ambient)))],
+                    keys: vec![(
+                        Expr::Column(0, Box::new(Expr::Ambient)),
+                        Expr::Column(0, Box::new(Expr::Ambient)),
+                    )],
                     left: Box::new(Plan::Source("orders".into())),
                     right: Box::new(Plan::Distinct(Box::new(Plan::UnionAll(vec![
                         Plan::Source("customers2018".into()),

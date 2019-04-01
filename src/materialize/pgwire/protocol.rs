@@ -13,7 +13,7 @@ use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::pgwire::codec::Codec;
-use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage, Severity};
+use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::repr::Datum;
 use crate::server::ConnState;
 use crate::sql::QueryResponse;
@@ -280,7 +280,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let state = state.take();
         let stream: MessageStream = Box::new(state.rows.map(|row| {
             BackendMessage::DataRow(match row {
-                Datum::Tuple(t) => t.into_iter().map(FieldValue::Datum).collect(),
+                Datum::Tuple(t) => t,
                 _ => unimplemented!(),
             })
         }));
