@@ -11,6 +11,7 @@ steps:
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
-            - "$HOME/.cache/sccache:/home/materialize/.cache/sccache"
+            - "$HOME/.cache/sccache:/sccache"
           env:
             - RUSTC_WRAPPER=sccache
+            - SCCACHE_DIR=/sccache
