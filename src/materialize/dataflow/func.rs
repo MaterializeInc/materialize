@@ -151,7 +151,7 @@ pub enum BinaryFunc {
 }
 
 impl BinaryFunc {
-    pub fn func(&self) -> fn(Datum, Datum) -> Datum {
+    pub fn func(self) -> fn(Datum, Datum) -> Datum {
         match self {
             BinaryFunc::And => and,
             BinaryFunc::Or => or,
@@ -190,7 +190,7 @@ pub enum UnaryFunc {
 }
 
 impl UnaryFunc {
-    pub fn func(&self) -> fn(Datum) -> Datum {
+    pub fn func(self) -> fn(Datum) -> Datum {
         match self {
             UnaryFunc::Not => not,
         }
