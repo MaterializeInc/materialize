@@ -2,97 +2,97 @@
     {
         "name": "bare null",
         "input": "null",
-        "expected": { "nullable": true, "typ": "null" }
+        "expected": { "nullable": true, "ftype": "null" }
     },
 
     {
         "name": "bare bool",
         "input": "boolean",
-        "expected": { "nullable": false, "typ": "bool" }
+        "expected": { "nullable": false, "ftype": "bool" }
     },
 
     {
         "name": "bare int32",
         "input": "int",
-        "expected": { "nullable": false, "typ": "int32" }
+        "expected": { "nullable": false, "ftype": "int32" }
     },
 
     {
         "name": "bare int64",
         "input": "long",
-        "expected": { "nullable": false, "typ": "int64" }
+        "expected": { "nullable": false, "ftype": "int64" }
     },
 
     {
         "name": "bare float32",
         "input": "float",
-        "expected": { "nullable": false, "typ": "float32" }
+        "expected": { "nullable": false, "ftype": "float32" }
     },
 
     {
         "name": "bare float64",
         "input": "double",
-        "expected": { "nullable": false, "typ": "float64" }
+        "expected": { "nullable": false, "ftype": "float64" }
     },
 
     {
         "name": "bare bytes",
         "input": "bytes",
-        "expected": { "nullable": false, "typ": "bytes" }
+        "expected": { "nullable": false, "ftype": "bytes" }
     },
 
     {
         "name": "bare string",
         "input": "string",
-        "expected": { "nullable": false, "typ": "string" }
+        "expected": { "nullable": false, "ftype": "string" }
     },
 
     {
         "name": "bare null - long form",
         "input": { "type": "null" },
-        "expected": { "nullable": true, "typ": "null" }
+        "expected": { "nullable": true, "ftype": "null" }
     },
 
     {
         "name": "bare bool - long form",
         "input": { "type": "boolean" },
-        "expected": { "nullable": false, "typ": "bool" }
+        "expected": { "nullable": false, "ftype": "bool" }
     },
 
     {
         "name": "bare int32 - long form",
         "input": { "type": "int" },
-        "expected": { "nullable": false, "typ": "int32" }
+        "expected": { "nullable": false, "ftype": "int32" }
     },
 
     {
         "name": "bare int64 - long form",
         "input": { "type": "long" },
-        "expected": { "nullable": false, "typ": "int64" }
+        "expected": { "nullable": false, "ftype": "int64" }
     },
 
     {
         "name": "bare float32 - long form",
         "input": { "type": "float" },
-        "expected": { "nullable": false, "typ": "float32" }
+        "expected": { "nullable": false, "ftype": "float32" }
     },
 
     {
         "name": "bare float64 - long form",
         "input": { "type": "double" },
-        "expected": { "nullable": false, "typ": "float64" }
+        "expected": { "nullable": false, "ftype": "float64" }
     },
 
     {
         "name": "bare bytes - long form",
         "input": { "type": "bytes" },
-        "expected": { "nullable": false, "typ": "bytes" }
+        "expected": { "nullable": false, "ftype": "bytes" }
     },
 
     {
         "name": "bare string - long form",
         "input": { "type": "string" },
-        "expected": { "nullable": false, "typ": "string" }
+        "expected": { "nullable": false, "ftype": "string" }
     },
 
     {
@@ -104,7 +104,7 @@
         },
         "expected": {
             "nullable": false,
-            "typ": {
+            "ftype": {
                 "tuple": []
             }
         }
@@ -122,10 +122,10 @@
         },
         "expected": {
             "nullable": false,
-            "typ": {
+            "ftype": {
                 "tuple": [
-                    { "name": "f1", "typ": "int32", "nullable": false },
-                    { "name": "f2", "typ": "string", "nullable": false }
+                    { "name": "f1", "ftype": "int32", "nullable": false },
+                    { "name": "f2", "ftype": "string", "nullable": false }
                 ]
             }
         }
@@ -136,8 +136,8 @@
         "input": { "type": "array", "items": "int" },
         "expected": {
             "nullable": false,
-            "typ": {
-                "array": { "nullable": false, "typ": "int32" }
+            "ftype": {
+                "array": { "nullable": false, "ftype": "int32" }
             }
         }
     },
@@ -145,13 +145,13 @@
     {
         "name": "basic nullable a",
         "input": ["null", "int"],
-        "expected": { "nullable": true, "typ": "int32" }
+        "expected": { "nullable": true, "ftype": "int32" }
     },
 
     {
         "name": "basic nullable b",
         "input": ["int", "null"],
-        "expected": { "nullable": true, "typ": "int32" }
+        "expected": { "nullable": true, "ftype": "int32" }
     },
 
     {
@@ -159,10 +159,10 @@
         "input": ["int", "long"],
         "expected": {
             "nullable": false,
-            "typ": {
+            "ftype": {
                 "tuple": [
-                    { "nullable": false, "typ": "int32" },
-                    { "nullable": false, "typ": "int64" }
+                    { "nullable": false, "ftype": "int32" },
+                    { "nullable": false, "ftype": "int64" }
                 ]
             }
         }
@@ -173,10 +173,10 @@
         "input": ["int", "null", "long"],
         "expected": {
             "nullable": true,
-            "typ": {
+            "ftype": {
                 "tuple": [
-                    { "nullable": false, "typ": "int32" },
-                    { "nullable": false, "typ": "int64" }
+                    { "nullable": false, "ftype": "int32" },
+                    { "nullable": false, "ftype": "int64" }
                 ]
             }
         }
@@ -187,7 +187,7 @@
         "input": { "type": "enum", "name": "enum", "symbols": ["a", "b", "c"] },
         "expected": {
             "nullable": false,
-            "typ": "string"
+            "ftype": "string"
         }
     },
 
@@ -196,10 +196,10 @@
         "input": { "type": "map", "values": "int" },
         "expected": {
             "nullable": false,
-            "typ": {
+            "ftype": {
                 "tuple": [
-                    { "name": "key", "nullable": false, "typ": "string" },
-                    { "name": "value", "nullable": false, "typ": "int32" }
+                    { "name": "key", "nullable": false, "ftype": "string" },
+                    { "name": "value", "nullable": false, "ftype": "int32" }
                 ]
             }
         }
@@ -244,37 +244,37 @@
         ],
         "expected": {
             "nullable": true,
-            "typ": {
+            "ftype": {
                 "tuple": [
-                    { "nullable": false, "typ": "int32" },
-                    { "nullable": false, "typ": "int64" },
+                    { "nullable": false, "ftype": "int32" },
+                    { "nullable": false, "ftype": "int64" },
                     {
                         "nullable": false,
-                        "typ": {
+                        "ftype": {
                             "tuple": [
-                                { "name": "key", "nullable": false, "typ": "string" },
+                                { "name": "key", "nullable": false, "ftype": "string" },
                                 {
                                     "name": "value",
                                     "nullable": true,
-                                    "typ": {
+                                    "ftype": {
                                         "array": {
                                             "nullable": false,
-                                            "typ": {
+                                            "ftype": {
                                                 "tuple": [
-                                                    { "name": "one", "nullable": false, "typ": "string" },
-                                                    { "name": "two", "nullable": false, "typ": "string" },
+                                                    { "name": "one", "nullable": false, "ftype": "string" },
+                                                    { "name": "two", "nullable": false, "ftype": "string" },
                                                     {
                                                         "name": "three",
                                                         "nullable": false,
-                                                        "typ": {
+                                                        "ftype": {
                                                             "tuple": [
-                                                                { "nullable": false, "typ": "bytes" },
+                                                                { "nullable": false, "ftype": "bytes" },
                                                                 {
                                                                     "nullable": false,
-                                                                    "typ": {
+                                                                    "ftype": {
                                                                         "tuple": [
-                                                                            { "name": "key", "nullable": false, "typ": "string" },
-                                                                            { "name": "value", "nullable": true, "typ": "null" }
+                                                                            { "name": "key", "nullable": false, "ftype": "string" },
+                                                                            { "name": "value", "nullable": true, "ftype": "null" }
                                                                         ]
                                                                     }
                                                                 }

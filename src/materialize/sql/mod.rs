@@ -21,19 +21,19 @@ use std::sync::{Arc, RwLock};
 
 use crate::dataflow::server::{Command, CommandSender};
 use crate::dataflow::{Connector, Dataflow, Expr, Plan, Source, View};
-use crate::repr::{Datum, Schema, Type};
+use crate::repr::{Datum, FType, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
 use ore::future::FutureExt;
 
 lazy_static! {
-    static ref DUAL_SCHEMA: Schema = Schema {
+    static ref DUAL_TYPE: Type = Type {
         name: Some("dual".into()),
         nullable: false,
-        typ: Type::Tuple(vec![Schema {
+        ftype: FType::Tuple(vec![Type {
             name: Some("x".into()),
             nullable: false,
-            typ: Type::String,
+            ftype: FType::String,
         }]),
     };
 }
@@ -42,7 +42,7 @@ pub enum QueryResponse {
     CreatedDataSource,
     CreatedView,
     StreamingRows {
-        schema: Schema,
+        typ: Type,
         rows: Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>,
     },
 }
@@ -95,7 +95,7 @@ fn handle_create_dataflow(
         let parser = Parser::new(
             dataflows
                 .into_iter()
-                .map(|(n, d)| (n, (0, d.schema().to_owned()))),
+                .map(|(n, d)| (n, (0, d.typ().to_owned()))),
         );
         let dataflow = match parser.parse_statement(&stmt) {
             Ok(dataflow) => dataflow,
@@ -135,7 +135,7 @@ fn handle_peek(
             }
             cmd_tx.send(Command::Peek(name.to_string(), uuid)).unwrap();
             future::ok(QueryResponse::StreamingRows {
-                schema: dataflow.schema().to_owned(),
+                typ: dataflow.typ().to_owned(),
                 rows: Box::new(rx.map_err(|_| format_err!("unreachable"))),
             })
         })
@@ -187,14 +187,14 @@ impl<'ast> Visit<'ast> for ObjectNameVisitor {
 
 #[allow(dead_code)]
 pub struct Parser {
-    dataflows: HashMap<String, (usize, Schema)>,
+    dataflows: HashMap<String, (usize, Type)>,
 }
 
 #[allow(dead_code)]
 impl Parser {
     pub fn new<I>(iter: I) -> Parser
     where
-        I: IntoIterator<Item = (String, (usize, Schema))>,
+        I: IntoIterator<Item = (String, (usize, Type))>,
     {
         Parser {
             dataflows: iter.into_iter().collect(),
@@ -208,11 +208,11 @@ impl Parser {
                 query,
                 materialized: true,
             } => {
-                let (plan, schema) = self.parse_view_query(query)?;
+                let (plan, typ) = self.parse_view_query(query)?;
                 Ok(Dataflow::View(View {
                     name: self.parse_sql_object_name(name)?,
                     plan,
-                    schema,
+                    typ,
                 }))
             }
             SQLStatement::SQLCreateDataSource { name, url, schema } => {
@@ -245,7 +245,7 @@ impl Parser {
                         addr: url.to_socket_addrs()?.next().unwrap(),
                         topic,
                     },
-                    schema: crate::interchange::avro::parse_schema(schema)?,
+                    typ: crate::interchange::avro::parse_schema(schema)?,
                     raw_schema: schema.clone(),
                 }))
             }
@@ -253,7 +253,7 @@ impl Parser {
         }
     }
 
-    fn parse_view_query(&self, q: &SQLQuery) -> Result<(Plan, Schema), failure::Error> {
+    fn parse_view_query(&self, q: &SQLQuery) -> Result<(Plan, Type), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -269,7 +269,7 @@ impl Parser {
         }
     }
 
-    fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Schema), failure::Error> {
+    fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
         if s.having.is_some() {
             bail!("HAVING is not yet supported");
         } else if s.group_by.is_some() {
@@ -292,19 +292,19 @@ impl Parser {
             }
             None => {
                 // https://en.wikipedia.org/wiki/DUAL_table
-                (Plan::Source("dual".into()), &*DUAL_SCHEMA)
+                (Plan::Source("dual".into()), &*DUAL_TYPE)
             }
         };
 
         let mut outputs = Vec::new();
         let mut pschema = Vec::new();
         for p in &s.projection {
-            let (name, expr, typ) = self.parse_select_item(p, schema)?;
+            let (name, expr, ftype) = self.parse_select_item(p, schema)?;
             outputs.push(expr);
-            pschema.push(Schema {
+            pschema.push(Type {
                 name: name.map(|s| s.to_owned()),
                 nullable: false,
-                typ,
+                ftype,
             });
         }
 
@@ -315,10 +315,10 @@ impl Parser {
 
         Ok((
             plan,
-            Schema {
+            Type {
                 name: None,
                 nullable: false,
-                typ: Type::Tuple(pschema),
+                ftype: FType::Tuple(pschema),
             },
         ))
     }
@@ -326,10 +326,10 @@ impl Parser {
     fn parse_select_item<'a>(
         &self,
         s: &'a SQLSelectItem,
-        schema: &Schema,
-    ) -> Result<(Option<&'a str>, Expr, Type), failure::Error> {
+        typ: &Type,
+    ) -> Result<(Option<&'a str>, Expr, FType), failure::Error> {
         match s {
-            SQLSelectItem::UnnamedExpression(e) => self.parse_expr(e, schema),
+            SQLSelectItem::UnnamedExpression(e) => self.parse_expr(e, typ),
             _ => bail!(
                 "complicated select items are not yet supported: {}",
                 s.to_string()
@@ -340,12 +340,12 @@ impl Parser {
     fn parse_expr<'a>(
         &self,
         e: &'a ASTNode,
-        schema: &Schema,
-    ) -> Result<(Option<&'a str>, Expr, Type), failure::Error> {
+        typ: &Type,
+    ) -> Result<(Option<&'a str>, Expr, FType), failure::Error> {
         match e {
             ASTNode::SQLIdentifier(name) => {
-                let i = match &schema.typ {
-                    Type::Tuple(t) => t.iter().position(|f| f.name == Some(name.clone())),
+                let i = match &typ.ftype {
+                    FType::Tuple(t) => t.iter().position(|f| f.name == Some(name.clone())),
                     _ => unimplemented!(),
                 };
                 let i = match i {
@@ -353,18 +353,18 @@ impl Parser {
                     None => bail!("unknown column {}", name),
                 };
                 let expr = Expr::Column(i);
-                let typ = match &schema.typ {
-                    Type::Tuple(t) => t[i].typ.clone(),
+                let typ = match &typ.ftype {
+                    FType::Tuple(t) => t[i].ftype.clone(),
                     _ => unreachable!(),
                 };
                 Ok((Some(name), expr, typ))
             }
             ASTNode::SQLValue(val) => match val {
-                Value::Long(i) => Ok((None, Expr::Literal(Datum::Int64(*i)), Type::Int64)),
+                Value::Long(i) => Ok((None, Expr::Literal(Datum::Int64(*i)), FType::Int64)),
                 Value::SingleQuotedString(s) => Ok((
                     None,
                     Expr::Literal(Datum::String(s.to_string())),
-                    Type::String,
+                    FType::String,
                 )),
                 _ => bail!(
                     "complicated literals are not yet supported: {}",
@@ -392,29 +392,29 @@ mod tests {
 
     #[test]
     fn test_basic_view() -> Result<(), failure::Error> {
-        let schema = Schema {
+        let typ = Type {
             name: None,
             nullable: false,
-            typ: Type::Tuple(vec![
-                Schema {
+            ftype: FType::Tuple(vec![
+                Type {
                     name: None,
                     nullable: false,
-                    typ: Type::Int64,
+                    ftype: FType::Int64,
                 },
-                Schema {
+                Type {
                     name: Some("a".into()),
                     nullable: false,
-                    typ: Type::String,
+                    ftype: FType::String,
                 },
-                Schema {
+                Type {
                     name: Some("b".into()),
                     nullable: false,
-                    typ: Type::String,
+                    ftype: FType::String,
                 },
             ]),
         };
         let version = 1;
-        let parser = Parser::new(vec![("src".into(), (version, schema))]);
+        let parser = Parser::new(vec![("src".into(), (version, typ))]);
 
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},
@@ -429,13 +429,13 @@ mod tests {
                     outputs: vec![Expr::Column(2)],
                     input: Box::new(Plan::Source("src".into())),
                 },
-                schema: Schema {
+                typ: Type {
                     name: None,
                     nullable: false,
-                    typ: Type::Tuple(vec![Schema {
+                    ftype: FType::Tuple(vec![Type {
                         name: Some("b".into()),
                         nullable: false,
-                        typ: Type::String
+                        ftype: FType::String
                     },]),
                 }
             })
@@ -473,19 +473,19 @@ mod tests {
                     addr: "127.0.0.1:9092".parse()?,
                     topic: "topic".into(),
                 },
-                schema: Schema {
+                typ: Type {
                     name: None,
                     nullable: false,
-                    typ: Type::Tuple(vec![
-                        Schema {
+                    ftype: FType::Tuple(vec![
+                        Type {
                             name: Some("a".into()),
                             nullable: false,
-                            typ: Type::Int64
+                            ftype: FType::Int64
                         },
-                        Schema {
+                        Type {
                             name: Some("b".into()),
                             nullable: false,
-                            typ: Type::String
+                            ftype: FType::String
                         },
                     ]),
                 },

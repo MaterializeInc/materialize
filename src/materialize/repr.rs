@@ -55,30 +55,36 @@ pub enum Datum {
 /// An ordered, unnamed collection of heterogeneous [`Datum`]s.
 pub type Tuple = Vec<Datum>;
 
-/// A description of the structure of a [`Datum`].
+/// The type of a [`Datum`].
 ///
-/// [`Schema`] bundles the [`Type`] of a datum (e.g., Int32 or String) with
-/// additional attributes, like its default value and its nullability.
+/// [`Type`] bundles information about the fundamental type of a datum (e.g.,
+/// Int32 or String) with additional attributes, like its default value and its
+/// nullability.
 ///
-/// It is not possible to construct a `Schema` directly from a `Datum`, as it is
-/// impossible to determine anything but the datum's `Type`. Consider: a naked
+/// It is not possible to construct a `Type` directly from a `Datum`, as it is
+/// impossible to determine anything but the type's `ftype`. Consider: a naked
 /// `Datum` provides no information about its name, default value, or
 /// nullability.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Schema {
+pub struct Type {
     /// The name of this datum. Perhaps surprisingly, expressions in SQL can
     /// have names, as in `SELECT 1 AS blah`.
     pub name: Option<String>,
     /// Whether this datum can be null.
     pub nullable: bool,
-    /// The type (e.g., Int32 or String) of this datum.
-    pub typ: Type,
+    /// The fundamental type (e.g., Int32 or String) of this datum.
+    pub ftype: FType,
 }
 
 /// The fundamental type of a [`Datum`].
+///
+/// A fundamental type is what is typically thought of as a type, like "Int32"
+/// or "String." The full [`Type`] struct bundles additional information, like
+/// an optional default value and nullability, that must also be considered part
+/// of a datum's type.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Type {
+pub enum FType {
     Unknown,
     /// The type of a datum that can only be null.
     ///
@@ -91,6 +97,7 @@ pub enum Type {
     Float64,
     Bytes,
     String,
-    Tuple(Vec<Schema>),
-    Array(Box<Schema>),
+    Tuple(Vec<Type>),
+    Array(Box<Type>),
+    OneOf(Vec<Type>),
 }

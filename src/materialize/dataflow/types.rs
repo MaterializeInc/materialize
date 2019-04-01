@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::repr::{Datum, Schema};
+use crate::repr::{Datum, Type};
 
 /// System-wide notion of time.
 pub type Time = std::time::Duration;
@@ -30,10 +30,10 @@ impl Dataflow {
         }
     }
 
-    pub fn schema(&self) -> &Schema {
+    pub fn typ(&self) -> &Type {
         match self {
-            Dataflow::Source(src) => &src.schema,
-            Dataflow::View(view) => &view.schema,
+            Dataflow::Source(src) => &src.typ,
+            Dataflow::View(view) => &view.typ,
         }
     }
 }
@@ -45,7 +45,7 @@ impl Dataflow {
 pub struct Source {
     pub name: String,
     pub connector: Connector,
-    pub schema: Schema,
+    pub typ: Type,
     pub raw_schema: String,
 }
 
@@ -63,7 +63,7 @@ pub enum Connector {
 pub struct View {
     pub name: String,
     pub plan: Plan,
-    pub schema: Schema,
+    pub typ: Type,
 }
 
 #[serde(rename_all = "snake_case")]
@@ -105,7 +105,7 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use crate::repr::Type;
+    use crate::repr::{FType, Type};
 
     /// Verify that a basic plan serializes and deserializes to JSON sensibly.
     #[test]
@@ -123,19 +123,19 @@ mod tests {
                     ])))),
                 }),
             },
-            schema: Schema {
+            typ: Type {
                 name: None,
                 nullable: false,
-                typ: Type::Tuple(vec![
-                    Schema {
+                ftype: FType::Tuple(vec![
+                    Type {
                         name: Some("name".into()),
                         nullable: false,
-                        typ: Type::String,
+                        ftype: FType::String,
                     },
-                    Schema {
+                    Type {
                         name: Some("quantity".into()),
                         nullable: false,
-                        typ: Type::Int32,
+                        ftype: FType::Int32,
                     },
                 ]),
             },
@@ -181,20 +181,20 @@ mod tests {
         }
       }
     },
-    "schema": {
+    "typ": {
       "name": null,
       "nullable": false,
-      "typ": {
+      "ftype": {
         "tuple": [
           {
             "name": "name",
             "nullable": false,
-            "typ": "string"
+            "ftype": "string"
           },
           {
             "name": "quantity",
             "nullable": false,
-            "typ": "int32"
+            "ftype": "int32"
           }
         ]
       }

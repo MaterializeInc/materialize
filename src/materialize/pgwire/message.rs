@@ -6,7 +6,7 @@
 use bytes::Bytes;
 
 use super::oid;
-use crate::repr::{Datum, Schema, Type};
+use crate::repr::{Datum, FType, Type};
 
 #[derive(Debug)]
 pub enum Severity {
@@ -84,9 +84,9 @@ pub enum FieldValue {
     Datum(Datum),
 }
 
-pub fn row_description_from_schema(schema: &Schema) -> Vec<FieldDescription> {
-    match &schema.typ {
-        Type::Tuple(schemas) => schemas
+pub fn row_description_from_type(typ: &Type) -> Vec<FieldDescription> {
+    match &typ.ftype {
+        FType::Tuple(types) => types
             .iter()
             .map(|schema| FieldDescription {
                 name: schema
@@ -96,14 +96,14 @@ pub fn row_description_from_schema(schema: &Schema) -> Vec<FieldDescription> {
                     .to_owned(),
                 table_id: 0,
                 column_id: 0,
-                type_oid: match schema.typ {
-                    Type::String => oid::STRING,
-                    Type::Int64 => oid::INT,
+                type_oid: match typ.ftype {
+                    FType::String => oid::STRING,
+                    FType::Int64 => oid::INT,
                     _ => unimplemented!(),
                 },
-                type_len: match schema.typ {
-                    Type::String => -1,
-                    Type::Int64 => 8,
+                type_len: match typ.ftype {
+                    FType::String => -1,
+                    FType::Int64 => 8,
                     _ => unimplemented!(),
                 },
                 type_mod: -1,

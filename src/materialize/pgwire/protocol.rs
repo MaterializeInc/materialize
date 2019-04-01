@@ -249,14 +249,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             .conn
                             .send(BackendMessage::CommandComplete { tag: "CREATE VIEW" })
                     }),
-                    QueryResponse::StreamingRows { schema, rows } => {
-                        transition!(SendRowDescription {
-                            send: state.conn.send(BackendMessage::RowDescription(
-                                super::message::row_description_from_schema(&schema)
-                            )),
-                            rows: rows,
-                        })
-                    }
+                    QueryResponse::StreamingRows { typ, rows } => transition!(SendRowDescription {
+                        send: state.conn.send(BackendMessage::RowDescription(
+                            super::message::row_description_from_type(&typ)
+                        )),
+                        rows: rows,
+                    }),
                 }
             }
             Err(err) => {
