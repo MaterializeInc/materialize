@@ -353,7 +353,7 @@ impl Parser {
                     expr,
                     Type {
                         name: Some(name.clone()),
-                        nullable: nullable,
+                        nullable,
                         ftype,
                     },
                 ))

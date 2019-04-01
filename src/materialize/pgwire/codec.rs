@@ -90,7 +90,7 @@ impl Encoder for Codec {
                 for f in fields {
                     if f == Datum::Null {
                         dst.put_i32_be(-1);
-                        continue
+                        continue;
                     }
                     let s: Cow<[u8]> = match f {
                         Datum::Null => unreachable!(), // handled above
