@@ -12,9 +12,11 @@ services:
     - $SSH_AUTH_SOCK:/tmp/ssh-agent.sock
     - ../../:/workdir
     - $HOME/.cache/sccache:/sccache
+    - $HOME/.cargo:/cargo
     environment:
       SSH_AUTH_SOCK: /tmp/ssh-agent.sock
       SCCACHE_DIR: /sccache
+      CARGO_HOME: /cargo
       ZOOKEEPER_URL: zookeeper:2181
       RUSTC_WRAPPER: sccache
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID

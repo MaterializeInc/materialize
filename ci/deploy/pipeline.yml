@@ -12,6 +12,8 @@ steps:
           mount-ssh-agent: true
           volumes:
             - "$HOME/.cache/sccache:/sccache"
+            - "$HOME/.cargo:/cargo"
           env:
             - RUSTC_WRAPPER=sccache
             - SCCACHE_DIR=/sccache
+            - CARGO_HOME=/cargo
