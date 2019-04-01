@@ -299,13 +299,9 @@ impl Parser {
         let mut outputs = Vec::new();
         let mut pschema = Vec::new();
         for p in &s.projection {
-            let (name, expr, ftype) = self.parse_select_item(p, schema)?;
+            let (expr, typ) = self.parse_select_item(p, schema)?;
             outputs.push(expr);
-            pschema.push(Type {
-                name: name.map(|s| s.to_owned()),
-                nullable: false,
-                ftype,
-            });
+            pschema.push(typ);
         }
 
         let plan = Plan::Project {
@@ -327,7 +323,7 @@ impl Parser {
         &self,
         s: &'a SQLSelectItem,
         typ: &Type,
-    ) -> Result<(Option<&'a str>, Expr, FType), failure::Error> {
+    ) -> Result<(Expr, Type), failure::Error> {
         match s {
             SQLSelectItem::UnnamedExpression(e) => self.parse_expr(e, typ),
             _ => bail!(
@@ -337,11 +333,7 @@ impl Parser {
         }
     }
 
-    fn parse_expr<'a>(
-        &self,
-        e: &'a ASTNode,
-        typ: &Type,
-    ) -> Result<(Option<&'a str>, Expr, FType), failure::Error> {
+    fn parse_expr<'a>(&self, e: &'a ASTNode, typ: &Type) -> Result<(Expr, Type), failure::Error> {
         match e {
             ASTNode::SQLIdentifier(name) => {
                 let i = match &typ.ftype {
@@ -353,18 +345,35 @@ impl Parser {
                     None => bail!("unknown column {}", name),
                 };
                 let expr = Expr::Column(i);
-                let typ = match &typ.ftype {
-                    FType::Tuple(t) => t[i].ftype.clone(),
+                let (ftype, nullable) = match &typ.ftype {
+                    FType::Tuple(t) => (t[i].ftype.clone(), t[i].nullable),
                     _ => unreachable!(),
                 };
-                Ok((Some(name), expr, typ))
+                Ok((
+                    expr,
+                    Type {
+                        name: Some(name.clone()),
+                        nullable: nullable,
+                        ftype,
+                    },
+                ))
             }
             ASTNode::SQLValue(val) => match val {
-                Value::Long(i) => Ok((None, Expr::Literal(Datum::Int64(*i)), FType::Int64)),
+                Value::Long(i) => Ok((
+                    Expr::Literal(Datum::Int64(*i)),
+                    Type {
+                        name: None,
+                        nullable: false,
+                        ftype: FType::Int64,
+                    },
+                )),
                 Value::SingleQuotedString(s) => Ok((
-                    None,
                     Expr::Literal(Datum::String(s.to_string())),
-                    FType::String,
+                    Type {
+                        name: None,
+                        nullable: false,
+                        ftype: FType::String,
+                    },
                 )),
                 _ => bail!(
                     "complicated literals are not yet supported: {}",
