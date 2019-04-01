@@ -344,7 +344,7 @@ impl Parser {
                     Some(i) => i,
                     None => bail!("unknown column {}", name),
                 };
-                let expr = Expr::Column(i);
+                let expr = Expr::Column(i, Box::new(Expr::Ambient));
                 let (ftype, nullable) = match &typ.ftype {
                     FType::Tuple(t) => (t[i].ftype.clone(), t[i].nullable),
                     _ => unreachable!(),
@@ -435,7 +435,7 @@ mod tests {
             Dataflow::View(View {
                 name: "v".into(),
                 plan: Plan::Project {
-                    outputs: vec![Expr::Column(2)],
+                    outputs: vec![Expr::Column(2, Box::new(Expr::Ambient))],
                     input: Box::new(Plan::Source("src".into())),
                 },
                 typ: Type {

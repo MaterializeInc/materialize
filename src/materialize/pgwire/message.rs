@@ -88,8 +88,8 @@ pub fn row_description_from_type(typ: &Type) -> Vec<FieldDescription> {
     match &typ.ftype {
         FType::Tuple(types) => types
             .iter()
-            .map(|schema| FieldDescription {
-                name: schema
+            .map(|typ| FieldDescription {
+                name: typ
                     .name
                     .as_ref()
                     .unwrap_or(&"?column?".into())

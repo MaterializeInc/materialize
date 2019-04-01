@@ -83,8 +83,8 @@ pub enum Plan {
     UnionAll(Vec<Plan>),
     /// Join two dataflows.
     Join {
-        /// Pairs of indices whose values must be equal.
-        keys: Vec<(usize, usize)>,
+        /// Expressions whose values must be equal.
+        keys: Vec<(Expr, Expr)>,
         /// Plan for the left input.
         left: Box<Plan>,
         /// Plan for the right input.
@@ -95,7 +95,11 @@ pub enum Plan {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
-    Column(usize),
+    /// The ambient value.
+    Ambient,
+    /// Tuple element selector.
+    Column(usize, Box<Expr>),
+    /// A literal value.
     Literal(Datum),
 }
 
@@ -113,9 +117,9 @@ mod tests {
         let dataflow = Dataflow::View(View {
             name: "report".into(),
             plan: Plan::Project {
-                outputs: vec![Expr::Column(1), Expr::Column(2)],
+                outputs: vec![Expr::Column(1, Box::new(Expr::Ambient)), Expr::Column(2, Box::new(Expr::Ambient))],
                 input: Box::new(Plan::Join {
-                    keys: vec![(0, 0)],
+                    keys: vec![(Expr::Column(0, Box::new(Expr::Ambient)), Expr::Column(0, Box::new(Expr::Ambient)))],
                     left: Box::new(Plan::Source("orders".into())),
                     right: Box::new(Plan::Distinct(Box::new(Plan::UnionAll(vec![
                         Plan::Source("customers2018".into()),
@@ -148,18 +152,34 @@ mod tests {
       "project": {
         "outputs": [
           {
-            "column": 1
+            "column": [
+              1,
+              "ambient"
+            ]
           },
           {
-            "column": 2
+            "column": [
+              2,
+              "ambient"
+            ]
           }
         ],
         "input": {
           "join": {
             "keys": [
               [
-                0,
-                0
+                {
+                  "column": [
+                    0,
+                    "ambient"
+                  ]
+                },
+                {
+                  "column": [
+                    0,
+                    "ambient"
+                  ]
+                }
               ]
             ],
             "left": {

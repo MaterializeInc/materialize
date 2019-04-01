@@ -105,17 +105,11 @@ fn build_plan<S: Scope<Timestamp = Time>>(
             .as_collection(|k, ()| k.to_owned()),
         Plan::Project { outputs, input } => {
             let outputs = outputs.clone();
-            build_plan(&input, manager, scope).map(move |tuple| {
+            build_plan(&input, manager, scope).map(move |datum| {
                 Datum::Tuple(
                     outputs
                         .iter()
-                        .map(|expr| match expr {
-                            Expr::Column(i) => match &tuple {
-                                Datum::Tuple(t) => t[*i].clone(),
-                                _ => panic!("type error"),
-                            },
-                            Expr::Literal(s) => s.clone(),
-                        })
+                        .map(|expr| eval_expr(expr, &datum))
                         .collect(),
                 )
             })
@@ -123,5 +117,16 @@ fn build_plan<S: Scope<Timestamp = Time>>(
         Plan::Distinct(_) => unimplemented!(),
         Plan::UnionAll(_) => unimplemented!(),
         Plan::Join { .. } => unimplemented!(),
+    }
+}
+
+fn eval_expr(expr: &Expr, datum: &Datum) -> Datum {
+    match expr {
+        Expr::Ambient => datum.clone(),
+        Expr::Column(index, expr) => match eval_expr(expr, datum) {
+            Datum::Tuple(tuple) => tuple[*index].clone(),
+            _ => unreachable!(),
+        },
+        Expr::Literal(datum) => datum.clone(),
     }
 }
