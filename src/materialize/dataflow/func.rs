@@ -99,6 +99,22 @@ pub fn mod_float64(a: Datum, b: Datum) -> Datum {
     Datum::from(a.unwrap_float64() % b.unwrap_float64())
 }
 
+pub fn neg_int32(a: Datum) -> Datum {
+    Datum::from(-a.unwrap_int32())
+}
+
+pub fn neg_int64(a: Datum) -> Datum {
+    Datum::from(-a.unwrap_int64())
+}
+
+pub fn neg_float32(a: Datum) -> Datum {
+    Datum::from(-a.unwrap_float32())
+}
+
+pub fn neg_float64(a: Datum) -> Datum {
+    Datum::from(-a.unwrap_float64())
+}
+
 pub fn eq(a: Datum, b: Datum) -> Datum {
     Datum::from(a == b)
 }
@@ -184,15 +200,29 @@ impl BinaryFunc {
     }
 }
 
+pub fn is_null(a: Datum) -> Datum {
+    Datum::from(a == Datum::Null)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum UnaryFunc {
     Not,
+    IsNull,
+    NegInt32,
+    NegInt64,
+    NegFloat32,
+    NegFloat64,
 }
 
 impl UnaryFunc {
     pub fn func(self) -> fn(Datum) -> Datum {
         match self {
             UnaryFunc::Not => not,
+            UnaryFunc::IsNull => is_null,
+            UnaryFunc::NegInt32 => neg_int32,
+            UnaryFunc::NegInt64 => neg_int64,
+            UnaryFunc::NegFloat32 => neg_float32,
+            UnaryFunc::NegFloat64 => neg_float64,
         }
     }
 }

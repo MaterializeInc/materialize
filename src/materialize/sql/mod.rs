@@ -19,7 +19,7 @@ use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use crate::dataflow::func::BinaryFunc;
+use crate::dataflow::func::{BinaryFunc, UnaryFunc};
 use crate::dataflow::server::{Command, CommandSender};
 use crate::dataflow::{Connector, Dataflow, Expr, Plan, Source, View};
 use crate::repr::{Datum, FType, Type};
@@ -360,14 +360,81 @@ impl Parser {
                 ))
             }
             ASTNode::SQLValue(val) => self.parse_literal(val),
+            // TODO(benesch): why isn't IS [NOT] NULL a unary op?
+            ASTNode::SQLIsNull(expr) => self.parse_is_null_expr(expr, false, typ),
+            ASTNode::SQLIsNotNull(expr) => self.parse_is_null_expr(expr, true, typ),
+            // TODO(benesch): "SQLUnary" but "SQLBinaryExpr"?
+            ASTNode::SQLUnary { operator, expr } => self.parse_unary_expr(operator, expr, typ),
             ASTNode::SQLBinaryExpr { op, left, right } => {
                 self.parse_binary_expr(op, left, right, typ)
             }
+            ASTNode::SQLNested(expr) => self.parse_expr(expr, typ),
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
             ),
         }
+    }
+
+    fn parse_is_null_expr<'a>(
+        &self,
+        inner: &'a ASTNode,
+        not: bool,
+        typ: &Type,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let (expr, _) = self.parse_expr(inner, typ)?;
+        let mut expr = Expr::CallUnary {
+            func: UnaryFunc::IsNull,
+            expr: Box::new(expr),
+        };
+        if not {
+            expr = Expr::CallUnary {
+                func: UnaryFunc::Not,
+                expr: Box::new(expr),
+            }
+        }
+        let typ = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Bool,
+        };
+        Ok((expr, typ))
+    }
+
+    fn parse_unary_expr<'a>(
+        &self,
+        op: &'a SQLOperator,
+        expr: &'a ASTNode,
+        typ: &Type,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let (expr, typ) = self.parse_expr(expr, typ)?;
+        let (func, ftype) = match op {
+            SQLOperator::Not => (UnaryFunc::Not, FType::Bool),
+            SQLOperator::Plus => return Ok((expr, typ)), // no-op
+            SQLOperator::Minus => match typ.ftype {
+                FType::Int32 => (UnaryFunc::NegInt32, FType::Int32),
+                FType::Int64 => (UnaryFunc::NegInt64, FType::Int64),
+                FType::Float32 => (UnaryFunc::NegFloat32, FType::Float32),
+                FType::Float64 => (UnaryFunc::NegFloat64, FType::Float64),
+                _ => bail!("cannot negate {:?}", typ.ftype),
+            },
+            // These are the only unary operators.
+            //
+            // TODO(benesch): SQLOperator should be split into UnarySQLOperator
+            // and BinarySQLOperator so that the compiler can check
+            // exhaustiveness.
+            _ => unreachable!(),
+        };
+        let expr = Expr::CallUnary {
+            func,
+            expr: Box::new(expr),
+        };
+        let typ = Type {
+            name: None,
+            nullable: typ.nullable,
+            ftype,
+        };
+        Ok((expr, typ))
     }
 
     fn parse_binary_expr<'a>(
@@ -379,7 +446,6 @@ impl Parser {
     ) -> Result<(Expr, Type), failure::Error> {
         let (lexpr, ltype) = self.parse_expr(left, typ)?;
         let (rexpr, rtype) = self.parse_expr(right, typ)?;
-        // TODO(benesch): handle NULLs.
         let (func, ftype) = match op {
             SQLOperator::Plus => match (&ltype.ftype, &rtype.ftype) {
                 (FType::Int32, FType::Int32) => (BinaryFunc::AddInt32, FType::Int32),
@@ -438,7 +504,7 @@ impl Parser {
         };
         let typ = Type {
             name: None,
-            nullable: false, // TODO(benesch): make the functions declare this?
+            nullable: ltype.nullable || rtype.nullable,
             ftype,
         };
         Ok((expr, typ))
