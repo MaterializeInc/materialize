@@ -53,18 +53,29 @@ fn test_basic() -> Result<(), failure::Error> {
     // Create a watch after dataflows are created.
     let mut watch1b = ms1.register_dataflow_watch();
 
-    // Verify that all watches see the same events.
+    // The first two dataflows were created sequentially. Verify that all
+	// watchers saw them in their known order of creation.
     assert_events(
         vec![&mut watch1a, &mut watch1b, &mut watch2],
         &[
             DataflowEvent::Created(DummyDataflow("basic".into())),
             DataflowEvent::Created(DummyDataflow("basic2".into())),
+        ],
+        Order::Exact,
+    );
+
+    // The remaining five dataflows were created concurrently, so we don't know
+    // exactly what ordering they were created in.
+    assert_events(
+        vec![&mut watch1a, &mut watch1b, &mut watch2],
+        &[
             DataflowEvent::Created(DummyDataflow("concurrent0".into())),
             DataflowEvent::Created(DummyDataflow("concurrent1".into())),
             DataflowEvent::Created(DummyDataflow("concurrent2".into())),
             DataflowEvent::Created(DummyDataflow("concurrent3".into())),
             DataflowEvent::Created(DummyDataflow("concurrent4".into())),
         ],
+        Order::MutualAgreement,
     );
 
     // Delete a dataflow.
@@ -78,6 +89,7 @@ fn test_basic() -> Result<(), failure::Error> {
     assert_events(
         vec![&mut watch1a, &mut watch1b, &mut watch2],
         &[DataflowEvent::Deleted("basic".into())],
+        Order::Exact,
     );
 
     // Create a new watch, after the deletion, and verify that it sees a
@@ -87,12 +99,19 @@ fn test_basic() -> Result<(), failure::Error> {
         vec![&mut watch1c],
         &[
             DataflowEvent::Created(DummyDataflow("basic2".into())),
+        ],
+        Order::Exact,
+    );
+    assert_events(
+        vec![&mut watch1c],
+        &[
             DataflowEvent::Created(DummyDataflow("concurrent0".into())),
             DataflowEvent::Created(DummyDataflow("concurrent1".into())),
             DataflowEvent::Created(DummyDataflow("concurrent2".into())),
             DataflowEvent::Created(DummyDataflow("concurrent3".into())),
             DataflowEvent::Created(DummyDataflow("concurrent4".into())),
         ],
+        Order::Exact,
     );
 
     // Drop the MetaStores, which will cancel any background futures they've
@@ -115,7 +134,16 @@ fn test_basic() -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn assert_events<S>(streams: S, events: &[DataflowEvent<DummyDataflow>])
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Order {
+    /// The ordering must match exactly the ordering specified.
+    Exact,
+    /// The exact ordering does not matter, but it must be consistent with the
+    /// other watchers.
+    MutualAgreement,
+}
+
+fn assert_events<S>(streams: S, events: &[DataflowEvent<DummyDataflow>], ord: Order)
 where
     S: IntoIterator,
     S::Item: Stream<Item = DataflowEvent<DummyDataflow>>,
@@ -124,8 +152,17 @@ where
     let n = events.len() as u64;
     let streams = streams.into_iter().map(|s| s.take(n).collect());
     let results = future::join_all(streams).wait().unwrap();
+    if results.len() == 0 {
+        panic!("assert_events called with no event streams")
+    }
+    let baseline = &results[0];
+    for (i, res) in results.iter().enumerate() {
+        assert_eq!(res, baseline, "watcher {} and 0 disagree on ordering", i)
+    }
     for (i, mut res) in results.into_iter().enumerate() {
-        res.sort();
-        assert_eq!(res, events, "watcher {} event mismatch", i);
+        if ord != Order::Exact {
+            res.sort();
+        }
+        assert_eq!(res, events, "watcher {} does not match expected ordering", i);
     }
 }

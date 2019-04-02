@@ -9,6 +9,7 @@ use futures::sync::mpsc;
 use futures::sync::mpsc::Sender;
 use futures::{future, stream, Future, Sink, Stream};
 use lazy_static::lazy_static;
+use linked_hash_map::LinkedHashMap;
 use log::error;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -45,7 +46,8 @@ pub struct MetaStore<D> {
 }
 
 struct Inner<D> {
-    dataflows: HashMap<String, D>,
+    // Dataflows are stored in a LinkedHashMap to maintain topological ordering.
+    dataflows: LinkedHashMap<String, D>,
     senders: Vec<Sender<DataflowEvent<D>>>,
 }
 
@@ -64,7 +66,7 @@ where
         }
 
         let inner = Arc::new(Mutex::new(Inner {
-            dataflows: HashMap::new(),
+            dataflows: LinkedHashMap::new(),
             senders: Vec::new(),
         }));
 
@@ -287,17 +289,26 @@ where
         .collect();
 
     future::join_all(data_futs).and_then(move |results| {
-        let results: Vec<_> = results
+        let mut results: Vec<_> = results
             .into_iter()
-            .filter_map(|(_zk, name, data)| data.map(|(bytes, _stat)| (name, bytes)))
+            .filter_map(|(_zk, name, data)| data.map(|(bytes, stat)| (stat.czxid, name, bytes)))
             .collect();
+        // It is very important to present dataflows in topological order, or
+        // building the dataflow will crash because the dataflows upon which
+        // it is built will not yet be present. Sorting by order of creation is
+        // implicitly a topological sort, as you can't create a dataflow unless
+        // all the dataflows upon which it depends are already created.
+        //
+        // Warning: this assumption breaks if we start altering dataflows
+        // in place. That's not on the horizon, though.
+        results.sort_by_key(|r| r.0);
 
         let mut send_futs: FuturesUnordered<
             Box<dyn Future<Item = (), Error = failure::Error> + Send>,
         > = FuturesUnordered::new();
         {
             let mut inner = inner.lock().unwrap();
-            for (name, bytes) in results {
+            for (_czxid, name, bytes) in results {
                 let dataflow: D = match BINCODER.deserialize(&bytes) {
                     Ok(d) => d,
                     Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
