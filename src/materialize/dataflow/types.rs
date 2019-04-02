@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::func::{BinaryFunc, UnaryFunc};
+use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::repr::{Datum, Type};
 
 /// System-wide notion of time.
@@ -93,6 +93,19 @@ pub enum Plan {
     },
     /// Filter records based on predicate.
     Filter { predicate: Expr, input: Box<Plan> },
+    /// Aggregate records that share a key.
+    Aggregate {
+        key: Expr,
+        aggs: Vec<Aggregate>,
+        input: Box<Plan>,
+    }
+}
+
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Aggregate {
+    pub func: AggregateFunc,
+    pub expr: Expr,
 }
 
 #[serde(rename_all = "snake_case")]

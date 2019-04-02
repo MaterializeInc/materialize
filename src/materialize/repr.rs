@@ -88,6 +88,13 @@ impl Datum {
             _ => panic!("Datum::unwrap_float64 called on {:?}", self),
         }
     }
+
+    pub fn unwrap_tuple(self) -> Tuple {
+        match self {
+            Datum::Tuple(tuple) => tuple,
+            _ => panic!("Datum::unwrap_tuple called on {:?}", self),
+        }
+    }
 }
 
 impl From<bool> for Datum {

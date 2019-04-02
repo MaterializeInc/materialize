@@ -5,7 +5,9 @@
 
 use avro_rs::Schema as AvroSchema;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::{AsCollection, Collection};
+use std::iter;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
@@ -120,6 +122,29 @@ fn build_plan<S: Scope<Timestamp = Time>>(
                     _ => unreachable!(),
                 }
             })
+        }
+
+        // TODO(benesch): this is extremely inefficient. Optimize.
+        Plan::Aggregate { key, aggs, input } => {
+            let key = key.clone();
+            let aggs = aggs.clone();
+            build_plan(&input, manager, scope)
+                .map(move |datum| (eval_expr(&key, &datum), datum))
+                .reduce(move |_key, input, output| {
+                    let res: Vec<_> = aggs.iter().map(|agg| {
+                        let datums = input.iter().map(|(datum, cnt)| {
+                            let datum = eval_expr(&agg.expr, datum);
+                            iter::repeat(datum).take(*cnt as usize)
+                        }).flatten();
+                        (agg.func.func())(datums)
+                    }).collect();
+                    output.push((res, 1));
+                })
+                .map(|(key, values)| {
+                    let mut tuple = key.unwrap_tuple();
+                    tuple.extend(values);
+                    Datum::Tuple(tuple)
+                })
         }
 
         Plan::Distinct(_) => unimplemented!(),

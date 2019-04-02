@@ -7,7 +7,6 @@
 
 use failure::{bail, format_err};
 use futures::{future, Future, Stream};
-use lazy_static::lazy_static;
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
@@ -16,9 +15,9 @@ use sqlparser::sqlast::{
     SQLStatement, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
-use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use self::catalog::{NameResolver, TableCollection};
 use crate::dataflow::func::{BinaryFunc, UnaryFunc};
 use crate::dataflow::server::{Command, CommandSender};
 use crate::dataflow::{Connector, Dataflow, Expr, Plan, Source, View};
@@ -27,17 +26,7 @@ use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
 use ore::future::FutureExt;
 
-lazy_static! {
-    static ref DUAL_TYPE: Type = Type {
-        name: Some("dual".into()),
-        nullable: false,
-        ftype: FType::Tuple(vec![Type {
-            name: Some("x".into()),
-            nullable: false,
-            ftype: FType::String,
-        }]),
-    };
-}
+mod catalog;
 
 pub enum QueryResponse {
     CreatedDataSource,
@@ -96,7 +85,7 @@ fn handle_create_dataflow(
         let parser = Parser::new(
             dataflows
                 .into_iter()
-                .map(|(n, d)| (n, (0, d.typ().to_owned()))),
+                .map(|(n, d)| (n, d.typ().to_owned())),
         );
         let dataflow = match parser.parse_statement(&stmt) {
             Ok(dataflow) => dataflow,
@@ -188,14 +177,14 @@ impl<'ast> Visit<'ast> for ObjectNameVisitor {
 
 #[allow(dead_code)]
 pub struct Parser {
-    dataflows: HashMap<String, (usize, Type)>,
+    dataflows: TableCollection,
 }
 
 #[allow(dead_code)]
 impl Parser {
     pub fn new<I>(iter: I) -> Parser
     where
-        I: IntoIterator<Item = (String, (usize, Type))>,
+        I: IntoIterator<Item = (String, Type)>,
     {
         Parser {
             dataflows: iter.into_iter().collect(),
@@ -279,28 +268,52 @@ impl Parser {
             bail!("JOIN is not yet supported");
         }
 
-        let (plan, schema) = match &s.relation {
+        let mut nr = NameResolver::new(&self.dataflows);
+
+        // Step 1. Handle FROM clause, including joins.
+        let plan = match &s.relation {
             Some(TableFactor::Table { name, .. }) => {
                 let name = self.parse_sql_object_name(name)?;
-                let schema = match self.dataflows.get(&name) {
-                    None => bail!("no dataflow named {}", name),
-                    Some((_version, schema)) => schema,
-                };
-                (Plan::Source(name), schema)
+                nr.import_table(&name);
+                Plan::Source(name)
             }
             Some(TableFactor::Derived { .. }) => {
                 bail!("nested subqueries are not yet supported");
             }
             None => {
                 // https://en.wikipedia.org/wiki/DUAL_table
-                (Plan::Source("dual".into()), &*DUAL_TYPE)
+                nr.import_table("$dual");
+                Plan::Source("$dual".into())
             }
         };
+        // TODO(benesch): joins.
 
+        // Step 2. Handle WHERE clause.
+        let plan = match &s.selection {
+            Some(expr) => {
+                let (expr, typ) = self.parse_expr(expr, &nr)?;
+                if typ.ftype != FType::Bool {
+                    bail!("WHERE clause must have boolean type, not {:?}", typ.ftype);
+                }
+                Plan::Filter {
+                    predicate: expr,
+                    input: Box::new(plan),
+                }
+            }
+            None => plan,
+        };
+
+        // Step 3. Handle GROUP BY clause.
+        // TODO(benesch)
+
+        // Step 4. Handle HAVING clause.
+        // TODO(benesch)
+
+        // Step 5. Handle projections.
         let mut outputs = Vec::new();
         let mut pschema = Vec::new();
         for p in &s.projection {
-            let (expr, typ) = self.parse_select_item(p, schema)?;
+            let (expr, typ) = self.parse_select_item(p, &nr)?;
             outputs.push(expr);
             pschema.push(typ);
         }
@@ -323,10 +336,10 @@ impl Parser {
     fn parse_select_item<'a>(
         &self,
         s: &'a SQLSelectItem,
-        typ: &Type,
+        nr: &NameResolver,
     ) -> Result<(Expr, Type), failure::Error> {
         match s {
-            SQLSelectItem::UnnamedExpression(e) => self.parse_expr(e, typ),
+            SQLSelectItem::UnnamedExpression(e) => self.parse_expr(e, nr),
             _ => bail!(
                 "complicated select items are not yet supported: {}",
                 s.to_string()
@@ -334,41 +347,27 @@ impl Parser {
         }
     }
 
-    fn parse_expr<'a>(&self, e: &'a ASTNode, typ: &Type) -> Result<(Expr, Type), failure::Error> {
+    fn parse_expr<'a>(
+        &self,
+        e: &'a ASTNode,
+        nr: &NameResolver,
+    ) -> Result<(Expr, Type), failure::Error> {
         match e {
             ASTNode::SQLIdentifier(name) => {
-                let i = match &typ.ftype {
-                    FType::Tuple(t) => t.iter().position(|f| f.name == Some(name.clone())),
-                    _ => unimplemented!(),
-                };
-                let i = match i {
-                    Some(i) => i,
-                    None => bail!("unknown column {}", name),
-                };
+                let (i, typ) = nr.resolve_column(name)?;
                 let expr = Expr::Column(i, Box::new(Expr::Ambient));
-                let (ftype, nullable) = match &typ.ftype {
-                    FType::Tuple(t) => (t[i].ftype.clone(), t[i].nullable),
-                    _ => unreachable!(),
-                };
-                Ok((
-                    expr,
-                    Type {
-                        name: Some(name.clone()),
-                        nullable,
-                        ftype,
-                    },
-                ))
+                Ok((expr, typ))
             }
             ASTNode::SQLValue(val) => self.parse_literal(val),
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            ASTNode::SQLIsNull(expr) => self.parse_is_null_expr(expr, false, typ),
-            ASTNode::SQLIsNotNull(expr) => self.parse_is_null_expr(expr, true, typ),
+            ASTNode::SQLIsNull(expr) => self.parse_is_null_expr(expr, false, nr),
+            ASTNode::SQLIsNotNull(expr) => self.parse_is_null_expr(expr, true, nr),
             // TODO(benesch): "SQLUnary" but "SQLBinaryExpr"?
-            ASTNode::SQLUnary { operator, expr } => self.parse_unary_expr(operator, expr, typ),
+            ASTNode::SQLUnary { operator, expr } => self.parse_unary_expr(operator, expr, nr),
             ASTNode::SQLBinaryExpr { op, left, right } => {
-                self.parse_binary_expr(op, left, right, typ)
+                self.parse_binary_expr(op, left, right, nr)
             }
-            ASTNode::SQLNested(expr) => self.parse_expr(expr, typ),
+            ASTNode::SQLNested(expr) => self.parse_expr(expr, nr),
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
@@ -380,9 +379,9 @@ impl Parser {
         &self,
         inner: &'a ASTNode,
         not: bool,
-        typ: &Type,
+        nr: &NameResolver,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (expr, _) = self.parse_expr(inner, typ)?;
+        let (expr, _) = self.parse_expr(inner, nr)?;
         let mut expr = Expr::CallUnary {
             func: UnaryFunc::IsNull,
             expr: Box::new(expr),
@@ -405,9 +404,9 @@ impl Parser {
         &self,
         op: &'a SQLOperator,
         expr: &'a ASTNode,
-        typ: &Type,
+        nr: &NameResolver,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (expr, typ) = self.parse_expr(expr, typ)?;
+        let (expr, typ) = self.parse_expr(expr, nr)?;
         let (func, ftype) = match op {
             SQLOperator::Not => (UnaryFunc::Not, FType::Bool),
             SQLOperator::Plus => return Ok((expr, typ)), // no-op
@@ -442,10 +441,10 @@ impl Parser {
         op: &'a SQLOperator,
         left: &'a ASTNode,
         right: &'a ASTNode,
-        typ: &Type,
+        nr: &NameResolver,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (lexpr, ltype) = self.parse_expr(left, typ)?;
-        let (rexpr, rtype) = self.parse_expr(right, typ)?;
+        let (lexpr, ltype) = self.parse_expr(left, nr)?;
+        let (rexpr, rtype) = self.parse_expr(right, nr)?;
         let (func, ftype) = match op {
             SQLOperator::Plus => match (&ltype.ftype, &rtype.ftype) {
                 (FType::Int32, FType::Int32) => (BinaryFunc::AddInt32, FType::Int32),
