@@ -20,7 +20,7 @@ pub struct NameResolver<'a> {
 impl<'a> NameResolver<'a> {
     pub fn new(all_tables: &'a TableCollection) -> NameResolver<'a> {
         NameResolver {
-            all_tables: all_tables,
+            all_tables,
             columns: Vec::new(),
         }
     }
@@ -54,9 +54,10 @@ impl<'a> NameResolver<'a> {
     }
 
     pub fn resolve_column(&self, name: &str) -> Result<(usize, Type), failure::Error> {
-        let i = self.columns.iter().position(|t| {
-            t.name.as_ref().map_or(false, |n| n == name)
-        });
+        let i = self
+            .columns
+            .iter()
+            .position(|t| t.name.as_ref().map_or(false, |n| n == name));
         let i = match i {
             Some(i) => i,
             None => bail!("no column named {} in scope", name),
@@ -64,7 +65,6 @@ impl<'a> NameResolver<'a> {
         Ok((i, self.columns[i].clone()))
     }
 }
-
 
 lazy_static! {
     static ref DUAL_TYPE: Type = Type {

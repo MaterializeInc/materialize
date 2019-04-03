@@ -54,7 +54,7 @@ fn test_basic() -> Result<(), failure::Error> {
     let mut watch1b = ms1.register_dataflow_watch();
 
     // The first two dataflows were created sequentially. Verify that all
-	// watchers saw them in their known order of creation.
+    // watchers saw them in their known order of creation.
     assert_events(
         vec![&mut watch1a, &mut watch1b, &mut watch2],
         &[
@@ -97,9 +97,7 @@ fn test_basic() -> Result<(), failure::Error> {
     let mut watch1c = ms1.register_dataflow_watch();
     assert_events(
         vec![&mut watch1c],
-        &[
-            DataflowEvent::Created(DummyDataflow("basic2".into())),
-        ],
+        &[DataflowEvent::Created(DummyDataflow("basic2".into()))],
         Order::Exact,
     );
     assert_events(
@@ -163,6 +161,10 @@ where
         if ord != Order::Exact {
             res.sort();
         }
-        assert_eq!(res, events, "watcher {} does not match expected ordering", i);
+        assert_eq!(
+            res, events,
+            "watcher {} does not match expected ordering",
+            i
+        );
     }
 }

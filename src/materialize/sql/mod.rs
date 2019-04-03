@@ -82,11 +82,7 @@ fn handle_create_dataflow(
             .map(|(stmt, dataflows)| (meta_store, stmt, dataflows))
     })
     .and_then(|(meta_store, stmt, dataflows)| {
-        let parser = Parser::new(
-            dataflows
-                .into_iter()
-                .map(|(n, d)| (n, d.typ().to_owned())),
-        );
+        let parser = Parser::new(dataflows.into_iter().map(|(n, d)| (n, d.typ().to_owned())));
         let dataflow = match parser.parse_statement(&stmt) {
             Ok(dataflow) => dataflow,
             Err(err) => return future::err(err).left(),
@@ -572,8 +568,7 @@ mod tests {
                 },
             ]),
         };
-        let version = 1;
-        let parser = Parser::new(vec![("src".into(), (version, typ))]);
+        let parser = Parser::new(vec![("src".into(), typ)]);
 
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},

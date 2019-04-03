@@ -98,7 +98,7 @@ pub enum Plan {
         key: Expr,
         aggs: Vec<Aggregate>,
         input: Box<Plan>,
-    }
+    },
 }
 
 #[serde(rename_all = "snake_case")]

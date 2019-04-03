@@ -227,12 +227,18 @@ impl UnaryFunc {
     }
 }
 
-pub fn sum_int32<I>(datums: I) -> Datum where I: IntoIterator<Item = Datum> {
+pub fn sum_int32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
     let x: i32 = datums.into_iter().map(|d| d.unwrap_int32()).sum();
     Datum::from(x)
 }
 
-pub fn sum_int64<I>(datums: I) -> Datum where I: IntoIterator<Item = Datum> {
+pub fn sum_int64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
     let x: i64 = datums.into_iter().map(|d| d.unwrap_int64()).sum();
     Datum::from(x)
 }
@@ -259,7 +265,10 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    pub fn func<I>(self) -> fn(I) -> Datum where I: IntoIterator<Item = Datum> {
+    pub fn func<I>(self) -> fn(I) -> Datum
+    where
+        I: IntoIterator<Item = Datum>,
+    {
         match self {
             AggregateFunc::SumInt32 => sum_int32,
             AggregateFunc::SumInt64 => sum_int64,

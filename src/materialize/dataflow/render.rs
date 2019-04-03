@@ -131,13 +131,19 @@ fn build_plan<S: Scope<Timestamp = Time>>(
             build_plan(&input, manager, scope)
                 .map(move |datum| (eval_expr(&key, &datum), datum))
                 .reduce(move |_key, input, output| {
-                    let res: Vec<_> = aggs.iter().map(|agg| {
-                        let datums = input.iter().map(|(datum, cnt)| {
-                            let datum = eval_expr(&agg.expr, datum);
-                            iter::repeat(datum).take(*cnt as usize)
-                        }).flatten();
-                        (agg.func.func())(datums)
-                    }).collect();
+                    let res: Vec<_> = aggs
+                        .iter()
+                        .map(|agg| {
+                            let datums = input
+                                .iter()
+                                .map(|(datum, cnt)| {
+                                    let datum = eval_expr(&agg.expr, datum);
+                                    iter::repeat(datum).take(*cnt as usize)
+                                })
+                                .flatten();
+                            (agg.func.func())(datums)
+                        })
+                        .collect();
                     output.push((res, 1));
                 })
                 .map(|(key, values)| {
