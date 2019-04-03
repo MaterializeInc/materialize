@@ -50,6 +50,7 @@ where
     cmd_rx: CommandReceiver,
     sequencer: Sequencer<Command>,
     traces: TraceManager,
+    rpc_client: reqwest::Client,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -63,6 +64,7 @@ where
             cmd_rx,
             sequencer,
             traces: TraceManager::new(),
+            rpc_client: reqwest::Client::new(),
         }
     }
 
@@ -100,8 +102,7 @@ where
                         cur.step_key(&storage)
                     }
                     let encoded = bincode::serialize(&out).unwrap();
-                    let client = reqwest::Client::new();
-                    client
+                    self.rpc_client
                         .post("http://localhost:6875/api/peek-results")
                         .header("X-Materialize-Query-UUID", uuid.to_string())
                         .body(encoded)
