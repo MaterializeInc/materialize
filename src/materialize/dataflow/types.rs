@@ -84,8 +84,10 @@ pub enum Plan {
     UnionAll(Vec<Plan>),
     /// Join two dataflows.
     Join {
-        /// Expressions whose values must be equal.
-        keys: Vec<(Expr, Expr)>,
+        /// Expression to compute the key from the left input.
+        left_key: Expr,
+        /// Expression to compute the key from the right input.
+        right_key: Expr,
         /// Plan for the left input.
         left: Box<Plan>,
         /// Plan for the right input.
@@ -153,10 +155,8 @@ mod tests {
                     Expr::Column(2, Box::new(Expr::Ambient)),
                 ],
                 input: Box::new(Plan::Join {
-                    keys: vec![(
-                        Expr::Column(0, Box::new(Expr::Ambient)),
-                        Expr::Column(0, Box::new(Expr::Ambient)),
-                    )],
+                    left_key: Expr::Column(0, Box::new(Expr::Ambient)),
+                    right_key: Expr::Column(0, Box::new(Expr::Ambient)),
                     left: Box::new(Plan::Source("orders".into())),
                     right: Box::new(Plan::Distinct(Box::new(Plan::UnionAll(vec![
                         Plan::Source("customers2018".into()),
@@ -203,22 +203,18 @@ mod tests {
         ],
         "input": {
           "join": {
-            "keys": [
-              [
-                {
-                  "column": [
-                    0,
-                    "ambient"
-                  ]
-                },
-                {
-                  "column": [
-                    0,
-                    "ambient"
-                  ]
-                }
+            "left_key": {
+              "column": [
+                0,
+                "ambient"
               ]
-            ],
+            },
+            "right_key": {
+              "column": [
+                0,
+                "ambient"
+              ]
+            },
             "left": {
               "source": "orders"
             },

@@ -12,11 +12,17 @@ use crate::repr::{FType, Type};
 
 pub type TableCollection = HashMap<String, Type>;
 
+pub enum Side {
+    Left,
+    Right,
+}
+
 /// Manages resolution of table and column references.
 pub struct NameResolver<'a> {
     all_tables: &'a TableCollection,
     columns: Vec<Type>,
     funcs: HashMap<*const SQLIdent, (usize, Type)>,
+    breakpoint: usize,
 }
 
 impl<'a> NameResolver<'a> {
@@ -25,6 +31,7 @@ impl<'a> NameResolver<'a> {
             all_tables,
             columns: Vec::new(),
             funcs: HashMap::new(),
+            breakpoint: 0,
         }
     }
 
@@ -37,6 +44,7 @@ impl<'a> NameResolver<'a> {
     }
 
     pub fn import_table(&mut self, name: &str) {
+        self.breakpoint = self.columns.len();
         let typ = self.get_table(name);
         match &typ.ftype {
             FType::Null
@@ -66,6 +74,18 @@ impl<'a> NameResolver<'a> {
             None => bail!("no column named {} in scope", name),
         };
         Ok((i, self.columns[i].clone()))
+    }
+
+    pub fn side(&self, pos: usize) -> Side {
+        if pos < self.breakpoint {
+            Side::Left
+        } else {
+            Side::Right
+        }
+    }
+
+    pub fn adjust_rhs(&self, pos: usize) -> usize {
+        pos - self.breakpoint
     }
 
     #[allow(clippy::ptr_arg)]

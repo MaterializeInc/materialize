@@ -11,13 +11,13 @@ use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
-    ASTNode, SQLIdent, SQLObjectName, SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr,
-    SQLStatement, TableFactor, Value,
+    ASTNode, JoinConstraint, JoinOperator, SQLIdent, SQLObjectName, SQLOperator, SQLQuery,
+    SQLSelect, SQLSelectItem, SQLSetExpr, SQLStatement, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::sync::{Arc, RwLock};
 
-use self::catalog::{NameResolver, TableCollection};
+use self::catalog::{NameResolver, Side, TableCollection};
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::dataflow::server::{Command, CommandSender};
 use crate::dataflow::{Aggregate, Connector, Dataflow, Expr, Plan, Source, View};
@@ -311,21 +311,17 @@ impl Parser {
     }
 
     fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
-        if !s.joins.is_empty() {
-            bail!("JOIN is not yet supported");
-        }
-
         let mut nr = NameResolver::new(&self.dataflows);
 
         // Step 1. Handle FROM clause, including joins.
-        let plan = match &s.relation {
+        let mut plan = match &s.relation {
             Some(TableFactor::Table { name, .. }) => {
                 let name = self.parse_sql_object_name(name)?;
                 nr.import_table(&name);
                 Plan::Source(name)
             }
             Some(TableFactor::Derived { .. }) => {
-                bail!("nested subqueries are not yet supported");
+                bail!("subqueries are not yet supported");
             }
             None => {
                 // https://en.wikipedia.org/wiki/DUAL_table
@@ -333,7 +329,25 @@ impl Parser {
                 Plan::Source("$dual".into())
             }
         };
-        // TODO(benesch): joins.
+        for join in &s.joins {
+            match &join.relation {
+                TableFactor::Table { name, .. } => {
+                    let name = self.parse_sql_object_name(&name)?;
+                    nr.import_table(&name);
+                    let (left_key, right_key) =
+                        self.parse_join_operator(&join.join_operator, &nr)?;
+                    plan = Plan::Join {
+                        left_key,
+                        right_key,
+                        left: Box::new(plan),
+                        right: Box::new(Plan::Source(name)),
+                    }
+                }
+                TableFactor::Derived { .. } => {
+                    bail!("subqueries are not yet supported");
+                }
+            }
+        }
 
         // Step 2. Handle WHERE clause.
         let plan = match &s.selection {
@@ -418,12 +432,10 @@ impl Parser {
             outputs.push(expr);
             proj_type.push(typ);
         }
-
         let plan = Plan::Project {
             outputs,
             input: Box::new(plan),
         };
-
         Ok((
             plan,
             Type {
@@ -446,6 +458,90 @@ impl Parser {
                 s.to_string()
             ),
         }
+    }
+
+    fn parse_join_operator<'a>(
+        &self,
+        op: &'a JoinOperator,
+        nr: &NameResolver,
+    ) -> Result<(Expr, Expr), failure::Error> {
+        match op {
+            JoinOperator::Inner(constraint) => match constraint {
+                JoinConstraint::On(expr) => self.parse_join_on_expr(expr, nr),
+                JoinConstraint::Natural => bail!("natural joins are not yet supported"),
+                JoinConstraint::Using(_) => bail!("using joins are not yet supported"),
+            },
+            JoinOperator::LeftOuter(_) => bail!("left outer joins are not yet supported"),
+            JoinOperator::RightOuter(_) => bail!("right outer joins are not yet supported"),
+            JoinOperator::FullOuter(_) => bail!("full outer joins are not yet supported"),
+            JoinOperator::Implicit => bail!("multiple from tables are not yet supported"),
+            JoinOperator::Cross => bail!("cross joins are not yet supported"),
+        }
+    }
+
+    fn parse_join_on_expr<'a>(
+        &self,
+        expr: &'a ASTNode,
+        nr: &NameResolver,
+    ) -> Result<(Expr, Expr), failure::Error> {
+        fn extract(e: &ASTNode, nr: &NameResolver) -> Result<(usize, Type, Side), failure::Error> {
+            match e {
+                ASTNode::SQLIdentifier(name) => {
+                    let (pos, typ) = nr.resolve_column(name)?;
+                    Ok((pos, typ, nr.side(pos)))
+                }
+                _ => bail!(
+                    "ON clause contained unsupported complicated expression: {:?}",
+                    e
+                ),
+            }
+        };
+
+        fn work(
+            e: &ASTNode,
+            left_keys: &mut Vec<Expr>,
+            right_keys: &mut Vec<Expr>,
+            nr: &NameResolver,
+        ) -> Result<(), failure::Error> {
+            match unnest(e) {
+                ASTNode::SQLBinaryExpr { left, op, right } => match op {
+                    SQLOperator::And => {
+                        work(left, left_keys, right_keys, nr)?;
+                        work(right, left_keys, right_keys, nr)
+                    }
+                    SQLOperator::Eq => {
+                        let (lpos, ltype, lside) = extract(left, nr)?;
+                        let (rpos, rtype, rside) = extract(right, nr)?;
+                        let (lpos, ltype, rpos, rtype) = match (lside, rside) {
+                            (Side::Left, Side::Left) | (Side::Right, Side::Right) => {
+                                bail!("ON clause compares two columns from the same table");
+                            }
+                            (Side::Left, Side::Right) => (lpos, ltype, rpos, rtype),
+                            (Side::Right, Side::Left) => (rpos, rtype, lpos, ltype),
+                        };
+                        if ltype.ftype != rtype.ftype {
+                            bail!("cannot compare {:?} and {:?}", ltype.ftype, rtype.ftype);
+                        }
+                        let lexpr = Expr::Column(lpos, Box::new(Expr::Ambient));
+                        let rexpr = Expr::Column(nr.adjust_rhs(rpos), Box::new(Expr::Ambient));
+                        left_keys.push(lexpr);
+                        right_keys.push(rexpr);
+                        Ok(())
+                    }
+                    _ => bail!("ON clause contained non-equality operator: {:?}", op),
+                },
+                _ => bail!(
+                    "ON clause contained unsupported complicated expression: {:?}",
+                    e
+                ),
+            }
+        };
+
+        let mut left_keys = Vec::new();
+        let mut right_keys = Vec::new();
+        work(expr, &mut left_keys, &mut right_keys, nr)?;
+
+        Ok((Expr::Tuple(left_keys), Expr::Tuple(right_keys)))
     }
 
     fn parse_expr<'a>(
@@ -659,6 +755,13 @@ impl Parser {
     }
 }
 
+fn unnest(expr: &ASTNode) -> &ASTNode {
+    match expr {
+        ASTNode::SQLNested(expr) => unnest(expr),
+        _ => expr,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -825,7 +928,92 @@ mod tests {
                         name: None,
                         nullable: true,
                         ftype: FType::Int64,
-                    },]),
+                    }]),
+                }
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_basic_join() -> Result<(), failure::Error> {
+        let src1_type = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Tuple(vec![
+                Type {
+                    name: Some("a".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+                Type {
+                    name: Some("b".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+            ]),
+        };
+        let src2_type = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Tuple(vec![
+                Type {
+                    name: Some("c".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+                Type {
+                    name: Some("d".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+            ]),
+        };
+        let parser = Parser::new(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
+
+        let stmts = SQLParser::parse_sql(
+            &AnsiSqlDialect {},
+            "CREATE MATERIALIZED VIEW v AS SELECT a, b, d FROM src1 JOIN src2 ON c = b".into(),
+        )?;
+        let dataflow = parser.parse_statement(&stmts[0])?;
+        assert_eq!(
+            dataflow,
+            Dataflow::View(View {
+                name: "v".into(),
+                plan: Plan::Project {
+                    outputs: vec![
+                        Expr::Column(0, Box::new(Expr::Ambient)),
+                        Expr::Column(1, Box::new(Expr::Ambient)),
+                        Expr::Column(3, Box::new(Expr::Ambient)),
+                    ],
+                    input: Box::new(Plan::Join {
+                        left_key: Expr::Tuple(vec![Expr::Column(1, Box::new(Expr::Ambient))]),
+                        right_key: Expr::Tuple(vec![Expr::Column(0, Box::new(Expr::Ambient))]),
+                        left: Box::new(Plan::Source("src1".into())),
+                        right: Box::new(Plan::Source("src2".into())),
+                    }),
+                },
+                typ: Type {
+                    name: None,
+                    nullable: false,
+                    ftype: FType::Tuple(vec![
+                        Type {
+                            name: Some("a".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                        Type {
+                            name: Some("b".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                        Type {
+                            name: Some("d".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                    ]),
                 }
             })
         );

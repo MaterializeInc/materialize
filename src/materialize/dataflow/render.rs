@@ -5,6 +5,7 @@
 
 use avro_rs::Schema as AvroSchema;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::{AsCollection, Collection};
 use std::iter;
@@ -153,9 +154,27 @@ fn build_plan<S: Scope<Timestamp = Time>>(
                 })
         }
 
+        Plan::Join {
+            left_key,
+            right_key,
+            left,
+            right,
+        } => {
+            let left_key = left_key.clone();
+            let right_key = right_key.clone();
+            let left = build_plan(&left, manager, scope)
+                .map(move |datum| (eval_expr(&left_key, &datum), datum));
+            let right = build_plan(&right, manager, scope)
+                .map(move |datum| (eval_expr(&right_key, &datum), datum));
+            left.join(&right).map(|(_key, (left, right))| {
+                let mut tuple = left.unwrap_tuple();
+                tuple.extend(right.unwrap_tuple());
+                Datum::Tuple(tuple)
+            })
+        }
+
         Plan::Distinct(_) => unimplemented!(),
         Plan::UnionAll(_) => unimplemented!(),
-        Plan::Join { .. } => unimplemented!(),
     }
 }
 
