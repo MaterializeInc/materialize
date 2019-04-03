@@ -118,7 +118,7 @@ pub fn init() {
             // TODO(benesch): this allocates a lot. At the time of writing, the
             // only goal was to prevent my eyes from bleeding when looking at
             // log messages.
-            let ts = buf.timestamp();
+            let ts = buf.precise_timestamp();
             let level = buf.default_styled_level(record.level());
             let fileline = match (record.file(), record.line()) {
                 (Some(file), Some(line)) => {
