@@ -38,7 +38,7 @@ pub fn build_dataflow<A: Allocate>(
                 consumer_config
                     .set("produce.offset.report", "true")
                     .set("auto.offset.reset", "smallest")
-                    .set("group.id", "example")
+                    .set("group.id", &format!("materialize-{}", src.name))
                     .set("enable.auto.commit", "false")
                     .set("enable.partition.eof", "false")
                     .set("auto.offset.reset", "earliest")
