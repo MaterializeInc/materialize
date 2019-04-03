@@ -34,6 +34,7 @@ try cargo test
 # https://github.com/rust-lang/rust-clippy/issues/3840
 try bin/check
 
+echo "+++ Status report"
 echo "$passed/$total commands passed"
 if ((passed != total)); then
     exit 1

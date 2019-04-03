@@ -11,9 +11,10 @@ steps:
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
-            - "$HOME/.cache/sccache:/sccache"
-            - "$HOME/.cargo:/cargo"
+          - "$HOME/.cache/sccache:/sccache"
+          - "$HOME/.cargo:/cargo"
           environment:
-            - RUSTC_WRAPPER=sccache
-            - SCCACHE_DIR=/sccache
-            - CARGO_HOME=/cargo
+          - BUILDKITE
+          - RUSTC_WRAPPER=sccache
+          - SCCACHE_DIR=/sccache
+          - CARGO_HOME=/cargo
