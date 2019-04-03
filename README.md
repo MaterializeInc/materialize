@@ -7,7 +7,7 @@ Material provides streaming SQL materialized views on top of
 
 [differential dataflow]: https://github.com/timelydata/differential-dataflow
 
-## Demo instructions
+## Basic demo instruction
 
 Assuming you have ZooKeeper, Kafka, and the Confluent Schema Registry running
 on your local machine on the default ports:
@@ -34,6 +34,7 @@ $ psql -h localhost -p 6875 sslmode=disable
 ```
 
 ## Aggregate demo
+
 ```bash
 $ kafka-avro-console-producer --topic aggdata --broker-list localhost:9092 --property value.schema='{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}'
 # {"a": 1, "b": 1}
@@ -41,6 +42,30 @@ $ kafka-avro-console-producer --topic aggdata --broker-list localhost:9092 --pro
 # {"a": 3, "b": 1}
 # {"a": 1, "b": 2}
 
+$ psql -h localhost -p 6875 sslmode=disable
 > CREATE DATA SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}';
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
+> PEEK aggtest;
+```
+
+## Join demo
+
+```bash
+$ kafka-avro-console-producer --topic src1 --broker-list localhost:9092 --property value.schema='{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}'
+# {"a": 1, "b": 1}
+# {"a": 2, "b": 1}
+# {"a": 1, "b": 2}
+# {"a": 1, "b": 3}
+
+$ kafka-avro-console-producer --topic src2 --broker-list localhost:9092 --property value.schema='{"type": "record", "name": "na", "fields": [{"name": "c", "type": "long"}, {"name": "d", "type": "long"}]}'
+# {"c": 1, "d": 1}
+# {"c": 1, "d": 2}
+# {"c": 1, "d": 3}
+# {"c": 3, "d": 1}
+
+$ psql -h localhost -p 6875 sslmode=disable
+> CREATE DATA SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}';
+> CREATE DATA SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "c", "type": "long"}, {"name": "d", "type": "long"}]}';
+> CREATE MATERIALIZED VIEW jointest AS SELECT a, b, d FROM src1 JOIN src2 ON c = b;
+> PEEK jointest;
 ```
