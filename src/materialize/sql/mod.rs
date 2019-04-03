@@ -402,11 +402,11 @@ impl Parser {
 
         // Step 5. Handle projections.
         let mut outputs = Vec::new();
-        let mut pschema = Vec::new();
+        let mut proj_type = Vec::new();
         for p in &s.projection {
             let (expr, typ) = self.parse_select_item(p, &nr)?;
             outputs.push(expr);
-            pschema.push(typ);
+            proj_type.push(typ);
         }
 
         let plan = Plan::Project {
@@ -419,7 +419,7 @@ impl Parser {
             Type {
                 name: None,
                 nullable: false,
-                ftype: FType::Tuple(pschema),
+                ftype: FType::Tuple(proj_type),
             },
         ))
     }
