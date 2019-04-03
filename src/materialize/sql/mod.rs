@@ -11,16 +11,16 @@ use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
-    ASTNode, SQLObjectName, SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr,
+    ASTNode, SQLIdent, SQLObjectName, SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr,
     SQLStatement, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::sync::{Arc, RwLock};
 
 use self::catalog::{NameResolver, TableCollection};
-use crate::dataflow::func::{BinaryFunc, UnaryFunc};
+use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::dataflow::server::{Command, CommandSender};
-use crate::dataflow::{Connector, Dataflow, Expr, Plan, Source, View};
+use crate::dataflow::{Aggregate, Connector, Dataflow, Expr, Plan, Source, View};
 use crate::repr::{Datum, FType, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
@@ -171,6 +171,61 @@ impl<'ast> Visit<'ast> for ObjectNameVisitor {
     }
 }
 
+struct AggregateFragment {
+    name: String,
+    id: *const SQLIdent,
+    expr: ASTNode,
+}
+
+struct AggregateFuncVisitor {
+    aggs: Vec<AggregateFragment>,
+    within: bool,
+    err: Option<failure::Error>,
+}
+
+impl AggregateFuncVisitor {
+    fn new() -> AggregateFuncVisitor {
+        AggregateFuncVisitor {
+            aggs: Vec::new(),
+            within: false,
+            err: None,
+        }
+    }
+
+    fn into_result(self) -> Result<Vec<AggregateFragment>, failure::Error> {
+        match self.err {
+            Some(err) => Err(err),
+            None => Ok(self.aggs),
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for AggregateFuncVisitor {
+    fn visit_function(&mut self, ident: &'ast SQLIdent, args: &'ast Vec<ASTNode>) {
+        match ident.to_lowercase().as_ref() {
+            "avg" | "sum" | "min" | "max" | "count" => {
+                if self.within {
+                    self.err = Some(format_err!("nested aggregate functions are not allowed"));
+                    return;
+                }
+                if args.len() != 1 {
+                    self.err = Some(format_err!("{} function only takes one argument", ident));
+                    return;
+                }
+                self.aggs.push(AggregateFragment {
+                    name: ident.to_owned(),
+                    id: ident as *const _,
+                    expr: args[0].clone(),
+                });
+            }
+            _ => (),
+        }
+        self.within = true;
+        visit::visit_function(self, ident, args);
+        self.within = false;
+    }
+}
+
 #[allow(dead_code)]
 pub struct Parser {
     dataflows: TableCollection,
@@ -258,8 +313,6 @@ impl Parser {
     fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
         if s.having.is_some() {
             bail!("HAVING is not yet supported");
-        } else if s.group_by.is_some() {
-            bail!("GROUP BY is not yet supported");
         } else if !s.joins.is_empty() {
             bail!("JOIN is not yet supported");
         }
@@ -300,7 +353,49 @@ impl Parser {
         };
 
         // Step 3. Handle GROUP BY clause.
-        // TODO(benesch)
+        let mut agg_visitor = AggregateFuncVisitor::new();
+        for p in &s.projection {
+            agg_visitor.visit_select_item(p);
+        }
+        let agg_frags = agg_visitor.into_result()?;
+        let plan = if !agg_frags.is_empty() {
+            let mut aggs = Vec::new();
+            for frag in agg_frags {
+                let (expr, typ) = self.parse_expr(&frag.expr, &nr)?;
+                let func = match (frag.name.as_ref(), &typ.ftype) {
+                    ("sum", FType::Int32) => AggregateFunc::SumInt32,
+                    ("sum", FType::Int64) => AggregateFunc::SumInt64,
+                    _ => unimplemented!(),
+                };
+                aggs.push(Aggregate { func, expr });
+                nr.add_func(
+                    frag.id,
+                    Type {
+                        name: None,
+                        nullable: true,
+                        ftype: typ.ftype,
+                    },
+                );
+            }
+
+            let mut key_exprs = Vec::new();
+            let mut retained_columns = Vec::new();
+            for expr in &s.group_by {
+                let (expr, typ) = self.parse_expr(&expr, &nr)?;
+                retained_columns.push(typ);
+                key_exprs.push(expr);
+            }
+            let key_expr = Expr::Tuple(key_exprs);
+
+            nr.reset(retained_columns);
+            Plan::Aggregate {
+                key: key_expr,
+                aggs,
+                input: Box::new(plan),
+            }
+        } else {
+            plan
+        };
 
         // Step 4. Handle HAVING clause.
         // TODO(benesch)
@@ -364,11 +459,24 @@ impl Parser {
                 self.parse_binary_expr(op, left, right, nr)
             }
             ASTNode::SQLNested(expr) => self.parse_expr(expr, nr),
+            ASTNode::SQLFunction { id, args } => self.parse_function(id, args, nr),
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
             ),
         }
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn parse_function<'a>(
+        &self,
+        ident: &'a SQLIdent,
+        _args: &'a [ASTNode],
+        nr: &NameResolver,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let (i, typ) = nr.resolve_func(ident)?;
+        let expr = Expr::Column(i, Box::new(Expr::Ambient));
+        Ok((expr, typ))
     }
 
     fn parse_is_null_expr<'a>(
@@ -543,6 +651,8 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     use super::*;
 
     #[test]
@@ -644,6 +754,69 @@ mod tests {
                     ]),
                 },
                 raw_schema: raw_schema.to_owned(),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_basic_sum() -> Result<(), failure::Error> {
+        let typ = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Tuple(vec![
+                Type {
+                    name: Some("a".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+                Type {
+                    name: Some("b".into()),
+                    nullable: false,
+                    ftype: FType::String,
+                },
+            ]),
+        };
+        let parser = Parser::new(vec![("src".into(), typ)]);
+
+        let stmts = SQLParser::parse_sql(
+            &AnsiSqlDialect {},
+            "CREATE MATERIALIZED VIEW v AS SELECT 1 + sum(a + 1) FROM src GROUP BY b".into(),
+        )?;
+        let dataflow = parser.parse_statement(&stmts[0])?;
+        assert_eq!(
+            dataflow,
+            Dataflow::View(View {
+                name: "v".into(),
+                plan: Plan::Project {
+                    outputs: vec![Expr::CallBinary {
+                        func: BinaryFunc::AddInt64,
+                        expr1: Box::new(Expr::Literal(Datum::Int64(1))),
+                        expr2: Box::new(Expr::Column(1, Box::new(Expr::Ambient))),
+                    }],
+                    input: Box::new(Plan::Aggregate {
+                        key: Expr::Tuple(vec![Expr::Column(1, Box::new(Expr::Ambient))]),
+                        aggs: vec![Aggregate {
+                            func: AggregateFunc::SumInt64,
+                            expr: Expr::CallBinary {
+                                func: BinaryFunc::AddInt64,
+                                expr1: Box::new(Expr::Column(0, Box::new(Expr::Ambient))),
+                                expr2: Box::new(Expr::Literal(Datum::Int64(1))),
+                            }
+                        }],
+                        input: Box::new(Plan::Source("src".into())),
+                    }),
+                },
+                typ: Type {
+                    name: None,
+                    nullable: false,
+                    ftype: FType::Tuple(vec![Type {
+                        name: None,
+                        nullable: true,
+                        ftype: FType::Int64,
+                    },]),
+                }
             })
         );
 

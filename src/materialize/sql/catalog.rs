@@ -5,6 +5,7 @@
 
 use failure::bail;
 use lazy_static::lazy_static;
+use sqlparser::sqlast::SQLIdent;
 use std::collections::HashMap;
 
 use crate::repr::{FType, Type};
@@ -15,6 +16,7 @@ pub type TableCollection = HashMap<String, Type>;
 pub struct NameResolver<'a> {
     all_tables: &'a TableCollection,
     columns: Vec<Type>,
+    funcs: HashMap<*const SQLIdent, (usize, Type)>,
 }
 
 impl<'a> NameResolver<'a> {
@@ -22,6 +24,7 @@ impl<'a> NameResolver<'a> {
         NameResolver {
             all_tables,
             columns: Vec::new(),
+            funcs: HashMap::new(),
         }
     }
 
@@ -63,6 +66,22 @@ impl<'a> NameResolver<'a> {
             None => bail!("no column named {} in scope", name),
         };
         Ok((i, self.columns[i].clone()))
+    }
+
+    #[allow(clippy::ptr_arg)]
+    pub fn resolve_func(&self, name: &SQLIdent) -> Result<(usize, Type), failure::Error> {
+        match self.funcs.get(&(name as *const _)) {
+            Some((i, typ)) => Ok((i + self.columns.len(), typ.clone())),
+            None => bail!("unknown function {}", name),
+        }
+    }
+
+    pub fn add_func(&mut self, id: *const SQLIdent, typ: Type) {
+        self.funcs.insert(id, (self.funcs.len(), typ));
+    }
+
+    pub fn reset(&mut self, types: Vec<Type>) {
+        std::mem::replace(&mut self.columns, types);
     }
 }
 

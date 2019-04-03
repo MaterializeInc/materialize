@@ -32,3 +32,15 @@ $ psql -h localhost -p 6875 sslmode=disable
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
 > PEEK business_insights;
 ```
+
+## Aggregate demo
+```bash
+$ kafka-avro-console-producer --topic aggdata --broker-list localhost:9092 --property value.schema='{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}'
+# {"a": 1, "b": 1}
+# {"a": 2, "b": 1}
+# {"a": 3, "b": 1}
+# {"a": 1, "b": 2}
+
+> CREATE DATA SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}';
+> CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
+```

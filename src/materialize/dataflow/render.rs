@@ -166,6 +166,10 @@ fn eval_expr(expr: &Expr, datum: &Datum) -> Datum {
             Datum::Tuple(tuple) => tuple[*index].clone(),
             _ => unreachable!(),
         },
+        Expr::Tuple(exprs) => {
+            let exprs = exprs.iter().map(|e| eval_expr(e, datum)).collect();
+            Datum::Tuple(exprs)
+        }
         Expr::Literal(datum) => datum.clone(),
         Expr::CallUnary { func, expr } => {
             let datum = eval_expr(expr, datum);

@@ -115,6 +115,8 @@ pub enum Expr {
     Ambient,
     /// Tuple element selector.
     Column(usize, Box<Expr>),
+    /// Tuple constructor.
+    Tuple(Vec<Expr>),
     /// A literal value.
     Literal(Datum),
     /// A function call that takes one expression as an argument.
