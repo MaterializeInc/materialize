@@ -311,9 +311,7 @@ impl Parser {
     }
 
     fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
-        if s.having.is_some() {
-            bail!("HAVING is not yet supported");
-        } else if !s.joins.is_empty() {
+        if !s.joins.is_empty() {
             bail!("JOIN is not yet supported");
         }
 
@@ -398,7 +396,19 @@ impl Parser {
         };
 
         // Step 4. Handle HAVING clause.
-        // TODO(benesch)
+        let plan = match &s.having {
+            Some(expr) => {
+                let (expr, typ) = self.parse_expr(expr, &nr)?;
+                if typ.ftype != FType::Bool {
+                    bail!("HAVING clause must have boolean type, not {:?}", typ.ftype);
+                }
+                Plan::Filter {
+                    predicate: expr,
+                    input: Box::new(plan),
+                }
+            }
+            None => plan,
+        };
 
         // Step 5. Handle projections.
         let mut outputs = Vec::new();
