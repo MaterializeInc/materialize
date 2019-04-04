@@ -238,17 +238,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(response)) => {
                 let state = state.take();
+
+                macro_rules! command_complete {
+                    ($tag:literal) => {
+                        return Ok(Async::Ready(SendCommandComplete {
+                            send: state.conn.send(BackendMessage::CommandComplete { tag: $tag }),
+                        }.into()));
+                    };
+                }
+
                 match response {
-                    QueryResponse::CreatedDataSource => transition!(SendCommandComplete {
-                        send: state.conn.send(BackendMessage::CommandComplete {
-                            tag: "CREATE DATA SOURCE"
-                        })
-                    }),
-                    QueryResponse::CreatedView => transition!(SendCommandComplete {
-                        send: state
-                            .conn
-                            .send(BackendMessage::CommandComplete { tag: "CREATE VIEW" })
-                    }),
+                    QueryResponse::CreatedDataSource => command_complete!("CREATE DATA SOURCE"),
+                    QueryResponse::CreatedView => command_complete!("CREATE VIEW"),
+                    QueryResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
+                    QueryResponse::DroppedView => command_complete!("DROP VIEW"),
                     QueryResponse::StreamingRows { typ, rows } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)

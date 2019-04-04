@@ -93,7 +93,7 @@ pub fn serve() -> Result<(), Box<dyn StdError>> {
             closure!([clone cmd_tx] |event| {
                 cmd_tx.send(match event {
                     DataflowEvent::Created(dataflow) => Command::CreateDataflow(dataflow),
-                    DataflowEvent::Deleted(_) => unimplemented!(),
+                    DataflowEvent::Deleted(name) => Command::DropDataflow(name),
                 }).unwrap();
                 Ok(())
             }),

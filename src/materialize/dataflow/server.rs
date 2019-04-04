@@ -90,7 +90,7 @@ where
             Command::CreateDataflow(dataflow) => {
                 render::build_dataflow(dataflow, &mut self.traces, self.inner)
             }
-            Command::DropDataflow(_) => unimplemented!(),
+            Command::DropDataflow(name) => self.traces.del_trace(name),
             Command::Peek(name, uuid) => {
                 use differential_dataflow::trace::cursor::Cursor;
                 use differential_dataflow::trace::TraceReader;

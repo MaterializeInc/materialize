@@ -35,4 +35,8 @@ impl TraceManager {
         handle.distinguish_since(&[]);
         self.traces.insert(name.clone(), handle);
     }
+
+    pub fn del_trace(&mut self, name: &str) {
+        self.traces.remove(name);
+    }
 }

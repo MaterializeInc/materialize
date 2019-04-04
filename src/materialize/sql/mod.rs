@@ -31,6 +31,8 @@ mod catalog;
 pub enum QueryResponse {
     CreatedDataSource,
     CreatedView,
+    DroppedDataSource,
+    DroppedView,
     StreamingRows {
         typ: Type,
         rows: Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>,
@@ -54,13 +56,20 @@ pub fn handle_query(
     .and_then(|stmt| match stmt {
         SQLStatement::SQLPeek { mut name } => {
             let name = std::mem::replace(&mut name, SQLObjectName(Vec::new()));
-            handle_peek(name, cmd_tx, server_state, meta_store).left()
+            handle_peek(name, cmd_tx, server_state, meta_store)
+                .left()
+                .left()
         }
         SQLStatement::SQLTail { .. } => unimplemented!(),
         SQLStatement::SQLCreateDataSource { .. } | SQLStatement::SQLCreateView { .. } => {
-            handle_create_dataflow(stmt, meta_store).right()
+            handle_create_dataflow(stmt, meta_store).left().right()
         }
-        _ => unimplemented!(),
+        SQLStatement::SQLDropDataSource { .. } | SQLStatement::SQLDropView { .. } => {
+            handle_drop_dataflow(stmt, meta_store).right().left()
+        }
+        _ => future::err(format_err!("unsupported SQL query: {:?}", stmt))
+            .right()
+            .right(),
     })
 }
 
@@ -99,6 +108,20 @@ fn handle_create_dataflow(
             _ => unreachable!(),
         })
     })
+}
+
+fn handle_drop_dataflow(
+    stmt: SQLStatement,
+    meta_store: MetaStore<Dataflow>,
+) -> impl Future<Item = QueryResponse, Error = failure::Error> {
+    let (response, object_name) = match stmt {
+        SQLStatement::SQLDropDataSource { name, .. } => (QueryResponse::DroppedDataSource, name),
+        SQLStatement::SQLDropView { name, .. } => (QueryResponse::DroppedView, name),
+        _ => unreachable!(),
+    };
+    future::lazy(move || extract_sql_object_name(&object_name))
+        .and_then(move |name| meta_store.delete_dataflow(&name))
+        .map(move |_| response)
 }
 
 fn handle_peek(
@@ -251,7 +274,7 @@ impl Parser {
             } => {
                 let (plan, typ) = self.parse_view_query(query)?;
                 Ok(Dataflow::View(View {
-                    name: self.parse_sql_object_name(name)?,
+                    name: extract_sql_object_name(name)?,
                     plan,
                     typ,
                 }))
@@ -281,7 +304,7 @@ impl Parser {
                 let url = url.with_default_port(|_| Ok(9092))?; // we already checked for kafka scheme above, so safe to assume scheme
 
                 Ok(Dataflow::Source(Source {
-                    name: self.parse_sql_object_name(name)?,
+                    name: extract_sql_object_name(name)?,
                     connector: Connector::Kafka {
                         addr: url.to_socket_addrs()?.next().unwrap(),
                         topic,
@@ -316,7 +339,7 @@ impl Parser {
         // Step 1. Handle FROM clause, including joins.
         let mut plan = match &s.relation {
             Some(TableFactor::Table { name, .. }) => {
-                let name = self.parse_sql_object_name(name)?;
+                let name = extract_sql_object_name(name)?;
                 nr.import_table(&name);
                 Plan::Source(name)
             }
@@ -332,7 +355,7 @@ impl Parser {
         for join in &s.joins {
             match &join.relation {
                 TableFactor::Table { name, .. } => {
-                    let name = self.parse_sql_object_name(&name)?;
+                    let name = extract_sql_object_name(&name)?;
                     nr.import_table(&name);
                     let (left_key, right_key) =
                         self.parse_join_operator(&join.join_operator, &nr)?;
@@ -746,13 +769,13 @@ impl Parser {
         };
         Ok((expr, typ))
     }
+}
 
-    fn parse_sql_object_name(&self, n: &SQLObjectName) -> Result<String, failure::Error> {
-        if n.0.len() != 1 {
-            bail!("qualified names are not yet supported: {}", n.to_string())
-        }
-        Ok(n.to_string())
+fn extract_sql_object_name(n: &SQLObjectName) -> Result<String, failure::Error> {
+    if n.0.len() != 1 {
+        bail!("qualified names are not yet supported: {}", n.to_string())
     }
+    Ok(n.to_string())
 }
 
 fn unnest(expr: &ASTNode) -> &ASTNode {
