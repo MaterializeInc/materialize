@@ -6,7 +6,7 @@
 steps:
   - command: ci/deploy/deploy.sh
     plugins:
-      - timelydata/docker#master:
+      - docker#v3.1.0:
           image: materialize/deploy:20190331-140439
           propagate-uid-gid: true
           mount-ssh-agent: true
