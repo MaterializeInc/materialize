@@ -241,9 +241,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
                 macro_rules! command_complete {
                     ($tag:literal) => {
-                        return Ok(Async::Ready(SendCommandComplete {
-                            send: state.conn.send(BackendMessage::CommandComplete { tag: $tag }),
-                        }.into()));
+                        return Ok(Async::Ready(
+                            SendCommandComplete {
+                                send: state
+                                    .conn
+                                    .send(BackendMessage::CommandComplete { tag: $tag }),
+                            }
+                            .into(),
+                        ));
                     };
                 }
 
