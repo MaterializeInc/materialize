@@ -20,7 +20,7 @@ const AVRO_OBJECT_HEADER: &[u8] = &[b'O', b'b', b'j', 1u8];
 
 /// Describes errors happened while validating Avro data.
 #[derive(Fail, Debug)]
-#[fail(display = "Decoding error: {}", _0)]
+#[fail(display = "Validation error: {}", _0)]
 pub struct ValidationError(String);
 
 impl ValidationError {

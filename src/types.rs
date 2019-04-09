@@ -10,8 +10,8 @@ use crate::schema::{RecordField, Schema, SchemaKind, UnionSchema};
 
 /// Describes errors happened while performing schema resolution on Avro data.
 #[derive(Fail, Debug)]
-#[fail(display = "Decoding error: {}", _0)]
-pub struct SchemaResolutionError(String);
+#[fail(display = "Schema resoulution error: {}", _0)]
+pub struct SchemaResolutionError(pub String);
 
 impl SchemaResolutionError {
     pub fn new<S>(msg: S) -> SchemaResolutionError
