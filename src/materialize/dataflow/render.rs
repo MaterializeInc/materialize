@@ -174,7 +174,12 @@ fn build_plan<S: Scope<Timestamp = Time>>(
         }
 
         Plan::Distinct(_) => unimplemented!(),
-        Plan::UnionAll(_) => unimplemented!(),
+        Plan::UnionAll(plans) => {
+            assert!(!plans.is_empty());
+            let mut plans = plans.iter().map(|plan| build_plan(plan, manager, scope));
+            let plan = plans.next().unwrap();
+            plans.fold(plan, |p1, p2| p1.concat(&p2))
+        }
     }
 }
 

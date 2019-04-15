@@ -12,7 +12,7 @@ use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, JoinConstraint, JoinOperator, SQLIdent, SQLObjectName, SQLOperator, SQLQuery,
-    SQLSelect, SQLSelectItem, SQLSetExpr, SQLStatement, TableFactor, Value,
+    SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::sync::{Arc, RwLock};
@@ -327,8 +327,24 @@ impl Parser {
         if q.order_by.is_some() {
             bail!("ORDER BY is not supported in a view definition");
         }
-        match &q.body {
+        self.parse_set_expr(&q.body)
+    }
+
+    fn parse_set_expr(&self, q: &SQLSetExpr) -> Result<(Plan, Type), failure::Error> {
+        match q {
             SQLSetExpr::Select(select) => self.parse_view_select(select),
+            SQLSetExpr::SetOperation {
+                op: SQLSetOperator::Union,
+                all: true,
+                left,
+                right,
+            } => {
+                let (left_plan, left_typ) = self.parse_set_expr(left)?;
+                let (right_plan, right_typ) = self.parse_set_expr(right)?;
+                assert!(left_typ == right_typ); // TODO(jamii) merge types
+                let plan = Plan::UnionAll(vec![left_plan, right_plan]);
+                Ok((plan, left_typ))
+            }
             _ => bail!("set operations are not yet supported"),
         }
     }
@@ -1033,6 +1049,90 @@ mod tests {
                         },
                         Type {
                             name: Some("d".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                    ]),
+                }
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_basic_union() -> Result<(), failure::Error> {
+        let src1_type = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Tuple(vec![
+                Type {
+                    name: Some("a".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+                Type {
+                    name: Some("b".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+            ]),
+        };
+        let src2_type = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Tuple(vec![
+                Type {
+                    name: Some("a".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+                Type {
+                    name: Some("b".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+            ]),
+        };
+        let parser = Parser::new(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
+
+        let stmts = SQLParser::parse_sql(
+            &AnsiSqlDialect {},
+            "CREATE MATERIALIZED VIEW v AS SELECT a, b FROM src1 UNION ALL SELECT a, b FROM src2"
+                .into(),
+        )?;
+        let dataflow = parser.parse_statement(&stmts[0])?;
+        assert_eq!(
+            dataflow,
+            Dataflow::View(View {
+                name: "v".into(),
+                plan: Plan::UnionAll(vec![
+                    Plan::Project {
+                        outputs: vec![
+                            Expr::Column(0, Box::new(Expr::Ambient)),
+                            Expr::Column(1, Box::new(Expr::Ambient)),
+                        ],
+                        input: Box::new(Plan::Source("src1".into()))
+                    },
+                    Plan::Project {
+                        outputs: vec![
+                            Expr::Column(0, Box::new(Expr::Ambient)),
+                            Expr::Column(1, Box::new(Expr::Ambient)),
+                        ],
+                        input: Box::new(Plan::Source("src2".into()))
+                    },
+                ]),
+                typ: Type {
+                    name: None,
+                    nullable: false,
+                    ftype: FType::Tuple(vec![
+                        Type {
+                            name: Some("a".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                        Type {
+                            name: Some("b".into()),
                             nullable: false,
                             ftype: FType::Int64,
                         },
