@@ -21,7 +21,9 @@ in pkgs.stdenv.mkDerivation rec {
     less # for psql
 
     confluent
+    ] ++
+    (if stdenv.isDarwin then [
     darwin.apple_sdk.frameworks.Security
     darwin.apple_sdk.frameworks.CoreServices
-  ];
+    ] else []);
 }
