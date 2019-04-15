@@ -1,8 +1,8 @@
 // Copyright 2019 Tokio Contributors
-// Copyright 2019 Timely Data, Inc. All rights reserved.
+// Copyright 2019 Materialize, Inc. All rights reserved.
 //
 // This file is part of Materialize. Materialize may not be used or
-// distributed without the express permission of Timely Data, Inc.
+// distributed without the express permission of Materialize, Inc.
 //
 // This file is derived from the ReadExact combinator in the Tokio project. The
 // original source code was retrieved on March 1, 2019 from:
