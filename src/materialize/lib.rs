@@ -1,4 +1,4 @@
-// Copyright 2019 Timely Data, Inc. All rights reserved.
+// Copyright 2019 Materialize, Inc. All rights reserved.
 
 //! A SQL stream processor built on top of [timely dataflow] and
 //! [differential dataflow].

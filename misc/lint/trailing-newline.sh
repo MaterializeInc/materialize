@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-# Copyright 2019 Timely Data, Inc. All rights reserved.
+# Copyright 2019 Materialize, Inc. All rights reserved.
 #
 # This file is part of Materialize. Materialize may not be used or
-# distributed without the express permission of Timely Data, Inc.
+# distributed without the express permission of Materialize, Inc.
 #
 # trailing-newline.sh — checks file for missing trailing newline.
 
