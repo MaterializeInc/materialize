@@ -21,5 +21,7 @@ in pkgs.stdenv.mkDerivation rec {
     less # for psql
 
     confluent
+    darwin.apple_sdk.frameworks.Security
+    darwin.apple_sdk.frameworks.CoreServices
   ];
 }
