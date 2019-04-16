@@ -353,28 +353,52 @@ impl Parser {
                         if left_types.len() != right_types.len() {
                             bail!("Each UNION should have the same number of columns: {:?} UNION {:?}", left, right);
                         }
-                        for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
+                        for (left_col_type, right_col_type) in
+                            left_types.iter().zip(right_types.iter())
+                        {
                             if left_col_type.ftype != right_col_type.ftype {
-                                bail!("Each UNION should have the column types: {:?} UNION {:?}", left, right);
+                                bail!(
+                                    "Each UNION should have the column types: {:?} UNION {:?}",
+                                    left,
+                                    right
+                                );
                             }
                         }
-                        let types = left_types.iter().zip(right_types.iter()).map(|(left_col_type, right_col_type)| {
-                            if left_col_type.ftype != right_col_type.ftype {
-                                bail!("Each UNION should have the column types: {:?} UNION {:?}", left, right);
-                            } else {
-                                Ok(Type {
-                                    name: left_col_type.name.clone(),
-                                    nullable: left_col_type.nullable || right_col_type.nullable,
-                                    ftype: left_col_type.ftype.clone(),
-                                })
-                            }
-                        }).collect::<Result<Vec<_>, _>>()?;
+                        let types = left_types
+                            .iter()
+                            .zip(right_types.iter())
+                            .map(|(left_col_type, right_col_type)| {
+                                if left_col_type.ftype != right_col_type.ftype {
+                                    bail!(
+                                        "Each UNION should have the column types: {:?} UNION {:?}",
+                                        left,
+                                        right
+                                    );
+                                } else {
+                                    Ok(Type {
+                                        name: left_col_type.name.clone(),
+                                        nullable: left_col_type.nullable || right_col_type.nullable,
+                                        ftype: left_col_type.ftype.clone(),
+                                    })
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
                         FType::Tuple(types)
                     }
-                    (_, _) => panic!("Union on non-tuple types shouldn't be possible - {:?} UNION {:?}", left, right),
+                    (_, _) => panic!(
+                        "Union on non-tuple types shouldn't be possible - {:?} UNION {:?}",
+                        left, right
+                    ),
                 };
 
-                Ok((plan, Type{name: None, nullable: false, ftype: ftype}))
+                Ok((
+                    plan,
+                    Type {
+                        name: None,
+                        nullable: false,
+                        ftype: ftype,
+                    },
+                ))
             }
             _ => bail!("set operations are not yet supported"),
         }
