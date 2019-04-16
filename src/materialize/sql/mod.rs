@@ -549,7 +549,7 @@ impl Parser {
             input: Box::new(plan),
         };
 
-        // Step 5. Handle DISTINCT
+        // Step 6. Handle DISTINCT.
         let plan = if s.distinct {
             Plan::Distinct(Box::new(plan))
         } else {
