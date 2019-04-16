@@ -396,7 +396,7 @@ impl Parser {
                     Type {
                         name: None,
                         nullable: false,
-                        ftype: ftype,
+                        ftype,
                     },
                 ))
             }
