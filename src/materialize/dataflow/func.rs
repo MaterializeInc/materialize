@@ -241,7 +241,7 @@ where
     if len == 0 {
         Datum::Null
     } else {
-        Datum::from(sum as f64 / len as f64)
+        Datum::from(f64::from(sum) / len as f64)
     }
 }
 
@@ -258,6 +258,7 @@ where
     if len == 0 {
         Datum::Null
     } else {
+        // TODO(jamii) check for truncation
         Datum::from(sum as f64 / len as f64)
     }
 }
@@ -275,7 +276,7 @@ where
     if len == 0 {
         Datum::Null
     } else {
-        Datum::from(sum as f64 / len as f64)
+        Datum::from(f64::from(sum) / len as f64)
     }
 }
 
