@@ -23,7 +23,7 @@ files=$(
     find . '(' -path './target' -o -path './.git' ')' -prune -o -type f \
         | sed 's,^.\/,,' \
         | grep -vE \
-            -e '^target$' \
+            -e 'target' \
             -e '^\.git$' \
             -e '^\.gitignore$' \
             -e '^Cargo\.lock$' \
@@ -32,7 +32,8 @@ files=$(
             -e '\.json$' \
             -e '(^|/)\.DS_Store$' \
             -e '\.md$' \
-            -e 'rust-toolchain'
+            -e 'rust-toolchain' \
+            -e 'rustfmt.toml'
 )
 
 run() {
