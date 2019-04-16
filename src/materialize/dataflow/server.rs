@@ -99,11 +99,14 @@ where
                     let mut out = Vec::new();
                     while cur.key_valid(&storage) {
                         let key = cur.key(&storage).clone();
+                        let mut copies = 0;
                         cur.map_times(&storage, |_, diff| {
-                            for _ in 0..*diff {
-                                out.push(key.clone());
-                            }
+                            copies += diff;
                         });
+                        assert!(copies >= 0);
+                        for _ in 0..copies {
+                            out.push(key.clone());
+                        }
                         cur.step_key(&storage)
                     }
                     let encoded = bincode::serialize(&out).unwrap();
