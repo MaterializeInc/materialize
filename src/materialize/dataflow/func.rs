@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use crate::repr::Datum;
@@ -227,6 +228,138 @@ impl UnaryFunc {
     }
 }
 
+pub fn avg_int32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let mut sum: i32 = 0;
+    let mut len: usize = 0;
+    for d in datums.into_iter() {
+        sum += d.unwrap_int32();
+        len += 1;
+    }
+    if len == 0 {
+        Datum::Null
+    } else {
+        Datum::from(sum as f64 / len as f64)
+    }
+}
+
+pub fn avg_int64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let mut sum: i64 = 0;
+    let mut len: usize = 0;
+    for d in datums.into_iter() {
+        sum += d.unwrap_int64();
+        len += 1;
+    }
+    if len == 0 {
+        Datum::Null
+    } else {
+        Datum::from(sum as f64 / len as f64)
+    }
+}
+
+pub fn avg_float32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let mut sum: f32 = 0.0;
+    let mut len: usize = 0;
+    for d in datums.into_iter() {
+        sum += d.unwrap_float32();
+        len += 1;
+    }
+    if len == 0 {
+        Datum::Null
+    } else {
+        Datum::from(sum as f64 / len as f64)
+    }
+}
+
+pub fn avg_float64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let mut sum: f64 = 0.0;
+    let mut len: usize = 0;
+    for d in datums.into_iter() {
+        sum += d.unwrap_float64();
+        len += 1;
+    }
+    if len == 0 {
+        Datum::Null
+    } else {
+        Datum::from(sum as f64 / len as f64)
+    }
+}
+
+pub fn max_int32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<i32> = datums.into_iter().map(|d| d.unwrap_int32()).max();
+    Datum::from(x)
+}
+
+pub fn max_int64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<i64> = datums.into_iter().map(|d| d.unwrap_int64()).max();
+    Datum::from(x)
+}
+
+pub fn max_float32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<OrderedFloat<f32>> = datums.into_iter().map(|d| d.unwrap_ordered_float32()).max();
+    Datum::from(x)
+}
+
+pub fn max_float64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<OrderedFloat<f64>> = datums.into_iter().map(|d| d.unwrap_ordered_float64()).max();
+    Datum::from(x)
+}
+
+pub fn min_int32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<i32> = datums.into_iter().map(|d| d.unwrap_int32()).min();
+    Datum::from(x)
+}
+
+pub fn min_int64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<i64> = datums.into_iter().map(|d| d.unwrap_int64()).min();
+    Datum::from(x)
+}
+
+pub fn min_float32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<OrderedFloat<f32>> = datums.into_iter().map(|d| d.unwrap_ordered_float32()).min();
+    Datum::from(x)
+}
+
+pub fn min_float64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<OrderedFloat<f64>> = datums.into_iter().map(|d| d.unwrap_ordered_float64()).min();
+    Datum::from(x)
+}
+
 pub fn sum_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -240,6 +373,30 @@ where
     I: IntoIterator<Item = Datum>,
 {
     let x: i64 = datums.into_iter().map(|d| d.unwrap_int64()).sum();
+    Datum::from(x)
+}
+
+pub fn sum_float32<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: f32 = datums.into_iter().map(|d| d.unwrap_float32()).sum();
+    Datum::from(x)
+}
+
+pub fn sum_float64<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: f64 = datums.into_iter().map(|d| d.unwrap_float64()).sum();
+    Datum::from(x)
+}
+
+pub fn count<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: i64 = datums.into_iter().count() as i64;
     Datum::from(x)
 }
 
@@ -270,9 +427,23 @@ impl AggregateFunc {
         I: IntoIterator<Item = Datum>,
     {
         match self {
+            AggregateFunc::AvgInt32 => avg_int32,
+            AggregateFunc::AvgInt64 => avg_int64,
+            AggregateFunc::AvgFloat32 => avg_float32,
+            AggregateFunc::AvgFloat64 => avg_float64,
+            AggregateFunc::MaxInt32 => max_int32,
+            AggregateFunc::MaxInt64 => max_int64,
+            AggregateFunc::MaxFloat32 => max_float32,
+            AggregateFunc::MaxFloat64 => max_float64,
+            AggregateFunc::MinInt32 => min_int32,
+            AggregateFunc::MinInt64 => min_int64,
+            AggregateFunc::MinFloat32 => min_float32,
+            AggregateFunc::MinFloat64 => min_float64,
             AggregateFunc::SumInt32 => sum_int32,
             AggregateFunc::SumInt64 => sum_int64,
-            _ => unimplemented!(),
+            AggregateFunc::SumFloat32 => sum_float32,
+            AggregateFunc::SumFloat64 => sum_float64,
+            AggregateFunc::Count => count,
         }
     }
 }

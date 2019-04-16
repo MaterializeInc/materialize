@@ -75,6 +75,20 @@ impl Datum {
         }
     }
 
+    pub fn unwrap_ordered_float32(&self) -> OrderedFloat<f32> {
+        match self {
+            Datum::Float32(f) => *f,
+            _ => panic!("Datum::unwrap_ordered_float32 called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_ordered_float64(&self) -> OrderedFloat<f64> {
+        match self {
+            Datum::Float64(f) => *f,
+            _ => panic!("Datum::unwrap_ordered_float64 called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_float32(&self) -> f32 {
         match self {
             Datum::Float32(f) => f.into_inner(),
@@ -118,6 +132,18 @@ impl From<i64> for Datum {
     }
 }
 
+impl From<OrderedFloat<f32>> for Datum {
+    fn from(f: OrderedFloat<f32>) -> Datum {
+        Datum::Float32(f)
+    }
+}
+
+impl From<OrderedFloat<f64>> for Datum {
+    fn from(f: OrderedFloat<f64>) -> Datum {
+        Datum::Float64(f)
+    }
+}
+
 impl From<f32> for Datum {
     fn from(f: f32) -> Datum {
         Datum::Float32(OrderedFloat(f))
@@ -127,6 +153,19 @@ impl From<f32> for Datum {
 impl From<f64> for Datum {
     fn from(f: f64) -> Datum {
         Datum::Float64(OrderedFloat(f))
+    }
+}
+
+impl<T> From<Option<T>> for Datum
+where
+    Datum: From<T>,
+{
+    fn from(o: Option<T>) -> Datum {
+        if let Some(d) = o {
+            d.into()
+        } else {
+            Datum::Null
+        }
     }
 }
 
