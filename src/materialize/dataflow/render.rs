@@ -7,13 +7,12 @@ use avro_rs::Schema as AvroSchema;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Reduce;
+use differential_dataflow::operators::reduce::Threshold;
 use differential_dataflow::{AsCollection, Collection};
 use std::iter;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
-
-use differential_dataflow::operators::threshold::ThresholdTotal;
 
 use super::source;
 use super::trace::TraceManager;
@@ -188,9 +187,7 @@ fn build_plan<S: Scope<Timestamp = Time>>(
             })
         }
 
-        Plan::Distinct(plan) => {
-            build_plan(plan, manager, scope).threshold_total(|_, c| if *c > 0 { 1 } else { 0 })
-        }
+        Plan::Distinct(plan) => build_plan(plan, manager, scope).distinct(),
         Plan::UnionAll(plans) => {
             assert!(!plans.is_empty());
             let mut plans = plans.iter().map(|plan| build_plan(plan, manager, scope));
