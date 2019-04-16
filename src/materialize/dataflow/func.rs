@@ -228,6 +228,9 @@ impl UnaryFunc {
     }
 }
 
+// TODO(jamii) be careful about overflow in sum/avg
+// see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
+
 pub fn avg_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
