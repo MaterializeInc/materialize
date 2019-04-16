@@ -335,15 +335,46 @@ impl Parser {
             SQLSetExpr::Select(select) => self.parse_view_select(select),
             SQLSetExpr::SetOperation {
                 op: SQLSetOperator::Union,
-                all: true,
+                all,
                 left,
                 right,
             } => {
-                let (left_plan, left_typ) = self.parse_set_expr(left)?;
-                let (right_plan, right_typ) = self.parse_set_expr(right)?;
-                assert!(left_typ == right_typ); // TODO(jamii) merge types
+                if !all {
+                    bail!("UNION is not yet supported - try UNION ALL");
+                }
+                let (left_plan, left_type) = self.parse_set_expr(left)?;
+                let (right_plan, right_type) = self.parse_set_expr(right)?;
                 let plan = Plan::UnionAll(vec![left_plan, right_plan]);
-                Ok((plan, left_typ))
+
+                // left and right must have the same number of columns and the same column types
+                // column names are taken from left, as in postgres
+                let ftype = match (left_type.ftype, right_type.ftype) {
+                    (FType::Tuple(left_types), FType::Tuple(right_types)) => {
+                        if left_types.len() != right_types.len() {
+                            bail!("Each UNION should have the same number of columns: {:?} UNION {:?}", left, right);
+                        }
+                        for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
+                            if left_col_type.ftype != right_col_type.ftype {
+                                bail!("Each UNION should have the column types: {:?} UNION {:?}", left, right);
+                            }
+                        }
+                        let types = left_types.iter().zip(right_types.iter()).map(|(left_col_type, right_col_type)| {
+                            if left_col_type.ftype != right_col_type.ftype {
+                                bail!("Each UNION should have the column types: {:?} UNION {:?}", left, right);
+                            } else {
+                                Ok(Type {
+                                    name: left_col_type.name.clone(),
+                                    nullable: left_col_type.nullable || right_col_type.nullable,
+                                    ftype: left_col_type.ftype.clone(),
+                                })
+                            }
+                        }).collect::<Result<Vec<_>, _>>()?;
+                        FType::Tuple(types)
+                    }
+                    (_, _) => panic!("Union on non-tuple types shouldn't be possible - {:?} UNION {:?}", left, right),
+                };
+
+                Ok((plan, Type{name: None, nullable: false, ftype: ftype}))
             }
             _ => bail!("set operations are not yet supported"),
         }
