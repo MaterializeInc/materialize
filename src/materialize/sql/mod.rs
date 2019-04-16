@@ -339,12 +339,15 @@ impl Parser {
                 left,
                 right,
             } => {
-                if !all {
-                    bail!("UNION is not yet supported - try UNION ALL");
-                }
                 let (left_plan, left_type) = self.parse_set_expr(left)?;
                 let (right_plan, right_type) = self.parse_set_expr(right)?;
+
                 let plan = Plan::UnionAll(vec![left_plan, right_plan]);
+                let plan = if *all {
+                    plan
+                } else {
+                    Plan::Distinct(Box::new(plan))
+                };
 
                 // left and right must have the same number of columns and the same column types
                 // column names are taken from left, as in postgres

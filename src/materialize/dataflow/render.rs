@@ -13,6 +13,8 @@ use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
+use differential_dataflow::operators::threshold::ThresholdTotal;
+
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
@@ -173,7 +175,9 @@ fn build_plan<S: Scope<Timestamp = Time>>(
             })
         }
 
-        Plan::Distinct(_) => unimplemented!(),
+        Plan::Distinct(plan) => {
+            build_plan(plan, manager, scope).threshold_total(|_, c| if *c > 0 { 1 } else { 0 })
+        }
         Plan::UnionAll(plans) => {
             assert!(!plans.is_empty());
             let mut plans = plans.iter().map(|plan| build_plan(plan, manager, scope));
