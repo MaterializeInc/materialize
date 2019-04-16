@@ -98,7 +98,12 @@ where
                     let (mut cur, storage) = trace.cursor();
                     let mut out = Vec::new();
                     while cur.key_valid(&storage) {
-                        out.push(cur.key(&storage));
+                        let key = cur.key(&storage).clone();
+                        cur.map_times(&storage, |_, diff| {
+                            for _ in 0..*diff {
+                                out.push(key.clone());
+                            }
+                        });
                         cur.step_key(&storage)
                     }
                     let encoded = bincode::serialize(&out).unwrap();
