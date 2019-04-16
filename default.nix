@@ -6,9 +6,9 @@
 let
 
 pkgs = import (builtins.fetchTarball {
-  name = "nixos-19-03-pre";
-  url = https://github.com/nixos/nixpkgs/archive/5c52b25283a6cccca443ffb7a358de6fe14b4a81.tar.gz;
-  sha256 = "0fhbl6bgabhi1sw1lrs64i0hibmmppy1bh256lq8hxy3a2p1haip";
+  name = "nixos-unstable";
+  url = https://github.com/nixos/nixpkgs/archive/1fc591f9a5bd1b016b5d66dfab29560073955a14.tar.gz;
+  sha256 = "1ij5x1qw486rbih7xh2c01s60c3zblj6ad1isf5y99sh47jcq76c";
 }) {};
 
 confluent = pkgs.callPackage ./confluent.nix { pkgs = pkgs; };
