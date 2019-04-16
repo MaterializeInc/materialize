@@ -27,6 +27,8 @@ try() {
     ((++total))
 }
 
+export RUST_BACKTRACE=full
+
 try bin/lint
 try cargo fmt -- --check
 try cargo test
