@@ -71,9 +71,22 @@ pub fn build_dataflow<A: Allocate>(
                             avro_rs::types::Value::Record(cols) => {
                                 for (_field_name, col) in cols {
                                     row.push(match col {
+                                        avro_rs::types::Value::Null => Datum::Null,
+                                        avro_rs::types::Value::Boolean(b) => {
+                                            if b {
+                                                Datum::True
+                                            } else {
+                                                Datum::False
+                                            }
+                                        }
                                         avro_rs::types::Value::Long(i) => Datum::Int64(i),
+                                        avro_rs::types::Value::Float(f) => Datum::Float32(f.into()),
+                                        avro_rs::types::Value::Double(f) => {
+                                            Datum::Float64(f.into())
+                                        }
+                                        avro_rs::types::Value::Bytes(b) => Datum::Bytes(b),
                                         avro_rs::types::Value::String(s) => Datum::String(s),
-                                        _ => panic!("avro deserialization went wrong"),
+                                        other => panic!("Unsupported avro value: {:?}", other),
                                     })
                                 }
                             }
