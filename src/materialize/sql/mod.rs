@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! SQL–dataflow translation.
+//! SQL-dataflow translation.
 
 use failure::{bail, format_err};
 use futures::{future, Future, Stream};
