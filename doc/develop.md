@@ -38,7 +38,7 @@ Install Rust via [rustup]:
 curl https://sh.rustup.rs -sSf | sh
 ```
 
-Rustup will automatically select the correct toolchain version specified in [materialize/rust-toolchain](rust-toolchain).
+Rustup will automatically select the correct toolchain version specified in [materialize/rust-toolchain](/rust-toolchain).
 
 [rustup]: https://www.rust-lang.org/tools/install
 
