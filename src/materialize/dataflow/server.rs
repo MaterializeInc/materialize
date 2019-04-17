@@ -26,6 +26,7 @@ pub fn serve(cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, String> {
 }
 
 /// The commands that a running dataflow server can accept.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Command {
     CreateDataflow(Dataflow),

@@ -113,9 +113,10 @@ impl Datum {
 
 impl From<bool> for Datum {
     fn from(b: bool) -> Datum {
-        match b {
-            true => Datum::True,
-            false => Datum::False,
+        if b {
+            Datum::True
+        } else {
+            Datum::False
         }
     }
 }
