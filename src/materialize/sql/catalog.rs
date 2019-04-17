@@ -69,6 +69,8 @@ impl<'a> NameResolver<'a> {
             .insert(name.to_owned(), self.breakpoint..self.columns.len());
     }
 
+    // TODO(jamii) we should detect when table/column names are ambiguous
+
     pub fn resolve_column(&self, name: &str) -> Result<(usize, Type), failure::Error> {
         let i = self
             .columns
