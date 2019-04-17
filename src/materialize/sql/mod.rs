@@ -432,7 +432,26 @@ impl Parser {
                     let name = extract_sql_object_name(&name)?;
                     nr.import_table(&name);
                     let ((left_key, right_key), (include_left_outer, include_right_outer)) =
-                        self.parse_join_operator(&join.join_operator, &nr)?;
+                        match &join.join_operator {
+                            JoinOperator::Inner(constraint) => {
+                                (self.parse_join_constraint(constraint, &nr)?, (false, false))
+                            }
+                            JoinOperator::LeftOuter(constraint) => {
+                                (self.parse_join_constraint(constraint, &nr)?, (true, false))
+                            }
+                            JoinOperator::RightOuter(constraint) => {
+                                (self.parse_join_constraint(constraint, &nr)?, (false, true))
+                            }
+                            JoinOperator::FullOuter(constraint) => {
+                                (self.parse_join_constraint(constraint, &nr)?, (true, true))
+                            }
+                            JoinOperator::Implicit => {
+                                bail!("multiple from tables are not yet supported")
+                            }
+                            JoinOperator::Cross => {
+                                ((Expr::Tuple(vec![]), Expr::Tuple(vec![])), (false, false))
+                            }
+                        };
                     plan = Plan::Join {
                         left_key,
                         right_key,
@@ -588,29 +607,6 @@ impl Parser {
                 "complicated select items are not yet supported: {}",
                 s.to_string()
             ),
-        }
-    }
-
-    fn parse_join_operator<'a>(
-        &self,
-        op: &'a JoinOperator,
-        nr: &NameResolver,
-    ) -> Result<((Expr, Expr), (bool, bool)), failure::Error> {
-        match op {
-            JoinOperator::Inner(constraint) => {
-                Ok((self.parse_join_constraint(constraint, nr)?, (false, false)))
-            }
-            JoinOperator::LeftOuter(constraint) => {
-                Ok((self.parse_join_constraint(constraint, nr)?, (true, false)))
-            }
-            JoinOperator::RightOuter(constraint) => {
-                Ok((self.parse_join_constraint(constraint, nr)?, (false, true)))
-            }
-            JoinOperator::FullOuter(constraint) => {
-                Ok((self.parse_join_constraint(constraint, nr)?, (true, true)))
-            }
-            JoinOperator::Implicit => bail!("multiple from tables are not yet supported"),
-            JoinOperator::Cross => Ok(((Expr::Tuple(vec![]), Expr::Tuple(vec![])), (false, false))),
         }
     }
 
