@@ -610,7 +610,7 @@ impl Parser {
                 Ok((self.parse_join_constraint(constraint, nr)?, (true, true)))
             }
             JoinOperator::Implicit => bail!("multiple from tables are not yet supported"),
-            JoinOperator::Cross => bail!("cross joins are not yet supported"),
+            JoinOperator::Cross => Ok(((Expr::Tuple(vec![]), Expr::Tuple(vec![])), (false, false))),
         }
     }
 
