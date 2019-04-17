@@ -452,6 +452,12 @@ impl Parser {
                                 ((Expr::Tuple(vec![]), Expr::Tuple(vec![])), (false, false))
                             }
                         };
+                    if include_left_outer {
+                        nr.make_nullable(Side::Left);
+                    }
+                    if include_right_outer {
+                        nr.make_nullable(Side::Right);
+                    }
                     plan = Plan::Join {
                         left_key,
                         right_key,
@@ -468,7 +474,6 @@ impl Parser {
                             None
                         },
                     }
-                    // TODO(jamii) include_left_outer/include_right_outer should factor into projected columns nullability
                 }
                 TableFactor::Derived { .. } => {
                     bail!("subqueries are not yet supported");

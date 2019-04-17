@@ -91,6 +91,16 @@ impl<'a> NameResolver<'a> {
         }
     }
 
+    pub fn make_nullable(&mut self, side: Side) {
+        let range = match side {
+            Side::Left => 0..self.breakpoint,
+            Side::Right => self.breakpoint..self.columns.len(),
+        };
+        for i in range {
+            self.columns[i].nullable = true;
+        }
+    }
+
     pub fn adjust_rhs(&self, pos: usize) -> usize {
         pos - self.breakpoint
     }
