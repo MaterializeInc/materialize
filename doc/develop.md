@@ -50,7 +50,7 @@ The "Confluent Platform" bundles ZooKeeper, Kafka, and the Confluent Schema Regi
 On macOS, the easiest installation method is to use Homebrew:
 
 ```shell
-brew install confluent-platform
+brew install confluent-oss
 ```
 
 On Debian-based Linux variants:
