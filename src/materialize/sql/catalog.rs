@@ -7,6 +7,7 @@ use failure::bail;
 use lazy_static::lazy_static;
 use sqlparser::sqlast::SQLIdent;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use crate::repr::{FType, Type};
 
@@ -20,6 +21,7 @@ pub enum Side {
 /// Manages resolution of table and column references.
 pub struct NameResolver<'a> {
     all_tables: &'a TableCollection,
+    tables: HashMap<String, Range<usize>>,
     columns: Vec<Type>,
     funcs: HashMap<*const SQLIdent, (usize, Type)>,
     breakpoint: usize,
@@ -29,6 +31,7 @@ impl<'a> NameResolver<'a> {
     pub fn new(all_tables: &'a TableCollection) -> NameResolver<'a> {
         NameResolver {
             all_tables,
+            tables: HashMap::new(),
             columns: Vec::new(),
             funcs: HashMap::new(),
             breakpoint: 0,
@@ -62,6 +65,8 @@ impl<'a> NameResolver<'a> {
             FType::Tuple(tuple) => self.columns.append(&mut tuple.clone()),
             _ => unimplemented!(),
         }
+        self.tables
+            .insert(name.to_owned(), self.breakpoint..self.columns.len());
     }
 
     pub fn resolve_column(&self, name: &str) -> Result<(usize, Type), failure::Error> {
@@ -73,6 +78,30 @@ impl<'a> NameResolver<'a> {
             Some(i) => i,
             None => bail!("no column named {} in scope", name),
         };
+        Ok((i, self.columns[i].clone()))
+    }
+
+    pub fn resolve_table_column(
+        &self,
+        table_name: &str,
+        column_name: &str,
+    ) -> Result<(usize, Type), failure::Error> {
+        let range = match self.tables.get(table_name) {
+            Some(range) => range,
+            None => bail!("no table named {} in scope", table_name),
+        };
+        let i = self.columns[range.clone()]
+            .iter()
+            .position(|t| t.name.as_ref().map_or(false, |n| n == column_name));
+        let i = match i {
+            Some(i) => i,
+            None => bail!(
+                "no table/column named {}.{} in scope",
+                table_name,
+                column_name
+            ),
+        };
+        let i = range.start + i;
         Ok((i, self.columns[i].clone()))
     }
 

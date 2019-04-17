@@ -638,6 +638,10 @@ impl Parser {
                     let (pos, typ) = nr.resolve_column(name)?;
                     Ok((pos, typ, nr.side(pos)))
                 }
+                ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
+                    let (pos, typ) = nr.resolve_table_column(&names[0], &names[1])?;
+                    Ok((pos, typ, nr.side(pos)))
+                }
                 _ => bail!(
                     "ON clause contained unsupported complicated expression: {:?}",
                     e
@@ -700,6 +704,11 @@ impl Parser {
         match e {
             ASTNode::SQLIdentifier(name) => {
                 let (i, typ) = nr.resolve_column(name)?;
+                let expr = Expr::Column(i, Box::new(Expr::Ambient));
+                Ok((expr, typ))
+            }
+            ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
+                let (i, typ) = nr.resolve_table_column(&names[0], &names[1])?;
                 let expr = Expr::Column(i, Box::new(Expr::Ambient));
                 Ok((expr, typ))
             }
