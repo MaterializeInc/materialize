@@ -6,7 +6,8 @@
 use avro_rs::Schema as AvroSchema;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::join::Join;
-use differential_dataflow::operators::reduce::{Reduce, Threshold};
+use differential_dataflow::operators::reduce::Reduce;
+use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::{AsCollection, Collection};
 use std::iter;
 use timely::communication::Allocate;
@@ -190,30 +191,34 @@ fn build_plan<S: Scope<Timestamp = Time>>(
 
             if let Some(num_cols) = include_left_outer {
                 let num_cols = *num_cols;
-                flow = flow.concat(&left.antijoin(&right.map(|(key, _)| key).distinct()).map(
-                    move |(_key, left)| {
-                        let mut tuple = left.unwrap_tuple();
-                        tuple.extend((0..num_cols).map(|_| Datum::Null));
-                        Datum::Tuple(tuple)
-                    },
-                ))
+                flow = flow.concat(
+                    &left
+                        .antijoin(&right.map(|(key, _)| key).distinct_total())
+                        .map(move |(_key, left)| {
+                            let mut tuple = left.unwrap_tuple();
+                            tuple.extend((0..num_cols).map(|_| Datum::Null));
+                            Datum::Tuple(tuple)
+                        }),
+                )
             }
 
             if let Some(num_cols) = include_right_outer {
                 let num_cols = *num_cols;
-                flow = flow.concat(&right.antijoin(&left.map(|(key, _)| key).distinct()).map(
-                    move |(_key, right)| {
-                        let mut tuple = (0..num_cols).map(|_| Datum::Null).collect::<Vec<_>>();
-                        tuple.extend(right.unwrap_tuple());
-                        Datum::Tuple(tuple)
-                    },
-                ))
+                flow = flow.concat(
+                    &right
+                        .antijoin(&left.map(|(key, _)| key).distinct_total())
+                        .map(move |(_key, right)| {
+                            let mut tuple = (0..num_cols).map(|_| Datum::Null).collect::<Vec<_>>();
+                            tuple.extend(right.unwrap_tuple());
+                            Datum::Tuple(tuple)
+                        }),
+                )
             }
 
             flow
         }
 
-        Plan::Distinct(plan) => build_plan(plan, manager, scope).distinct(),
+        Plan::Distinct(plan) => build_plan(plan, manager, scope).distinct_total(),
         Plan::UnionAll(plans) => {
             assert!(!plans.is_empty());
             let mut plans = plans.iter().map(|plan| build_plan(plan, manager, scope));
