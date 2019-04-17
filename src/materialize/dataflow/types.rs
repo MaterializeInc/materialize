@@ -92,6 +92,10 @@ pub enum Plan {
         left: Box<Plan>,
         /// Plan for the right input.
         right: Box<Plan>,
+        /// Include keys on the left that are not joined (for left/full outer join). The usize value is the number of columns on the right.
+        include_left_outer: Option<usize>,
+        /// Include keys on the right that are not joined (for right/full outer join). The usize value is the number of columns on the left.
+        include_right_outer: Option<usize>,
     },
     /// Filter records based on predicate.
     Filter { predicate: Expr, input: Box<Plan> },
@@ -162,6 +166,8 @@ mod tests {
                         Plan::Source("customers2018".into()),
                         Plan::Source("customers2019".into()),
                     ])))),
+                    include_left_outer: None,
+                    include_right_outer: None,
                 }),
             },
             typ: Type {

@@ -84,6 +84,13 @@ impl<'a> NameResolver<'a> {
         }
     }
 
+    pub fn num_columns(&self, side: Side) -> usize {
+        match side {
+            Side::Left => self.breakpoint,
+            Side::Right => self.columns.len() - self.breakpoint,
+        }
+    }
+
     pub fn adjust_rhs(&self, pos: usize) -> usize {
         pos - self.breakpoint
     }

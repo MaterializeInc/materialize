@@ -172,6 +172,8 @@ fn build_plan<S: Scope<Timestamp = Time>>(
             right_key,
             left,
             right,
+            include_left_outer,
+            include_right_outer,
         } => {
             let left_key = left_key.clone();
             let right_key = right_key.clone();
@@ -179,13 +181,36 @@ fn build_plan<S: Scope<Timestamp = Time>>(
                 .map(move |datum| (eval_expr(&left_key, &datum), datum));
             let right = build_plan(&right, manager, scope)
                 .map(move |datum| (eval_expr(&right_key, &datum), datum));
-            left.join(&right).map(|(_key, (left, right))| {
+
+            let mut flow = left.join(&right).map(|(_key, (left, right))| {
                 let mut tuple = left.unwrap_tuple();
                 tuple.extend(right.unwrap_tuple());
                 Datum::Tuple(tuple)
-            })
-        }
+            });
 
+            if let Some(num_cols) = include_left_outer {
+                let num_cols = *num_cols;
+                flow = flow.concat(&left.antijoin(&right.map(|(key, _)| key).distinct()).map(
+                    move |(_key, left)| {
+                        let mut tuple = left.unwrap_tuple();
+                        tuple.extend((0..num_cols).map(|_| Datum::Null));
+                        Datum::Tuple(tuple)
+                    },
+                ))
+            }
+
+            if let Some(num_cols) = include_right_outer {
+                let num_cols = *num_cols;
+                flow = flow.concat(&right.antijoin(&left.map(|(key, _)| key).distinct()).map(
+                    move |(_key, right)| {
+                        let mut tuple = (0..num_cols).map(|_| Datum::Null).collect::<Vec<_>>();
+                        tuple.extend(right.unwrap_tuple());
+                        Datum::Tuple(tuple)
+                    },
+                ))
+            }
+
+            flow
         }
 
         Plan::Distinct(plan) => build_plan(plan, manager, scope).distinct(),

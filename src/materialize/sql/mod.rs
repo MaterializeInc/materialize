@@ -431,14 +431,25 @@ impl Parser {
                 TableFactor::Table { name, .. } => {
                     let name = extract_sql_object_name(&name)?;
                     nr.import_table(&name);
-                    let (left_key, right_key) =
+                    let ((left_key, right_key), (include_left_outer, include_right_outer)) =
                         self.parse_join_operator(&join.join_operator, &nr)?;
                     plan = Plan::Join {
                         left_key,
                         right_key,
                         left: Box::new(plan),
                         right: Box::new(Plan::Source(name)),
+                        include_left_outer: if include_left_outer {
+                            Some(nr.num_columns(Side::Left))
+                        } else {
+                            None
+                        },
+                        include_right_outer: if include_right_outer {
+                            Some(nr.num_columns(Side::Right))
+                        } else {
+                            None
+                        },
                     }
+                    // TODO(jamii) include_left_outer/include_right_outer should factor into projected columns nullability
                 }
                 TableFactor::Derived { .. } => {
                     bail!("subqueries are not yet supported");
@@ -584,18 +595,34 @@ impl Parser {
         &self,
         op: &'a JoinOperator,
         nr: &NameResolver,
-    ) -> Result<(Expr, Expr), failure::Error> {
+    ) -> Result<((Expr, Expr), (bool, bool)), failure::Error> {
         match op {
-            JoinOperator::Inner(constraint) => match constraint {
-                JoinConstraint::On(expr) => self.parse_join_on_expr(expr, nr),
-                JoinConstraint::Natural => bail!("natural joins are not yet supported"),
-                JoinConstraint::Using(_) => bail!("using joins are not yet supported"),
-            },
-            JoinOperator::LeftOuter(_) => bail!("left outer joins are not yet supported"),
-            JoinOperator::RightOuter(_) => bail!("right outer joins are not yet supported"),
-            JoinOperator::FullOuter(_) => bail!("full outer joins are not yet supported"),
+            JoinOperator::Inner(constraint) => {
+                Ok((self.parse_join_constraint(constraint, nr)?, (false, false)))
+            }
+            JoinOperator::LeftOuter(constraint) => {
+                Ok((self.parse_join_constraint(constraint, nr)?, (true, false)))
+            }
+            JoinOperator::RightOuter(constraint) => {
+                Ok((self.parse_join_constraint(constraint, nr)?, (false, true)))
+            }
+            JoinOperator::FullOuter(constraint) => {
+                Ok((self.parse_join_constraint(constraint, nr)?, (true, true)))
+            }
             JoinOperator::Implicit => bail!("multiple from tables are not yet supported"),
             JoinOperator::Cross => bail!("cross joins are not yet supported"),
+        }
+    }
+
+    fn parse_join_constraint<'a>(
+        &self,
+        constraint: &'a JoinConstraint,
+        nr: &NameResolver,
+    ) -> Result<(Expr, Expr), failure::Error> {
+        match constraint {
+            JoinConstraint::On(expr) => self.parse_join_on_expr(expr, nr),
+            JoinConstraint::Natural => bail!("natural joins are not yet supported"),
+            JoinConstraint::Using(_) => bail!("using joins are not yet supported"),
         }
     }
 
@@ -1112,6 +1139,8 @@ mod tests {
                         right_key: Expr::Tuple(vec![Expr::Column(0, Box::new(Expr::Ambient))]),
                         left: Box::new(Plan::Source("src1".into())),
                         right: Box::new(Plan::Source("src2".into())),
+                        include_left_outer: None,
+                        include_right_outer: None,
                     }),
                 },
                 typ: Type {
