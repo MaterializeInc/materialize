@@ -832,21 +832,21 @@ impl Parser {
                 (FType::Int64, FType::Int64) => (BinaryFunc::MulInt64, FType::Int64),
                 (FType::Float32, FType::Float32) => (BinaryFunc::MulFloat32, FType::Float32),
                 (FType::Float64, FType::Float64) => (BinaryFunc::MulFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+                _ => bail!("no overload for {:?} * {:?}", ltype.ftype, rtype.ftype),
             },
             SQLOperator::Divide => match (&ltype.ftype, &rtype.ftype) {
                 (FType::Int32, FType::Int32) => (BinaryFunc::DivInt32, FType::Int32),
                 (FType::Int64, FType::Int64) => (BinaryFunc::DivInt64, FType::Int64),
                 (FType::Float32, FType::Float32) => (BinaryFunc::DivFloat32, FType::Float32),
                 (FType::Float64, FType::Float64) => (BinaryFunc::DivFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+                _ => bail!("no overload for {:?} / {:?}", ltype.ftype, rtype.ftype),
             },
             SQLOperator::Modulus => match (&ltype.ftype, &rtype.ftype) {
                 (FType::Int32, FType::Int32) => (BinaryFunc::ModInt32, FType::Int32),
                 (FType::Int64, FType::Int64) => (BinaryFunc::ModInt64, FType::Int64),
                 (FType::Float32, FType::Float32) => (BinaryFunc::ModFloat32, FType::Float32),
                 (FType::Float64, FType::Float64) => (BinaryFunc::ModFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+                _ => bail!("no overload for {:?} % {:?}", ltype.ftype, rtype.ftype),
             },
             SQLOperator::Lt | SQLOperator::LtEq | SQLOperator::Gt | SQLOperator::GtEq => {
                 if ltype.ftype != rtype.ftype {
