@@ -6,7 +6,7 @@
 steps:
   - command: ci/test/test.sh
     plugins:
-      - timelydata/uid#master: ~
+      - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.0:
           config: ci/test/docker-compose.yml
           run: app

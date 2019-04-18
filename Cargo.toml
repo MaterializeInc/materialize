@@ -6,9 +6,7 @@ members = [
     "src/testdrive",
 ]
 
-# TODO(benesch): remove this when rdkafka is updated upstream.
-[patch."https://github.com/benesch/timely-dataflow.git"]
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git" }
-
+# TODO(benesch): remove when https://github.com/fede1024/rust-rdkafka/pull/117
+# lands.
 [patch.crates-io]
 rdkafka = { git = "ssh://git@github.com/MaterializeInc/rust-rdkafka.git" }
