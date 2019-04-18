@@ -17,6 +17,9 @@ in pkgs.stdenv.mkDerivation rec {
   name = "materialize";
   buildInputs = with pkgs; [
     openssl
+    zlib.static
+    clang
+    llvmPackages.libclang
     pkgconfig
     rustup
 
@@ -31,4 +34,7 @@ in pkgs.stdenv.mkDerivation rec {
     darwin.apple_sdk.frameworks.Security
     darwin.apple_sdk.frameworks.CoreServices
     ] else []);
+  shellHook = ''
+    export LIBCLANG_PATH=${pkgs.llvmPackages.clang-unwrapped.lib}/lib
+   '';
 }
