@@ -188,6 +188,7 @@ impl<'a> NameResolver<'a> {
         (left_key, left_types, right_key, right_types)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn resolve_using_join(
         &self,
         names: &[String],
