@@ -43,13 +43,14 @@ where
                 // Could cease earlier, if we had a better policy.
                 while let Some(result) = consumer.poll(std::time::Duration::from_millis(0)) {
                     // If valid data back from Kafka
-                    if let Ok(message) = result {
-                        // Attempt to interpret bytes as utf8  ...
-                        if let Some(payload) = message.payload() {
-                            complete = logic(payload, capability, output) || complete;
+                    match result {
+                        Ok(message) => {
+                            // Attempt to interpret bytes as utf8  ...
+                            if let Some(payload) = message.payload() {
+                                complete = logic(payload, capability, output) || complete;
+                            }
                         }
-                    } else {
-                        println!("Kafka error");
+                        Err(err) => println!("Kafka error: {}", err),
                     }
                 }
                 // We need some rule to advance timestamps ...
