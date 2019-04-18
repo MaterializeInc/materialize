@@ -3,6 +3,7 @@ members = [
     "src/metastore",
     "src/materialize",
     "src/ore",
+    "src/testdrive",
 ]
 
 # TODO(benesch): remove this when rdkafka is updated upstream.
