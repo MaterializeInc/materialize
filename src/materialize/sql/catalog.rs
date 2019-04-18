@@ -7,6 +7,7 @@ use failure::bail;
 use lazy_static::lazy_static;
 use sqlparser::sqlast::SQLIdent;
 use std::collections::HashMap;
+use std::ops::Deref;
 
 use crate::repr::{FType, Type};
 
@@ -85,7 +86,7 @@ impl<'a> NameResolver<'a> {
             .columns
             .iter()
             .enumerate()
-            .filter(|(_, (_, t))| t.name.as_ref().unwrap() == column_name)
+            .filter(|(_, (_, t))| t.name.as_ref().map(|t| t.deref()) == Some(column_name))
             .collect::<Vec<_>>();
         match results.len() {
             0 => bail!("no column named {} in scope", column_name),
@@ -107,7 +108,8 @@ impl<'a> NameResolver<'a> {
             .iter()
             .enumerate()
             .filter(|(_, (tn, t))| {
-                tn.as_ref().unwrap() == table_name && t.name.as_ref().unwrap() == column_name
+                tn.as_ref().map(|tn| tn.deref()) == Some(table_name)
+                    && t.name.as_ref().map(|t| t.deref()) == Some(column_name)
             })
             .collect::<Vec<_>>();
         match results.len() {
@@ -130,7 +132,7 @@ impl<'a> NameResolver<'a> {
             .iter()
             .enumerate()
             .filter(|(i, (_, t))| {
-                t.name.as_ref().unwrap() == column_name
+                t.name.as_ref().map(|t| t.deref()) == Some(column_name)
                     && match side {
                         Side::Left => *i < self.breakpoint,
                         Side::Right => *i >= self.breakpoint,
@@ -162,7 +164,7 @@ impl<'a> NameResolver<'a> {
     pub fn get_table_column_types(&self, table_name: &str) -> Vec<&Type> {
         self.columns
             .iter()
-            .filter(|(tn, _)| tn.as_ref().unwrap() == table_name)
+            .filter(|(tn, _)| tn.as_ref().map(|tn| tn.deref()) == Some(table_name))
             .map(|(_, t)| t)
             .collect()
     }
