@@ -615,15 +615,17 @@ impl Parser {
                 Ok(vec![(expr, typ)])
             }
             SQLSelectItem::Wildcard => Ok(nr
-                .get_column_types()
+                .get_all_column_types()
                 .into_iter()
                 .enumerate()
                 .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ))
                 .collect()),
-            _ => bail!(
-                "complicated select items are not yet supported: {}",
-                s.to_string()
-            ),
+            SQLSelectItem::QualifiedWildcard(name) => Ok(nr
+                .get_table_column_types(&extract_sql_object_name(name)?)?
+                .into_iter()
+                .enumerate()
+                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ))
+                .collect()),
         }
     }
 

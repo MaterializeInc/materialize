@@ -107,8 +107,15 @@ impl<'a> NameResolver<'a> {
         Ok((i, self.columns[i].clone()))
     }
 
-    pub fn get_column_types(&self) -> Vec<Type> {
+    pub fn get_all_column_types(&self) -> Vec<Type> {
         self.columns.clone()
+    }
+
+    pub fn get_table_column_types(&self, table_name: &str) -> Result<Vec<Type>, failure::Error> {
+        match self.tables.get(table_name) {
+            Some(range) => Ok(self.columns[range.clone()].to_vec()),
+            None => bail!("no table named {} in scope", table_name),
+        }
     }
 
     pub fn side(&self, pos: usize) -> Side {
