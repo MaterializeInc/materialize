@@ -608,6 +608,11 @@ impl Parser {
     ) -> Result<(Expr, Type), failure::Error> {
         match s {
             SQLSelectItem::UnnamedExpression(e) => self.parse_expr(e, nr),
+            SQLSelectItem::ExpressionWithAlias(e, alias) => {
+                let (expr, mut typ) = self.parse_expr(e, nr)?;
+                typ.name = Some(alias.clone());
+                Ok((expr, typ))
+            }
             _ => bail!(
                 "complicated select items are not yet supported: {}",
                 s.to_string()
