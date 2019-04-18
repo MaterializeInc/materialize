@@ -412,9 +412,9 @@ impl Parser {
 
         // Step 1. Handle FROM clause, including joins.
         let mut plan = match &s.relation {
-            Some(TableFactor::Table { name, .. }) => {
+            Some(TableFactor::Table { name, alias }) => {
                 let name = extract_sql_object_name(name)?;
-                nr.import_table(&name);
+                nr.import_table(&name, alias.as_ref().map(|s| &**s));
                 Plan::Source(name)
             }
             Some(TableFactor::Derived { .. }) => {
@@ -422,15 +422,15 @@ impl Parser {
             }
             None => {
                 // https://en.wikipedia.org/wiki/DUAL_table
-                nr.import_table("$dual");
+                nr.import_table("$dual", None);
                 Plan::Source("$dual".into())
             }
         };
         for join in &s.joins {
             match &join.relation {
-                TableFactor::Table { name, .. } => {
+                TableFactor::Table { name, alias } => {
                     let name = extract_sql_object_name(&name)?;
-                    nr.import_table(&name);
+                    nr.import_table(&name, alias.as_ref().map(|s| &**s));
                     let ((left_key, right_key), (include_left_outer, include_right_outer)) =
                         match &join.join_operator {
                             JoinOperator::Inner(constraint) => {

@@ -46,7 +46,7 @@ impl<'a> NameResolver<'a> {
         }
     }
 
-    pub fn import_table(&mut self, name: &str) {
+    pub fn import_table(&mut self, name: &str, alias: Option<&str>) {
         self.breakpoint = self.columns.len();
         let typ = self.get_table(name);
         match &typ.ftype {
@@ -65,8 +65,10 @@ impl<'a> NameResolver<'a> {
             FType::Tuple(tuple) => self.columns.append(&mut tuple.clone()),
             _ => unimplemented!(),
         }
-        self.tables
-            .insert(name.to_owned(), self.breakpoint..self.columns.len());
+        self.tables.insert(
+            alias.unwrap_or(name).to_owned(),
+            self.breakpoint..self.columns.len(),
+        );
     }
 
     // TODO(jamii) we should detect when table/column names are ambiguous
