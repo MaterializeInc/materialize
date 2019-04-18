@@ -205,6 +205,13 @@ impl<'a> NameResolver<'a> {
         Ok((left_key, left_types, right_key, right_types))
     }
 
+    pub fn project(&mut self, key: &[usize]) {
+        self.columns = key
+            .iter()
+            .map(|i| self.columns[*i].clone())
+            .collect::<Vec<_>>();
+    }
+
     pub fn side(&self, pos: usize) -> Side {
         if pos < self.breakpoint {
             Side::Left
@@ -213,7 +220,11 @@ impl<'a> NameResolver<'a> {
         }
     }
 
-    pub fn num_columns(&self, side: Side) -> usize {
+    pub fn num_columns(&self) -> usize {
+        self.columns.len()
+    }
+
+    pub fn num_columns_on_side(&self, side: Side) -> usize {
         match side {
             Side::Left => self.breakpoint,
             Side::Right => self.columns.len() - self.breakpoint,

@@ -433,18 +433,22 @@ impl Parser {
                     nr.import_table(&name, alias.as_ref().map(|s| &**s));
                     let ((left_key, right_key), (include_left_outer, include_right_outer)) =
                         match &join.join_operator {
-                            JoinOperator::Inner(constraint) => {
-                                (self.parse_join_constraint(constraint, &nr)?, (false, false))
-                            }
-                            JoinOperator::LeftOuter(constraint) => {
-                                (self.parse_join_constraint(constraint, &nr)?, (true, false))
-                            }
-                            JoinOperator::RightOuter(constraint) => {
-                                (self.parse_join_constraint(constraint, &nr)?, (false, true))
-                            }
-                            JoinOperator::FullOuter(constraint) => {
-                                (self.parse_join_constraint(constraint, &nr)?, (true, true))
-                            }
+                            JoinOperator::Inner(constraint) => (
+                                self.parse_join_constraint(constraint, &mut nr)?,
+                                (false, false),
+                            ),
+                            JoinOperator::LeftOuter(constraint) => (
+                                self.parse_join_constraint(constraint, &mut nr)?,
+                                (true, false),
+                            ),
+                            JoinOperator::RightOuter(constraint) => (
+                                self.parse_join_constraint(constraint, &mut nr)?,
+                                (false, true),
+                            ),
+                            JoinOperator::FullOuter(constraint) => (
+                                self.parse_join_constraint(constraint, &mut nr)?,
+                                (true, true),
+                            ),
                             JoinOperator::Implicit => {
                                 bail!("multiple from tables are not yet supported")
                             }
@@ -464,12 +468,12 @@ impl Parser {
                         left: Box::new(plan),
                         right: Box::new(Plan::Source(name)),
                         include_left_outer: if include_left_outer {
-                            Some(nr.num_columns(Side::Left))
+                            Some(nr.num_columns_on_side(Side::Left))
                         } else {
                             None
                         },
                         include_right_outer: if include_right_outer {
-                            Some(nr.num_columns(Side::Right))
+                            Some(nr.num_columns_on_side(Side::Right))
                         } else {
                             None
                         },
@@ -632,11 +636,10 @@ impl Parser {
     fn parse_join_constraint<'a>(
         &self,
         constraint: &'a JoinConstraint,
-        nr: &NameResolver,
+        nr: &mut NameResolver,
     ) -> Result<(Expr, Expr), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => self.parse_join_on_expr(expr, nr),
-            // TODO(jamii) Natural/Using need to project away the joined keys, but NameResolver can't handle this right now
             JoinConstraint::Natural => {
                 let (left_key, left_types, right_key, right_types) = nr.resolve_natural_join();
                 for (l, r) in left_types.iter().zip(right_types.iter()) {
@@ -644,6 +647,15 @@ impl Parser {
                         bail!("cannot compare {:?} and {:?}", l, r);
                     }
                 }
+                let project_key = (0..nr.num_columns())
+                    .filter(|i| {
+                        right_key
+                            .iter()
+                            .find(|r| nr.num_columns_on_side(Side::Left) + *r == *i)
+                            .is_none()
+                    })
+                    .collect::<Vec<_>>();
+                nr.project(&project_key);
                 Ok((
                     Expr::columns(&left_key, &Expr::Ambient),
                     Expr::columns(&right_key, &Expr::Ambient),
@@ -657,6 +669,10 @@ impl Parser {
                         bail!("cannot compare {:?} and {:?}", l, r);
                     }
                 }
+                let project_key = (0..nr.num_columns())
+                    .filter(|i| left_key.iter().find(|l| *l == i).is_none())
+                    .collect::<Vec<_>>();
+                nr.project(&project_key);
                 Ok((
                     Expr::columns(&left_key, &Expr::Ambient),
                     Expr::columns(&right_key, &Expr::Ambient),
