@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use failure::bail;
+use failure::format_err;
 use lazy_static::lazy_static;
 use sqlparser::sqlast::SQLIdent;
 use std::collections::HashMap;
@@ -118,6 +119,64 @@ impl<'a> NameResolver<'a> {
             Some(range) => Ok(self.columns[range.clone()].to_vec()),
             None => bail!("no table named {} in scope", table_name),
         }
+    }
+
+    pub fn resolve_natural_join(&self) -> (Vec<usize>, Vec<Type>, Vec<usize>, Vec<Type>) {
+        let mut left_key = vec![];
+        let mut left_types = vec![];
+        let mut right_key = vec![];
+        let mut right_types = vec![];
+        for r in self.breakpoint..self.columns.len() {
+            let r_type = &self.columns[r];
+            if let Some(name) = &r_type.name {
+                let (l, l_type) = self.resolve_column(name).unwrap();
+                // if it isn't just matching itself
+                if l < self.breakpoint {
+                    left_key.push(l);
+                    left_types.push(l_type);
+                    right_key.push(r - self.breakpoint);
+                    right_types.push(r_type.clone());
+                }
+            }
+        }
+        (left_key, left_types, right_key, right_types)
+    }
+
+    pub fn resolve_using_join(
+        &self,
+        names: &[String],
+    ) -> Result<(Vec<usize>, Vec<Type>, Vec<usize>, Vec<Type>), failure::Error> {
+        let mut left_key = vec![];
+        let mut left_types = vec![];
+        let mut right_key = vec![];
+        let mut right_types = vec![];
+        for name in names {
+            let (l, l_type) = self
+                .columns
+                .iter()
+                .enumerate()
+                .find(|(l, l_type)| {
+                    *l < self.breakpoint
+                        && l_type.name.is_some()
+                        && l_type.name.as_ref().unwrap() == name
+                })
+                .ok_or_else(|| format_err!("no column named {} in scope on left of join", name))?;
+            let (r, r_type) = self
+                .columns
+                .iter()
+                .enumerate()
+                .find(|(r, r_type)| {
+                    *r >= self.breakpoint
+                        && r_type.name.is_some()
+                        && r_type.name.as_ref().unwrap() == name
+                })
+                .ok_or_else(|| format_err!("no column named {} in scope on right of join", name))?;
+            left_key.push(l);
+            left_types.push(l_type.clone());
+            right_key.push(r - self.breakpoint);
+            right_types.push(r_type.clone());
+        }
+        Ok((left_key, left_types, right_key, right_types))
     }
 
     pub fn side(&self, pos: usize) -> Side {

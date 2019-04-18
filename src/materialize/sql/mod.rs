@@ -636,8 +636,32 @@ impl Parser {
     ) -> Result<(Expr, Expr), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => self.parse_join_on_expr(expr, nr),
-            JoinConstraint::Natural => bail!("natural joins are not yet supported"),
-            JoinConstraint::Using(_) => bail!("using joins are not yet supported"),
+            // TODO(jamii) Natural/Using need to project away the joined keys, but NameResolver can't handle this right now
+            JoinConstraint::Natural => {
+                let (left_key, left_types, right_key, right_types) = nr.resolve_natural_join();
+                for (l, r) in left_types.iter().zip(right_types.iter()) {
+                    if l.ftype != r.ftype {
+                        bail!("cannot compare {:?} and {:?}", l, r);
+                    }
+                }
+                Ok((
+                    Expr::columns(&left_key, &Expr::Ambient),
+                    Expr::columns(&right_key, &Expr::Ambient),
+                ))
+            }
+            JoinConstraint::Using(column_names) => {
+                let (left_key, left_types, right_key, right_types) =
+                    nr.resolve_using_join(&column_names)?;
+                for (l, r) in left_types.iter().zip(right_types.iter()) {
+                    if l.ftype != r.ftype {
+                        bail!("cannot compare {:?} and {:?}", l, r);
+                    }
+                }
+                Ok((
+                    Expr::columns(&left_key, &Expr::Ambient),
+                    Expr::columns(&right_key, &Expr::Ambient),
+                ))
+            }
         }
     }
 

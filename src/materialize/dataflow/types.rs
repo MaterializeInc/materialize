@@ -140,6 +140,16 @@ pub enum Expr {
     // }
 }
 
+impl Expr {
+    pub fn columns(is: &[usize], input: &Expr) -> Self {
+        Expr::Tuple(
+            is.iter()
+                .map(|i| Expr::Column(*i, Box::new(input.clone())))
+                .collect(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
