@@ -14,7 +14,7 @@ atty = "0.2"
 failure = "0.1.5"
 ore = { path = "../ore" }
 postgres = "0.16.0-rc.1"  # pre-release for simple_query support
-sqlparser = { git = "ssh://git@github.com/timelydata/sqlparser.git" }
+sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rdkafka = "0.20"
 reqwest = "0.9.15"
 termcolor = "1.0.4"
