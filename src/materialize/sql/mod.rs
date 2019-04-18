@@ -618,13 +618,13 @@ impl Parser {
                 .get_all_column_types()
                 .into_iter()
                 .enumerate()
-                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ))
+                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ.clone()))
                 .collect()),
             SQLSelectItem::QualifiedWildcard(name) => Ok(nr
-                .get_table_column_types(&extract_sql_object_name(name)?)?
+                .get_table_column_types(&extract_sql_object_name(name)?)
                 .into_iter()
                 .enumerate()
-                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ))
+                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ.clone()))
                 .collect()),
         }
     }
@@ -674,11 +674,11 @@ impl Parser {
             match e {
                 ASTNode::SQLIdentifier(name) => {
                     let (pos, typ) = nr.resolve_column(name)?;
-                    Ok((pos, typ, nr.side(pos)))
+                    Ok((pos, typ.clone(), nr.side(pos)))
                 }
                 ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
                     let (pos, typ) = nr.resolve_table_column(&names[0], &names[1])?;
-                    Ok((pos, typ, nr.side(pos)))
+                    Ok((pos, typ.clone(), nr.side(pos)))
                 }
                 _ => bail!(
                     "ON clause contained unsupported complicated expression: {:?}",
@@ -743,12 +743,12 @@ impl Parser {
             ASTNode::SQLIdentifier(name) => {
                 let (i, typ) = nr.resolve_column(name)?;
                 let expr = Expr::Column(i, Box::new(Expr::Ambient));
-                Ok((expr, typ))
+                Ok((expr, typ.clone()))
             }
             ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
                 let (i, typ) = nr.resolve_table_column(&names[0], &names[1])?;
                 let expr = Expr::Column(i, Box::new(Expr::Ambient));
-                Ok((expr, typ))
+                Ok((expr, typ.clone()))
             }
             ASTNode::SQLValue(val) => self.parse_literal(val),
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
