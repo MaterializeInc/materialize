@@ -575,9 +575,10 @@ impl Parser {
         let mut outputs = Vec::new();
         let mut proj_type = Vec::new();
         for p in &s.projection {
-            let (expr, typ) = self.parse_select_item(p, &nr)?;
-            outputs.push(expr);
-            proj_type.push(typ);
+            for (expr, typ) in self.parse_select_item(p, &nr)? {
+                outputs.push(expr);
+                proj_type.push(typ);
+            }
         }
         let plan = Plan::Project {
             outputs,
@@ -605,14 +606,20 @@ impl Parser {
         &self,
         s: &'a SQLSelectItem,
         nr: &NameResolver,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<Vec<(Expr, Type)>, failure::Error> {
         match s {
-            SQLSelectItem::UnnamedExpression(e) => self.parse_expr(e, nr),
+            SQLSelectItem::UnnamedExpression(e) => Ok(vec![self.parse_expr(e, nr)?]),
             SQLSelectItem::ExpressionWithAlias(e, alias) => {
                 let (expr, mut typ) = self.parse_expr(e, nr)?;
                 typ.name = Some(alias.clone());
-                Ok((expr, typ))
+                Ok(vec![(expr, typ)])
             }
+            SQLSelectItem::Wildcard => Ok(nr
+                .get_column_types()
+                .into_iter()
+                .enumerate()
+                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ))
+                .collect()),
             _ => bail!(
                 "complicated select items are not yet supported: {}",
                 s.to_string()

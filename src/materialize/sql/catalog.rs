@@ -107,6 +107,10 @@ impl<'a> NameResolver<'a> {
         Ok((i, self.columns[i].clone()))
     }
 
+    pub fn get_column_types(&self) -> Vec<Type> {
+        self.columns.clone()
+    }
+
     pub fn side(&self, pos: usize) -> Side {
         if pos < self.breakpoint {
             Side::Left
