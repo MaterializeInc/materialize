@@ -8,7 +8,7 @@ FROM rustlang/rust:nightly
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.1.0/autouseradd-1.1.0-amd64.tar.gz \
     | tar xz -C /usr --strip-components 1
 
-RUN apt-get update && apt-get install -y jq rsync
+RUN apt-get update && apt-get install -y jq clang libclang-dev rsync
 
 COPY --from=materialize/sccache:0.2.8 /usr/local/bin/sccache /usr/local/bin/sccache
 
