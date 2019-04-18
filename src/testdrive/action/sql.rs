@@ -51,7 +51,9 @@ impl Action for SqlAction {
     fn redo(&self, state: &mut State) -> Result<(), String> {
         print_query(&self.cmd.query);
         let max = match self.stmt {
-            SQLStatement::SQLPeek { .. } => 5,
+            // TODO(benesch): this is horrible. PEEK needs to learn to wait
+            // until it's up to date.
+            SQLStatement::SQLPeek { .. } => 7,
             _ => 0,
         };
         let mut i = 0;

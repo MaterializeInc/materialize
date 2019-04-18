@@ -979,7 +979,7 @@ dependencies = [
  "serde_json 1.0.39 (registry+https://github.com/rust-lang/crates.io-index)",
  "simplelog 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "smallvec 0.6.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "sqlparser 0.2.2-alpha.0 (git+ssh://git@github.com/timelydata/sqlparser.git)",
+ "sqlparser 0.2.2-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
  "state_machine_future 0.2.0 (git+https://github.com/benesch/state_machine_future.git?branch=context-generic-bounds)",
  "timely 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "tokio 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1853,7 +1853,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "sqlparser"
 version = "0.2.2-alpha.0"
-source = "git+ssh://git@github.com/timelydata/sqlparser.git#332372776300d935ac972c9ccf1a07e4cbcd5c6a"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#332372776300d935ac972c9ccf1a07e4cbcd5c6a"
 dependencies = [
  "chrono 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2009,7 +2009,7 @@ dependencies = [
  "predicates 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rdkafka 0.20.0 (git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git)",
  "reqwest 0.9.15 (registry+https://github.com/rust-lang/crates.io-index)",
- "sqlparser 0.2.2-alpha.0 (git+ssh://git@github.com/timelydata/sqlparser.git)",
+ "sqlparser 0.2.2-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
  "termcolor 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2692,7 +2692,7 @@ dependencies = [
 "checksum slog-scope 4.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "60c04b4726fa04595ccf2c2dad7bcd15474242c4c5e109a8a376e8a2c9b1539a"
 "checksum slog-stdlog 3.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "ac42f8254ae996cc7d640f9410d3b048dcdf8887a10df4d5d4c44966de24c4a8"
 "checksum smallvec 0.6.9 (registry+https://github.com/rust-lang/crates.io-index)" = "c4488ae950c49d403731982257768f48fada354a5203fe81f9bb6f43ca9002be"
-"checksum sqlparser 0.2.2-alpha.0 (git+ssh://git@github.com/timelydata/sqlparser.git)" = "<none>"
+"checksum sqlparser 0.2.2-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)" = "<none>"
 "checksum stable_deref_trait 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 "checksum state_machine_future 0.2.0 (git+https://github.com/benesch/state_machine_future.git?branch=context-generic-bounds)" = "<none>"
 "checksum state_machine_future 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "530e1d624baae485bce12e6647acb76aafa253346ee8a16751974eed5a24b13d"
