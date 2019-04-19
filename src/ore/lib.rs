@@ -14,6 +14,7 @@
 pub mod future;
 pub mod log;
 pub mod netio;
+pub mod option;
 pub mod sync;
 pub mod vec;
 
