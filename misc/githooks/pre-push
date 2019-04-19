@@ -8,7 +8,7 @@
 #
 # To install this hook, copy or symlink it into .git/hooks/pre-push:
 #
-#     $ ln -s misc/githooks/pre-push .git/hooks/pre-push
+#     $ ln -s ../../misc/githooks/pre-push .git/hooks/pre-push
 #
 
 set -euo pipefail
