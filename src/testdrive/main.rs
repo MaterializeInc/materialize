@@ -59,19 +59,11 @@ fn run1(line_reader: &mut LineReader) -> Result<(), Error> {
         a.action
             .undo(&mut state)
             .map_err(|e| InputError { msg: e, pos: a.pos })?;
-        // TODO(benesch): this is awful, but necessary to "fix" synchronization
-        // issues that crash the test until they can be properly fixed in
-        // materialized itself.
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     for a in &actions {
         a.action
             .redo(&mut state)
             .map_err(|e| InputError { msg: e, pos: a.pos })?;
-        // TODO(benesch): this is awful, but necessary to "fix" synchronization
-        // issues that crash the test until they can be properly fixed in
-        // materialized itself.
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     Ok(())
 }

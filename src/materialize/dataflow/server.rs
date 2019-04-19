@@ -5,7 +5,10 @@
 
 //! An interactive dataflow server.
 
+use differential_dataflow::trace::cursor::Cursor;
+use differential_dataflow::trace::TraceReader;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::mpsc;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -50,6 +53,7 @@ where
     inner: &'w mut TimelyWorker<A>,
     cmd_rx: CommandReceiver,
     sequencer: Sequencer<Command>,
+    pending_cmds: HashMap<String, Vec<Command>>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
 }
@@ -64,6 +68,7 @@ where
             inner: w,
             cmd_rx,
             sequencer,
+            pending_cmds: HashMap::new(),
             traces: TraceManager::new(),
             rpc_client: reqwest::Client::new(),
         }
@@ -71,14 +76,14 @@ where
 
     fn run(&mut self) {
         loop {
-            // Submit any external commands for sequencing,.
+            // Submit any external commands for sequencing.
             while let Ok(cmd) = self.cmd_rx.try_recv() {
                 self.sequencer.push(cmd)
             }
 
             // Handle any sequenced commands.
             while let Some(cmd) = self.sequencer.next() {
-                self.handle_command(&cmd)
+                self.handle_command(cmd)
             }
 
             // Ask Timely to execute a unit of work.
@@ -86,39 +91,52 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: &Command) {
-        match cmd {
+    fn handle_command(&mut self, cmd: Command) {
+        match &cmd {
             Command::CreateDataflow(dataflow) => {
-                render::build_dataflow(dataflow, &mut self.traces, self.inner)
+                render::build_dataflow(dataflow, &mut self.traces, self.inner);
+                if let Some(cmds) = self.pending_cmds.remove(dataflow.name()) {
+                    for cmd in cmds {
+                        self.handle_command(cmd);
+                    }
+                }
             }
             Command::DropDataflow(name) => self.traces.del_trace(name),
             Command::Peek(name, uuid) => {
-                use differential_dataflow::trace::cursor::Cursor;
-                use differential_dataflow::trace::TraceReader;
-                if let Some(mut trace) = self.traces.get_trace(name.clone()) {
-                    let (mut cur, storage) = trace.cursor();
-                    let mut out = Vec::new();
-                    while cur.key_valid(&storage) {
-                        let key = cur.key(&storage).clone();
-                        let mut copies = 0;
-                        cur.map_times(&storage, |_, diff| {
-                            copies += diff;
-                        });
-                        assert!(copies >= 0);
-                        for _ in 0..copies {
-                            out.push(key.clone());
+                match self.traces.get_trace(name.clone()) {
+                    Some(mut trace) => {
+                        let (mut cur, storage) = trace.cursor();
+                        let mut out = Vec::new();
+                        while cur.key_valid(&storage) {
+                            let key = cur.key(&storage).clone();
+                            let mut copies = 0;
+                            cur.map_times(&storage, |_, diff| {
+                                copies += diff;
+                            });
+                            assert!(copies >= 0);
+                            for _ in 0..copies {
+                                out.push(key.clone());
+                            }
+                            cur.step_key(&storage)
                         }
-                        cur.step_key(&storage)
+                        let encoded = bincode::serialize(&out).unwrap();
+                        self.rpc_client
+                            .post("http://localhost:6875/api/peek-results")
+                            .header("X-Materialize-Query-UUID", uuid.to_string())
+                            .body(encoded)
+                            .send()
+                            .unwrap();
                     }
-                    let encoded = bincode::serialize(&out).unwrap();
-                    self.rpc_client
-                        .post("http://localhost:6875/api/peek-results")
-                        .header("X-Materialize-Query-UUID", uuid.to_string())
-                        .body(encoded)
-                        .send()
-                        .unwrap();
-                } else {
-                    println!("no trace named {}", name);
+                    None => {
+                        // We might see a Peek command before the corresponding
+                        // CreateDataflow command. That's entirely expected.
+                        // Just stash the Peek command so that it can be run
+                        // after the dataflow is created.
+                        self.pending_cmds
+                            .entry(name.clone())
+                            .or_insert(Vec::new())
+                            .push(cmd);
+                    }
                 }
             }
             Command::Tail(_) => unimplemented!(),
