@@ -9,6 +9,8 @@ use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::{AsCollection, Collection};
+use std::cell::Cell;
+use std::rc::Rc;
 use std::iter;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
@@ -31,29 +33,17 @@ pub fn build_dataflow<A: Allocate>(
                     Connector::Kafka { topic, addr } => (topic, addr),
                 };
 
-                use rdkafka::config::ClientConfig;
-                use rdkafka::consumer::{BaseConsumer, Consumer, DefaultConsumerContext};
-
-                // TODO(benesch): fix this copypasta.
-                let mut consumer_config = ClientConfig::new();
-                consumer_config
-                    .set("produce.offset.report", "true")
-                    .set("auto.offset.reset", "smallest")
-                    .set("group.id", &format!("materialize-{}", src.name))
-                    .set("enable.auto.commit", "false")
-                    .set("enable.partition.eof", "false")
-                    .set("auto.offset.reset", "earliest")
-                    .set("session.timeout.ms", "6000")
-                    .set("bootstrap.servers", &addr.to_string());
-
-                let consumer: BaseConsumer<DefaultConsumerContext> =
-                    consumer_config.create().unwrap();
-                consumer.subscribe(&[&topic]).unwrap();
-
                 let schema = AvroSchema::parse_str(&src.raw_schema).unwrap();
 
-                let arrangement =
-                    source::kafka(scope, &src.name, consumer, move |mut bytes, cap, output| {
+                let done = Rc::new(Cell::new(false));
+
+                let arrangement = source::kafka(
+                    scope,
+                    &src.name,
+                    topic,
+                    &addr.to_string(),
+                    done.clone(),
+                    move |mut bytes, cap, output| {
                         // Chomp five bytes; the first byte is a magic byte (0) that
                         // indicates the Confluent serialization format version, and
                         // the next four bytes are a 32-bit schema ID. We should
@@ -91,19 +81,20 @@ pub fn build_dataflow<A: Allocate>(
                             }
                             _ => panic!("avro deserialization went wrong"),
                         }
-                        let time = *cap.time();
-                        output.session(cap).give((Datum::Tuple(row), time, 1));
-
-                        // Indicate that we are not yet done.
-                        false
-                    })
-                    .as_collection()
-                    .arrange_by_self();
-                manager.set_trace(src.name.clone(), &arrangement.trace);
+                        output
+                            .session(cap)
+                            .give((Datum::Tuple(row), *cap.time(), 1));
+                    },
+                )
+                .as_collection()
+                .arrange_by_self();
+                let on_delete = Box::new(move || done.set(true));
+                manager.set_trace(src.name.clone(), &arrangement.trace, on_delete);
             }
             Dataflow::View(view) => {
                 let arrangement = build_plan(&view.plan, manager, scope).arrange_by_self();
-                manager.set_trace(view.name.clone(), &arrangement.trace);
+                let on_delete = Box::new(|| ());
+                manager.set_trace(view.name.clone(), &arrangement.trace, on_delete);
             }
         }
     })

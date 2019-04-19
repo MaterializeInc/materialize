@@ -15,8 +15,10 @@ pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>
 
 pub type KeysOnlyHandle = TraceKeyHandle<Datum, Time, Diff>;
 
+pub type DeleteCallback = Box<Fn()>;
+
 pub struct TraceManager {
-    pub traces: HashMap<String, KeysOnlyHandle>,
+    traces: HashMap<String, (KeysOnlyHandle, DeleteCallback)>,
 }
 
 impl TraceManager {
@@ -27,16 +29,19 @@ impl TraceManager {
     }
 
     pub fn get_trace(&self, name: String) -> Option<KeysOnlyHandle> {
-        self.traces.get(&name).cloned()
+        self.traces.get(&name).map(|(trace, _)| trace.clone())
     }
 
-    pub fn set_trace(&mut self, name: String, handle: &KeysOnlyHandle) {
+    pub fn set_trace(&mut self, name: String, handle: &KeysOnlyHandle, delete_callback: DeleteCallback) {
         let mut handle = handle.clone();
         handle.distinguish_since(&[]);
-        self.traces.insert(name.clone(), handle);
+        self.traces.insert(name.clone(), (handle, delete_callback));
     }
 
     pub fn del_trace(&mut self, name: &str) {
-        self.traces.remove(name);
+        match self.traces.remove(name) {
+            Some((_, callback)) => callback(),
+            _ => (),
+        }
     }
 }

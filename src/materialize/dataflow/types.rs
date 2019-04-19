@@ -9,7 +9,7 @@ use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::repr::{Datum, Type};
 
 /// System-wide notion of time.
-pub type Time = std::time::Duration;
+pub type Time = u64;
 
 /// System-wide update type.
 pub type Diff = isize;
