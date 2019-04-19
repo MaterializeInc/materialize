@@ -17,7 +17,14 @@ use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
-pub fn kafka<G, D, L>(scope: &G, name: &str, topic: &str, addr: &str, done: Rc<Cell<bool>>, logic: L) -> Stream<G, D>
+pub fn kafka<G, D, L>(
+    scope: &G,
+    name: &str,
+    topic: &str,
+    addr: &str,
+    done: Rc<Cell<bool>>,
+    logic: L,
+) -> Stream<G, D>
 where
     G: Scope<Timestamp = u64>,
     D: Data,

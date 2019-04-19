@@ -62,7 +62,7 @@ impl Action for SqlAction {
             match self.try_redo(&mut state.pgconn) {
                 Ok(()) => {
                     println!("rows match; continuing");
-                    return Ok(())
+                    return Ok(());
                 }
                 Err(err) => {
                     if i >= max {

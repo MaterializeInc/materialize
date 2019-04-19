@@ -32,7 +32,12 @@ impl TraceManager {
         self.traces.get(&name).map(|(trace, _)| trace.clone())
     }
 
-    pub fn set_trace(&mut self, name: String, handle: &KeysOnlyHandle, delete_callback: DeleteCallback) {
+    pub fn set_trace(
+        &mut self,
+        name: String,
+        handle: &KeysOnlyHandle,
+        delete_callback: DeleteCallback,
+    ) {
         let mut handle = handle.clone();
         handle.distinguish_since(&[]);
         self.traces.insert(name.clone(), (handle, delete_callback));
