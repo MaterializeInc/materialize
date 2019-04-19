@@ -39,9 +39,8 @@ impl TraceManager {
     }
 
     pub fn del_trace(&mut self, name: &str) {
-        match self.traces.remove(name) {
-            Some((_, callback)) => callback(),
-            _ => (),
+        if let Some((_, callback)) = self.traces.remove(name) {
+            callback();
         }
     }
 }

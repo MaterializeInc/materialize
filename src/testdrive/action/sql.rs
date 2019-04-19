@@ -60,7 +60,10 @@ impl Action for SqlAction {
         loop {
             let backoff = Duration::from_millis(100 * 2_u64.pow(i));
             match self.try_redo(&mut state.pgconn) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    println!("rows match; continuing");
+                    return Ok(())
+                }
                 Err(err) => {
                     if i >= max {
                         return Err(err);
