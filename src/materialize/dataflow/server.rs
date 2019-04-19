@@ -134,7 +134,7 @@ where
                         // after the dataflow is created.
                         self.pending_cmds
                             .entry(name.clone())
-                            .or_insert(Vec::new())
+                            .or_insert_with(Vec::new)
                             .push(cmd);
                     }
                 }
