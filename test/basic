@@ -3,7 +3,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-$ kafka-ingest format=avro topic=aggdata schema={
+$ kafka-ingest format=avro topic=data schema={
     "type": "record",
     "name": "na",
     "fields": [
@@ -16,7 +16,7 @@ $ kafka-ingest format=avro topic=aggdata schema={
 {"a": 3, "b": 1}
 {"a": 1, "b": 2}
 
-> CREATE DATA SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA '{
+> CREATE DATA SOURCE data FROM 'kafka://localhost/data' USING SCHEMA '{
     "type": "record",
     "name": "na",
     "fields": [
@@ -25,11 +25,38 @@ $ kafka-ingest format=avro topic=aggdata schema={
     ]
   }'
 
-> CREATE MATERIALIZED VIEW aggtest AS
-  SELECT b, sum(a) FROM aggdata GROUP BY b;
+> CREATE MATERIALIZED VIEW test1 AS
+  SELECT b, sum(a) FROM data GROUP BY b;
 
-> PEEK aggtest
+> PEEK test1
 b  sum
 ------
 1  6
+2  1
+
+> CREATE MATERIALIZED VIEW test2 AS
+  SELECT b, 1 + sum(a + 1) FROM data GROUP BY b;
+
+> PEEK test2
+b  ?column?
+-----------
+1  10
+2  3
+
+> CREATE MATERIALIZED VIEW test3 AS
+  SELECT b, min(a) FROM data GROUP BY b;
+
+> PEEK test3
+b  min
+------
+1  1
+2  1
+
+> CREATE MATERIALIZED VIEW test4 AS
+  SELECT b, max(a) FROM data GROUP BY b;
+
+> PEEK test4
+b  max
+------
+1  3
 2  1
