@@ -20,7 +20,7 @@ use std::sync::{Arc, RwLock};
 use self::catalog::{NameResolver, Side, TableCollection};
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::dataflow::server::{Command, CommandSender};
-use crate::dataflow::{Aggregate, Connector, Dataflow, Expr, Plan, Source, View};
+use crate::dataflow::{Aggregate, Connector, Dataflow, Expr, KafkaConnector, Plan, Source, View};
 use crate::repr::{Datum, FType, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
@@ -305,10 +305,10 @@ impl Parser {
 
                 Ok(Dataflow::Source(Source {
                     name: extract_sql_object_name(name)?,
-                    connector: Connector::Kafka {
+                    connector: Connector::Kafka(KafkaConnector {
                         addr: url.to_socket_addrs()?.next().unwrap(),
                         topic,
-                    },
+                    }),
                     typ: crate::interchange::avro::parse_schema(schema)?,
                     raw_schema: schema.clone(),
                 }))
@@ -1057,10 +1057,10 @@ mod tests {
             dataflow,
             Dataflow::Source(Source {
                 name: "s".into(),
-                connector: Connector::Kafka {
+                connector: Connector::Kafka(KafkaConnector {
                     addr: "127.0.0.1:9092".parse()?,
                     topic: "topic".into(),
-                },
+                }),
                 typ: Type {
                     name: None,
                     nullable: false,

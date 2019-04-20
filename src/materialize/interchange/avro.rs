@@ -3,8 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use avro_rs::Schema;
 use avro_rs::types::Value;
+use avro_rs::Schema;
 use failure::{bail, Error};
 
 use crate::repr::{Datum, FType, Type};
@@ -137,9 +137,7 @@ impl Decoder {
                         }
                         Value::Long(i) => Datum::Int64(i),
                         Value::Float(f) => Datum::Float32(f.into()),
-                        Value::Double(f) => {
-                            Datum::Float64(f.into())
-                        }
+                        Value::Double(f) => Datum::Float64(f.into()),
                         Value::Bytes(b) => Datum::Bytes(b),
                         Value::String(s) => Datum::String(s),
                         other => bail!("unsupported avro value: {:?}", other),

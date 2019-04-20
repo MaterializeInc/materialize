@@ -3,7 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use differential_dataflow::Data;
 use log::error;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, DefaultConsumerContext};
@@ -11,28 +10,22 @@ use rdkafka::Message;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::generic::OutputHandle;
-use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
-pub fn kafka<G, D, L>(
+use crate::dataflow::types::{Diff, KafkaConnector, Time};
+use crate::interchange::avro;
+use crate::repr::Datum;
+
+pub fn kafka<G>(
     scope: &G,
     name: &str,
-    topic: &str,
-    addr: &str,
+    raw_schema: &str,
+    connector: &KafkaConnector,
     done: Rc<Cell<bool>>,
-    logic: L,
-) -> Stream<G, D>
+) -> Stream<G, (Datum, Time, Diff)>
 where
     G: Scope<Timestamp = u64>,
-    D: Data,
-    L: Fn(
-            &[u8],
-            &Capability<G::Timestamp>,
-            &mut OutputHandle<G::Timestamp, D, Tee<G::Timestamp, D>>,
-        ) + 'static,
 {
     if scope.index() != 0 {
         // Only the first worker reads from Kafka, to ensure it has a complete
@@ -47,6 +40,8 @@ where
         let clock = Instant::now();
         let mut maybe_cap = Some(cap);
 
+        let decoder = avro::Decoder::new(raw_schema);
+
         let mut config = ClientConfig::new();
         config
             .set("produce.offset.report", "true")
@@ -56,10 +51,10 @@ where
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
             .set("session.timeout.ms", "6000")
-            .set("bootstrap.servers", &addr.to_string());
+            .set("bootstrap.servers", &connector.addr.to_string());
 
         let consumer: BaseConsumer<DefaultConsumerContext> = config.create().unwrap();
-        consumer.subscribe(&[&topic]).unwrap();
+        consumer.subscribe(&[&connector.topic]).unwrap();
 
         move |output| {
             if done.get() {
@@ -79,14 +74,30 @@ where
             while let Some(result) = consumer.poll(Duration::from_millis(0)) {
                 match result {
                     Ok(message) => {
-                        // TODO(benesch): this will explode if the timestamps
-                        // are sufficiently out of order.
-                        let msg_cap = cap.delayed(&ts);
-                        if let Some(payload) = message.payload() {
-                            logic(payload, &msg_cap, output);
+                        let payload = match message.payload() {
+                            Some(p) => p,
+                            None => {
+                                // TODO(benesch): what does it mean to have a
+                                // Kafka message with no payload?
+                                error!("dropped kafka message with no payload");
+                                continue;
+                            }
+                        };
+                        let cap = cap.delayed(&ts);
+                        // Chomp five bytes; the first byte is a magic byte (0)
+                        // that indicates the Confluent serialization format
+                        // version, and the next four bytes are a 32-bit schema
+                        // ID. We should deal with the schema registry
+                        // eventually, but for now we require the user to
+                        // hardcode their one true schema in the data source
+                        // definition.
+                        //
+                        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+                        let payload = &payload[5..];
+                        match decoder.decode(payload) {
+                            Ok(d) => output.session(&cap).give((d, *cap.time(), 1)),
+                            Err(err) => error!("avro deserialization error: {}", err),
                         }
-                        // TODO(benesch): what does it mean to have a Kafka
-                        // message with no payload?
                     }
                     Err(err) => error!("kafka error: {}: {}", name, err),
                 }

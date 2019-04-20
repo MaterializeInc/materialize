@@ -52,10 +52,13 @@ pub struct Source {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Connector {
-    Kafka {
-        addr: std::net::SocketAddr,
-        topic: String,
-    },
+    Kafka(KafkaConnector),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaConnector {
+    pub addr: std::net::SocketAddr,
+    pub topic: String,
 }
 
 /// A view transforms one dataflow into another.

@@ -8,7 +8,6 @@ use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::{AsCollection, Collection};
-use log::error;
 use std::cell::Cell;
 use std::iter;
 use std::rc::Rc;
@@ -20,56 +19,28 @@ use super::source;
 use super::trace::TraceManager;
 use super::types::*;
 use crate::repr::Datum;
-use crate::interchange::avro;
 
 pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
 ) {
-    worker.dataflow::<Time, _, _>(|scope| {
-        match dataflow {
-            Dataflow::Source(src) => {
-                let (topic, addr) = match &src.connector {
-                    Connector::Kafka { topic, addr } => (topic, addr),
-                };
-
-                let decoder = avro::Decoder::new(&src.raw_schema);
-
-                let done = Rc::new(Cell::new(false));
-
-                let arrangement = source::kafka(
-                    scope,
-                    &src.name,
-                    topic,
-                    &addr.to_string(),
-                    done.clone(),
-                    move |bytes, cap, output| {
-                        // Chomp five bytes; the first byte is a magic byte (0) that
-                        // indicates the Confluent serialization format version, and
-                        // the next four bytes are a 32-bit schema ID. We should
-                        // deal with the schema registry eventually, but for now
-                        // we require the user to hardcode their one true schema in
-                        // the data source definition.
-                        //
-                        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-                        let bytes = &bytes[5..];
-                        match decoder.decode(bytes) {
-                            Ok(d) => output.session(cap).give((d, *cap.time(), 1)),
-                            Err(err) => error!("avro deserialization error: {}", err),
-                        }
-                    },
-                )
-                .as_collection()
-                .arrange_by_self();
-                let on_delete = Box::new(move || done.set(true));
-                manager.set_trace(src.name.clone(), &arrangement.trace, on_delete);
-            }
-            Dataflow::View(view) => {
-                let arrangement = build_plan(&view.plan, manager, scope).arrange_by_self();
-                let on_delete = Box::new(|| ());
-                manager.set_trace(view.name.clone(), &arrangement.trace, on_delete);
-            }
+    worker.dataflow::<Time, _, _>(|scope| match dataflow {
+        Dataflow::Source(src) => {
+            let done = Rc::new(Cell::new(false));
+            let plan = match &src.connector {
+                Connector::Kafka(c) => {
+                    source::kafka(scope, &src.name, &src.raw_schema, &c, done.clone())
+                }
+            };
+            let arrangement = plan.as_collection().arrange_by_self();
+            let on_delete = Box::new(move || done.set(true));
+            manager.set_trace(src.name.clone(), &arrangement.trace, on_delete);
+        }
+        Dataflow::View(view) => {
+            let arrangement = build_plan(&view.plan, manager, scope).arrange_by_self();
+            let on_delete = Box::new(|| ());
+            manager.set_trace(view.name.clone(), &arrangement.trace, on_delete);
         }
     })
 }
