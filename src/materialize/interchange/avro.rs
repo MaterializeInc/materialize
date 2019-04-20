@@ -4,12 +4,13 @@
 // distributed without the express permission of Materialize, Inc.
 
 use avro_rs::Schema;
-use failure::Error;
+use avro_rs::types::Value;
+use failure::{bail, Error};
 
-use crate::repr::{FType, Type};
+use crate::repr::{Datum, FType, Type};
 use ore::vec::VecExt;
 
-/// Convert an Apache Avro schema into a [`repr::Type`].
+/// Converts an Apache Avro schema into a [`repr::Type`].
 pub fn parse_schema(schema: &str) -> Result<Type, Error> {
     let schema = Schema::parse_str(schema)?;
     Ok(Type {
@@ -102,6 +103,52 @@ fn is_null(schema: &Schema) -> bool {
     match schema {
         Schema::Null => true,
         _ => false,
+    }
+}
+
+/// Manages decoding of Avro-encoded bytes.
+pub struct Decoder {
+    schema: Schema,
+}
+
+impl Decoder {
+    /// Creates a new `Decoder`.
+    pub fn new(schema: &str) -> Decoder {
+        Decoder {
+            schema: Schema::parse_str(schema).unwrap(),
+        }
+    }
+
+    /// Decodes Avro-encoded `bytes` that adhere to `schema` into a `Datum`.
+    pub fn decode(&self, mut bytes: &[u8]) -> Result<Datum, failure::Error> {
+        let val = avro_rs::from_avro_datum(&self.schema, &mut bytes, Some(&self.schema))?;
+        let mut row = Vec::new();
+        match val {
+            Value::Record(cols) => {
+                for (_field_name, col) in cols {
+                    row.push(match col {
+                        Value::Null => Datum::Null,
+                        Value::Boolean(b) => {
+                            if b {
+                                Datum::True
+                            } else {
+                                Datum::False
+                            }
+                        }
+                        Value::Long(i) => Datum::Int64(i),
+                        Value::Float(f) => Datum::Float32(f.into()),
+                        Value::Double(f) => {
+                            Datum::Float64(f.into())
+                        }
+                        Value::Bytes(b) => Datum::Bytes(b),
+                        Value::String(s) => Datum::String(s),
+                        other => bail!("unsupported avro value: {:?}", other),
+                    })
+                }
+            }
+            _ => bail!("unsupported avro value: {:?}", val),
+        }
+        Ok(Datum::Tuple(row))
     }
 }
 

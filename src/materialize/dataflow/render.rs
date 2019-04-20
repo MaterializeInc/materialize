@@ -3,12 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use avro_rs::Schema as AvroSchema;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::{AsCollection, Collection};
+use log::error;
 use std::cell::Cell;
 use std::iter;
 use std::rc::Rc;
@@ -20,6 +20,7 @@ use super::source;
 use super::trace::TraceManager;
 use super::types::*;
 use crate::repr::Datum;
+use crate::interchange::avro;
 
 pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
@@ -33,7 +34,7 @@ pub fn build_dataflow<A: Allocate>(
                     Connector::Kafka { topic, addr } => (topic, addr),
                 };
 
-                let schema = AvroSchema::parse_str(&src.raw_schema).unwrap();
+                let decoder = avro::Decoder::new(&src.raw_schema);
 
                 let done = Rc::new(Cell::new(false));
 
@@ -43,7 +44,7 @@ pub fn build_dataflow<A: Allocate>(
                     topic,
                     &addr.to_string(),
                     done.clone(),
-                    move |mut bytes, cap, output| {
+                    move |bytes, cap, output| {
                         // Chomp five bytes; the first byte is a magic byte (0) that
                         // indicates the Confluent serialization format version, and
                         // the next four bytes are a 32-bit schema ID. We should
@@ -52,38 +53,11 @@ pub fn build_dataflow<A: Allocate>(
                         // the data source definition.
                         //
                         // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-                        bytes = &bytes[5..];
-                        let val =
-                            avro_rs::from_avro_datum(&schema, &mut bytes, Some(&schema)).unwrap();
-                        let mut row = Vec::new();
-                        match val {
-                            avro_rs::types::Value::Record(cols) => {
-                                for (_field_name, col) in cols {
-                                    row.push(match col {
-                                        avro_rs::types::Value::Null => Datum::Null,
-                                        avro_rs::types::Value::Boolean(b) => {
-                                            if b {
-                                                Datum::True
-                                            } else {
-                                                Datum::False
-                                            }
-                                        }
-                                        avro_rs::types::Value::Long(i) => Datum::Int64(i),
-                                        avro_rs::types::Value::Float(f) => Datum::Float32(f.into()),
-                                        avro_rs::types::Value::Double(f) => {
-                                            Datum::Float64(f.into())
-                                        }
-                                        avro_rs::types::Value::Bytes(b) => Datum::Bytes(b),
-                                        avro_rs::types::Value::String(s) => Datum::String(s),
-                                        other => panic!("Unsupported avro value: {:?}", other),
-                                    })
-                                }
-                            }
-                            _ => panic!("avro deserialization went wrong"),
+                        let bytes = &bytes[5..];
+                        match decoder.decode(bytes) {
+                            Ok(d) => output.session(cap).give((d, *cap.time(), 1)),
+                            Err(err) => error!("avro deserialization error: {}", err),
                         }
-                        output
-                            .session(cap)
-                            .give((Datum::Tuple(row), *cap.time(), 1));
                     },
                 )
                 .as_collection()
