@@ -433,34 +433,38 @@ impl Parser {
                 TableFactor::Table { name, alias } => {
                     let name = extract_sql_object_name(&name)?;
                     nr.import_table(&name, alias.as_ref().map(|s| &**s));
-                    let ((left_key, right_key), (include_left_outer, include_right_outer)) =
-                        match &join.join_operator {
-                            JoinOperator::Inner(constraint) => (
-                                self.parse_join_constraint(constraint, &mut nr)?,
-                                (false, false),
-                            ),
-                            JoinOperator::LeftOuter(constraint) => (
-                                self.parse_join_constraint(constraint, &mut nr)?,
-                                (true, false),
-                            ),
-                            JoinOperator::RightOuter(constraint) => (
-                                self.parse_join_constraint(constraint, &mut nr)?,
-                                (false, true),
-                            ),
-                            JoinOperator::FullOuter(constraint) => (
-                                self.parse_join_constraint(constraint, &mut nr)?,
-                                (true, true),
-                            ),
-                            JoinOperator::Implicit => {
-                                let (left_key, right_key, new_selection) =
-                                    self.parse_implicit_join_expr(&selection, &nr)?;
-                                selection = new_selection;
-                                ((left_key, right_key), (false, false))
-                            }
-                            JoinOperator::Cross => {
-                                ((Expr::Tuple(vec![]), Expr::Tuple(vec![])), (false, false))
-                            }
-                        };
+                    let (
+                        (left_key, right_key, project_key),
+                        (include_left_outer, include_right_outer),
+                    ) = match &join.join_operator {
+                        JoinOperator::Inner(constraint) => (
+                            self.parse_join_constraint(constraint, &mut nr)?,
+                            (false, false),
+                        ),
+                        JoinOperator::LeftOuter(constraint) => (
+                            self.parse_join_constraint(constraint, &mut nr)?,
+                            (true, false),
+                        ),
+                        JoinOperator::RightOuter(constraint) => (
+                            self.parse_join_constraint(constraint, &mut nr)?,
+                            (false, true),
+                        ),
+                        JoinOperator::FullOuter(constraint) => (
+                            self.parse_join_constraint(constraint, &mut nr)?,
+                            (true, true),
+                        ),
+                        JoinOperator::Implicit => {
+                            let (left_key, right_key, new_selection) =
+                                self.parse_implicit_join_expr(&selection, &nr)?;
+                            selection = new_selection;
+                            ((left_key, right_key, None), (false, false))
+                        }
+                        JoinOperator::Cross => (
+                            (Expr::Tuple(vec![]), Expr::Tuple(vec![]), None),
+                            (false, false),
+                        ),
+                    };
+                    // TODO(jamii) need to do this before nr.project because breakpoint gets messed up
                     if include_left_outer {
                         nr.make_nullable(Side::Left);
                     }
@@ -482,6 +486,12 @@ impl Parser {
                         } else {
                             None
                         },
+                    };
+                    if let Some(project_key) = project_key {
+                        plan = Plan::Project {
+                            outputs: project_key,
+                            input: Box::new(plan),
+                        }
                     }
                 }
                 TableFactor::Derived { .. } => {
@@ -639,9 +649,12 @@ impl Parser {
         &self,
         constraint: &'a JoinConstraint,
         nr: &mut NameResolver,
-    ) -> Result<(Expr, Expr), failure::Error> {
+    ) -> Result<(Expr, Expr, Option<Vec<Expr>>), failure::Error> {
         match constraint {
-            JoinConstraint::On(expr) => self.parse_join_on_expr(expr, nr),
+            JoinConstraint::On(expr) => {
+                let (left_key, right_key) = self.parse_join_on_expr(expr, nr)?;
+                Ok((left_key, right_key, None))
+            }
             JoinConstraint::Natural => {
                 let (left_key, left_types, right_key, right_types) = nr.resolve_natural_join();
                 for (l, r) in left_types.iter().zip(right_types.iter()) {
@@ -661,6 +674,12 @@ impl Parser {
                 Ok((
                     Expr::columns(&left_key, &Expr::Ambient),
                     Expr::columns(&right_key, &Expr::Ambient),
+                    Some(
+                        project_key
+                            .into_iter()
+                            .map(|i| Expr::Column(i, Box::new(Expr::Ambient)))
+                            .collect(),
+                    ),
                 ))
             }
             JoinConstraint::Using(column_names) => {
@@ -672,12 +691,23 @@ impl Parser {
                     }
                 }
                 let project_key = (0..nr.num_columns())
-                    .filter(|i| left_key.iter().find(|l| *l == i).is_none())
+                    .filter(|i| {
+                        right_key
+                            .iter()
+                            .find(|r| nr.num_columns_on_side(Side::Left) + *r == *i)
+                            .is_none()
+                    })
                     .collect::<Vec<_>>();
                 nr.project(&project_key);
                 Ok((
                     Expr::columns(&left_key, &Expr::Ambient),
                     Expr::columns(&right_key, &Expr::Ambient),
+                    Some(
+                        project_key
+                            .into_iter()
+                            .map(|i| Expr::Column(i, Box::new(Expr::Ambient)))
+                            .collect(),
+                    ),
                 ))
             }
         }
