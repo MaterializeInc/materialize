@@ -410,6 +410,8 @@ impl Parser {
     fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
         let mut nr = NameResolver::new(&self.dataflows);
 
+        let mut selection = s.selection.clone();
+
         // Step 1. Handle FROM clause, including joins.
         let mut plan = match &s.relation {
             Some(TableFactor::Table { name, alias }) => {
@@ -450,7 +452,10 @@ impl Parser {
                                 (true, true),
                             ),
                             JoinOperator::Implicit => {
-                                bail!("multiple from tables are not yet supported")
+                                let (left_key, right_key, new_selection) =
+                                    self.parse_implicit_join_expr(&selection, &nr)?;
+                                selection = new_selection;
+                                ((left_key, right_key), (false, false))
                             }
                             JoinOperator::Cross => {
                                 ((Expr::Tuple(vec![]), Expr::Tuple(vec![])), (false, false))
@@ -486,19 +491,16 @@ impl Parser {
         }
 
         // Step 2. Handle WHERE clause.
-        let plan = match &s.selection {
-            Some(expr) => {
-                let (expr, typ) = self.parse_expr(expr, &nr)?;
-                if typ.ftype != FType::Bool {
-                    bail!("WHERE clause must have boolean type, not {:?}", typ.ftype);
-                }
-                Plan::Filter {
-                    predicate: expr,
-                    input: Box::new(plan),
-                }
+        if let Some(selection) = selection {
+            let (expr, typ) = self.parse_expr(&selection, &nr)?;
+            if typ.ftype != FType::Bool {
+                bail!("WHERE clause must have boolean type, not {:?}", typ.ftype);
             }
-            None => plan,
-        };
+            plan = Plan::Filter {
+                predicate: expr,
+                input: Box::new(plan),
+            };
+        }
 
         // Step 3. Handle GROUP BY clause.
         let mut agg_visitor = AggregateFuncVisitor::new();
@@ -750,6 +752,103 @@ impl Parser {
         Ok((Expr::Tuple(left_keys), Expr::Tuple(right_keys)))
     }
 
+    // This is basically the same as parse_join_on_expr, except that we allow `expr` to contain irrelevant constraints that need to be saved for later
+    fn parse_implicit_join_expr<'a>(
+        &self,
+        expr: &Option<ASTNode>,
+        nr: &NameResolver,
+    ) -> Result<(Expr, Expr, Option<ASTNode>), failure::Error> {
+        fn extract(e: &ASTNode, nr: &NameResolver) -> Result<(usize, Type, Side), failure::Error> {
+            match e {
+                ASTNode::SQLIdentifier(name) => {
+                    let (pos, typ) = nr.resolve_column(name)?;
+                    Ok((pos, typ.clone(), nr.side(pos)))
+                }
+                ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
+                    let (pos, typ) = nr.resolve_table_column(&names[0], &names[1])?;
+                    Ok((pos, typ.clone(), nr.side(pos)))
+                }
+                _ => bail!(
+                    "ON clause contained unsupported complicated expression: {:?}",
+                    e
+                ),
+            }
+        };
+
+        fn try_work(
+            e: &ASTNode,
+            left_keys: &mut Vec<Expr>,
+            right_keys: &mut Vec<Expr>,
+            left_over: &mut Option<ASTNode>,
+            nr: &NameResolver,
+        ) -> Result<(), failure::Error> {
+            match unnest(e) {
+                ASTNode::SQLBinaryExpr { left, op, right } => match op {
+                    SQLOperator::And => {
+                        work(left, left_keys, right_keys, left_over, nr);
+                        work(right, left_keys, right_keys, left_over, nr);
+                        Ok(())
+                    }
+                    SQLOperator::Eq => {
+                        let (lpos, ltype, lside) = extract(left, nr)?;
+                        let (rpos, rtype, rside) = extract(right, nr)?;
+                        let (lpos, ltype, rpos, rtype) = match (lside, rside) {
+                            (Side::Left, Side::Left) | (Side::Right, Side::Right) => {
+                                bail!("ON clause compares two columns from the same table");
+                            }
+                            (Side::Left, Side::Right) => (lpos, ltype, rpos, rtype),
+                            (Side::Right, Side::Left) => (rpos, rtype, lpos, ltype),
+                        };
+                        if ltype.ftype != rtype.ftype {
+                            bail!("cannot compare {:?} and {:?}", ltype.ftype, rtype.ftype);
+                        }
+                        let lexpr = Expr::Column(lpos, Box::new(Expr::Ambient));
+                        let rexpr = Expr::Column(nr.adjust_rhs(rpos), Box::new(Expr::Ambient));
+                        left_keys.push(lexpr);
+                        right_keys.push(rexpr);
+                        Ok(())
+                    }
+                    _ => bail!("ON clause contained non-equality operator: {:?}", op),
+                },
+                _ => bail!(
+                    "ON clause contained unsupported complicated expression: {:?}",
+                    e
+                ),
+            }
+        };
+
+        fn work(
+            e: &ASTNode,
+            left_keys: &mut Vec<Expr>,
+            right_keys: &mut Vec<Expr>,
+            left_over: &mut Option<ASTNode>,
+            nr: &NameResolver,
+        ) {
+            match try_work(e, left_keys, right_keys, left_over, nr) {
+                Ok(()) => (),
+                Err(_) => {
+                    *left_over = match left_over.take() {
+                        Some(left_over) => Some(ASTNode::SQLBinaryExpr {
+                            left: Box::new(left_over),
+                            op: SQLOperator::And,
+                            right: Box::new(e.clone()),
+                        }),
+                        None => Some(e.clone()),
+                    }
+                }
+            }
+        }
+
+        let mut left_keys = Vec::new();
+        let mut right_keys = Vec::new();
+        let mut left_over = None;
+        if let Some(expr) = expr {
+            work(expr, &mut left_keys, &mut right_keys, &mut left_over, nr);
+        }
+
+        Ok((Expr::Tuple(left_keys), Expr::Tuple(right_keys), left_over))
+    }
+
     fn parse_expr<'a>(
         &self,
         e: &'a ASTNode,
@@ -915,7 +1014,7 @@ impl Parser {
                 };
                 (func, FType::Bool)
             }
-            _ => unimplemented!(),
+            other => bail!("Function {:?} is not supported yet", other),
         };
         let expr = Expr::CallBinary {
             func,
