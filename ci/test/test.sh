@@ -36,6 +36,18 @@ try cargo test --release -- --ignored
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840
 try bin/check
+try cargo build
+
+target/debug/materialized --zookeeper "${ZOOKEEPER_HOST:-localhost}:2181" &
+materialized_pid=$!
+trap "kill -9 $materialized_pid &> /dev/null" EXIT
+
+# "Wait" for materialized to start up.
+#
+# TODO(benesch): we need proper synchronization here.
+sleep 0.1
+
+target/debug/testdrive --kafka "${KAFKA_HOST:-localhost}:9092" test/basic
 
 echo "+++ Status report"
 echo "$passed/$total commands passed"

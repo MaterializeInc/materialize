@@ -4,8 +4,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 //
-// This file is derived from the ReadExact combinator in the Tokio project. The
-// original source code was retrieved on March 1, 2019 from:
+// Portions of this file are derived from the ReadExact combinator in the Tokio
+// project. The original source code was retrieved on March 1, 2019 from:
 //
 //     https://github.com/tokio-rs/tokio/blob/195c4b04963742ecfff202ee9d0b72cc923aee81/tokio-io/src/io/read_exact.rs
 //

@@ -14,7 +14,9 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use backtrace::Backtrace;
+use getopts::Options;
 use lazy_static::lazy_static;
+use std::env;
 use std::error::Error;
 use std::panic;
 use std::panic::PanicInfo;
@@ -22,10 +24,27 @@ use std::process;
 use std::sync::Mutex;
 use std::thread;
 
+use materialize::server;
+
 fn main() -> Result<(), Box<dyn Error>> {
     panic::set_hook(Box::new(handle_panic));
     ore::log::init();
-    materialize::server::serve()
+
+    let args: Vec<_> = env::args().collect();
+    let mut opts = Options::new();
+    opts.optopt("", "zookeeper", "zookeeper URL", "URL");
+    opts.optflag("h", "help", "show this usage information");
+
+    let popts = opts.parse(&args[1..])?;
+
+    if popts.opt_present("h") {
+        print!("{}", opts.usage("usage: materialized [options]"));
+        return Ok(());
+    }
+
+    server::serve(server::Config {
+        zookeeper_url: popts.opt_str("zookeeper"),
+    })
 }
 
 lazy_static! {

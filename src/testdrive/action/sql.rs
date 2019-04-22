@@ -49,7 +49,8 @@ impl Action for SqlAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        print_query(&self.cmd.query);
+        let query = self.cmd.query.replace("${KAFKA_URL}", &state.kafka_url);
+        print_query(&query);
         let max = match self.stmt {
             // TODO(benesch): this is horrible. PEEK needs to learn to wait
             // until it's up to date.
@@ -59,7 +60,7 @@ impl Action for SqlAction {
         let mut i = 0;
         loop {
             let backoff = Duration::from_millis(100 * 2_u64.pow(i));
-            match self.try_redo(&mut state.pgconn) {
+            match self.try_redo(&mut state.pgconn, &query) {
                 Ok(()) => {
                     println!("rows match; continuing");
                     return Ok(());
@@ -100,10 +101,10 @@ impl SqlAction {
         }
     }
 
-    fn try_redo(&self, pgconn: &mut postgres::Client) -> Result<(), String> {
+    fn try_redo(&self, pgconn: &mut postgres::Client, query: &str) -> Result<(), String> {
         let mut rows = Vec::new();
         let msgs = pgconn
-            .simple_query(&self.cmd.query)
+            .simple_query(query)
             .map_err(|e| format!("query failed: {}", e))?;
         for msg in &msgs {
             match msg {

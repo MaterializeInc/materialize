@@ -4,9 +4,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 //
-// This file is derived from the Option implementation in the libcore crate
-// distributed as part of the Rust project. The original source code was
-// retrieved on April 18, 2019 from:
+// Portions of this file are derived from the Option implementation in the
+// libcore crate distributed as part of the Rust project. The original source
+// code was retrieved on April 18, 2019 from:
 //
 //     https://github.com/rust-lang/rust/blob/e928e9441157f63a776ba1f8773818838e0912ea/src/libcore/option.rs
 //

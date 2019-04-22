@@ -4,8 +4,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 //
-// This file is derived from the stdlog component of the slog project. The
-// original source code was retrieved on March 14, 2019 from:
+// Portions of this file are derived from the stdlog component of the slog
+// project. The original source code was retrieved on March 14, 2019 from:
 //
 //     https://github.com/slog-rs/stdlog/blob/master/lib.rs
 //

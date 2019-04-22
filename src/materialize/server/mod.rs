@@ -5,13 +5,14 @@
 
 //! Main materialized server.
 
+use failure::format_err;
 use futures::sync::mpsc::UnboundedSender;
 use futures::{future, Future};
 use log::error;
 use std::boxed::Box;
 use std::collections::HashMap;
 use std::error::Error as StdError;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, RwLock};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
@@ -29,6 +30,10 @@ use ore::netio::SniffingStream;
 
 mod http;
 mod pgwire;
+
+pub struct Config {
+    pub zookeeper_url: Option<String>,
+}
 
 pub struct ServerState {
     pub peek_results: HashMap<uuid::Uuid, (UnboundedSender<Datum>, usize)>,
@@ -71,8 +76,11 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 }
 
 /// Start the materialized server.
-pub fn serve() -> Result<(), Box<dyn StdError>> {
-    let zookeeper_addr: SocketAddr = "127.0.0.1:2181".parse()?;
+pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
+    let zookeeper_url = config
+        .zookeeper_url
+        .unwrap_or_else(|| "127.0.0.1:2181".into());
+    let zookeeper_addr = to_socket_addr(zookeeper_url)?;
     let listen_addr: SocketAddr = "127.0.0.1:6875".parse()?;
 
     let listener = TcpListener::bind(&listen_addr)?;
@@ -122,4 +130,11 @@ pub fn serve() -> Result<(), Box<dyn StdError>> {
     tokio::run(start);
 
     Ok(())
+}
+
+fn to_socket_addr<TSA: ToSocketAddrs>(tsa: TSA) -> Result<SocketAddr, failure::Error> {
+    let mut addrs = tsa.to_socket_addrs()?;
+    addrs
+        .next()
+        .ok_or_else(|| format_err!("address did not resolve"))
 }

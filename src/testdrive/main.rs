@@ -14,6 +14,6 @@ fn main() {
         // If printing the error message fails, there's not a whole lot we can
         // do.
         let _ = err.print_stderr();
-        process::exit(1);
+        process::exit(err.exit_code());
     }
 }

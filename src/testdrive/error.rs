@@ -22,7 +22,10 @@ pub enum Error {
         cause: Box<dyn StdError>,
         hints: Vec<String>,
     },
-    Usage,
+    Usage {
+        details: String,
+        requested: bool,
+    },
 }
 
 impl Error {
@@ -68,10 +71,24 @@ impl Error {
                 }
                 Ok(())
             }
-            Error::Usage => {
-                eprintln!("usage: testdrive FILE");
+            Error::Usage { details, requested } => {
+                if *requested {
+                    println!("{}", details);
+                } else {
+                    eprintln!("{}", details);
+                }
                 Ok(())
             }
+        }
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            // Requested usage details do not cause a failing exit code.
+            Error::Usage {
+                requested: true, ..
+            } => 0,
+            _ => 1,
         }
     }
 
@@ -131,7 +148,7 @@ impl fmt::Display for Error {
         match self {
             Error::Input { err, .. } => write!(f, "{}", err.msg),
             Error::General { cause, .. } => cause.fmt(f),
-            Error::Usage => write!(f, "usage error"),
+            Error::Usage { details, .. } => write!(f, "usage error: {}", details),
         }
     }
 }
