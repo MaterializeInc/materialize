@@ -111,7 +111,7 @@ impl SqlAction {
                 postgres::SimpleQueryMessage::Row(row) => {
                     let mut row0 = Vec::new();
                     for i in 0..row.len() {
-                        row0.push(row.get(i).unwrap().to_owned());
+                        row0.push(row.get(i).unwrap_or("<null>").to_owned());
                     }
                     rows.push(row0);
                 }
