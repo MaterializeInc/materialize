@@ -1,0 +1,101 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+$ kafka-ingest format=avro topic=names schema={
+    "type": "record",
+    "name": "na",
+    "fields": [
+        {"name": "num", "type": "long"},
+        {"name": "name", "type": "string"}
+    ]
+  }
+{"num": 1, "name": "one"}
+{"num": 2, "name": "two"}
+{"num": 3, "name": "three"}
+
+> CREATE DATA SOURCE names FROM 'kafka://localhost/names' USING SCHEMA '{
+    "type": "record",
+    "name": "na",
+    "fields": [
+        {"name": "num", "type": "long"},
+        {"name": "name", "type": "string"}
+    ]
+  }'
+
+$ kafka-ingest format=avro topic=mods schema={
+    "type": "record",
+    "name": "na",
+    "fields": [
+        {"name": "num", "type": "long"},
+        {"name": "name", "type": "string"}
+    ]
+  }
+{"num": 0, "name": "even"}
+{"num": 1, "name": "odd"}
+{"num": 2, "name": "even"}
+
+> CREATE DATA SOURCE mods FROM 'kafka://localhost/mods' USING SCHEMA '{
+    "type": "record",
+    "name": "na",
+    "fields": [
+        {"name": "num", "type": "long"},
+        {"name": "mod", "type": "string"}
+    ]
+  }'
+
+> CREATE MATERIALIZED VIEW test1 AS
+  SELECT * FROM names JOIN mods USING (num);
+
+> PEEK test1;
+num name mod
+------------
+1 one odd
+2 two even
+
+> CREATE MATERIALIZED VIEW test2 AS
+  SELECT * FROM names JOIN mods ON names.num = mods.num;
+
+> PEEK test2;
+num name num mod
+----------------
+1 one 1 odd
+2 two 2 even
+
+> CREATE MATERIALIZED VIEW test3 AS
+  SELECT * FROM names, mods WHERE names.num = mods.num;
+
+> PEEK test3;
+num name num mod
+----------------
+1 one 1 odd
+2 two 2 even
+
+> CREATE MATERIALIZED VIEW test4 AS
+  SELECT * FROM names, mods WHERE names.num = mods.num AND mods.mod <= 'even';
+
+> PEEK test4;
+num name num mod
+----------------
+2 two 2 even
+
+> CREATE MATERIALIZED VIEW test5 AS
+  SELECT * FROM names LEFT JOIN mods ON names.num = mods.num;
+
+> PEEK test5;
+num name num mod
+----------------
+1 one 1 odd
+2 two 2 even
+3 three <null> <null>
+
+> CREATE MATERIALIZED VIEW test6 AS
+  SELECT * FROM names RIGHT JOIN mods ON names.num = mods.num;
+
+> PEEK test6;
+num name num mod
+----------------
+<null> <null> 0 even
+1 one 1 odd
+2 two 2 even
