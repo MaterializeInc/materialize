@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-oldsha=$(git rev-parse -q --verify refs/stash)
+oldsha=$(git rev-parse -q --verify refs/stash || true)
 git stash save -q -u
 newsha=$(git rev-parse -q --verify refs/stash)
 unstash() {
