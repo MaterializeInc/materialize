@@ -753,7 +753,7 @@ impl Parser {
     }
 
     // This is basically the same as parse_join_on_expr, except that we allow `expr` to contain irrelevant constraints that need to be saved for later
-    fn parse_implicit_join_expr<'a>(
+    fn parse_implicit_join_expr(
         &self,
         expr: &Option<ASTNode>,
         nr: &NameResolver,
