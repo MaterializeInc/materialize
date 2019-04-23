@@ -1,8 +1,6 @@
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::SQLStatement;
 
-use walkdir::WalkDir;
-
 pub fn run(string: String) {
     if let Ok(stmts) = sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, string) {
         if let [SQLStatement::SQLSelect(query)] = &*stmts {
@@ -18,6 +16,8 @@ mod test {
     use super::*;
     use std::fs::File;
     use std::io::prelude::*;
+
+    use walkdir::WalkDir;
 
     #[test]
     fn test_artifacts() {
