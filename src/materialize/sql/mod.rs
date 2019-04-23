@@ -502,26 +502,7 @@ impl Parser {
             let mut aggs = Vec::new();
             for frag in agg_frags {
                 let (expr, typ) = self.parse_expr(&frag.expr, &plan)?;
-                let func = match (frag.name.as_ref(), &typ.ftype) {
-                    ("avg", FType::Int32) => AggregateFunc::AvgInt32,
-                    ("avg", FType::Int64) => AggregateFunc::AvgInt64,
-                    ("avg", FType::Float32) => AggregateFunc::AvgFloat32,
-                    ("avg", FType::Float64) => AggregateFunc::AvgFloat64,
-                    ("max", FType::Int32) => AggregateFunc::MaxInt32,
-                    ("max", FType::Int64) => AggregateFunc::MaxInt64,
-                    ("max", FType::Float32) => AggregateFunc::MaxFloat32,
-                    ("max", FType::Float64) => AggregateFunc::MaxFloat64,
-                    ("min", FType::Int32) => AggregateFunc::MinInt32,
-                    ("min", FType::Int64) => AggregateFunc::MinInt64,
-                    ("min", FType::Float32) => AggregateFunc::MinFloat32,
-                    ("min", FType::Float64) => AggregateFunc::MinFloat64,
-                    ("sum", FType::Int32) => AggregateFunc::SumInt32,
-                    ("sum", FType::Int64) => AggregateFunc::SumInt64,
-                    ("sum", FType::Float32) => AggregateFunc::SumFloat32,
-                    ("sum", FType::Float64) => AggregateFunc::SumFloat64,
-                    ("count", _) => AggregateFunc::Count,
-                    other => bail!("Unimplemented function/type combo: {:?}", other),
-                };
+                let func = AggregateFunc::from_name_and_ftype(frag.name.as_ref(), &typ.ftype)?;
                 aggs.push((frag.id, Aggregate { func, expr }, typ));
             }
 
@@ -848,9 +829,13 @@ impl Parser {
         _args: &'a [ASTNode],
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (i, typ) = plan.resolve_func(ident);
-        let expr = Expr::Column(i, Box::new(Expr::Ambient));
-        Ok((expr, typ.clone()))
+        if AggregateFunc::is_aggregate_func(ident) {
+            let (i, typ) = plan.resolve_func(ident);
+            let expr = Expr::Column(i, Box::new(Expr::Ambient));
+            Ok((expr, typ.clone()))
+        } else {
+            bail!("Unsupported function: {}", ident)
+        }
     }
 
     fn parse_is_null_expr<'a>(

@@ -3,10 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use crate::repr::Datum;
+use crate::repr::FType;
 
 pub fn and(a: Datum, b: Datum) -> Datum {
     Datum::from(a.unwrap_bool() && b.unwrap_bool())
@@ -432,6 +434,36 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
+    pub fn is_aggregate_func(name: &str) -> bool {
+        match name {
+            "avg" | "max" | "min" | "sum" | "count" => true,
+            _ => false,
+        }
+    }
+
+    pub fn from_name_and_ftype(name: &str, ftype: &FType) -> Result<Self, failure::Error> {
+        Ok(match (name, ftype) {
+            ("avg", FType::Int32) => AggregateFunc::AvgInt32,
+            ("avg", FType::Int64) => AggregateFunc::AvgInt64,
+            ("avg", FType::Float32) => AggregateFunc::AvgFloat32,
+            ("avg", FType::Float64) => AggregateFunc::AvgFloat64,
+            ("max", FType::Int32) => AggregateFunc::MaxInt32,
+            ("max", FType::Int64) => AggregateFunc::MaxInt64,
+            ("max", FType::Float32) => AggregateFunc::MaxFloat32,
+            ("max", FType::Float64) => AggregateFunc::MaxFloat64,
+            ("min", FType::Int32) => AggregateFunc::MinInt32,
+            ("min", FType::Int64) => AggregateFunc::MinInt64,
+            ("min", FType::Float32) => AggregateFunc::MinFloat32,
+            ("min", FType::Float64) => AggregateFunc::MinFloat64,
+            ("sum", FType::Int32) => AggregateFunc::SumInt32,
+            ("sum", FType::Int64) => AggregateFunc::SumInt64,
+            ("sum", FType::Float32) => AggregateFunc::SumFloat32,
+            ("sum", FType::Float64) => AggregateFunc::SumFloat64,
+            ("count", _) => AggregateFunc::Count,
+            other => bail!("Unimplemented function/type combo: {:?}", other),
+        })
+    }
+
     pub fn func<I>(self) -> fn(I) -> Datum
     where
         I: IntoIterator<Item = Datum>,
