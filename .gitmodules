@@ -1,0 +1,3 @@
+[submodule "sqllogictest"]
+	path = sqllogictest
+	url = git@github.com:gregrahn/sqllogictest.git
