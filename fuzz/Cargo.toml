@@ -1,0 +1,35 @@
+# this has to live in the testdrive crate until https://github.com/rust-fuzz/cargo-fuzz/issues/42 is fixed
+
+[package]
+name = "fuzz"
+version = "0.0.1"
+authors = []
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { git = "https://github.com/rust-fuzz/libfuzzer-sys.git" }
+materialize = { path = "../src/materialize" }
+testdrive = { path = "../src/testdrive" }
+sqllogictest = { path = "../src/sqllogictest" }
+walkdir = "2"
+rand = "0.6.5"
+
+[[bin]]
+name = "fuzz_testdrive"
+path = "fuzz_targets/fuzz_testdrive.rs"
+
+[[bin]]
+name = "fuzz_sqllogictest"
+path = "fuzz_targets/fuzz_sqllogictest.rs"
+
+[[bin]]
+name = "build_corpus"
+path = "build_corpus.rs"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
