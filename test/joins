@@ -123,3 +123,35 @@ num mod
 mod num name
 ------------
 even 2 two
+
+> CREATE MATERIALIZED VIEW test10 AS
+  SELECT * FROM names, mods;
+
+> PEEK test10;
+num name num mod
+----------------
+1 one 0 even
+1 one 1 odd
+1 one 2 even
+2 two 0 even
+2 two 1 odd
+2 two 2 even
+3 three 0 even
+3 three 1 odd
+3 three 2 even
+
+> CREATE MATERIALIZED VIEW test11 AS
+  SELECT * FROM names CROSS JOIN mods;
+
+> PEEK test11;
+num name num mod
+----------------
+1 one 0 even
+1 one 1 odd
+1 one 2 even
+2 two 0 even
+2 two 1 odd
+2 two 2 even
+3 three 0 even
+3 three 1 odd
+3 three 2 even
