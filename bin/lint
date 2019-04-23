@@ -20,20 +20,19 @@ try() {
 }
 
 files=$(
-    find . '(' -path './target' -o -path './.git' ')' -prune -o -type f \
+    git ls-files \
         | sed 's,^.\/,,' \
         | grep -vE \
-            -e 'target' \
-            -e '^\.git$' \
-            -e '^\.gitignore$' \
+            -e '.gitignore' \
+            -e '.gitmodules' \
             -e '^Cargo\.lock$' \
             -e '(^|/)Cargo\.toml$' \
             -e '^LICENSE$' \
-            -e '\.json$' \
-            -e '(^|/)\.DS_Store$' \
-            -e '\.md$' \
             -e 'rust-toolchain' \
-            -e 'rustfmt.toml'
+            -e 'rustfmt.toml' \
+            -e '*.md' \
+            -e '*.json' \
+            -e 'sqllogictest'
 )
 
 run() {
