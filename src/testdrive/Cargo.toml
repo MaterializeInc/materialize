@@ -5,6 +5,9 @@ version = "0.1.0"
 authors = ["Nikhil Benesch <nikhil.benesch@gmail.com>"]
 edition = "2018"
 
+[lib]
+path = "lib.rs"
+
 [[bin]]
 name = "testdrive"
 path = "main.rs"
