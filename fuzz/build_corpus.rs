@@ -11,8 +11,8 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::Read;
 
-const CHANCE_TO_PICK_QUERY: u32 = 1000;
-const MAX_QUERIES: u32 = 10000;
+const CHANCE_TO_PICK_QUERY: u32 = 100;
+const MAX_QUERIES: u32 = 10_000;
 
 fn main() {
     let mut query_num = 0;
