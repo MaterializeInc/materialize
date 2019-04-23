@@ -958,7 +958,12 @@ impl Parser {
                 (FType::Float64, FType::Float64) => (BinaryFunc::ModFloat64, FType::Float64),
                 _ => bail!("no overload for {:?} % {:?}", ltype.ftype, rtype.ftype),
             },
-            SQLOperator::Lt | SQLOperator::LtEq | SQLOperator::Gt | SQLOperator::GtEq => {
+            SQLOperator::Lt
+            | SQLOperator::LtEq
+            | SQLOperator::Gt
+            | SQLOperator::GtEq
+            | SQLOperator::Eq
+            | SQLOperator::NotEq => {
                 if ltype.ftype != rtype.ftype {
                     bail!("{:?} and {:?} are not comparable", ltype.ftype, rtype.ftype)
                 }
@@ -967,6 +972,8 @@ impl Parser {
                     SQLOperator::LtEq => BinaryFunc::Lte,
                     SQLOperator::Gt => BinaryFunc::Gt,
                     SQLOperator::GtEq => BinaryFunc::Gte,
+                    SQLOperator::Eq => BinaryFunc::Eq,
+                    SQLOperator::NotEq => BinaryFunc::NotEq,
                     _ => unreachable!(),
                 };
                 (func, FType::Bool)

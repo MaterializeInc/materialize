@@ -120,6 +120,10 @@ pub fn eq(a: Datum, b: Datum) -> Datum {
     Datum::from(a == b)
 }
 
+pub fn not_eq(a: Datum, b: Datum) -> Datum {
+    Datum::from(a != b)
+}
+
 pub fn lt(a: Datum, b: Datum) -> Datum {
     Datum::from(a < b)
 }
@@ -161,6 +165,7 @@ pub enum BinaryFunc {
     ModFloat32,
     ModFloat64,
     Eq,
+    NotEq,
     Lt,
     Lte,
     Gt,
@@ -193,6 +198,7 @@ impl BinaryFunc {
             BinaryFunc::ModFloat32 => mod_float32,
             BinaryFunc::ModFloat64 => mod_float64,
             BinaryFunc::Eq => eq,
+            BinaryFunc::NotEq => not_eq,
             BinaryFunc::Lt => lt,
             BinaryFunc::Lte => lte,
             BinaryFunc::Gt => gt,
