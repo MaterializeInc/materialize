@@ -25,7 +25,7 @@ files=$(
         | grep -vE \
             -e '.gitignore' \
             -e '.gitmodules' \
-            -e '^Cargo\.lock$' \
+            -e '(^|/)Cargo\.lock$' \
             -e '(^|/)Cargo\.toml$' \
             -e '^LICENSE$' \
             -e 'rust-toolchain' \
