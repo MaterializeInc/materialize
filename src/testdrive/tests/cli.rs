@@ -41,7 +41,7 @@ fn test_leading_input() {
         .assert()
         .failure()
         .stderr(
-            r#"stdin:1:1: error: unexpected input line at beginning of file
+            r#"<stdin>:1:1: error: unexpected input line at beginning of file
      |
    1 | leading input
      | ^
@@ -57,7 +57,7 @@ fn test_cmd_missing_name() {
         .assert()
         .failure()
         .stderr(concat!(
-            r#"stdin:1:1: error: command line is missing command name
+            r#"<stdin>:1:1: error: command line is missing command name
      |
    1 | $   "#, // separated to preserve trailing spaces
             r#"
@@ -74,7 +74,7 @@ fn test_cmd_arg_missing_value() {
         .assert()
         .failure()
         .stderr(
-            r#"stdin:1:7: error: command argument is not in required key=value format
+            r#"<stdin>:1:7: error: command argument is not in required key=value format
      |
    1 | $ cmd badarg
      |       ^
@@ -90,7 +90,7 @@ fn test_cmd_arg_bad_nesting_close() {
         .assert()
         .failure()
         .stderr(
-            r#"stdin:1:13: error: command argument has unbalanced close brace
+            r#"<stdin>:1:13: error: command argument has unbalanced close brace
      |
    1 | $ cmd arg={}}
      |             ^
@@ -106,7 +106,7 @@ fn test_cmd_arg_bad_nesting_open() {
         .assert()
         .failure()
         .stderr(
-            r#"stdin:1:26: error: command argument has unterminated open brace
+            r#"<stdin>:1:26: error: command argument has unterminated open brace
      |
    1 | $ cmd arg={{one} two three
      |                          ^
