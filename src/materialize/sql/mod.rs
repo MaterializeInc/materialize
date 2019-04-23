@@ -62,7 +62,9 @@ pub fn handle_query(
                 .left()
                 .left()
         }
-        SQLStatement::SQLTail { .. } => unimplemented!(),
+        SQLStatement::SQLTail { .. } => future::err(format_err!("TAIL is not implemented yet"))
+            .right()
+            .right(),
         SQLStatement::SQLCreateDataSource { .. } | SQLStatement::SQLCreateView { .. } => {
             handle_create_dataflow(stmt, meta_store).left().right()
         }
@@ -518,7 +520,7 @@ impl Parser {
                     ("sum", FType::Float32) => AggregateFunc::SumFloat32,
                     ("sum", FType::Float64) => AggregateFunc::SumFloat64,
                     ("count", _) => AggregateFunc::Count,
-                    _ => unimplemented!(),
+                    other => bail!("Unimplemented function/type combo: {:?}", other),
                 };
                 aggs.push((frag.id, Aggregate { func, expr }, typ));
             }
