@@ -21,7 +21,7 @@ mod test {
 
     #[test]
     fn test_artifacts() {
-        for entry in WalkDir::new("../../fuzz/artifacts/fuzz_parse_and_compile/") {
+        for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
             if entry.path().is_file() {
                 let mut contents = String::new();
