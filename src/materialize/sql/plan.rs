@@ -310,11 +310,12 @@ impl SQLPlan {
         self.columns.iter().map(|(_, t)| t).collect()
     }
 
-    pub fn get_table_column_types(&self, table_name: &str) -> Vec<&Type> {
+    pub fn get_table_column_types(&self, table_name: &str) -> Vec<(usize, &Type)> {
         self.columns
             .iter()
-            .filter(|(name, _)| name.table_name.as_deref() == Some(table_name))
-            .map(|(_, t)| t)
+            .enumerate()
+            .filter(|(_, (name, _))| name.table_name.as_deref() == Some(table_name))
+            .map(|(i, (_, t))| (i, t))
             .collect()
     }
 

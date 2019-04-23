@@ -107,3 +107,11 @@ num name num mod
 num name num mod
 ----------------
 2 two 2 even
+
+> CREATE MATERIALIZED VIEW test8 AS
+  SELECT mods.* FROM names, mods WHERE names.num = mods.num AND mods.mod = 'even';
+
+> PEEK test8;
+num mod
+-------
+2 even

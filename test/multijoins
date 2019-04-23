@@ -98,3 +98,12 @@ num name num mod num plurals
 1 one 1 odd one mouse
 2 two 2 even two sheep
 2 two 2 even two meeses
+
+> CREATE MATERIALIZED VIEW test4 AS
+  SELECT * FROM names, mods, plurals as foo WHERE names.num = mods.num AND names.name = foo.num AND foo.num = 'one';
+
+> PEEK test4;
+num name num mod num plurals
+----------------------------
+1 one 1 odd one sheep
+1 one 1 odd one mouse

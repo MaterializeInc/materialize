@@ -582,7 +582,6 @@ impl Parser {
             SQLSelectItem::QualifiedWildcard(name) => Ok(plan
                 .get_table_column_types(&extract_sql_object_name(name)?)
                 .into_iter()
-                .enumerate()
                 .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ.clone()))
                 .collect()),
         }
