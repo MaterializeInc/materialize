@@ -4,6 +4,7 @@ Before first use:
 
 ``` sh
 cd materialize/fuzz
+cargo install cargo-fuzz
 cargo run build_corpus
 ```
 
