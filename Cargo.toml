@@ -4,6 +4,7 @@ members = [
     "src/materialize",
     "src/ore",
     "src/testdrive",
+    "src/sqllogictest",
 ]
 
 # TODO(benesch): remove when https://github.com/fede1024/rust-rdkafka/pull/117

@@ -1,0 +1,13 @@
+[package]
+name = "sqllogictest"
+version = "0.0.1"
+authors = []
+edition = "2018"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
+materialize = { path = "../materialize" }
+walkdir = "2"

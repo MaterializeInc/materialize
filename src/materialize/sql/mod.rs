@@ -333,7 +333,7 @@ impl Parser {
         }
     }
 
-    fn parse_view_query(&self, q: &SQLQuery) -> Result<(Plan, Type), failure::Error> {
+    pub fn parse_view_query(&self, q: &SQLQuery) -> Result<(Plan, Type), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
