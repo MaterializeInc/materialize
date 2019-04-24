@@ -11,3 +11,5 @@ path = "lib.rs"
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 materialize = { path = "../materialize" }
 walkdir = "2"
+regex = "1"
+lazy_static = "1"
