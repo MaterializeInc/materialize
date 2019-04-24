@@ -1,8 +1,5 @@
 //! https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
-use std::fs::File;
-use std::io::Read;
-use std::io::Write;
 use std::path::PathBuf;
 
 use lazy_static::lazy_static;
@@ -19,28 +16,36 @@ macro_rules! unexpected {
     }};
 }
 
-pub enum TestRecord {
+#[derive(Debug, Clone)]
+pub enum TestRecord<'a> {
     Statement {
         should_run: bool,
-        sql: String,
+        sql: &'a str,
     },
     Query {
         types: Vec<FType>,
-        sort: String,
-        label: Option<String>,
-        sql: String,
+        sort: &'a str,
+        label: Option<&'a str>,
+        sql: &'a str,
+        output: &'a str,
     },
     HashThreshold {
         threshold: u64,
     },
 }
 
-pub struct Test {
-    filename: PathBuf,
-    records: Vec<TestRecord>,
+fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> &'a str {
+    match sep.find(input) {
+        Some(found) => {
+            let result = &input[..found.start()];
+            *input = &input[found.end()..];
+            result
+        }
+        None => panic!("Couldn't split {:?} at {}", input, sep),
+    }
 }
 
-pub fn parse_types(input: &str) -> Vec<FType> {
+fn parse_types(input: &str) -> Vec<FType> {
     input
         .chars()
         .map(|char| match char {
@@ -52,92 +57,68 @@ pub fn parse_types(input: &str) -> Vec<FType> {
         .collect()
 }
 
-pub fn parse_sql<'a, I: Iterator<Item = &'a str>>(lines: &mut I) -> String {
-    let mut sql = String::new();
-    while let Some(line) = lines.next() {
-        if line == "----" {
-            break;
-        } else {
-            sql.push_str(line);
-        }
-    }
-    assert!(sql != "");
-    sql
-}
-
-pub fn parse_test_record(input: &str) -> Option<TestRecord> {
-    dbg!(input);
-    let mut lines = input
-        .lines()
-        .filter(|line| !line.starts_with("#") && !(*line == ""));
+fn parse_sql<'a>(input: &mut &'a str) -> &'a str {
     lazy_static! {
-        static ref COMMENT_REGEX: Regex = Regex::new(r"#(.*)").unwrap();
+        static ref QUERY_OUTPUT_REGEX: Regex = Regex::new("(\n----\n|$)").unwrap();
     }
-    let first_line = COMMENT_REGEX.replace(lines.next()?, "");
-    let words = first_line.trim().split(" ").collect::<Vec<_>>();
-    dbg!(&words);
-    match *words {
-        ["statement", should_run] => {
-            let should_run = match should_run {
-                "ok" => true,
-                "error" => false,
-                other => unexpected!(other),
-            };
-            let sql = parse_sql(&mut lines);
-            Some(TestRecord::Statement { should_run, sql })
-        }
-        ["query", types, sort] => {
-            let types = parse_types(types);
-            let sort = sort.to_string();
-            let label = None;
-            let sql = parse_sql(&mut lines);
-            Some(TestRecord::Query {
-                types,
-                sort,
-                label,
-                sql,
-            })
-        }
-        ["query", types, sort, label] => {
-            let types = parse_types(types);
-            let sort = sort.to_string();
-            let label = Some(label.to_string());
-            let sql = parse_sql(&mut lines);
-            Some(TestRecord::Query {
-                types,
-                sort,
-                label,
-                sql,
-            })
-        }
-        ["hash-threshold", threshold] => {
-            assert!(lines.next().is_none());
-            let threshold = threshold.parse().unwrap();
-            Some(TestRecord::HashThreshold { threshold })
-        }
-        ["skipif", _db] | ["onlyif", _db] => None,
-        _ => unexpected!(first_line),
-    }
+    split_at(input, &QUERY_OUTPUT_REGEX)
 }
 
-pub fn parse_test_file(filename: PathBuf) -> Test {
-    dbg!(&filename);
-    let mut input = String::new();
-    File::open(&filename)
-        .unwrap()
-        .read_to_string(&mut input)
-        .unwrap();
-    let records = input
-        .replace("\r", "")
-        .split("\n\n")
+pub fn parse_test_record(mut input: &str) -> Option<TestRecord> {
+    while input != "" {
+        lazy_static! {
+            static ref COMMENT_AND_LINE_REGEX: Regex = Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap();
+        }
+        let next_line = split_at(&mut input, &COMMENT_AND_LINE_REGEX).trim();
+        if next_line != "" {
+            let mut words = next_line.split(' ');
+            match words.next().unwrap() {
+                "statement" => {
+                    let should_run = match words.next().unwrap() {
+                        "ok" => true,
+                        "error" => false,
+                        other => unexpected!(other),
+                    };
+                    let sql = parse_sql(&mut input);
+                    assert!(input == "");
+                    return Some(TestRecord::Statement { should_run, sql });
+                }
+                "query" => {
+                    let types = parse_types(words.next().unwrap());
+                    let sort = words.next().unwrap();
+                    let label = words.next();
+                    let sql = parse_sql(&mut input);
+                    let output = input;
+                    return Some(TestRecord::Query {
+                        types,
+                        sort,
+                        label,
+                        sql,
+                        output,
+                    });
+                }
+                "hash-threshold" => {
+                    let threshold = words.next().unwrap().parse::<u64>().unwrap();
+                    assert!(input == "");
+                    return Some(TestRecord::HashThreshold { threshold });
+                }
+                "skipif" | "onlyif" => return None,
+                other => unexpected!(other),
+            }
+        }
+    }
+    None
+}
+
+pub fn parse_test_records(input: &str) -> impl Iterator<Item = TestRecord> {
+    lazy_static! {
+        static ref DOUBLE_LINE_REGEX: Regex = Regex::new("(\n|\r\n)(\n|\r\n)").unwrap();
+    }
+    DOUBLE_LINE_REGEX
+        .split(input)
         .map(|lines| lines.trim())
         .filter(|lines| *lines != "")
         .filter_map(parse_test_record)
-        .collect();
-    Test {
-        filename: filename,
-        records: records,
-    }
 }
 
 pub fn all_test_files() -> impl Iterator<Item = PathBuf> {
@@ -161,10 +142,23 @@ pub fn run(string: String) {
 mod test {
     use super::*;
 
+    use std::fs::File;
+    use std::io::Read;
+
     #[test]
     #[ignore]
     fn test_parsing() {
-        all_test_files().map(parse_test_file).for_each(drop);
+        let mut input = String::new();
+        for filename in all_test_files() {
+            input.clear();
+            File::open(filename)
+                .unwrap()
+                .read_to_string(&mut input)
+                .unwrap();
+            parse_test_records(&input).for_each(|record| {
+                drop(record);
+            });
+        }
     }
 
     #[test]
