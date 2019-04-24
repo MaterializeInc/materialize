@@ -153,6 +153,7 @@ pub struct State {
     num_plan_failures: usize,
 }
 
+#[allow(clippy::new_without_default)]
 impl State {
     pub fn new() -> Self {
         State {
@@ -194,7 +195,7 @@ pub fn run_record(state: &mut State, record: &Record) {
                 sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
             match parse {
                 Ok(ref statements) if statements.len() == 1 => {
-                    match statements.into_iter().next().unwrap() {
+                    match statements.iter().next().unwrap() {
                         SQLStatement::SQLSelect(query) => {
                             state.num_parse_successes += 1;
                             let parser = materialize::sql::Parser::new(vec![]);
