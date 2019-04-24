@@ -151,6 +151,8 @@ pub struct State {
     num_parse_unsupported: usize,
     num_plan_successes: usize,
     num_plan_failures: usize,
+    num_type_successes: usize,
+    num_type_failures: usize,
 }
 
 #[allow(clippy::new_without_default)]
@@ -162,6 +164,8 @@ impl State {
             num_parse_unsupported: 0,
             num_plan_successes: 0,
             num_plan_failures: 0,
+            num_type_successes: 0,
+            num_type_failures: 0,
         }
     }
 }
@@ -190,7 +194,11 @@ pub fn run_record(state: &mut State, record: &Record) {
                 }
             }
         }
-        Record::Query { sql, .. } => {
+        Record::Query {
+            sql,
+            types: expected_types,
+            ..
+        } => {
             let parse =
                 sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
             match parse {
@@ -200,13 +208,27 @@ pub fn run_record(state: &mut State, record: &Record) {
                             state.num_parse_successes += 1;
                             let parser = materialize::sql::Parser::new(vec![]);
                             match parser.parse_view_query(&query) {
-                                Ok(_) => state.num_plan_successes += 1,
+                                Ok((_plan, typ)) => {
+                                    state.num_plan_successes += 1;
+                                    let inferred_types = match &typ.ftype {
+                                        FType::Tuple(types) => {
+                                            types.iter().map(|typ| &typ.ftype).collect::<Vec<_>>()
+                                        }
+                                        other => panic!("Query with non-tuple type: {:?}", other),
+                                    };
+                                    if inferred_types == expected_types.iter().collect::<Vec<_>>() {
+                                        state.num_type_successes += 1;
+                                    } else {
+                                        // println!("Type inference failure.\n Expected {:?}\nInferred {:?}", expected_types, inferred_types);
+                                        state.num_type_failures += 1;
+                                    }
+                                }
                                 Err(_) => state.num_plan_failures += 1,
                             }
                         }
                         _ => {
                             state.num_parse_failures += 1;
-                            println!("Parse failure - not a SQLSelect: {}", sql);
+                            // println!("Parse failure - not a SQLSelect: {}", sql);
                         }
                     }
                 }
@@ -251,6 +273,8 @@ mod test {
         assert_eq!(state.num_parse_unsupported, 28_142);
         assert_eq!(state.num_plan_successes, 321_343);
         assert_eq!(state.num_plan_failures, 3_505_700);
+        assert_eq!(state.num_type_successes, 321_343);
+        assert_eq!(state.num_type_failures, 0);
     }
 
     #[test]
