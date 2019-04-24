@@ -13,11 +13,11 @@
 
 set -euo pipefail
 
-oldsha=$(git rev-parse -q --verify refs/stash || true)
+oldlist=$(git stash list)
 git stash save -q -u
-newsha=$(git rev-parse -q --verify refs/stash)
+newlist=$(git stash list)
 unstash() {
-  if [[ "$oldsha" != "$newsha" ]]; then
+  if [[ "$oldlist" != "$newlist" ]]; then
     git stash pop -q --index || true
   fi
 }
