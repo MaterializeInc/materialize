@@ -36,5 +36,6 @@ in pkgs.stdenv.mkDerivation rec {
     ] else []);
   shellHook = ''
     export LIBCLANG_PATH=${pkgs.llvmPackages.clang-unwrapped.lib}/lib
+    export PATH=$(pwd)/bin/:$PATH
    '';
 }
