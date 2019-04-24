@@ -32,6 +32,7 @@ export RUST_BACKTRACE=full
 try bin/lint
 try cargo fmt -- --check
 try cargo test
+try cargo test --release -- --ignored
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840
 try bin/check
