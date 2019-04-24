@@ -41,7 +41,7 @@ fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> &'a str {
             *input = &input[found.end()..];
             result
         }
-        None => panic!("Couldn't split {:?} at {}", input, sep),
+        None => panic!("Couldn't split {:?} at {:?}", input, sep),
     }
 }
 
@@ -59,7 +59,7 @@ fn parse_types(input: &str) -> Vec<FType> {
 
 fn parse_sql<'a>(input: &mut &'a str) -> &'a str {
     lazy_static! {
-        static ref QUERY_OUTPUT_REGEX: Regex = Regex::new("(\n----\n|$)").unwrap();
+        static ref QUERY_OUTPUT_REGEX: Regex = Regex::new("(\r?\n----\r?\n?)|$").unwrap();
     }
     split_at(input, &QUERY_OUTPUT_REGEX)
 }
@@ -80,7 +80,7 @@ pub fn parse_test_record(mut input: &str) -> Option<TestRecord> {
                         other => unexpected!(other),
                     };
                     let sql = parse_sql(&mut input);
-                    assert!(input == "");
+                    assert_eq!(input, "");
                     return Some(TestRecord::Statement { should_run, sql });
                 }
                 "query" => {
@@ -99,7 +99,7 @@ pub fn parse_test_record(mut input: &str) -> Option<TestRecord> {
                 }
                 "hash-threshold" => {
                     let threshold = words.next().unwrap().parse::<u64>().unwrap();
-                    assert!(input == "");
+                    assert_eq!(input, "");
                     return Some(TestRecord::HashThreshold { threshold });
                 }
                 "skipif" | "onlyif" => return None,
@@ -138,6 +138,10 @@ pub fn run(string: String) {
     }
 }
 
+lazy_static! {
+    static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new("^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP TABLE|DROP INDEX|DROP TRIGGER|INSERT INTO .* SELECT|UPDATE|REINDEX|REPLACE INTO)").unwrap();
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -147,18 +151,80 @@ mod test {
 
     #[test]
     #[ignore]
-    fn test_parsing() {
+    fn test_sqllogictest() {
         let mut input = String::new();
+
+        let mut num_parse_failures = 0;
+        let mut num_parse_successes = 0;
+        let mut num_parse_unsupported = 0;
+        // let mut num_plan_failures = 0;
+        // let mut num_plan_successes = 0;
+
         for filename in all_test_files() {
             input.clear();
             File::open(filename)
                 .unwrap()
                 .read_to_string(&mut input)
                 .unwrap();
-            parse_test_records(&input).for_each(|record| {
-                drop(record);
-            });
+            for record in parse_test_records(&input) {
+                match &record {
+                    TestRecord::Statement { should_run, sql } => {
+                        if UNSUPPORTED_STATEMENT_REGEX.is_match(sql) {
+                            num_parse_unsupported += 1;
+                        } else {
+                            let parse = sqlparser::sqlparser::Parser::parse_sql(
+                                &AnsiSqlDialect {},
+                                sql.to_string(),
+                            );
+                            match parse {
+                                Ok(ref statements) if statements.len() == 1 => {
+                                    num_parse_successes += 1;
+                                }
+                                _other => {
+                                    if *should_run {
+                                        num_parse_failures += 1;
+                                        // println!("Parse failure: {:?} in {}", other, sql);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    TestRecord::Query { sql, .. } => {
+                        let parse = sqlparser::sqlparser::Parser::parse_sql(
+                            &AnsiSqlDialect {},
+                            sql.to_string(),
+                        );
+                        match parse {
+                            Ok(ref statements) if statements.len() == 1 => {
+                                num_parse_successes += 1;
+                                // let parser = materialize::sql::Parser::new(vec![]);
+                                // match parser.parse_view_query(&query) {
+                                //     Ok(_) => (),
+                                //     Err(_) => num_plan_failures += 1,
+                                // }
+                            }
+                            _other => {
+                                num_parse_failures += 1;
+                                // println!("Parse failure: {:?} in {}", other, sql);
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
         }
+
+        dbg!(num_parse_failures);
+        dbg!(num_parse_successes);
+        dbg!(num_parse_unsupported);
+        // dbg!(num_plan_failures);
+        // dbg!(num_plan_successes);
+
+        // If the number of successes goes up, feel free to edit this test
+        assert_eq!(num_parse_failures, 236080);
+        assert_eq!(num_parse_successes, 3995082);
+        assert_eq!(num_parse_unsupported, 28142);
+        // assert!(false);
     }
 
     #[test]
