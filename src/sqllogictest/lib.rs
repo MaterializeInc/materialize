@@ -48,7 +48,7 @@ fn parse_types(input: &str) -> Result<Vec<FType>, failure::Error> {
                 'T' => FType::String,
                 'I' => FType::Int64,
                 'R' => FType::Float64,
-                other => bail!("Unexpected type char {} in: {}", char, input),
+                _ => bail!("Unexpected type char {} in: {}", char, input),
             })
         })
         .collect()
@@ -149,14 +149,18 @@ pub struct State {
     num_parse_failures: usize,
     num_parse_successes: usize,
     num_parse_unsupported: usize,
+    num_plan_successes: usize,
+    num_plan_failures: usize,
 }
 
 impl State {
     pub fn new() -> Self {
         State {
-            num_parse_failures: 0,
             num_parse_successes: 0,
+            num_parse_failures: 0,
             num_parse_unsupported: 0,
+            num_plan_successes: 0,
+            num_plan_failures: 0,
         }
     }
 }
@@ -190,12 +194,20 @@ pub fn run_record(state: &mut State, record: &Record) {
                 sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
             match parse {
                 Ok(ref statements) if statements.len() == 1 => {
-                    state.num_parse_successes += 1;
-                    // let parser = materialize::sql::Parser::new(vec![]);
-                    // match parser.parse_view_query(&query) {
-                    //     Ok(_) => (),
-                    //     Err(_) => num_plan_failures += 1,
-                    // }
+                    match statements.into_iter().next().unwrap() {
+                        SQLStatement::SQLSelect(query) => {
+                            state.num_parse_successes += 1;
+                            let parser = materialize::sql::Parser::new(vec![]);
+                            match parser.parse_view_query(&query) {
+                                Ok(_) => state.num_plan_successes += 1,
+                                Err(_) => state.num_plan_failures += 1,
+                            }
+                        }
+                        _ => {
+                            state.num_parse_failures += 1;
+                            println!("Parse failure - not a SQLSelect: {}", sql);
+                        }
+                    }
                 }
                 _other => {
                     state.num_parse_failures += 1;
@@ -231,16 +243,17 @@ mod test {
             }
         }
 
-        dbg!(&state);
-
         // If the number of successes goes up, feel free to edit this test
-        assert_eq!(state.num_parse_failures, 236080);
-        assert_eq!(state.num_parse_successes, 3995082);
-        assert_eq!(state.num_parse_unsupported, 28142);
+        dbg!(&state);
+        assert_eq!(state.num_parse_successes, 3_995_082);
+        assert_eq!(state.num_parse_failures, 236_080);
+        assert_eq!(state.num_parse_unsupported, 28_142);
+        assert_eq!(state.num_plan_successes, 321_343);
+        assert_eq!(state.num_plan_failures, 3_505_700);
     }
 
     #[test]
-    fn artifacts() {
+    fn fuzz_artifacts() {
         for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
             if entry.path().is_file() {
