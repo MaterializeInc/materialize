@@ -26,10 +26,6 @@ path = "fuzz_targets/fuzz_testdrive.rs"
 name = "fuzz_sqllogictest"
 path = "fuzz_targets/fuzz_sqllogictest.rs"
 
-[[bin]]
-name = "build_corpus"
-path = "build_corpus.rs"
-
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]

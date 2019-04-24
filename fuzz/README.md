@@ -3,9 +3,9 @@ WIP fuzzing. Not super useful yet.
 Before first use:
 
 ``` sh
-cd materialize/fuzz
+cd materialize
 cargo install cargo-fuzz
-cargo run build_corpus
+cp -ar sqllogictest/test/ fuzz/corpus/fuzz_sqllogictest/
 ```
 
 To fuzz stuff:

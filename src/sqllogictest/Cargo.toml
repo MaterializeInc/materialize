@@ -13,3 +13,4 @@ materialize = { path = "../materialize" }
 walkdir = "2"
 regex = "1"
 lazy_static = "1"
+failure = "0.1.5"

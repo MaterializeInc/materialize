@@ -8,8 +8,15 @@
 #[macro_use]
 extern crate libfuzzer_sys;
 
+// We're just looking for crashes here, not parse failures
 fuzz_target!(|data: &[u8]| {
     if let Ok(string) = std::str::from_utf8(data) {
-        sqllogictest::run(string.to_owned());
+        let mut state = sqllogictest::State::new();
+        for record in sqllogictest::parse_records(&string) {
+            match record {
+                Ok(record) => sqllogictest::run_record(&mut state, &record),
+                _ => (),
+            }
+        }
     };
 });
