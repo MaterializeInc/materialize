@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use failure::{bail, format_err, ResultExt};
+use failure::{bail, format_err};
 use lazy_static::lazy_static;
 use regex::Regex;
 use walkdir::WalkDir;
@@ -155,29 +155,12 @@ pub fn all_files() -> impl Iterator<Item = PathBuf> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Report {
-    num_parse_failures: usize,
-    num_parse_successes: usize,
-    num_parse_unsupported: usize,
-    num_plan_successes: usize,
-    num_plan_failures: usize,
-    num_type_successes: usize,
-    num_type_failures: usize,
-}
-
-#[allow(clippy::new_without_default)]
-impl Report {
-    pub fn new() -> Self {
-        Report {
-            num_parse_successes: 0,
-            num_parse_failures: 0,
-            num_parse_unsupported: 0,
-            num_plan_successes: 0,
-            num_plan_failures: 0,
-            num_type_successes: 0,
-            num_type_failures: 0,
-        }
-    }
+pub enum Outcome {
+    Unsupported = 0,
+    ParseFailure = 1,
+    PlanFailure = 2,
+    InferenceFailure = 3,
+    Success = 4,
 }
 
 #[derive(Debug, Clone)]
@@ -194,69 +177,69 @@ impl State {
     }
 }
 
-pub fn run_record(
-    report: &mut Report,
-    state: &mut State,
-    record: &Record,
-) -> Result<(), failure::Error> {
+pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure::Error> {
     match &record {
         Record::Statement { should_run, sql } => {
             lazy_static! {
                 static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new("^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP TABLE|DROP INDEX|DROP TRIGGER|INSERT INTO .* SELECT|UPDATE|REINDEX|REPLACE INTO)").unwrap();
             }
             if UNSUPPORTED_STATEMENT_REGEX.is_match(sql) {
-                report.num_parse_unsupported += 1;
-            } else {
-                let parse =
-                    sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
-                match parse {
-                    Ok(ref statements) if statements.len() == 1 => {
-                        report.num_parse_successes += 1;
-                        if *should_run {
-                            match statements.iter().next().unwrap() {
-                                SQLStatement::SQLCreateTable { name, columns } => {
-                                    let types = columns
-                                        .iter()
-                                        .map(|column| {
-                                            Ok(Type {
-                                                name: Some(column.name.clone()),
-                                                ftype: match &column.data_type {
-                                                    SQLType::Char(_)
-                                                    | SQLType::Varchar(_)
-                                                    | SQLType::Text => FType::String,
-                                                    SQLType::SmallInt
-                                                    | SQLType::Int
-                                                    | SQLType::BigInt => FType::Int64,
-                                                    SQLType::Float(_)
-                                                    | SQLType::Real
-                                                    | SQLType::Double => FType::Float64,
-                                                    other => {
-                                                        bail!("Unexpected SQL type: {:?}", other)
-                                                    }
-                                                },
-                                                nullable: column.allow_null,
-                                            })
-                                        })
-                                        .collect::<Result<Vec<_>, _>>()?;
-                                    let typ = Type {
-                                        name: None,
-                                        ftype: FType::Tuple(types),
-                                        nullable: false,
-                                    };
-                                    state.table_types.insert(name.to_string(), typ);
-                                }
-                                _ => (),
-                            }
-                        }
-                    }
-                    _other => {
-                        if *should_run {
-                            report.num_parse_failures += 1;
-                            // println!("Parse failure: {:?} in {}:\n{}", other, filename, sql);
-                        }
+                return Ok(Outcome::Unsupported);
+            }
+
+            let parse =
+                sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
+
+            let statement = match parse {
+                Ok(ref statements) if statements.len() == 1 => statements.iter().next().unwrap(),
+                _ => {
+                    if *should_run {
+                        return Ok(Outcome::ParseFailure);
+                    } else {
+                        return Ok(Outcome::Success);
                     }
                 }
+            };
+
+            // this is mostly testing database constraints, which we don't support
+            if !should_run {
+                return Ok(Outcome::Success);
             }
+
+            match statement {
+                SQLStatement::SQLCreateTable { name, columns } => {
+                    let types = columns
+                        .iter()
+                        .map(|column| {
+                            Ok(Type {
+                                name: Some(column.name.clone()),
+                                ftype: match &column.data_type {
+                                    SQLType::Char(_) | SQLType::Varchar(_) | SQLType::Text => {
+                                        FType::String
+                                    }
+                                    SQLType::SmallInt | SQLType::Int | SQLType::BigInt => {
+                                        FType::Int64
+                                    }
+                                    SQLType::Float(_) | SQLType::Real | SQLType::Double => {
+                                        FType::Float64
+                                    }
+                                    other => bail!("Unexpected SQL type: {:?}", other),
+                                },
+                                nullable: column.allow_null,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let typ = Type {
+                        name: None,
+                        ftype: FType::Tuple(types),
+                        nullable: false,
+                    };
+                    state.table_types.insert(name.to_string(), typ);
+                }
+                _ => return Ok(Outcome::Unsupported),
+            }
+
+            Ok(Outcome::Success)
         }
         Record::Query {
             sql,
@@ -265,46 +248,40 @@ pub fn run_record(
         } => {
             let parse =
                 sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
-            match parse {
+
+            let query = match parse {
                 Ok(ref statements) if statements.len() == 1 => {
                     match statements.iter().next().unwrap() {
-                        SQLStatement::SQLSelect(query) => {
-                            report.num_parse_successes += 1;
-                            let parser = materialize::sql::Parser::new(state.table_types.clone());
-                            match parser.parse_view_query(&query) {
-                                Ok((_plan, typ)) => {
-                                    report.num_plan_successes += 1;
-                                    let inferred_types = match &typ.ftype {
-                                        FType::Tuple(types) => {
-                                            types.iter().map(|typ| &typ.ftype).collect::<Vec<_>>()
-                                        }
-                                        other => panic!("Query with non-tuple type: {:?}", other),
-                                    };
-                                    // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
-                                    if inferred_types.len() == expected_types.len() {
-                                        report.num_type_successes += 1;
-                                    } else {
-                                        report.num_type_failures += 1;
-                                    }
-                                }
-                                Err(_) => report.num_plan_failures += 1,
-                            }
-                        }
-                        _ => {
-                            report.num_parse_failures += 1;
-                            // println!("Parse failure - not a SQLSelect: {}", sql);
-                        }
+                        SQLStatement::SQLSelect(query) => query,
+                        _ => return Ok(Outcome::ParseFailure),
                     }
                 }
-                _other => {
-                    report.num_parse_failures += 1;
-                    // println!("Parse failure: {:?} in {}", other, sql);
+                _ => {
+                    return Ok(Outcome::ParseFailure);
                 }
+            };
+
+            let parser = materialize::sql::Parser::new(state.table_types.clone());
+
+            let (_plan, typ) = match parser.parse_view_query(&query) {
+                Ok(result) => result,
+                _ => return Ok(Outcome::PlanFailure),
+            };
+
+            let inferred_types = match &typ.ftype {
+                FType::Tuple(types) => types.iter().map(|typ| &typ.ftype).collect::<Vec<_>>(),
+                other => panic!("Query with non-tuple type: {:?}", other),
+            };
+
+            // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
+            if inferred_types.len() != expected_types.len() {
+                return Ok(Outcome::InferenceFailure);
             }
+
+            Ok(Outcome::Success)
         }
-        _ => (),
+        _ => Ok(Outcome::Success),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -314,12 +291,13 @@ mod test {
     use std::fs::File;
     use std::io::Read;
 
+    use failure::ResultExt;
+
     #[test]
     #[ignore]
     fn sqllogictest() {
+        let mut total = vec![0; 1 + Outcome::Success as usize];
         let mut input = String::new();
-        let mut report = Report::new();
-
         for filename in all_files() {
             let mut state = State::new();
             input.clear();
@@ -328,28 +306,19 @@ mod test {
                 .read_to_string(&mut input)
                 .unwrap();
             for record in parse_records(&input) {
-                run_record(&mut report, &mut state, &record.unwrap())
+                let outcome = run_record(&mut state, &record.unwrap())
                     .with_context(|err| format!("In {}:\n{}", filename.to_str().unwrap(), err))
                     .unwrap();
+                total[outcome as usize] += 1;
             }
         }
 
-        // If the number of successes goes up, feel free to edit this test
-        dbg!(&report);
-        assert_eq!(report.num_parse_successes, 5_376_068);
-        assert_eq!(report.num_parse_failures, 535_485);
-        assert_eq!(report.num_parse_unsupported, 28_140);
-        assert_eq!(report.num_plan_successes, 2_080_584);
-        assert_eq!(report.num_plan_failures, 3_127_450);
-        assert_eq!(report.num_type_successes, 2_080_584);
-        assert_eq!(report.num_type_failures, 0);
+        assert_eq!(total, vec![188_315, 535_485, 3_127_450, 0, 2_089_059]);
     }
 
     #[test]
     fn fuzz_artifacts() {
         let mut input = String::new();
-        let mut report = Report::new();
-
         for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
             if entry.path().is_file() {
@@ -360,7 +329,7 @@ mod test {
                     .read_to_string(&mut input)
                     .unwrap();
                 for record in parse_records(&input) {
-                    run_record(&mut report, &mut state, &record.unwrap())
+                    run_record(&mut state, &record.unwrap())
                         .with_context(|err| {
                             format!("In {}:\n{}", entry.path().to_str().unwrap(), err)
                         })
