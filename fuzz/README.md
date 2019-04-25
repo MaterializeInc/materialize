@@ -8,14 +8,14 @@ Before first use:
 cd materialize
 cargo install cargo-fuzz
 cp -ar sqllogictest/test/ fuzz/corpus/fuzz_sqllogictest/
-cargo +nightly fuzz cmin fuzz_sqllogictest
+RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz cmin --release fuzz_sqllogictest
 ```
 
 To fuzz stuff:
 
 ``` sh
 cd materialize
-cargo +nightly fuzz run fuzz_sqllogictest -- -workers=4
+RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz run --release fuzz_sqllogictest -- -jobs=4
 ```
 
 Failing tests are added to `./fuzz/artifacts/fuzz_sqllogictest` and can be rerun with `cargo test -p sqllogictest`.
@@ -36,7 +36,7 @@ To fuzz stuff:
 
 ``` sh
 cd materialize
-cargo +nightly fuzz run fuzz_testdriver
+RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz --release run fuzz_testdriver
 ```
 
 Failing tests are added to `./fuzz/artifacts/fuzz_testdrive` and can be rerun with `cargo run --bin testdrive ./fuzz/artificats/fuzz_testdrive/<FAILING_TEST>`.
