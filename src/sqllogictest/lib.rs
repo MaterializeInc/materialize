@@ -181,7 +181,7 @@ pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure
     match &record {
         Record::Statement { should_run, sql } => {
             lazy_static! {
-                static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new("^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP TABLE|DROP INDEX|DROP TRIGGER|INSERT INTO .* SELECT|UPDATE|REINDEX|REPLACE INTO)").unwrap();
+                static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new("^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP INDEX|DROP TRIGGER|INSERT INTO .* SELECT|UPDATE|REINDEX|REPLACE INTO)").unwrap();
             }
             if UNSUPPORTED_STATEMENT_REGEX.is_match(sql) {
                 return Ok(Outcome::Unsupported);
@@ -235,6 +235,14 @@ pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure
                         nullable: false,
                     };
                     state.table_types.insert(name.to_string(), typ);
+                }
+                SQLStatement::SQLDropTable { names, cascade, .. } => {
+                    if *cascade {
+                        return Ok(Outcome::Unsupported);
+                    }
+                    for name in names {
+                        state.table_types.remove(&name.to_string());
+                    }
                 }
                 _ => return Ok(Outcome::Unsupported),
             }
@@ -313,7 +321,7 @@ mod test {
             }
         }
 
-        assert_eq!(total, vec![188_315, 535_485, 3_127_450, 0, 2_089_059]);
+        assert_eq!(total, vec![182_796, 535_485, 3_127_450, 0, 2_094_578]);
     }
 
     #[test]
