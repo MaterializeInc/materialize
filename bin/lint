@@ -28,11 +28,11 @@ files=$(
             -e '(^|/)Cargo\.lock$' \
             -e '(^|/)Cargo\.toml$' \
             -e '^LICENSE$' \
-            -e 'rust-toolchain' \
-            -e 'rustfmt.toml' \
-            -e '*.md' \
-            -e '*.json' \
-            -e 'sqllogictest'
+            -e '^rust-toolchain$' \
+            -e '^rustfmt.toml$' \
+            -e '\.md$' \
+            -e '\.json$' \
+            -e '^sqllogictest$'
 )
 
 run() {
