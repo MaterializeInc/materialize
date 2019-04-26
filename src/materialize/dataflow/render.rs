@@ -53,7 +53,7 @@ fn build_plan<S: Scope<Timestamp = Time>>(
     match plan {
         Plan::Source(name) => manager
             .get_trace(name.to_owned())
-            .expect("unable to find dataflow")
+            .unwrap_or_else(|| panic!(format!("unable to find dataflow {}", name)))
             .import(scope)
             .as_collection(|k, ()| k.to_owned()),
 
