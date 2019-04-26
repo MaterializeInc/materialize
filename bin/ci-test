@@ -11,4 +11,4 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-exec ci/test/test.sh
+exec ci/test/test.sh "$@"

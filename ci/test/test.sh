@@ -9,6 +9,22 @@
 
 set -euo pipefail
 
+die() {
+    echo "$@" >&2
+    exit 1
+}
+
+fast=
+for arg
+do
+    case "$arg" in
+        --fast) fast=1 ;;
+        --fast=*) die "--fast option does not take an argument" ;;
+        -*) die "unknown option $arg" ;;
+        *) die "usage: $0 [--fast]" ;;
+    esac
+done
+
 passed=0
 total=0
 
@@ -32,22 +48,28 @@ export RUST_BACKTRACE=full
 try bin/lint
 try cargo fmt -- --check
 try cargo test
-try cargo test --release -- --ignored
+if [[ ! "$fast" ]]; then
+    try cargo test --release -- --ignored
+fi
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840
 try bin/check
-try cargo build
 
-target/debug/materialized --zookeeper "${ZOOKEEPER_HOST:-localhost}:2181" &
-materialized_pid=$!
-trap "kill -9 $materialized_pid &> /dev/null" EXIT
+# TODO(benesch): maybe some subset of testdrive tests can be run in fast mode?
+if [[ ! "$fast" ]]; then
+    try cargo build
 
-# "Wait" for materialized to start up.
-#
-# TODO(benesch): we need proper synchronization here.
-sleep 0.1
+    target/debug/materialized --zookeeper "${ZOOKEEPER_HOST:-localhost}:2181" &
+    materialized_pid=$!
+    trap "kill -9 $materialized_pid &> /dev/null" EXIT
 
-target/debug/testdrive --kafka "${KAFKA_HOST:-localhost}:9092" test/basic
+    # "Wait" for materialized to start up.
+    #
+    # TODO(benesch): we need proper synchronization here.
+    sleep 0.1
+
+    target/debug/testdrive --kafka "${KAFKA_HOST:-localhost}:9092" test/basic
+fi
 
 echo "+++ Status report"
 echo "$passed/$total commands passed"
