@@ -53,8 +53,13 @@ impl Encoder for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // TODO(benesch): do we need to be smarter about avoiding allocations?
+        // At the very least, we won't need a separate buffer when BytesMut
+        // automatically grows its capacity (carllerche/bytes#170).
+        let mut buf = Vec::new();
+
         // Write type byte.
-        dst.put(match msg {
+        buf.put(match msg {
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_) => b'D',
@@ -65,31 +70,31 @@ impl Encoder for Codec {
         });
 
         // Write message length placeholder. The true length is filled in later.
-        let start_len = dst.len();
-        dst.put_u32_be(0);
+        let start_len = buf.len();
+        buf.put_u32_be(0);
 
         // Write message contents.
         match msg {
             BackendMessage::AuthenticationOk => {
-                dst.put_u32_be(0);
+                buf.put_u32_be(0);
             }
             BackendMessage::RowDescription(fields) => {
-                dst.put_u16_be(fields.len() as u16);
+                buf.put_u16_be(fields.len() as u16);
                 for f in &fields {
-                    dst.put_string(&f.name);
-                    dst.put_u32_be(f.table_id);
-                    dst.put_u16_be(f.column_id);
-                    dst.put_u32_be(f.type_oid);
-                    dst.put_i16_be(f.type_len);
-                    dst.put_i32_be(f.type_mod);
-                    dst.put_u16_be(f.format as u16);
+                    buf.put_string(&f.name);
+                    buf.put_u32_be(f.table_id);
+                    buf.put_u16_be(f.column_id);
+                    buf.put_u32_be(f.type_oid);
+                    buf.put_i16_be(f.type_len);
+                    buf.put_i32_be(f.type_mod);
+                    buf.put_u16_be(f.format as u16);
                 }
             }
             BackendMessage::DataRow(fields) => {
-                dst.put_u16_be(fields.len() as u16);
+                buf.put_u16_be(fields.len() as u16);
                 for f in fields {
                     if f == Datum::Null {
-                        dst.put_i32_be(-1);
+                        buf.put_i32_be(-1);
                         continue;
                     }
                     let s: Cow<[u8]> = match f {
@@ -104,16 +109,16 @@ impl Encoder for Codec {
                         Datum::String(ref s) => s.as_bytes().into(),
                         _ => unimplemented!(),
                     };
-                    dst.put_u32_be(s.len() as u32);
-                    dst.put(&*s);
+                    buf.put_u32_be(s.len() as u32);
+                    buf.put(&*s);
                 }
             }
             BackendMessage::CommandComplete { tag } => {
-                dst.put_string(tag);
+                buf.put_string(tag);
             }
             BackendMessage::EmptyQueryResponse => panic!("unimplemented"),
             BackendMessage::ReadyForQuery => {
-                dst.put(b'I'); // transaction indicator
+                buf.put(b'I'); // transaction indicator
             }
             BackendMessage::ErrorResponse {
                 severity,
@@ -121,24 +126,25 @@ impl Encoder for Codec {
                 message,
                 detail,
             } => {
-                dst.put(b'S');
-                dst.put_string(severity.string());
-                dst.put(b'C');
-                dst.put_string(code);
-                dst.put(b'M');
-                dst.put_string(message);
+                buf.put(b'S');
+                buf.put_string(severity.string());
+                buf.put(b'C');
+                buf.put_string(code);
+                buf.put(b'M');
+                buf.put_string(message);
                 if let Some(ref detail) = detail {
-                    dst.put(b'D');
-                    dst.put_string(detail);
+                    buf.put(b'D');
+                    buf.put_string(detail);
                 }
-                dst.put(b'\0');
+                buf.put(b'\0');
             }
         }
 
         // Overwrite length placeholder with true length.
-        let len = dst.len() - start_len;
-        NetworkEndian::write_u32(&mut dst[start_len..start_len + 4], len as u32);
+        let len = buf.len() - start_len;
+        NetworkEndian::write_u32(&mut buf[start_len..start_len + 4], len as u32);
 
+        dst.extend(buf);
         Ok(())
     }
 }
@@ -230,7 +236,7 @@ trait Pgbuf: BufMut {
     fn put_string<T: IntoBuf>(&mut self, s: T);
 }
 
-impl Pgbuf for BytesMut {
+impl<B: BufMut> Pgbuf for B {
     fn put_string<T: IntoBuf>(&mut self, s: T) {
         self.put(s);
         self.put(b'\0');
