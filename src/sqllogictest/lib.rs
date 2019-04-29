@@ -70,22 +70,27 @@ fn parse_sql<'a>(input: &mut &'a str) -> Result<&'a str, failure::Error> {
 }
 
 pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
-    lazy_static! {
-        static ref COMMENT_AND_LINE_REGEX: Regex = Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap();
-    }
-    let next_line = split_at(&mut input, &COMMENT_AND_LINE_REGEX)?.trim();
-
-    if next_line == "" {
+    if input == "" {
         // must have just been a bunch of comments
         return Ok(None);
     }
 
-    let mut words = next_line.split(' ');
+    lazy_static! {
+        static ref COMMENT_AND_LINE_REGEX: Regex = Regex::new("(#[^\n]*)?\r?(\n|$)").unwrap();
+    }
+    let first_line = split_at(&mut input, &COMMENT_AND_LINE_REGEX)?.trim();
+
+    if first_line == "" {
+        // query starts on the next line
+        return parse_record(input);
+    }
+
+    let mut words = first_line.split(' ');
     match words.next().unwrap() {
         "statement" => {
             let should_run = match words
                 .next()
-                .ok_or_else(|| format_err!("missing should_run in: {}", next_line))?
+                .ok_or_else(|| format_err!("missing should_run in: {}", first_line))?
             {
                 "ok" => true,
                 "error" => false,
@@ -101,11 +106,11 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
             let types = parse_types(
                 words
                     .next()
-                    .ok_or_else(|| format_err!("missing types in: {}", next_line))?,
+                    .ok_or_else(|| format_err!("missing types in: {}", first_line))?,
             )?;
             let sort = words
                 .next()
-                .ok_or_else(|| format_err!("missing sort in: {}", next_line))?;
+                .ok_or_else(|| format_err!("missing sort in: {}", first_line))?;
             let label = words.next();
             let sql = parse_sql(&mut input)?;
             let output = input.trim();
@@ -120,18 +125,22 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
         "hash-threshold" => {
             let threshold = words
                 .next()
-                .ok_or_else(|| format_err!("missing threshold in: {}", next_line))?
+                .ok_or_else(|| format_err!("missing threshold in: {}", first_line))?
                 .parse::<u64>()
-                .map_err(|err| format_err!("invalid threshold ({}) in: {}", err, next_line))?;
+                .map_err(|err| format_err!("invalid threshold ({}) in: {}", err, first_line))?;
             if input != "" {
                 bail!("leftover input: {}", input)
             }
             Ok(Some(Record::HashThreshold { threshold }))
         }
-        // query starts on next line
-        "skipif" => parse_record(input),
-        // we probably don't want to support any db-specific query
-        "onlyif" => Ok(None),
+        "skipif" => {
+            // query starts on the next line
+            parse_record(input)
+        }
+        "onlyif" => {
+            // we probably don't want to support any db-specific query
+            Ok(None)
+        }
         "halt" => Ok(Some(Record::Halt)),
         other => bail!("Unexpected start of record: {}", other),
     }
@@ -326,7 +335,7 @@ mod test {
             }
         }
 
-        assert_eq!(total, vec![182_796, 535_485, 3_127_450, 0, 2_094_578]);
+        assert_eq!(total, vec![182_803, 535_485, 3_127_457, 0, 2_094_585]);
     }
 
     #[test]
