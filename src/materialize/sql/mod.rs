@@ -45,9 +45,11 @@ pub fn handle_query(
     stmt: String,
     conn_state: &ConnState,
 ) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    let meta_store = conn_state.meta_store.clone();
-    let cmd_tx = conn_state.cmd_tx.clone();
-    let server_state = conn_state.server_state.clone();
+    let ConnState {
+        meta_store,
+        cmd_tx,
+        server_state,
+    } = conn_state.clone();
     future::lazy(|| {
         let mut stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, stmt)?;
         if stmts.len() != 1 {
@@ -55,26 +57,71 @@ pub fn handle_query(
         }
         Ok(stmts.remove(0))
     })
-    .and_then(|stmt| match stmt {
-        SQLStatement::SQLPeek { mut name } => {
-            let name = std::mem::replace(&mut name, SQLObjectName(Vec::new()));
-            handle_peek(name, cmd_tx, server_state, meta_store)
-                .left()
-                .left()
+    .and_then(|stmt| handle_statement(stmt, meta_store, cmd_tx, server_state))
+}
+
+fn handle_statement(
+    stmt: SQLStatement,
+    meta_store: MetaStore<Dataflow>,
+    cmd_tx: crate::dataflow::server::CommandSender,
+    server_state: Arc<RwLock<ServerState>>,
+) -> Box<dyn Future<Item = QueryResponse, Error = failure::Error> + Send> {
+    match stmt {
+        SQLStatement::SQLPeek { name } => {
+            Box::new(handle_peek(name, meta_store, cmd_tx, server_state))
         }
-        SQLStatement::SQLTail { .. } => future::err(format_err!("TAIL is not implemented yet"))
-            .right()
-            .right(),
+        SQLStatement::SQLTail { .. } => {
+            Box::new(future::err(format_err!("TAIL is not implemented yet")))
+        }
         SQLStatement::SQLCreateDataSource { .. } | SQLStatement::SQLCreateView { .. } => {
-            handle_create_dataflow(stmt, meta_store).left().right()
+            Box::new(handle_create_dataflow(stmt, meta_store))
         }
         SQLStatement::SQLDropDataSource { .. } | SQLStatement::SQLDropView { .. } => {
-            handle_drop_dataflow(stmt, meta_store).right().left()
+            Box::new(handle_drop_dataflow(stmt, meta_store))
         }
-        _ => future::err(format_err!("unsupported SQL query: {:?}", stmt))
-            .right()
-            .right(),
-    })
+        SQLStatement::SQLSelect(query) => {
+            let id: u64 = rand::random();
+            let name = SQLObjectName(vec![format!("<temp_{}>", id)]);
+            Box::new(
+                handle_statement(
+                    SQLStatement::SQLCreateView {
+                        name: name.clone(),
+                        query,
+                        materialized: true,
+                    },
+                    meta_store.clone(),
+                    cmd_tx.clone(),
+                    server_state.clone(),
+                )
+                .and_then(move |_| {
+                    // TODO(jamii) we need a wait-for-timestamp api
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    handle_statement(
+                        SQLStatement::SQLPeek { name: name.clone() },
+                        meta_store.clone(),
+                        cmd_tx.clone(),
+                        server_state.clone(),
+                    )
+                    .and_then(move |query_response| {
+                        handle_statement(
+                            SQLStatement::SQLDropView {
+                                name: name.clone(),
+                                materialized: true,
+                            },
+                            meta_store,
+                            cmd_tx,
+                            server_state,
+                        )
+                        .map(move |_| query_response)
+                    })
+                }),
+            )
+        }
+        _ => Box::new(future::err(format_err!(
+            "unsupported SQL query: {:?}",
+            stmt
+        ))),
+    }
 }
 
 fn handle_create_dataflow(
@@ -130,9 +177,9 @@ fn handle_drop_dataflow(
 
 fn handle_peek(
     name: SQLObjectName,
+    meta_store: metastore::MetaStore<Dataflow>,
     cmd_tx: CommandSender,
     server_state: Arc<RwLock<ServerState>>,
-    meta_store: metastore::MetaStore<Dataflow>,
 ) -> impl Future<Item = QueryResponse, Error = failure::Error> {
     let name = name.to_string();
     let names = vec![name.clone()];

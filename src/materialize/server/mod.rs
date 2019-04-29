@@ -39,6 +39,7 @@ pub struct ServerState {
     pub peek_results: HashMap<uuid::Uuid, (UnboundedSender<Datum>, usize)>,
 }
 
+#[derive(Clone)]
 pub struct ConnState {
     pub meta_store: MetaStore<Dataflow>,
     pub cmd_tx: dataflow::server::CommandSender,
