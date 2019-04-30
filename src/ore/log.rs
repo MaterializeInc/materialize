@@ -19,6 +19,7 @@ use slog::{Drain, Serializer, KV};
 use std::fmt;
 use std::io;
 use std::io::Write;
+use std::sync::Once;
 
 struct StdLog;
 
@@ -111,29 +112,37 @@ pub fn slog_adapter() -> slog::Logger {
     slog::Logger::root(drain, o!())
 }
 
+static LOG_INIT: Once = Once::new();
+
 /// Initialize global logger, using the [`log`] crate, with sensible defaults.
+///
+/// It is safe to call `init` multiple times. This is mostly for the convenience
+/// of tests, which are not run in any particular order, and therefore must each
+/// call `init`.
 pub fn init() {
-    env_logger::Builder::from_default_env()
-        .format(|buf, record| {
-            // TODO(benesch): this allocates a lot. At the time of writing, the
-            // only goal was to prevent my eyes from bleeding when looking at
-            // log messages.
-            let ts = buf.precise_timestamp();
-            let level = buf.default_styled_level(record.level());
-            let fileline = match (record.file(), record.line()) {
-                (Some(file), Some(line)) => {
-                    let search = "/.cargo/";
-                    let file = match file.find(search) {
-                        Some(index) => &file[search.len() + index..],
-                        None => file,
+    LOG_INIT.call_once(|| {
+        env_logger::Builder::from_default_env()
+            .format(|buf, record| {
+                // TODO(benesch): this allocates a lot. At the time of writing, the
+                // only goal was to prevent my eyes from bleeding when looking at
+                // log messages.
+                let ts = buf.precise_timestamp();
+                let level = buf.default_styled_level(record.level());
+                let fileline = match (record.file(), record.line()) {
+                    (Some(file), Some(line)) => {
+                        let search = "/.cargo/";
+                        let file = match file.find(search) {
+                            Some(index) => &file[search.len() + index..],
+                            None => file,
+                        }
+                        .trim_start_matches("registry/src/")
+                        .trim_start_matches("git/checkouts/");
+                        format!("{}:{}", file, line)
                     }
-                    .trim_start_matches("registry/src/")
-                    .trim_start_matches("git/checkouts/");
-                    format!("{}:{}", file, line)
-                }
-                _ => "(unknown)".to_string(),
-            };
-            writeln!(buf, "[{} {} {}] {}", level, ts, fileline, record.args())
-        })
-        .init();
+                    _ => "(unknown)".to_string(),
+                };
+                writeln!(buf, "[{} {} {}] {}", level, ts, fileline, record.args())
+            })
+            .init();
+    });
 }
