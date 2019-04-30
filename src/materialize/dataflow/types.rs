@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::repr::{Datum, Type};
@@ -53,12 +54,19 @@ pub struct Source {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Connector {
     Kafka(KafkaConnector),
+    Local(LocalConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LocalConnector {
+    /// The id maps to a mutable queue in memory
+    pub id: Uuid,
 }
 
 /// A view transforms one dataflow into another.

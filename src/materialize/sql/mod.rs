@@ -12,14 +12,17 @@ use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, JoinConstraint, JoinOperator, SQLIdent, SQLObjectName, SQLOperator, SQLQuery,
-    SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement, TableFactor, Value,
+    SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement, SQLType, TableFactor,
+    Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::sync::{Arc, RwLock};
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::dataflow::server::{Command, CommandSender};
-use crate::dataflow::{Aggregate, Connector, Dataflow, Expr, KafkaConnector, Plan, Source, View};
+use crate::dataflow::{
+    Aggregate, Connector, Dataflow, Expr, KafkaConnector, LocalConnector, Plan, Source, View,
+};
 use crate::repr::{Datum, FType, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
@@ -33,8 +36,10 @@ use plan::SQLPlan;
 pub enum QueryResponse {
     CreatedDataSource,
     CreatedView,
+    CreatedTable,
     DroppedDataSource,
     DroppedView,
+    DroppedTable,
     StreamingRows {
         typ: Type,
         rows: Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>,
@@ -73,12 +78,14 @@ fn handle_statement(
         SQLStatement::SQLTail { .. } => {
             Box::new(future::err(format_err!("TAIL is not implemented yet")))
         }
-        SQLStatement::SQLCreateDataSource { .. } | SQLStatement::SQLCreateView { .. } => {
-            Box::new(handle_create_dataflow(stmt, meta_store))
-        }
+        SQLStatement::SQLCreateDataSource { .. }
+        | SQLStatement::SQLCreateView { .. }
+        | SQLStatement::SQLCreateTable { .. } => Box::new(handle_create_dataflow(stmt, meta_store)),
         SQLStatement::SQLDropDataSource { .. } | SQLStatement::SQLDropView { .. } => {
             Box::new(handle_drop_dataflow(stmt, meta_store))
         }
+
+        // these are intended mostly for testing:
         SQLStatement::SQLSelect(query) => {
             let id: u64 = rand::random();
             let name = SQLObjectName(vec![format!("<temp_{}>", id)]);
@@ -117,6 +124,8 @@ fn handle_statement(
                 }),
             )
         }
+        // SQLStatement::DropTable{name, columns} => {}
+        // SQLStatement::SQLInsert {table_name, columns, values} => {}
         _ => Box::new(future::err(format_err!(
             "unsupported SQL query: {:?}",
             stmt
@@ -156,6 +165,7 @@ fn handle_create_dataflow(
         Ok(match stmt {
             SQLStatement::SQLCreateDataSource { .. } => QueryResponse::CreatedDataSource,
             SQLStatement::SQLCreateView { .. } => QueryResponse::CreatedView,
+            SQLStatement::SQLCreateTable { .. } => QueryResponse::CreatedTable,
             _ => unreachable!(),
         })
     })
@@ -378,7 +388,40 @@ impl Parser {
                     raw_schema: schema.clone(),
                 }))
             }
-            _ => bail!("only CREATE MATERIALIZED VIEW AS allowed"),
+            SQLStatement::SQLCreateTable { name, columns } => {
+                let types = columns
+                    .iter()
+                    .map(|column| {
+                        Ok(Type {
+                            name: Some(column.name.clone()),
+                            ftype: match &column.data_type {
+                                SQLType::Char(_) | SQLType::Varchar(_) | SQLType::Text => {
+                                    FType::String
+                                }
+                                SQLType::SmallInt | SQLType::Int | SQLType::BigInt => FType::Int64,
+                                SQLType::Float(_) | SQLType::Real | SQLType::Double => {
+                                    FType::Float64
+                                }
+                                other => bail!("Unexpected SQL type: {:?}", other),
+                            },
+                            nullable: column.allow_null,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let typ = Type {
+                    name: None,
+                    ftype: FType::Tuple(types),
+                    nullable: false,
+                };
+                Ok(Dataflow::Source(Source {
+                    name: extract_sql_object_name(name)?,
+                    connector: Connector::Local(LocalConnector::new()),
+                    typ,
+                    // TODO(jamii) raw_schema should live in KafkaConnector
+                    raw_schema: "".to_owned(),
+                }))
+            }
+            other => bail!("Unsupported statement: {:?}", other),
         }
     }
 

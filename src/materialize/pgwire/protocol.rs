@@ -255,8 +255,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 match response {
                     QueryResponse::CreatedDataSource => command_complete!("CREATE DATA SOURCE"),
                     QueryResponse::CreatedView => command_complete!("CREATE VIEW"),
+                    QueryResponse::CreatedTable => command_complete!("CREATE TABLE"),
                     QueryResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
                     QueryResponse::DroppedView => command_complete!("DROP VIEW"),
+                    QueryResponse::DroppedTable => command_complete!("DROP TABLE"),
                     QueryResponse::StreamingRows { typ, rows } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)

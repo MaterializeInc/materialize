@@ -32,6 +32,7 @@ pub fn build_dataflow<A: Allocate>(
                 Connector::Kafka(c) => {
                     source::kafka(scope, &src.name, &src.raw_schema, &c, done.clone())
                 }
+                Connector::Local(l) => source::local(scope, &src.name, &l, done.clone()),
             };
             let arrangement = plan.as_collection().arrange_by_self();
             let on_delete = Box::new(move || done.set(true));
