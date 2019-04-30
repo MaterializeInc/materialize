@@ -64,12 +64,14 @@ where
 {
     fn new(w: &'w mut TimelyWorker<A>, cmd_rx: CommandReceiver) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, std::time::Instant::now());
+        let mut traces = TraceManager::new();
+        render::add_builtin_dataflows(&mut traces, w);
         Worker {
             inner: w,
             cmd_rx,
             sequencer,
             pending_cmds: HashMap::new(),
-            traces: TraceManager::new(),
+            traces,
             rpc_client: reqwest::Client::new(),
         }
     }

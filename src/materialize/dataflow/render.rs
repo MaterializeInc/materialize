@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Reduce;
@@ -19,6 +20,18 @@ use super::source;
 use super::trace::TraceManager;
 use super::types::*;
 use crate::repr::Datum;
+
+pub fn add_builtin_dataflows<A: Allocate>(
+    manager: &mut TraceManager,
+    worker: &mut TimelyWorker<A>,
+) {
+    worker.dataflow(|scope| {
+        let (_, collection) = scope.new_collection_from(vec![Datum::String("X".into())]);
+        let arrangement = collection.arrange_by_self();
+        let on_delete = Box::new(|| ());
+        manager.set_trace("dual".into(), &arrangement.trace, on_delete);
+    })
+}
 
 pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
