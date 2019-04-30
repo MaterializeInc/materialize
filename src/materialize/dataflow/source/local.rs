@@ -19,13 +19,15 @@ use lazy_static::lazy_static;
 use crate::dataflow::types::{Diff, LocalConnector, Time};
 use crate::repr::Datum;
 
+// TODO(jamii) There doesn't seem to be any way to use #[allow(clippy::type_complexity)] inside lazy_static
+type Channels = Mutex<HashMap<Uuid, (Sender<Datum>, Option<Receiver<Datum>>)>>;
 // TODO(jamii) Ideally this would be part of the materialized state so we don't have to worry about reinitialization
 lazy_static! {
-    pub static ref CHANNELS: Mutex<HashMap<Uuid, (Sender<Datum>, Option<Receiver<Datum>>)>> =
-        Mutex::new(HashMap::new());
+    pub static ref CHANNELS: Channels = Mutex::new(HashMap::new());
 }
 
 impl LocalConnector {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> LocalConnector {
         LocalConnector { id: Uuid::new_v4() }
     }
