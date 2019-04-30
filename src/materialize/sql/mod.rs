@@ -244,7 +244,7 @@ fn handle_insert(
                 let permutation = expected_columns.iter().map(|name| columns.iter().position(|name2| name == name2).unwrap()).collect::<Vec<_>>();
                 let datums = values.into_iter().map(|asts| {
                     let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
-                    let datums = permuted_asts.into_iter().zip(types.iter()).map(|(ast, typ)| {
+                    let datums = permuted_asts.zip(types.iter()).map(|(ast, typ)| {
                         Ok(match ast {
                             ASTNode::SQLValue(value) => {
                                 match (value, &typ.ftype) {
