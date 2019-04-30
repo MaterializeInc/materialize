@@ -17,6 +17,7 @@ pub struct PosCommand {
 pub enum Command {
     Builtin(BuiltinCommand),
     Sql(SqlCommand),
+    FailSql(FailSqlCommand),
 }
 
 #[derive(Debug)]
@@ -33,6 +34,12 @@ pub struct SqlCommand {
     pub expected_rows: Vec<Vec<String>>,
 }
 
+#[derive(Debug)]
+pub struct FailSqlCommand {
+    pub query: String,
+    pub expected_error: String,
+}
+
 pub fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, InputError> {
     let mut out = Vec::new();
     while let Some((pos, line)) = line_reader.peek() {
@@ -40,6 +47,7 @@ pub fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, InputError
         let command = match line.chars().next() {
             Some('$') => Command::Builtin(parse_builtin(line_reader)?),
             Some('>') => Command::Sql(parse_sql(line_reader)?),
+            Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
             Some('#') => {
                 // Comment line.
                 line_reader.next();
@@ -115,6 +123,24 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     })
 }
 
+fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, InputError> {
+    let (pos, line1) = line_reader.next().unwrap();
+    let line2 = slurp_one(line_reader);
+    let expected_error = match line2 {
+        Some((_, line2)) => line2,
+        None => {
+            return Err(InputError {
+                pos,
+                msg: "failing SQL command is missing expected error message".into(),
+            });
+        }
+    };
+    Ok(FailSqlCommand {
+        query: line1[1..].trim().to_owned(),
+        expected_error,
+    })
+}
+
 fn split_line(line: &str) -> Vec<String> {
     line.split_whitespace().map(|c| c.to_owned()).collect()
 }
@@ -130,7 +156,7 @@ fn slurp_all(line_reader: &mut LineReader) -> Vec<String> {
 fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
     if let Some((_, line)) = line_reader.peek() {
         match line.chars().next() {
-            Some('$') | Some('>') | Some('#') => return None,
+            Some('$') | Some('>') | Some('!') | Some('#') => return None,
             _ => return line_reader.next(),
         }
     }
@@ -222,7 +248,7 @@ impl<'a> Iterator for LineReader<'a> {
 
 fn should_fold(c: Option<char>) -> bool {
     match c {
-        Some('$') | Some('>') => true,
+        Some('$') | Some('>') | Some('!') => true,
         _ => false,
     }
 }

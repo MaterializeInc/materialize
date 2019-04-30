@@ -51,6 +51,7 @@ pub fn build(cmds: Vec<PosCommand>) -> Result<Vec<PosAction>, InputError> {
                 }
             },
             Command::Sql(sql) => Box::new(sql::build_sql(sql).map_err(wrap_err)?),
+            Command::FailSql(sql) => Box::new(sql::build_fail_sql(sql).map_err(wrap_err)?),
         };
         out.push(PosAction {
             pos: cmd.pos,

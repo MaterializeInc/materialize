@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use postgres::error::DbError;
+use postgres::error::Error as PostgresError;
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser as SQLParser;
@@ -11,7 +12,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::action::{Action, State};
-use crate::parser::SqlCommand;
+use crate::parser::{FailSqlCommand, SqlCommand};
 use ore::vec::VecExt;
 
 pub struct SqlAction {
@@ -49,7 +50,7 @@ impl Action for SqlAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let query = self.cmd.query.replace("${KAFKA_URL}", &state.kafka_url);
+        let query = substitute_vars(&self.cmd.query, state);
         print_query(&query);
         let max = match self.stmt {
             // TODO(benesch): this is horrible. PEEK needs to learn to wait
@@ -88,11 +89,10 @@ impl SqlAction {
         match pgconn.simple_query(query) {
             Err(err) => {
                 let err_string = err.to_string();
-                if let Some(err) = err.into_source() {
-                    if let Ok(err) = err.downcast::<DbError>() {
-                        if err.message() == "target node does not exist" {
-                            return Ok(());
-                        }
+                if let Some(err) = try_extract_db_error(err) {
+                    // TODO(benesch): we need structured errors here.
+                    if err.message().starts_with("no such dataflow: ") {
+                        return Ok(());
                     }
                 }
                 Err(err_string)
@@ -132,10 +132,62 @@ impl SqlAction {
     }
 }
 
+pub struct FailSqlAction(FailSqlCommand);
+
+pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, String> {
+    Ok(FailSqlAction(cmd))
+}
+
+impl Action for FailSqlAction {
+    fn undo(&self, state: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn redo(&self, state: &mut State) -> Result<(), String> {
+        let query = substitute_vars(&self.0.query, state);
+        print_query(&query);
+        match state.pgconn.simple_query(&query) {
+            Ok(_) => Err(format!(
+                "query succeeded, but expected error '{}'",
+                self.0.expected_error
+            )),
+            Err(err) => {
+                let err_string = err.to_string();
+                match try_extract_db_error(err) {
+                    Some(err) => {
+                        if err.message().contains(&self.0.expected_error) {
+                            Ok(())
+                        } else {
+                            Err(format!(
+                                "expected error containing '{}', but got '{}'",
+                                self.0.expected_error, err
+                            ))
+                        }
+                    }
+                    None => Err(err_string),
+                }
+            }
+        }
+    }
+}
+
 fn print_query(query: &str) {
     if query.len() > 72 {
         println!("> {}...", &query[..72]);
     } else {
         println!("> {}", &query);
     }
+}
+
+fn substitute_vars(query: &str, state: &mut State) -> String {
+    query.replace("${KAFKA_URL}", &state.kafka_url)
+}
+
+fn try_extract_db_error(err: PostgresError) -> Option<DbError> {
+    if let Some(err) = err.into_source() {
+        if let Ok(err) = err.downcast::<DbError>() {
+            return Some(*err);
+        }
+    }
+    None
 }
