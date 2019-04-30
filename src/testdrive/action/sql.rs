@@ -139,7 +139,7 @@ pub fn build_fail_sql(cmd: FailSqlCommand) -> Result<FailSqlAction, String> {
 }
 
 impl Action for FailSqlAction {
-    fn undo(&self, state: &mut State) -> Result<(), String> {
+    fn undo(&self, _state: &mut State) -> Result<(), String> {
         Ok(())
     }
 

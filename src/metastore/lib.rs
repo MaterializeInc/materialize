@@ -12,15 +12,17 @@ use lazy_static::lazy_static;
 use linked_hash_map::LinkedHashMap;
 use log::error;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio_zookeeper::error::Create;
+use tokio_zookeeper::error::Multi as MultiError;
 use tokio_zookeeper::{
-    Acl, CreateMode, KeeperState, WatchedEvent, WatchedEventType, ZooKeeper, ZooKeeperBuilder,
+    Acl, CreateMode, KeeperState, MultiResponse, WatchedEvent, WatchedEventType, ZooKeeper,
+    ZooKeeperBuilder,
 };
 
 use ore::closure;
@@ -53,7 +55,7 @@ struct Inner<D> {
 
 impl<D> MetaStore<D>
 where
-    D: Serialize + DeserializeOwned + Clone + Send + 'static,
+    D: Dataflow,
 {
     pub fn new<P>(addr: &SocketAddr, prefix: P) -> MetaStore<D>
     where
@@ -92,31 +94,11 @@ where
     pub fn read_dataflows(
         &self,
         dataflows: Vec<String>,
-    ) -> impl Future<Item = HashMap<String, D>, Error = failure::Error> {
-        let prefix = self.prefix.clone();
-        self.wait_for_setup().and_then(move |zk| {
-            let mut futures = Vec::new();
-            for name in dataflows {
-                futures.push(
-                    zk.clone()
-                        .get_data(&format!("/{}/dataflows/{}", prefix, name))
-                        .map(|(zk, data)| (zk, name, data)),
-                )
-            }
-            stream::futures_unordered(futures)
-                .and_then(|(_zk, name, data)| match data {
-                    Some((bytes, _stat)) => Ok((name, bytes)),
-                    None => bail!("dataflow {} does not exist", name),
-                })
-                .fold(HashMap::new(), move |mut out, (name, bytes)| {
-                    let dataflow: D = match BINCODER.deserialize(&bytes) {
-                        Ok(d) => d,
-                        Err(err) => return Err(failure::Error::from_boxed_compat(err)),
-                    };
-                    out.insert(name.to_owned(), dataflow);
-                    Ok(out)
-                })
-        })
+    ) -> impl Future<Item = HashMap<String, StoredDataflow<D>>, Error = failure::Error> {
+        let prefix = self.prefix.to_string();
+        self.wait_for_setup()
+            .and_then(move |zk| read_dataflows(zk, prefix, dataflows))
+            .map(|(_zk, dataflow_map)| dataflow_map)
     }
 
     pub fn register_dataflow_watch(&self) -> impl Stream<Item = DataflowEvent<D>, Error = ()> {
@@ -133,39 +115,105 @@ where
         stream::iter_ok(events).chain(rx)
     }
 
-    // TODO: this needs to maintain consistency by running a transaction that
-    // checks that all dependent dataflows have the correct version.
-    pub fn create_dataflow(
+    pub fn create_dataflow<U>(
         &self,
         name: &str,
-        dataflow: &D,
-    ) -> impl Future<Item = (), Error = failure::Error> {
-        let encoded = match BINCODER.serialize(dataflow) {
+        dataflow: D,
+        uses: U,
+    ) -> impl Future<Item = StoredDataflow<D>, Error = failure::Error>
+    where
+        U: IntoIterator<Item = StoredDataflow<D>>,
+    {
+        let mut uses_names = Vec::new();
+        let mut uses_data = Vec::new();
+        for mut sd in uses {
+            let path = format!("/{}/dataflows/{}", self.prefix, sd.name);
+            sd.used_by.push(name.to_owned());
+            let encoded = match BINCODER.serialize(&sd) {
+                Ok(encoded) => encoded,
+                Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
+            };
+            uses_data.push((path, sd.version, encoded));
+            uses_names.push(sd.name);
+        }
+        let sd = StoredDataflow {
+            name: name.to_owned(),
+            inner: dataflow,
+            version: 0,
+            used_by: Vec::new(),
+            uses: uses_names,
+        };
+        let encoded = match BINCODER.serialize(&sd) {
             Ok(encoded) => encoded,
             Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
         };
         let path = format!("/{}/dataflows/{}", self.prefix, name);
         self.wait_for_setup()
             .and_then(move |zk| {
-                zk.create(&path, encoded, Acl::open_unsafe(), CreateMode::Persistent)
+                let mut multi = zk.multi();
+                multi = multi.create(&path, encoded, Acl::open_unsafe(), CreateMode::Persistent);
+                for (path, version, encoded) in uses_data {
+                    multi = multi.set_data(&path, Some(version), encoded);
+                }
+                multi.run()
             })
-            .and_then(|(_zk, res)| match res {
-                Ok(_name) => Ok(()),
-                Err(err) => Err(err.into()),
+            .and_then(move |(_zk, res)| {
+                let res: Result<Vec<tokio_zookeeper::MultiResponse>, _> = Result::from_iter(res);
+                match res {
+                    Ok(_) => Ok(sd),
+                    Err(err) => Err(format_err!("{}", err)),
+                }
             })
             .right()
     }
 
-    // TODO: this needs to maintain consistency by verifying that nothing
-    // depends on this dataflow.
     pub fn delete_dataflow(&self, name: &str) -> impl Future<Item = (), Error = failure::Error> {
+        let name = name.to_owned();
         let path = format!("/{}/dataflows/{}", self.prefix, name);
+        let prefix = self.prefix.to_string();
         self.wait_for_setup()
-            .and_then(move |zk| zk.delete(&path, None))
-            .and_then(|(_zk, res)| match res {
-                Ok(()) => Ok(()),
-                Err(err) => Err(err.into()),
+            .and_then(closure!([clone path] |zk| zk.get_data(&path)))
+            .and_then(move |(zk, res)| {
+                let (bytes, version) = match res {
+                    Some((bytes, stat)) => (bytes, stat.version),
+                    _ => bail!("no such dataflow: {}", name),
+                };
+                let dataflow: StoredDataflow<D> = match BINCODER.deserialize(&bytes) {
+                    Ok(d) => d,
+                    Err(err) => return Err(failure::Error::from_boxed_compat(err)),
+                };
+                if dataflow.used_by.is_empty() {
+                    Ok((zk, dataflow.uses, name, version))
+                } else {
+                    Err(format_err!(
+                        "cannot delete {}: still depended upon by dataflow '{}'",
+                        name,
+                        dataflow.used_by[0]
+                    ))
+                }
             })
+            .and_then(move |(zk, uses, name, version)| {
+                read_dataflows::<D>(zk, prefix.clone(), uses)
+                    .map(move |(zk, dataflow_map)| (zk, dataflow_map, prefix, name, version))
+            })
+            .and_then(move |(zk, dataflow_map, prefix, name, version)| {
+                let mut multi = zk.multi();
+                multi = multi.delete(&path, Some(version));
+                for (_, mut sd) in dataflow_map {
+                    let path = format!("/{}/dataflows/{}", prefix, sd.name);
+                    sd.used_by
+                        .remove(sd.used_by.iter().position(|u| u == &name).unwrap());
+                    let encoded = match BINCODER.serialize(&sd) {
+                        Ok(encoded) => encoded,
+                        Err(err) => {
+                            return future::err(failure::Error::from_boxed_compat(err)).left();
+                        }
+                    };
+                    multi = multi.set_data(&path, Some(sd.version), encoded);
+                }
+                multi.run().right()
+            })
+            .and_then(|(_zk, res)| handle_multi_response(res))
     }
 
     fn start_watching(&self, cancel_signal: futures::sync::mpsc::Receiver<()>) {
@@ -213,6 +261,35 @@ where
     fn wait_for_setup(&self) -> impl Future<Item = ZooKeeper, Error = failure::Error> {
         self.setup.clone().extract_shared()
     }
+}
+
+fn handle_multi_response(
+    res: Vec<Result<MultiResponse, MultiError>>,
+) -> Result<(), failure::Error> {
+    let mut saw_error = false;
+    for r in res {
+        match r {
+            Ok(_) => (),
+            Err(MultiError::RolledBack) | Err(MultiError::Skipped) => saw_error = true,
+            Err(err) => return Err(format_err!("{}", err)),
+        }
+    }
+    if saw_error {
+        bail!("multi request failed, but without an error");
+    }
+    Ok(())
+}
+
+pub trait Dataflow: Serialize + DeserializeOwned + fmt::Debug + Clone + Send + 'static {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredDataflow<D> {
+    pub name: String,
+    pub inner: D,
+    #[serde(skip)]
+    version: i32,
+    uses: Vec<String>,
+    used_by: Vec<String>,
 }
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -309,7 +386,7 @@ where
         {
             let mut inner = inner.lock().unwrap();
             for (_czxid, name, bytes) in results {
-                let dataflow: D = match BINCODER.deserialize(&bytes) {
+                let dataflow: StoredDataflow<D> = match BINCODER.deserialize(&bytes) {
                     Ok(d) => d,
                     Err(err) => return future::err(failure::Error::from_boxed_compat(err)).left(),
                 };
@@ -322,12 +399,12 @@ where
                     // is that we do a bit of extra work on every event.
                     let send_fut = tx
                         .clone()
-                        .send(DataflowEvent::Created(dataflow.clone()))
+                        .send(DataflowEvent::Created(dataflow.inner.clone()))
                         .discard()
                         .or_else(|_| Ok(()));
                     send_futs.push(Box::new(send_fut));
                 }
-                inner.dataflows.insert(name, dataflow);
+                inner.dataflows.insert(name, dataflow.inner);
             }
             for name in deleted_names {
                 for tx in &inner.senders {
@@ -343,6 +420,36 @@ where
         }
         send_futs.drain().map(|_| (zk, inner, prefix)).right()
     })
+}
+
+fn read_dataflows<D: Dataflow>(
+    zk: ZooKeeper,
+    prefix: String,
+    dataflows: Vec<String>,
+) -> impl Future<Item = (ZooKeeper, HashMap<String, StoredDataflow<D>>), Error = failure::Error> {
+    let mut futures = Vec::new();
+    for name in dataflows {
+        futures.push(
+            zk.clone()
+                .get_data(&format!("/{}/dataflows/{}", prefix, name))
+                .map(|(zk, data)| (zk, name, data)),
+        )
+    }
+    stream::futures_unordered(futures)
+        .and_then(|(_zk, name, data)| match data {
+            Some((bytes, stat)) => Ok((name, bytes, stat.version)),
+            None => bail!("dataflow {} does not exist", name),
+        })
+        .fold(HashMap::new(), move |mut out, (name, bytes, version)| {
+            let mut dataflow: StoredDataflow<D> = match BINCODER.deserialize(&bytes) {
+                Ok(d) => d,
+                Err(err) => return Err(failure::Error::from_boxed_compat(err)),
+            };
+            dataflow.version = version;
+            out.insert(name.to_owned(), dataflow);
+            Ok(out)
+        })
+        .map(|dataflow_map| (zk, dataflow_map))
 }
 
 lazy_static! {

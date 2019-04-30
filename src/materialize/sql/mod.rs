@@ -122,13 +122,18 @@ fn handle_create_dataflow(
             .map(|(stmt, dataflows)| (meta_store, stmt, dataflows))
     })
     .and_then(|(meta_store, stmt, dataflows)| {
-        let parser = Parser::new(dataflows.into_iter().map(|(n, d)| (n, d.typ().to_owned())));
+        let parser = Parser::new(
+            dataflows
+                .iter()
+                .map(|(n, d)| (n.to_owned(), d.inner.typ().to_owned())),
+        );
         let dataflow = match parser.parse_statement(&stmt) {
             Ok(dataflow) => dataflow,
             Err(err) => return future::err(err).left(),
         };
+        let name = dataflow.name().to_owned();
         meta_store
-            .create_dataflow(dataflow.name(), &dataflow)
+            .create_dataflow(&name, dataflow, dataflows.into_iter().map(|(_, v)| v))
             .map(|_| stmt)
             .right()
     })
@@ -176,7 +181,7 @@ fn handle_peek(
             }
             cmd_tx.send(Command::Peek(name.to_string(), uuid)).unwrap();
             future::ok(QueryResponse::StreamingRows {
-                typ: dataflow.typ().to_owned(),
+                typ: dataflow.inner.typ().to_owned(),
                 rows: Box::new(rx.map_err(|_| format_err!("unreachable"))),
             })
         })
@@ -232,7 +237,7 @@ fn handle_insert(
 ) -> impl Future<Item = QueryResponse, Error = failure::Error> {
     let name = name.to_string();
     meta_store.read_dataflows(vec![name.clone()]).and_then(move |mut dataflows| {
-        match dataflows.remove(&name).unwrap() {
+        match dataflows.remove(&name).unwrap().inner {
             Dataflow::Source(Source{typ: Type{ftype: FType::Tuple(types), ..}, connector: Connector::Local(connector), ..}) => {
                 if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
                     bail!("Duplicate column in INSERT INTO ... COLUMNS ({})", columns.join(", "));

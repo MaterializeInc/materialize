@@ -8,13 +8,25 @@ use futures::{future, Async, Future, Stream};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use metastore::{DataflowEvent, MetaStore};
+use metastore::{Dataflow, DataflowEvent, MetaStore};
 use ore::closure;
 
 mod util;
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-struct DummyDataflow(String);
+struct DummyDataflow {
+    name: String,
+}
+
+impl DummyDataflow {
+    fn new(name: &str) -> DummyDataflow {
+        DummyDataflow {
+            name: name.to_owned(),
+        }
+    }
+}
+
+impl Dataflow for DummyDataflow {}
 
 #[test]
 fn test_basic() -> Result<(), failure::Error> {
@@ -29,9 +41,9 @@ fn test_basic() -> Result<(), failure::Error> {
             let ms1 = MetaStore::new(&util::ZOOKEEPER_ADDR, prefix);
             let ms2 = MetaStore::new(&util::ZOOKEEPER_ADDR, prefix);
             let watch1a = ms1.register_dataflow_watch();
-            ms1.create_dataflow("basic", &DummyDataflow("basic".into()))
+            ms1.create_dataflow("basic", DummyDataflow::new("basic"), vec![])
                 .and_then(move |_| {
-                    ms2.create_dataflow("basic2", &DummyDataflow("basic2".into()))
+                    ms2.create_dataflow("basic2", DummyDataflow::new("basic2"), vec![])
                         .map(|_| {
                             let watch2 = ms2.register_dataflow_watch();
                             (ms2, watch2)
@@ -41,7 +53,7 @@ fn test_basic() -> Result<(), failure::Error> {
                     let futs: Vec<_> = (0..5)
                         .map(|i| {
                             let name = format!("concurrent{}", i);
-                            ms2.create_dataflow(&name, &DummyDataflow(name.clone()))
+                            ms2.create_dataflow(&name, DummyDataflow::new(&name), vec![])
                         })
                         .collect();
                     future::join_all(futs).map(move |_| (ms2, watch2))
@@ -58,8 +70,8 @@ fn test_basic() -> Result<(), failure::Error> {
     assert_events(
         vec![&mut watch1a, &mut watch1b, &mut watch2],
         &[
-            DataflowEvent::Created(DummyDataflow("basic".into())),
-            DataflowEvent::Created(DummyDataflow("basic2".into())),
+            DataflowEvent::Created(DummyDataflow::new("basic")),
+            DataflowEvent::Created(DummyDataflow::new("basic2")),
         ],
         Order::Exact,
     );
@@ -69,11 +81,11 @@ fn test_basic() -> Result<(), failure::Error> {
     assert_events(
         vec![&mut watch1a, &mut watch1b, &mut watch2],
         &[
-            DataflowEvent::Created(DummyDataflow("concurrent0".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent1".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent2".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent3".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent4".into())),
+            DataflowEvent::Created(DummyDataflow::new("concurrent0")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent1")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent2")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent3")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent4")),
         ],
         Order::MutualAgreement,
     );
@@ -97,17 +109,17 @@ fn test_basic() -> Result<(), failure::Error> {
     let mut watch1c = ms1.register_dataflow_watch();
     assert_events(
         vec![&mut watch1c],
-        &[DataflowEvent::Created(DummyDataflow("basic2".into()))],
+        &[DataflowEvent::Created(DummyDataflow::new("basic2"))],
         Order::Exact,
     );
     assert_events(
         vec![&mut watch1c],
         &[
-            DataflowEvent::Created(DummyDataflow("concurrent0".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent1".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent2".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent3".into())),
-            DataflowEvent::Created(DummyDataflow("concurrent4".into())),
+            DataflowEvent::Created(DummyDataflow::new("concurrent0")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent1")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent2")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent3")),
+            DataflowEvent::Created(DummyDataflow::new("concurrent4")),
         ],
         Order::Exact,
     );
@@ -129,6 +141,45 @@ fn test_basic() -> Result<(), failure::Error> {
     assert_eq!(watch1a.poll(), Ok(Async::Ready(None)));
     assert_eq!(watch1b.poll(), Ok(Async::Ready(None)));
     assert_eq!(watch2.poll(), Ok(Async::Ready(None)));
+    Ok(())
+}
+
+#[test]
+fn test_dependencies() -> Result<(), failure::Error> {
+    ore::log::init();
+
+    let prefix = "metastore-test-dependencies";
+    util::zk_delete_all(prefix)?;
+
+    let mut runtime = tokio::runtime::Runtime::new().unwrap();
+    let (ms, del_res) = runtime
+        .block_on(future::lazy(move || {
+            let ms = MetaStore::new(&util::ZOOKEEPER_ADDR, prefix);
+            ms.create_dataflow("parent", DummyDataflow::new("parent"), vec![])
+                .and_then(move |parent_dataflow| {
+                    ms.create_dataflow("child", DummyDataflow::new("child"), vec![parent_dataflow])
+                        .map(|_| ms)
+                })
+                .and_then(|ms| {
+                    ms.delete_dataflow("parent")
+                        .then(|del_res| -> Result<_, failure::Error> { Ok((ms, del_res)) })
+                })
+        }))
+        .unwrap();
+
+    // TODO(benesch): would be better off using structured errors here.
+    assert_eq!(
+        del_res.unwrap_err().to_string(),
+        "cannot delete parent: still depended upon by dataflow 'child'"
+    );
+
+    runtime
+        .block_on(future::lazy(closure!([clone ms] || {
+            ms.delete_dataflow("child")
+                .and_then(move |_| ms.delete_dataflow("parent"))
+        })))
+        .unwrap();
+
     Ok(())
 }
 

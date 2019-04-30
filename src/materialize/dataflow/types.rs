@@ -40,6 +40,8 @@ impl Dataflow {
     }
 }
 
+impl metastore::Dataflow for Dataflow {}
+
 /// A data source materializes data. It typically represents an external source
 /// of data, like a topic from Apache Kafka.
 #[serde(rename_all = "snake_case")]
