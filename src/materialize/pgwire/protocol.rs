@@ -259,6 +259,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     QueryResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
                     QueryResponse::DroppedView => command_complete!("DROP VIEW"),
                     QueryResponse::DroppedTable => command_complete!("DROP TABLE"),
+                    QueryResponse::Inserted => command_complete!("INSERTED"),
                     QueryResponse::StreamingRows { typ, rows } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)

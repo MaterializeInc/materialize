@@ -27,7 +27,8 @@ use crate::repr::{Datum, FType, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
 use ore::future::FutureExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 
 mod plan;
 
@@ -40,6 +41,7 @@ pub enum QueryResponse {
     DroppedDataSource,
     DroppedView,
     DroppedTable,
+    Inserted,
     StreamingRows {
         typ: Type,
         rows: Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>,
@@ -87,45 +89,14 @@ fn handle_statement(
 
         // these are intended mostly for testing:
         SQLStatement::SQLSelect(query) => {
-            let id: u64 = rand::random();
-            let name = SQLObjectName(vec![format!("<temp_{}>", id)]);
-            Box::new(
-                handle_statement(
-                    SQLStatement::SQLCreateView {
-                        name: name.clone(),
-                        query,
-                        materialized: true,
-                    },
-                    meta_store.clone(),
-                    cmd_tx.clone(),
-                    server_state.clone(),
-                )
-                .and_then(move |_| {
-                    // TODO(jamii) we need a wait-for-timestamp api
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    handle_statement(
-                        SQLStatement::SQLPeek { name: name.clone() },
-                        meta_store.clone(),
-                        cmd_tx.clone(),
-                        server_state.clone(),
-                    )
-                    .and_then(move |query_response| {
-                        handle_statement(
-                            SQLStatement::SQLDropView {
-                                name: name.clone(),
-                                materialized: true,
-                            },
-                            meta_store,
-                            cmd_tx,
-                            server_state,
-                        )
-                        .map(move |_| query_response)
-                    })
-                }),
-            )
+            Box::new(handle_select(query, meta_store, cmd_tx, server_state))
         }
         // SQLStatement::DropTable{name, columns} => {}
-        // SQLStatement::SQLInsert {table_name, columns, values} => {}
+        SQLStatement::SQLInsert {
+            table_name,
+            columns,
+            values,
+        } => Box::new(handle_insert(table_name, columns, values, meta_store)),
         _ => Box::new(future::err(format_err!(
             "unsupported SQL query: {:?}",
             stmt
@@ -209,6 +180,102 @@ fn handle_peek(
                 rows: Box::new(rx.map_err(|_| format_err!("unreachable"))),
             })
         })
+}
+
+fn handle_select(
+    query: SQLQuery,
+    meta_store: metastore::MetaStore<Dataflow>,
+    cmd_tx: CommandSender,
+    server_state: Arc<RwLock<ServerState>>,
+) -> impl Future<Item = QueryResponse, Error = failure::Error> {
+    let id: u64 = rand::random();
+    let name = SQLObjectName(vec![format!("<temp_{}>", id)]);
+    handle_statement(
+        SQLStatement::SQLCreateView {
+            name: name.clone(),
+            query,
+            materialized: true,
+        },
+        meta_store.clone(),
+        cmd_tx.clone(),
+        server_state.clone(),
+    )
+    .and_then(move |_| {
+        // TODO(jamii) we need a wait-for-timestamp api
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        handle_statement(
+            SQLStatement::SQLPeek { name: name.clone() },
+            meta_store.clone(),
+            cmd_tx.clone(),
+            server_state.clone(),
+        )
+        .and_then(move |query_response| {
+            handle_statement(
+                SQLStatement::SQLDropView {
+                    name: name.clone(),
+                    materialized: true,
+                },
+                meta_store,
+                cmd_tx,
+                server_state,
+            )
+            .map(move |_| query_response)
+        })
+    })
+}
+
+fn handle_insert(
+    name: SQLObjectName,
+    columns: Vec<SQLIdent>,
+    values: Vec<Vec<ASTNode>>,
+    meta_store: metastore::MetaStore<Dataflow>,
+) -> impl Future<Item = QueryResponse, Error = failure::Error> {
+    let name = name.to_string();
+    meta_store.read_dataflows(vec![name.clone()]).and_then(move |mut dataflows| {
+        match dataflows.remove(&name).unwrap() {
+            Dataflow::Source(Source{typ: Type{ftype: FType::Tuple(types), ..}, connector: Connector::Local(connector), ..}) => {
+                if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
+                    bail!("Duplicate column in INSERT INTO ... COLUMNS ({})", columns.join(", "));
+                }
+                let expected_columns = types.iter().map(|typ| typ.name.clone().expect("Table columns should all be named")).collect::<Vec<_>>();
+                if HashSet::<&String>::from_iter(&columns).len() != HashSet::<&String>::from_iter(&expected_columns).len() {
+                    bail!("Missing column in INSERT INTO ... COLUMNS ({}), expected {}", columns.join(", "), expected_columns.join(", "));
+                }
+                let permutation = expected_columns.iter().map(|name| columns.iter().position(|name2| name == name2).unwrap()).collect::<Vec<_>>();
+                let datums = values.into_iter().map(|asts| {
+                    let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
+                    let datums = permuted_asts.into_iter().zip(types.iter()).map(|(ast, typ)| {
+                        Ok(match ast {
+                            ASTNode::SQLValue(value) => {
+                                match (value, &typ.ftype) {
+                                    (Value::Null, _) => {
+                                        if typ.nullable {
+                                            Datum::Null
+                                        } else {
+                                            bail!("Tried to insert null into non-nullable column")
+                                        }
+                                    }
+                                    (Value::Long(l), FType::Int64) => Datum::Int64(l),
+                                    (Value::Double(f), FType::Float64) => Datum::Float64(f.into()),
+                                    (Value::SingleQuotedString(s), FType::String) | (Value::NationalStringLiteral(s), FType::String) => Datum::String(s),
+                                    (Value::Boolean(b), FType::Bool) => if b { Datum::True } else { Datum::False },
+                                    (value, ftype) => bail!("Don't know how to insert value {:?} into column of type {:?}", value, ftype),
+                                }
+                            }
+                            other => bail!("Can only insert plain values, not {:?}", other),
+                        })
+                    }).collect::<Result<Vec<_>, _>>()?;
+                    Ok(Datum::Tuple(datums))
+                }).collect::<Result<Vec<_>, failure::Error>>()?;
+                let sender = connector.get_sender();
+                for datum in datums {
+                    sender.send(datum).map_err(|e| format_err!("{}", e))?;
+                }
+                Ok(QueryResponse::Inserted)
+            }
+            other => bail!("Can only insert into tables - {} is a {:?}", name, other)
+        }
+    })
 }
 
 struct ObjectNameVisitor {
