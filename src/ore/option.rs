@@ -32,6 +32,6 @@ pub trait OptionExt<T: Deref> {
 
 impl<T: Deref> OptionExt<T> for Option<T> {
     fn as_deref(&self) -> Option<&T::Target> {
-        self.as_ref().map(|t| t.deref())
+        self.as_ref().map(Deref::deref)
     }
 }

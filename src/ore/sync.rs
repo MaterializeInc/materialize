@@ -30,11 +30,13 @@ use std::sync::Mutex;
 ///
 /// let stderr: Box<io::Write + Send> = Box::new(io::stderr());
 /// let lottery = Lottery::new(stderr, || Box::new(Discarder));
-/// (0..5).into_iter()
-///     .map(|_| thread::spawn(|| {
-///         write!(lottery.draw(), "Can you hear me?");
-///     }))
-///     .for_each(|h| h.join().unwrap());
+/// crossbeam::thread::scope(|thread_scope| {
+///     (0..5).into_iter()
+///         .map(|_| thread_scope.spawn(|_| {
+///             write!(lottery.draw(), "Can you hear me?");
+///         }))
+///         .for_each(|handle| handle.join().unwrap());
+/// }).unwrap()
 /// ```
 pub struct Lottery<T, F>
 where

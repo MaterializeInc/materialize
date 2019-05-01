@@ -152,7 +152,7 @@ pub fn parse_records(input: &str) -> impl Iterator<Item = Result<Record, failure
     }
     DOUBLE_LINE_REGEX
         .split(input)
-        .map(|lines| lines.trim())
+        .map(str::trim)
         .filter(|lines| *lines != "")
         .filter_map(|lines| parse_record(lines).transpose())
         .take_while(|record| match record {

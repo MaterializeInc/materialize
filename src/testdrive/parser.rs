@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::borrow::ToOwned;
 use std::collections::{BTreeMap, HashMap};
 
 use super::error::{InputError, Positioner};
@@ -142,7 +143,7 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, InputE
 }
 
 fn split_line(line: &str) -> Vec<String> {
-    line.split_whitespace().map(|c| c.to_owned()).collect()
+    line.split_whitespace().map(ToOwned::to_owned).collect()
 }
 
 fn slurp_all(line_reader: &mut LineReader) -> Vec<String> {
