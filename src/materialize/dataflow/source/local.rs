@@ -70,9 +70,9 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     if scope.index() != 0 {
-        // Only the first worker reads data, to ensure it has a complete
-        // view of the topic. The other workers get dummy sources that never
-        // produce any data.
+        // Only the first worker reads data, since Rust channels are single
+        // consumer and can't be shared between threads. The other workers get
+        // dummy sources that never produce any data.
         return source(scope, name, move |_cap, _info| move |_output| ());
     }
 
