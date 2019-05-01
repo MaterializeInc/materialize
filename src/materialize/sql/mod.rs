@@ -16,7 +16,9 @@ use sqlparser::sqlast::{
     Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
-use std::sync::{Arc, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
+use std::sync::Arc;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::dataflow::server::{Command, CommandSender};
@@ -27,12 +29,9 @@ use crate::repr::{Datum, FType, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
 use ore::future::FutureExt;
-use std::collections::{HashMap, HashSet};
-use std::iter::FromIterator;
+use plan::SQLPlan;
 
 mod plan;
-
-use plan::SQLPlan;
 
 pub enum QueryResponse {
     CreatedDataSource,
@@ -71,7 +70,7 @@ fn handle_statement(
     stmt: SQLStatement,
     meta_store: MetaStore<Dataflow>,
     cmd_tx: crate::dataflow::server::CommandSender,
-    server_state: Arc<RwLock<ServerState>>,
+    server_state: Arc<ServerState>,
 ) -> Box<dyn Future<Item = QueryResponse, Error = failure::Error> + Send> {
     match stmt {
         SQLStatement::SQLPeek { name } => {
@@ -165,7 +164,7 @@ fn handle_peek(
     name: SQLObjectName,
     meta_store: metastore::MetaStore<Dataflow>,
     cmd_tx: CommandSender,
-    server_state: Arc<RwLock<ServerState>>,
+    server_state: Arc<ServerState>,
 ) -> impl Future<Item = QueryResponse, Error = failure::Error> {
     let name = name.to_string();
     let names = vec![name.clone()];
@@ -176,10 +175,13 @@ fn handle_peek(
             let uuid = uuid::Uuid::new_v4();
             let (tx, rx) = futures::sync::mpsc::unbounded();
             {
-                let mut server_state = server_state.write().unwrap();
-                server_state.peek_results.insert(uuid, (tx, 4 /* XXX */));
+                let mut peek_results = server_state.peek_results.write().unwrap();
+                peek_results.insert(uuid, (tx, 4 /* XXX */));
             }
-            cmd_tx.send(Command::Peek(name.to_string(), uuid)).unwrap();
+            let ts = server_state.clock.now();
+            cmd_tx
+                .send(Command::Peek(name.to_string(), uuid, ts))
+                .unwrap();
             future::ok(QueryResponse::StreamingRows {
                 typ: dataflow.inner.typ().to_owned(),
                 rows: Box::new(rx.map_err(|_| format_err!("unreachable"))),
@@ -191,7 +193,7 @@ fn handle_select(
     query: SQLQuery,
     meta_store: metastore::MetaStore<Dataflow>,
     cmd_tx: CommandSender,
-    server_state: Arc<RwLock<ServerState>>,
+    server_state: Arc<ServerState>,
 ) -> impl Future<Item = QueryResponse, Error = failure::Error> {
     let id: u64 = rand::random();
     let name = SQLObjectName(vec![format!("<temp_{}>", id)]);
@@ -206,8 +208,6 @@ fn handle_select(
         server_state.clone(),
     )
     .and_then(move |_| {
-        // TODO(jamii) we need a wait-for-timestamp api
-        std::thread::sleep(std::time::Duration::from_secs(1));
         handle_statement(
             SQLStatement::SQLPeek { name: name.clone() },
             meta_store.clone(),

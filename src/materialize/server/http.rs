@@ -90,8 +90,8 @@ fn handle_peek_result(
                 .ok_or_else(|| format_err!("missing uuid header"))?;
             let uuid = uuid::Uuid::parse_str(uuid.to_str()?)?;
             let tx = {
-                let mut server_state = server_state.write().unwrap();
-                match server_state.peek_results.entry(uuid) {
+                let mut peek_results = server_state.peek_results.write().unwrap();
+                match peek_results.entry(uuid) {
                     Entry::Occupied(mut entry) => {
                         let (tx, rc) = entry.get_mut();
                         if *rc == 1 {

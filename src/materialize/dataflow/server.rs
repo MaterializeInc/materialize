@@ -12,13 +12,14 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
+use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::clock::Clock;
 use super::render;
-use super::trace::TraceManager;
+use super::trace::{KeysOnlyHandle, TraceManager};
 use super::types::Dataflow;
+use crate::clock::{Clock, Timestamp};
 use ore::sync::Lottery;
 
 pub fn serve(clock: Clock, cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, String> {
@@ -35,7 +36,7 @@ pub fn serve(clock: Clock, cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, 
 pub enum Command {
     CreateDataflow(Dataflow),
     DropDataflow(String),
-    Peek(String, uuid::Uuid),
+    Peek(String, uuid::Uuid, Timestamp),
     Tail(String),
 }
 
@@ -47,6 +48,13 @@ fn dummy_command_receiver() -> CommandReceiver {
     rx
 }
 
+struct PendingPeek {
+    id: uuid::Uuid,
+    timestamp: Timestamp,
+    trace: KeysOnlyHandle,
+    probe: ProbeHandle<Timestamp>,
+}
+
 struct Worker<'w, A>
 where
     A: Allocate,
@@ -56,6 +64,7 @@ where
     cmd_rx: CommandReceiver,
     sequencer: Sequencer<Command>,
     pending_cmds: HashMap<String, Vec<Command>>,
+    pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
 }
@@ -74,6 +83,7 @@ where
             cmd_rx,
             sequencer,
             pending_cmds: HashMap::new(),
+            pending_peeks: Vec::new(),
             traces,
             rpc_client: reqwest::Client::new(),
         }
@@ -93,6 +103,37 @@ where
 
             // Ask Timely to execute a unit of work.
             self.inner.step();
+
+            // See if time has advanced enough to handle any of our pending
+            // peeks.
+            let rpc_client = &self.rpc_client;
+            self.pending_peeks.retain(|peek| {
+                if peek.probe.less_than(&peek.timestamp) {
+                    return true; // retain
+                }
+                let (mut cur, storage) = peek.trace.clone().cursor();
+                let mut out = Vec::new();
+                while cur.key_valid(&storage) {
+                    let key = cur.key(&storage).clone();
+                    let mut copies = 0;
+                    cur.map_times(&storage, |_, diff| {
+                        copies += diff;
+                    });
+                    assert!(copies >= 0);
+                    for _ in 0..copies {
+                        out.push(key.clone());
+                    }
+                    cur.step_key(&storage)
+                }
+                let encoded = bincode::serialize(&out).unwrap();
+                rpc_client
+                    .post("http://localhost:6875/api/peek-results")
+                    .header("X-Materialize-Query-UUID", peek.id.to_string())
+                    .body(encoded)
+                    .send()
+                    .unwrap();
+                false // don't retain
+            });
         }
     }
 
@@ -107,31 +148,14 @@ where
                 }
             }
             Command::DropDataflow(name) => self.traces.del_trace(name),
-            Command::Peek(name, uuid) => {
-                match self.traces.get_trace(name.clone()) {
-                    Some(mut trace) => {
-                        let (mut cur, storage) = trace.cursor();
-                        let mut out = Vec::new();
-                        while cur.key_valid(&storage) {
-                            let key = cur.key(&storage).clone();
-                            let mut copies = 0;
-                            cur.map_times(&storage, |_, diff| {
-                                copies += diff;
-                            });
-                            assert!(copies >= 0);
-                            for _ in 0..copies {
-                                out.push(key.clone());
-                            }
-                            cur.step_key(&storage)
-                        }
-                        let encoded = bincode::serialize(&out).unwrap();
-                        self.rpc_client
-                            .post("http://localhost:6875/api/peek-results")
-                            .header("X-Materialize-Query-UUID", uuid.to_string())
-                            .body(encoded)
-                            .send()
-                            .unwrap();
-                    }
+            Command::Peek(name, id, timestamp) => {
+                match self.traces.get_trace_and_probe(name.clone()) {
+                    Some((trace, probe)) => self.pending_peeks.push(PendingPeek {
+                        id: *id,
+                        timestamp: *timestamp,
+                        trace,
+                        probe,
+                    }),
                     None => {
                         // We might see a Peek command before the corresponding
                         // CreateDataflow command. That's entirely expected.

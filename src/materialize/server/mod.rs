@@ -36,15 +36,17 @@ pub struct Config {
     pub zookeeper_url: Option<String>,
 }
 
+#[derive(Default)]
 pub struct ServerState {
-    pub peek_results: HashMap<uuid::Uuid, (UnboundedSender<Datum>, usize)>,
+    pub clock: Clock,
+    pub peek_results: RwLock<HashMap<uuid::Uuid, (UnboundedSender<Datum>, usize)>>,
 }
 
 #[derive(Clone)]
 pub struct ConnState {
     pub meta_store: MetaStore<Dataflow>,
     pub cmd_tx: dataflow::server::CommandSender,
-    pub server_state: Arc<RwLock<ServerState>>,
+    pub server_state: Arc<ServerState>,
 }
 
 fn handle_connection(
@@ -88,15 +90,12 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     let listener = TcpListener::bind(&listen_addr)?;
 
     let start = future::lazy(move || {
+        let server_state: Arc<ServerState> = Default::default();
+
         let meta_store = MetaStore::new(&zookeeper_addr, "materialized");
 
-        let clock = Clock::new();
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-        let _dd_workers = dataflow::server::serve(clock.clone(), cmd_rx);
-
-        let server_state = Arc::new(RwLock::new(ServerState {
-            peek_results: HashMap::new(),
-        }));
+        let _dd_workers = dataflow::server::serve(server_state.clock.clone(), cmd_rx);
 
         // TODO(benesch): only pipe the metastore watch to the dataflow
         // on one machine, to avoid duplicating dataflows.

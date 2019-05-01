@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::repr::{Datum, Type};
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
+use crate::repr::{Datum, Type};
 
 /// System-wide update type.
 pub type Diff = isize;

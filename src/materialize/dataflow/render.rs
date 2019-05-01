@@ -16,11 +16,11 @@ use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
-use crate::clock::{Clock, Timestamp};
-use crate::repr::Datum;
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
+use crate::clock::{Clock, Timestamp};
+use crate::repr::Datum;
 
 pub fn add_builtin_dataflows<A: Allocate>(
     manager: &mut TraceManager,
@@ -30,7 +30,7 @@ pub fn add_builtin_dataflows<A: Allocate>(
         let (_, collection) = scope.new_collection_from(vec![Datum::String("X".into())]);
         let arrangement = collection.arrange_by_self();
         let on_delete = Box::new(|| ());
-        manager.set_trace("dual".into(), &arrangement.trace, on_delete);
+        manager.set_trace("dual".into(), &arrangement, on_delete);
     })
 }
 
@@ -51,12 +51,12 @@ pub fn build_dataflow<A: Allocate>(
             };
             let arrangement = plan.as_collection().arrange_by_self();
             let on_delete = Box::new(move || done.set(true));
-            manager.set_trace(src.name.clone(), &arrangement.trace, on_delete);
+            manager.set_trace(src.name.clone(), &arrangement, on_delete);
         }
         Dataflow::View(view) => {
             let arrangement = build_plan(&view.plan, manager, scope).arrange_by_self();
             let on_delete = Box::new(|| ());
-            manager.set_trace(view.name.clone(), &arrangement.trace, on_delete);
+            manager.set_trace(view.name.clone(), &arrangement, on_delete);
         }
     })
 }
