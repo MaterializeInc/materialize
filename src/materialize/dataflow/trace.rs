@@ -8,12 +8,13 @@ use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 use differential_dataflow::trace::TraceReader;
 use std::collections::HashMap;
 
-use super::types::{Diff, Time};
+use crate::clock::Timestamp;
 use crate::repr::Datum;
+use super::types::Diff;
 
 pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>;
 
-pub type KeysOnlyHandle = TraceKeyHandle<Datum, Time, Diff>;
+pub type KeysOnlyHandle = TraceKeyHandle<Datum, Timestamp, Diff>;
 
 pub type DeleteCallback = Box<Fn()>;
 

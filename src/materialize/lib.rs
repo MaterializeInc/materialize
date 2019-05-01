@@ -10,6 +10,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+pub mod clock;
 pub mod dataflow;
 pub mod interchange;
 pub mod pgwire;

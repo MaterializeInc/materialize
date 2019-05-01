@@ -9,11 +9,12 @@ use rdkafka::consumer::{BaseConsumer, Consumer, DefaultConsumerContext};
 use rdkafka::Message;
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::{Scope, Stream};
 
-use crate::dataflow::types::{Diff, KafkaConnector, Time};
+use crate::clock::{Clock, Timestamp};
+use crate::dataflow::types::{Diff, KafkaConnector};
 use crate::interchange::avro;
 use crate::repr::Datum;
 
@@ -23,9 +24,10 @@ pub fn kafka<G>(
     raw_schema: &str,
     connector: &KafkaConnector,
     done: Rc<Cell<bool>>,
-) -> Stream<G, (Datum, Time, Diff)>
+    clock: &Clock,
+) -> Stream<G, (Datum, Timestamp, Diff)>
 where
-    G: Scope<Timestamp = u64>,
+    G: Scope<Timestamp = Timestamp>,
 {
     if scope.index() != 0 {
         // Only the first worker reads from Kafka, to ensure it has a complete
@@ -37,8 +39,8 @@ where
     source(scope, name, move |cap, info| {
         let name = name.to_owned();
         let activator = scope.activator_for(&info.address[..]);
-        let clock = Instant::now();
         let mut maybe_cap = Some(cap);
+        let clock = clock.clone();
 
         let decoder = avro::Decoder::new(raw_schema);
 
@@ -66,7 +68,7 @@ where
             // Indicate that we should run again.
             activator.activate();
 
-            let ts = clock.elapsed().as_millis() as u64;
+            let ts = clock.now();
 
             // Repeatedly interrogate Kafka for messages. Cease only when
             // Kafka stops returning new data. We could cease earlier, if we

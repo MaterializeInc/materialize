@@ -16,10 +16,11 @@ use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
+use crate::clock::{Clock, Timestamp};
+use crate::repr::Datum;
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
-use crate::repr::Datum;
 
 pub fn add_builtin_dataflows<A: Allocate>(
     manager: &mut TraceManager,
@@ -37,15 +38,16 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
+    clock: &Clock,
 ) {
-    worker.dataflow::<Time, _, _>(|scope| match dataflow {
+    worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
             let done = Rc::new(Cell::new(false));
             let plan = match &src.connector {
                 Connector::Kafka(c) => {
-                    source::kafka(scope, &src.name, &src.raw_schema, &c, done.clone())
+                    source::kafka(scope, &src.name, &src.raw_schema, &c, done.clone(), clock)
                 }
-                Connector::Local(l) => source::local(scope, &src.name, &l, done.clone()),
+                Connector::Local(l) => source::local(scope, &src.name, &l, done.clone(), clock),
             };
             let arrangement = plan.as_collection().arrange_by_self();
             let on_delete = Box::new(move || done.set(true));
@@ -59,7 +61,7 @@ pub fn build_dataflow<A: Allocate>(
     })
 }
 
-fn build_plan<S: Scope<Timestamp = Time>>(
+fn build_plan<S: Scope<Timestamp = Timestamp>>(
     plan: &Plan,
     manager: &mut TraceManager,
     scope: &mut S,

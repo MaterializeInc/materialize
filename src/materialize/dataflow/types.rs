@@ -6,11 +6,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::repr::{Datum, Type};
-
-/// System-wide notion of time.
-pub type Time = u64;
+use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 
 /// System-wide update type.
 pub type Diff = isize;

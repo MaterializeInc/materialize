@@ -18,6 +18,7 @@ use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
+use crate::clock::Clock;
 use crate::dataflow;
 use crate::dataflow::server::Command;
 use crate::dataflow::Dataflow;
@@ -89,8 +90,9 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     let start = future::lazy(move || {
         let meta_store = MetaStore::new(&zookeeper_addr, "materialized");
 
+        let clock = Clock::new();
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-        let _dd_workers = dataflow::server::serve(cmd_rx);
+        let _dd_workers = dataflow::server::serve(clock.clone(), cmd_rx);
 
         let server_state = Arc::new(RwLock::new(ServerState {
             peek_results: HashMap::new(),

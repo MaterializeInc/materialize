@@ -15,16 +15,17 @@ use timely::communication::Allocate;
 use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
+use crate::clock::Clock;
 use super::render;
 use super::trace::TraceManager;
 use super::types::Dataflow;
 use ore::sync::Lottery;
 
-pub fn serve(cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, String> {
+pub fn serve(clock: Clock, cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, String> {
     let lottery = Lottery::new(cmd_rx, dummy_command_receiver);
     timely::execute(timely::Configuration::Process(4), move |worker| {
         let cmd_rx = lottery.draw();
-        Worker::new(worker, cmd_rx).run()
+        Worker::new(worker, clock.clone(), cmd_rx).run()
     })
 }
 
@@ -51,6 +52,7 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
+    clock: Clock,
     cmd_rx: CommandReceiver,
     sequencer: Sequencer<Command>,
     pending_cmds: HashMap<String, Vec<Command>>,
@@ -62,12 +64,13 @@ impl<'w, A> Worker<'w, A>
 where
     A: Allocate,
 {
-    fn new(w: &'w mut TimelyWorker<A>, cmd_rx: CommandReceiver) -> Worker<'w, A> {
+    fn new(w: &'w mut TimelyWorker<A>, clock: Clock, cmd_rx: CommandReceiver) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, std::time::Instant::now());
         let mut traces = TraceManager::new();
         render::add_builtin_dataflows(&mut traces, w);
         Worker {
             inner: w,
+            clock,
             cmd_rx,
             sequencer,
             pending_cmds: HashMap::new(),
@@ -96,7 +99,7 @@ where
     fn handle_command(&mut self, cmd: Command) {
         match &cmd {
             Command::CreateDataflow(dataflow) => {
-                render::build_dataflow(dataflow, &mut self.traces, self.inner);
+                render::build_dataflow(dataflow, &mut self.traces, self.inner, &self.clock);
                 if let Some(cmds) = self.pending_cmds.remove(dataflow.name()) {
                     for cmd in cmds {
                         self.handle_command(cmd);
