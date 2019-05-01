@@ -177,18 +177,9 @@ pub enum Outcome {
     Success = 4,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct State {
     table_types: HashMap<String, Type>,
-}
-
-#[allow(clippy::new_without_default)]
-impl State {
-    pub fn new() -> Self {
-        State {
-            table_types: HashMap::new(),
-        }
-    }
 }
 
 pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure::Error> {
@@ -321,7 +312,7 @@ mod test {
         let mut total = vec![0; 1 + Outcome::Success as usize];
         let mut input = String::new();
         for filename in all_files() {
-            let mut state = State::new();
+            let mut state = State::default();
             input.clear();
             File::open(&filename)
                 .unwrap()
@@ -344,7 +335,7 @@ mod test {
         for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
             if entry.path().is_file() {
-                let mut state = State::new();
+                let mut state = State::default();
                 input.clear();
                 File::open(&entry.path())
                     .unwrap()
