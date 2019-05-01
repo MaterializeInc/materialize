@@ -44,9 +44,7 @@ pub fn build_dataflow<A: Allocate>(
         Dataflow::Source(src) => {
             let done = Rc::new(Cell::new(false));
             let plan = match &src.connector {
-                Connector::Kafka(c) => {
-                    source::kafka(scope, &src.name, &src.raw_schema, &c, done.clone(), clock)
-                }
+                Connector::Kafka(c) => source::kafka(scope, &src.name, &c, done.clone(), clock),
                 Connector::Local(l) => source::local(scope, &src.name, &l, done.clone(), clock),
             };
             let arrangement = plan.as_collection().arrange_by_self();

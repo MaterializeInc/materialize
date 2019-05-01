@@ -47,7 +47,6 @@ pub struct Source {
     pub name: String,
     pub connector: Connector,
     pub typ: Type,
-    pub raw_schema: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -60,6 +59,7 @@ pub enum Connector {
 pub struct KafkaConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
+    pub raw_schema: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

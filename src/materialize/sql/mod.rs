@@ -455,9 +455,9 @@ impl Parser {
                     connector: Connector::Kafka(KafkaConnector {
                         addr: url.to_socket_addrs()?.next().unwrap(),
                         topic,
+                        raw_schema: schema.clone(),
                     }),
                     typ: crate::interchange::avro::parse_schema(schema)?,
-                    raw_schema: schema.clone(),
                 }))
             }
             SQLStatement::SQLCreateTable { name, columns } => {
@@ -489,8 +489,6 @@ impl Parser {
                     name: extract_sql_object_name(name)?,
                     connector: Connector::Local(LocalConnector::new()),
                     typ,
-                    // TODO(jamii) raw_schema should live in KafkaConnector
-                    raw_schema: "".to_owned(),
                 }))
             }
             other => bail!("Unsupported statement: {:?}", other),
@@ -1271,6 +1269,7 @@ mod tests {
                 connector: Connector::Kafka(KafkaConnector {
                     addr: "127.0.0.1:9092".parse()?,
                     topic: "topic".into(),
+                    raw_schema: raw_schema.to_owned(),
                 }),
                 typ: Type {
                     name: None,
@@ -1288,7 +1287,6 @@ mod tests {
                         },
                     ]),
                 },
-                raw_schema: raw_schema.to_owned(),
             })
         );
 

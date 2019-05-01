@@ -21,7 +21,6 @@ use crate::repr::Datum;
 pub fn kafka<G>(
     scope: &G,
     name: &str,
-    raw_schema: &str,
     connector: &KafkaConnector,
     done: Rc<Cell<bool>>,
     clock: &Clock,
@@ -42,7 +41,7 @@ where
         let mut maybe_cap = Some(cap);
         let clock = clock.clone();
 
-        let decoder = avro::Decoder::new(raw_schema);
+        let decoder = avro::Decoder::new(&connector.raw_schema);
 
         let mut config = ClientConfig::new();
         config
