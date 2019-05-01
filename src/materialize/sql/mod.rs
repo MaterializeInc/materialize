@@ -236,51 +236,107 @@ fn handle_insert(
     meta_store: metastore::MetaStore<Dataflow>,
 ) -> impl Future<Item = QueryResponse, Error = failure::Error> {
     let name = name.to_string();
-    meta_store.read_dataflows(vec![name.clone()]).and_then(move |mut dataflows| {
-        match dataflows.remove(&name).unwrap().inner {
-            Dataflow::Source(Source{typ: Type{ftype: FType::Tuple(types), ..}, connector: Connector::Local(connector), ..}) => {
-                if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
-                    bail!("Duplicate column in INSERT INTO ... COLUMNS ({})", columns.join(", "));
-                }
-                let expected_columns = types.iter().map(|typ| typ.name.clone().expect("Table columns should all be named")).collect::<Vec<_>>();
-                if HashSet::<&String>::from_iter(&columns).len() != HashSet::<&String>::from_iter(&expected_columns).len() {
-                    bail!("Missing column in INSERT INTO ... COLUMNS ({}), expected {}", columns.join(", "), expected_columns.join(", "));
-                }
-                let permutation = expected_columns.iter().map(|name| columns.iter().position(|name2| name == name2).unwrap()).collect::<Vec<_>>();
-                let datums = values.into_iter().map(|asts| {
-                    let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
-                    let datums = permuted_asts.zip(types.iter()).map(|(ast, typ)| {
-                        Ok(match ast {
-                            ASTNode::SQLValue(value) => {
-                                match (value, &typ.ftype) {
-                                    (Value::Null, _) => {
-                                        if typ.nullable {
-                                            Datum::Null
-                                        } else {
-                                            bail!("Tried to insert null into non-nullable column")
-                                        }
-                                    }
-                                    (Value::Long(l), FType::Int64) => Datum::Int64(l),
-                                    (Value::Double(f), FType::Float64) => Datum::Float64(f.into()),
-                                    (Value::SingleQuotedString(s), FType::String) | (Value::NationalStringLiteral(s), FType::String) => Datum::String(s),
-                                    (Value::Boolean(b), FType::Bool) => if b { Datum::True } else { Datum::False },
-                                    (value, ftype) => bail!("Don't know how to insert value {:?} into column of type {:?}", value, ftype),
+    meta_store
+        .read_dataflows(vec![name.clone()])
+        .and_then(move |dataflows| match dataflows[&name].inner {
+            Dataflow::Source(ref src) => handle_insert_source(src, columns, values),
+            Dataflow::View(_) => bail!("Can only insert into tables - {} is a view", name),
+        })
+}
+
+fn handle_insert_source(
+    source: &Source,
+    columns: Vec<SQLIdent>,
+    values: Vec<Vec<ASTNode>>,
+) -> Result<QueryResponse, failure::Error> {
+    let types = match &source.typ {
+        Type {
+            ftype: FType::Tuple(types),
+            ..
+        } => types,
+        _ => bail!(
+            "Can only insert into tables of tuple type - {} has type {:?}",
+            source.name,
+            source.typ
+        ),
+    };
+
+    let sender = match &source.connector {
+        Connector::Local(connector) => connector.get_sender(),
+        connector => bail!(
+            "Can only insert into tables - {} is a data source: {:?}",
+            source.name,
+            connector
+        ),
+    };
+
+    if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
+        bail!(
+            "Duplicate column in INSERT INTO ... COLUMNS ({})",
+            columns.join(", ")
+        );
+    }
+    let expected_columns = types
+        .iter()
+        .map(|typ| typ.name.clone().expect("Table columns should all be named"))
+        .collect::<Vec<_>>();
+    if HashSet::<&String>::from_iter(&columns).len()
+        != HashSet::<&String>::from_iter(&expected_columns).len()
+    {
+        bail!(
+            "Missing column in INSERT INTO ... COLUMNS ({}), expected {}",
+            columns.join(", "),
+            expected_columns.join(", ")
+        );
+    }
+    let permutation = expected_columns
+        .iter()
+        .map(|name| columns.iter().position(|name2| name == name2).unwrap())
+        .collect::<Vec<_>>();
+    let datums = values
+        .into_iter()
+        .map(|asts| {
+            let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
+            let datums = permuted_asts
+                .zip(types.iter())
+                .map(|(ast, typ)| {
+                    Ok(match ast {
+                        ASTNode::SQLValue(value) => match (value, &typ.ftype) {
+                            (Value::Null, _) => {
+                                if typ.nullable {
+                                    Datum::Null
+                                } else {
+                                    bail!("Tried to insert null into non-nullable column")
                                 }
                             }
-                            other => bail!("Can only insert plain values, not {:?}", other),
-                        })
-                    }).collect::<Result<Vec<_>, _>>()?;
-                    Ok(Datum::Tuple(datums))
-                }).collect::<Result<Vec<_>, failure::Error>>()?;
-                let sender = connector.get_sender();
-                for datum in datums {
-                    sender.send(datum).map_err(|e| format_err!("{}", e))?;
-                }
-                Ok(QueryResponse::Inserted)
-            }
-            other => bail!("Can only insert into tables - {} is a {:?}", name, other)
-        }
-    })
+                            (Value::Long(l), FType::Int64) => Datum::Int64(l),
+                            (Value::Double(f), FType::Float64) => Datum::Float64(f.into()),
+                            (Value::SingleQuotedString(s), FType::String)
+                            | (Value::NationalStringLiteral(s), FType::String) => Datum::String(s),
+                            (Value::Boolean(b), FType::Bool) => {
+                                if b {
+                                    Datum::True
+                                } else {
+                                    Datum::False
+                                }
+                            }
+                            (value, ftype) => bail!(
+                                "Don't know how to insert value {:?} into column of type {:?}",
+                                value,
+                                ftype
+                            ),
+                        },
+                        other => bail!("Can only insert plain values, not {:?}", other),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Datum::Tuple(datums))
+        })
+        .collect::<Result<Vec<_>, failure::Error>>()?;
+    for datum in datums {
+        sender.send(datum).map_err(|e| format_err!("{}", e))?;
+    }
+    Ok(QueryResponse::Inserted)
 }
 
 struct ObjectNameVisitor {
