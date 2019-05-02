@@ -240,12 +240,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let state = state.take();
 
                 macro_rules! command_complete {
-                    ($tag:literal) => {
+                    ($($arg:tt)*) => {
                         return Ok(Async::Ready(
                             SendCommandComplete {
                                 send: state
                                     .conn
-                                    .send(BackendMessage::CommandComplete { tag: $tag }),
+                                    .send(BackendMessage::CommandComplete {
+                                        tag: std::fmt::format(format_args!($($arg)*))
+                                    }),
                             }
                             .into(),
                         ));
@@ -259,7 +261,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     QueryResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
                     QueryResponse::DroppedView => command_complete!("DROP VIEW"),
                     QueryResponse::DroppedTable => command_complete!("DROP TABLE"),
-                    QueryResponse::Inserted => command_complete!("INSERTED"),
+                    // "On successful completion, an INSERT command returns a
+                    // command tag of the form `INSERT <oid> <count>`."
+                    //     -- https://www.postgresql.org/docs/11/sql-insert.html
+                    //
+                    // OIDs are a PostgreSQL-specific historical quirk, but we
+                    // can return a 0 OID to indicate that the table does not
+                    // have OIDs.
+                    QueryResponse::Inserted(n) => command_complete!("INSERT 0 {}", n),
                     QueryResponse::StreamingRows { typ, rows } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
@@ -306,7 +315,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendRows<A>, failure::Error> {
         let (_, conn) = try_ready!(state.send.poll());
         transition!(SendCommandComplete {
-            send: conn.send(BackendMessage::CommandComplete { tag: "SELECT" }),
+            send: conn.send(BackendMessage::CommandComplete {
+                tag: "SELECT".to_owned()
+            }),
         })
     }
 

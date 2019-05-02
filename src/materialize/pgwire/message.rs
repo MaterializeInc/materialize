@@ -46,7 +46,7 @@ pub enum FrontendMessage {
 pub enum BackendMessage {
     AuthenticationOk,
     CommandComplete {
-        tag: &'static str,
+        tag: String,
     },
     EmptyQueryResponse,
     ReadyForQuery,

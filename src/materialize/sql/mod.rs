@@ -40,7 +40,7 @@ pub enum QueryResponse {
     DroppedDataSource,
     DroppedView,
     DroppedTable,
-    Inserted,
+    Inserted(usize),
     StreamingRows {
         typ: Type,
         rows: Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>,
@@ -293,6 +293,7 @@ fn handle_insert_source(
         .iter()
         .map(|name| columns.iter().position(|name2| name == name2).unwrap())
         .collect::<Vec<_>>();
+    let n = values.len();
     let datums = values
         .into_iter()
         .map(|asts| {
@@ -336,7 +337,7 @@ fn handle_insert_source(
     for datum in datums {
         sender.send(datum).map_err(|e| format_err!("{}", e))?;
     }
-    Ok(QueryResponse::Inserted)
+    Ok(QueryResponse::Inserted(n))
 }
 
 struct ObjectNameVisitor {
