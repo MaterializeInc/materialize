@@ -11,9 +11,9 @@ use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
-    ASTNode, JoinConstraint, JoinOperator, SQLIdent, SQLObjectName, SQLOperator, SQLQuery,
-    SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement, SQLType, TableFactor,
-    Value,
+    ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLIdent, SQLObjectName, SQLOperator,
+    SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement, SQLType,
+    SQLWindowSpec, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::{HashMap, HashSet};
@@ -87,8 +87,8 @@ fn handle_statement(
         }
 
         // these are intended mostly for testing:
-        SQLStatement::SQLSelect(query) => {
-            Box::new(handle_select(query, meta_store, cmd_tx, server_state))
+        SQLStatement::SQLQuery(query) => {
+            Box::new(handle_select(*query, meta_store, cmd_tx, server_state))
         }
         // SQLStatement::DropTable{name, columns} => {}
         SQLStatement::SQLInsert {
@@ -200,7 +200,7 @@ fn handle_select(
     handle_statement(
         SQLStatement::SQLCreateView {
             name: name.clone(),
-            query,
+            query: Box::new(query),
             materialized: true,
         },
         meta_store.clone(),
@@ -386,7 +386,7 @@ impl<'ast> Visit<'ast> for ObjectNameVisitor {
 
 struct AggregateFragment {
     name: String,
-    id: *const SQLIdent,
+    id: *const SQLObjectName,
     expr: ASTNode,
 }
 
@@ -414,27 +414,37 @@ impl AggregateFuncVisitor {
 }
 
 impl<'ast> Visit<'ast> for AggregateFuncVisitor {
-    fn visit_function(&mut self, ident: &'ast SQLIdent, args: &'ast Vec<ASTNode>) {
-        match ident.to_lowercase().as_ref() {
+    fn visit_function(
+        &mut self,
+        name: &'ast SQLObjectName,
+        args: &'ast Vec<ASTNode>,
+        over: Option<&'ast SQLWindowSpec>,
+    ) {
+        if over.is_some() {
+            self.err = Some(format_err!("window functions are not yet supported"));
+            return;
+        }
+        let name_str = name.to_string().to_lowercase();
+        match name_str.as_ref() {
             "avg" | "sum" | "min" | "max" | "count" => {
                 if self.within {
                     self.err = Some(format_err!("nested aggregate functions are not allowed"));
                     return;
                 }
                 if args.len() != 1 {
-                    self.err = Some(format_err!("{} function only takes one argument", ident));
+                    self.err = Some(format_err!("{} function only takes one argument", name_str));
                     return;
                 }
                 self.aggs.push(AggregateFragment {
-                    name: ident.to_owned(),
-                    id: ident as *const _,
+                    name: name_str.clone(),
+                    id: name as *const _,
                     expr: args[0].clone(),
                 });
             }
             _ => (),
         }
         self.within = true;
-        visit::visit_function(self, ident, args);
+        visit::visit_function(self, name, args, over);
         self.within = false;
     }
 }
@@ -507,6 +517,13 @@ impl Parser {
                 };
                 let url = url.with_default_port(|_| Ok(9092))?; // we already checked for kafka scheme above, so safe to assume scheme
 
+                let schema = match schema {
+                    DataSourceSchema::Raw(schema) => schema,
+                    DataSourceSchema::Registry(_url) => {
+                        bail!("schema registries are not yet supported")
+                    }
+                };
+
                 Ok(Dataflow::Source(Source {
                     name: extract_sql_object_name(name)?,
                     connector: Connector::Kafka(KafkaConnector {
@@ -517,7 +534,16 @@ impl Parser {
                     typ: crate::interchange::avro::parse_schema(schema)?,
                 }))
             }
-            SQLStatement::SQLCreateTable { name, columns } => {
+            SQLStatement::SQLCreateTable {
+                name,
+                columns,
+                external,
+                file_format,
+                location,
+            } => {
+                if *external || file_format.is_some() || location.is_some() {
+                    bail!("EXTERNAL tables are not supported");
+                }
                 let types = columns
                     .iter()
                     .map(|column| {
@@ -645,7 +671,18 @@ impl Parser {
     fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
         let mut plan = match &s.relation {
-            Some(TableFactor::Table { name, alias }) => {
+            Some(TableFactor::Table {
+                name,
+                alias,
+                args,
+                with_hints,
+            }) => {
+                if args.is_some() {
+                    bail!("table arguments are not supported");
+                }
+                if !with_hints.is_empty() {
+                    bail!("WITH hints are not supported");
+                }
                 let name = extract_sql_object_name(name)?;
                 let types = match self.dataflows.get(&name) {
                     Some(Type {
@@ -677,7 +714,18 @@ impl Parser {
         let mut selection = s.selection.clone();
         for join in &s.joins {
             match &join.relation {
-                TableFactor::Table { name, alias } => {
+                TableFactor::Table {
+                    name,
+                    alias,
+                    args,
+                    with_hints,
+                } => {
+                    if args.is_some() {
+                        bail!("table arguments are not supported");
+                    }
+                    if !with_hints.is_empty() {
+                        bail!("WITH hints are not supported");
+                    }
                     let name = extract_sql_object_name(&name)?;
                     let types = match self.dataflows.get(&name) {
                         Some(Type {
@@ -768,8 +816,8 @@ impl Parser {
     ) -> Result<Vec<(Expr, Type)>, failure::Error> {
         match s {
             SQLSelectItem::UnnamedExpression(e) => Ok(vec![self.parse_expr(e, plan)?]),
-            SQLSelectItem::ExpressionWithAlias(e, alias) => {
-                let (expr, mut typ) = self.parse_expr(e, plan)?;
+            SQLSelectItem::ExpressionWithAlias { expr, alias } => {
+                let (expr, mut typ) = self.parse_expr(expr, plan)?;
                 typ.name = Some(alias.clone());
                 Ok(vec![(expr, typ)])
             }
@@ -1031,7 +1079,9 @@ impl Parser {
                 self.parse_binary_expr(op, left, right, plan)
             }
             ASTNode::SQLNested(expr) => self.parse_expr(expr, plan),
-            ASTNode::SQLFunction { id, args } => self.parse_function(id, args, plan),
+            ASTNode::SQLFunction { name, args, over } => {
+                self.parse_function(name, args, over, plan)
+            }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
@@ -1042,12 +1092,14 @@ impl Parser {
     #[allow(clippy::ptr_arg)]
     fn parse_function<'a>(
         &self,
-        ident: &'a SQLIdent,
+        name: &'a SQLObjectName,
         _args: &'a [ASTNode],
+        _over: &'a Option<SQLWindowSpec>,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        if AggregateFunc::is_aggregate_func(ident) {
-            let (i, typ) = plan.resolve_func(ident);
+        let ident = name.to_string().to_lowercase();
+        if AggregateFunc::is_aggregate_func(&ident) {
+            let (i, typ) = plan.resolve_func(name);
             let expr = Expr::Column(i, Box::new(Expr::Ambient));
             Ok((expr, typ.clone()))
         } else {
@@ -1212,7 +1264,6 @@ impl Parser {
             Value::Date(_) | Value::DateTime(_) | Value::Timestamp(_) | Value::Time(_) => {
                 bail!("date/time types are not yet supported: {}", l.to_string())
             }
-            Value::Uuid(_) => bail!("uuid types are not yet supported: {}", l.to_string()),
         };
         let nullable = datum == Datum::Null;
         let expr = Expr::Literal(datum);

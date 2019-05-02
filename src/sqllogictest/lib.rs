@@ -212,7 +212,16 @@ pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure
             }
 
             match statement {
-                SQLStatement::SQLCreateTable { name, columns } => {
+                SQLStatement::SQLCreateTable {
+                    name,
+                    columns,
+                    external,
+                    file_format,
+                    location,
+                } => {
+                    if *external || file_format.is_some() || location.is_some() {
+                        bail!("EXTERNAL tables shouldn't appear in sqllogictest");
+                    }
                     let types = columns
                         .iter()
                         .map(|column| {
@@ -265,7 +274,7 @@ pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure
             let query = match parse {
                 Ok(ref statements) if statements.len() == 1 => {
                     match statements.iter().next().unwrap() {
-                        SQLStatement::SQLSelect(query) => query,
+                        SQLStatement::SQLQuery(query) => query,
                         _ => return Ok(Outcome::ParseFailure),
                     }
                 }

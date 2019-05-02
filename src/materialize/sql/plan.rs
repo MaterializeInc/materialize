@@ -3,14 +3,16 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use failure::bail;
+use sqlparser::sqlast::SQLObjectName;
+
 use crate::dataflow::{Aggregate, Expr, Plan};
 use crate::repr::{FType, Type};
-
-use failure::bail;
 use ore::option::OptionExt;
 
-/// This a massive hack - we don't have unique ids for ast nodes so we use the address of the string name in func node
-pub type FuncName = *const String;
+/// This a massive hack - we don't have unique ids for ast nodes so we use the
+/// address of the string name in func node.
+pub type FuncName = *const SQLObjectName;
 
 #[derive(Debug, Clone)]
 pub struct Name {
