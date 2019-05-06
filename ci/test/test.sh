@@ -49,6 +49,12 @@ try bin/lint
 try cargo fmt -- --check
 try cargo test
 if [[ ! "$fast" ]]; then
+    # NOTE(benesch): the expected outcomes will need to be periodically adjusted
+    # as we make improvements to our SQL layer.
+    #
+    # TODO(benesch): The format of --expect-outcomes is extremely unreadable,
+    # but I was too lazy to do something more descriptive. Feel free to change
+    # it.
     try cargo run --release --bin=sqllogictest -- sqllogictest/test \
         --verbose \
         --expect-outcomes 182803,457182,3116321,0,2184024
