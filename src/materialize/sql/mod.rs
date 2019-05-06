@@ -29,6 +29,7 @@ use crate::repr::{Datum, FType, Type};
 use crate::server::{ConnState, ServerState};
 use metastore::MetaStore;
 use ore::future::FutureExt;
+use ore::vec::VecExt;
 use plan::SQLPlan;
 
 mod plan;
@@ -82,9 +83,9 @@ fn handle_statement(
         SQLStatement::SQLCreateDataSource { .. }
         | SQLStatement::SQLCreateView { .. }
         | SQLStatement::SQLCreateTable { .. } => Box::new(handle_create_dataflow(stmt, meta_store)),
-        SQLStatement::SQLDropDataSource { .. } | SQLStatement::SQLDropView { .. } => {
-            Box::new(handle_drop_dataflow(stmt, meta_store))
-        }
+        SQLStatement::SQLDropDataSource { .. }
+        | SQLStatement::SQLDropView { .. }
+        | SQLStatement::SQLDropTable { .. } => Box::new(handle_drop_dataflow(stmt, meta_store)),
 
         // these are intended mostly for testing:
         SQLStatement::SQLQuery(query) => {
@@ -150,14 +151,37 @@ fn handle_drop_dataflow(
     stmt: SQLStatement,
     meta_store: MetaStore<Dataflow>,
 ) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    let (response, object_name) = match stmt {
-        SQLStatement::SQLDropDataSource { name, .. } => (QueryResponse::DroppedDataSource, name),
-        SQLStatement::SQLDropView { name, .. } => (QueryResponse::DroppedView, name),
-        _ => unreachable!(),
-    };
-    future::lazy(move || extract_sql_object_name(&object_name))
-        .and_then(move |name| meta_store.delete_dataflow(&name))
-        .map(move |_| response)
+    future::lazy(move || {
+        let (response, object_name) = match stmt {
+            SQLStatement::SQLDropDataSource { name, .. } => {
+                (QueryResponse::DroppedDataSource, name)
+            }
+            SQLStatement::SQLDropView { name, .. } => (QueryResponse::DroppedView, name),
+            SQLStatement::SQLDropTable {
+                names,
+                if_exists,
+                cascade,
+                restrict,
+            } => {
+                if if_exists {
+                    bail!("DROP TABLE IF EXISTS is not yet supported");
+                }
+                if cascade {
+                    bail!("DROP TABLE ... CASCADE is not yet supported");
+                }
+                if restrict {
+                    bail!("DROP TABLE ... RESTRICT is not yet supported");
+                }
+                if names.len() != 1 {
+                    bail!("DROP TABLE with more than one name is not yet supported");
+                }
+                (QueryResponse::DroppedTable, names.into_element())
+            }
+            _ => unreachable!(),
+        };
+        Ok((response, extract_sql_object_name(&object_name)?))
+    })
+    .and_then(move |(response, name)| meta_store.delete_dataflow(&name).map(|_| response))
 }
 
 fn handle_peek(

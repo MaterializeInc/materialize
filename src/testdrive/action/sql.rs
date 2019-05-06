@@ -45,6 +45,10 @@ impl Action for SqlAction {
                 &mut state.pgconn,
                 &format!("DROP VIEW {}", name.to_string()),
             ),
+            SQLStatement::SQLCreateTable { name, .. } => self.try_drop(
+                &mut state.pgconn,
+                &format!("DROP TABLE {}", name.to_string()),
+            ),
             _ => Ok(()),
         }
     }
