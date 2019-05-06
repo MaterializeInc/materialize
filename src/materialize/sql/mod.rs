@@ -393,6 +393,16 @@ impl<'ast> Visit<'ast> for ObjectNameVisitor {
         visit::visit_query(self, query);
     }
 
+    fn visit_function(
+        &mut self,
+        _name: &'ast SQLObjectName,
+        _args: &'ast Vec<ASTNode>,
+        _over: Option<&'ast SQLWindowSpec>,
+    ) {
+        // Terminate traversal early, to avoid considering a function name as
+        // a table name.
+    }
+
     fn visit_object_name(&mut self, object_name: &'ast SQLObjectName) {
         if self.err.is_some() || !self.recording {
             return;
@@ -774,7 +784,11 @@ impl Parser {
 
         // Step 2. Handle WHERE clause.
         if let Some(selection) = selection {
-            let (expr, typ) = self.parse_expr(&selection, &plan)?;
+            let ctx = &ExprContext {
+                scope: "WHERE clause",
+                allow_aggregates: false,
+            };
+            let (expr, typ) = self.parse_expr(ctx, &selection, &plan)?;
             if typ.ftype != FType::Bool {
                 bail!("WHERE clause must have boolean type, not {:?}", typ.ftype);
             }
@@ -786,11 +800,18 @@ impl Parser {
         for p in &s.projection {
             agg_visitor.visit_select_item(p);
         }
+        if let Some(having) = &s.having {
+            agg_visitor.visit_expr(having);
+        }
         let agg_frags = agg_visitor.into_result()?;
         if !agg_frags.is_empty() {
+            let ctx = &ExprContext {
+                scope: "GROUP BY clause",
+                allow_aggregates: false,
+            };
             let mut aggs = Vec::new();
             for frag in agg_frags {
-                let (expr, typ) = self.parse_expr(&frag.expr, &plan)?;
+                let (expr, typ) = self.parse_expr(ctx, &frag.expr, &plan)?;
                 let func = AggregateFunc::from_name_and_ftype(frag.name.as_ref(), &typ.ftype)?;
                 aggs.push((frag.id, Aggregate { func, expr }, typ));
             }
@@ -798,7 +819,7 @@ impl Parser {
             let mut key_exprs = Vec::new();
             let mut retained_columns = Vec::new();
             for expr in &s.group_by {
-                let (expr, typ) = self.parse_expr(&expr, &plan)?;
+                let (expr, typ) = self.parse_expr(ctx, &expr, &plan)?;
                 retained_columns.push(typ);
                 key_exprs.push(expr);
             }
@@ -809,7 +830,11 @@ impl Parser {
 
         // Step 4. Handle HAVING clause.
         if let Some(having) = &s.having {
-            let (expr, typ) = self.parse_expr(having, &plan)?;
+            let ctx = &ExprContext {
+                scope: "HAVING clause",
+                allow_aggregates: true,
+            };
+            let (expr, typ) = self.parse_expr(ctx, having, &plan)?;
             if typ.ftype != FType::Bool {
                 bail!("HAVING clause must have boolean type, not {:?}", typ.ftype);
             }
@@ -838,10 +863,14 @@ impl Parser {
         s: &'a SQLSelectItem,
         plan: &SQLPlan,
     ) -> Result<Vec<(Expr, Type)>, failure::Error> {
+        let ctx = &ExprContext {
+            scope: "SELECT projection",
+            allow_aggregates: true,
+        };
         match s {
-            SQLSelectItem::UnnamedExpression(e) => Ok(vec![self.parse_expr(e, plan)?]),
+            SQLSelectItem::UnnamedExpression(e) => Ok(vec![self.parse_expr(ctx, e, plan)?]),
             SQLSelectItem::ExpressionWithAlias { expr, alias } => {
-                let (expr, mut typ) = self.parse_expr(expr, plan)?;
+                let (expr, mut typ) = self.parse_expr(ctx, expr, plan)?;
                 typ.name = Some(alias.clone());
                 Ok(vec![(expr, typ)])
             }
@@ -1079,6 +1108,7 @@ impl Parser {
 
     fn parse_expr<'a>(
         &self,
+        ctx: &ExprContext,
         e: &'a ASTNode,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
@@ -1095,16 +1125,18 @@ impl Parser {
             }
             ASTNode::SQLValue(val) => self.parse_literal(val),
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            ASTNode::SQLIsNull(expr) => self.parse_is_null_expr(expr, false, plan),
-            ASTNode::SQLIsNotNull(expr) => self.parse_is_null_expr(expr, true, plan),
+            ASTNode::SQLIsNull(expr) => self.parse_is_null_expr(ctx, expr, false, plan),
+            ASTNode::SQLIsNotNull(expr) => self.parse_is_null_expr(ctx, expr, true, plan),
             // TODO(benesch): "SQLUnary" but "SQLBinaryExpr"?
-            ASTNode::SQLUnary { operator, expr } => self.parse_unary_expr(operator, expr, plan),
-            ASTNode::SQLBinaryExpr { op, left, right } => {
-                self.parse_binary_expr(op, left, right, plan)
+            ASTNode::SQLUnary { operator, expr } => {
+                self.parse_unary_expr(ctx, operator, expr, plan)
             }
-            ASTNode::SQLNested(expr) => self.parse_expr(expr, plan),
+            ASTNode::SQLBinaryExpr { op, left, right } => {
+                self.parse_binary_expr(ctx, op, left, right, plan)
+            }
+            ASTNode::SQLNested(expr) => self.parse_expr(ctx, expr, plan),
             ASTNode::SQLFunction { name, args, over } => {
-                self.parse_function(name, args, over, plan)
+                self.parse_function(ctx, name, args, over, plan)
             }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
@@ -1116,6 +1148,7 @@ impl Parser {
     #[allow(clippy::ptr_arg)]
     fn parse_function<'a>(
         &self,
+        ctx: &ExprContext,
         name: &'a SQLObjectName,
         _args: &'a [ASTNode],
         _over: &'a Option<SQLWindowSpec>,
@@ -1123,6 +1156,9 @@ impl Parser {
     ) -> Result<(Expr, Type), failure::Error> {
         let ident = name.to_string().to_lowercase();
         if AggregateFunc::is_aggregate_func(&ident) {
+            if !ctx.allow_aggregates {
+                bail!("aggregate functions are not allowed in {}", ctx.scope);
+            }
             let (i, typ) = plan.resolve_func(name);
             let expr = Expr::Column(i, Box::new(Expr::Ambient));
             Ok((expr, typ.clone()))
@@ -1133,11 +1169,12 @@ impl Parser {
 
     fn parse_is_null_expr<'a>(
         &self,
+        ctx: &ExprContext,
         inner: &'a ASTNode,
         not: bool,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (expr, _) = self.parse_expr(inner, plan)?;
+        let (expr, _) = self.parse_expr(ctx, inner, plan)?;
         let mut expr = Expr::CallUnary {
             func: UnaryFunc::IsNull,
             expr: Box::new(expr),
@@ -1158,11 +1195,12 @@ impl Parser {
 
     fn parse_unary_expr<'a>(
         &self,
+        ctx: &ExprContext,
         op: &'a SQLOperator,
         expr: &'a ASTNode,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (expr, typ) = self.parse_expr(expr, plan)?;
+        let (expr, typ) = self.parse_expr(ctx, expr, plan)?;
         let (func, ftype) = match op {
             SQLOperator::Not => (UnaryFunc::Not, FType::Bool),
             SQLOperator::Plus => return Ok((expr, typ)), // no-op
@@ -1194,13 +1232,14 @@ impl Parser {
 
     fn parse_binary_expr<'a>(
         &self,
+        ctx: &ExprContext,
         op: &'a SQLOperator,
         left: &'a ASTNode,
         right: &'a ASTNode,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (lexpr, ltype) = self.parse_expr(left, plan)?;
-        let (rexpr, rtype) = self.parse_expr(right, plan)?;
+        let (lexpr, ltype) = self.parse_expr(ctx, left, plan)?;
+        let (rexpr, rtype) = self.parse_expr(ctx, right, plan)?;
         let (func, ftype) = match op {
             SQLOperator::Plus => match (&ltype.ftype, &rtype.ftype) {
                 (FType::Int32, FType::Int32) => (BinaryFunc::AddInt32, FType::Int32),
@@ -1298,6 +1337,11 @@ impl Parser {
         };
         Ok((expr, typ))
     }
+}
+
+struct ExprContext {
+    scope: &'static str,
+    allow_aggregates: bool,
 }
 
 fn extract_sql_object_name(n: &SQLObjectName) -> Result<String, failure::Error> {
