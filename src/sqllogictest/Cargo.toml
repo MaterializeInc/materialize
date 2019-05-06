@@ -4,12 +4,17 @@ version = "0.0.1"
 authors = []
 edition = "2018"
 
+[[bin]]
+name = "sqllogictest"
+path = "main.rs"
+
 [lib]
 path = "lib.rs"
 
 [dependencies]
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 materialize = { path = "../materialize" }
+getopts = "0.2"
 walkdir = "2"
 regex = "1"
 lazy_static = "1"

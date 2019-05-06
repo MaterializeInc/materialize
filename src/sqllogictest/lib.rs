@@ -6,12 +6,17 @@
 //! https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::error::Error;
+use std::fmt;
+use std::fs::File;
+use std::io::Read;
+use std::ops;
+use std::path::Path;
+use std::str::FromStr;
 
-use failure::{bail, format_err};
+use failure::{bail, format_err, ResultExt};
 use lazy_static::lazy_static;
 use regex::Regex;
-use walkdir::WalkDir;
 
 use materialize::repr::{FType, Type};
 use sqlparser::dialect::AnsiSqlDialect;
@@ -161,13 +166,6 @@ pub fn parse_records(input: &str) -> impl Iterator<Item = Result<Record, failure
         })
 }
 
-pub fn all_files() -> impl Iterator<Item = PathBuf> {
-    WalkDir::new("../../sqllogictest/test/")
-        .into_iter()
-        .map(|entry| entry.unwrap().path().to_owned())
-        .filter(|path| path.is_file())
-}
-
 #[derive(Debug, Clone)]
 pub enum Outcome {
     Unsupported = 0,
@@ -175,6 +173,61 @@ pub enum Outcome {
     PlanFailure = 2,
     InferenceFailure = 3,
     Success = 4,
+}
+
+#[derive(Default, Debug, Eq, PartialEq)]
+pub struct Outcomes([usize; (Outcome::Success as usize) + 1]);
+
+impl Outcomes {
+    pub fn total(&self) -> usize {
+        self.0.iter().sum()
+    }
+
+    pub fn failed(&self) -> bool {
+        self.0[Outcome::Success as usize] != self.total()
+    }
+}
+
+impl ops::AddAssign<Outcomes> for Outcomes {
+    fn add_assign(&mut self, rhs: Outcomes) {
+        for (lhs, rhs) in self.0.iter_mut().zip(rhs.0.iter()) {
+            *lhs += rhs
+        }
+    }
+}
+
+impl FromStr for Outcomes {
+    type Err = Box<dyn Error>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let pieces: Vec<_> = s.split(',').collect();
+        if pieces.len() != 5 {
+            return Err("expected-outcomes argument needs five comma-separated ints".into());
+        }
+        Ok(Outcomes([
+            pieces[0].parse()?,
+            pieces[1].parse()?,
+            pieces[2].parse()?,
+            pieces[3].parse()?,
+            pieces[4].parse()?,
+        ]))
+    }
+}
+
+impl fmt::Display for Outcomes {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "unsupported={} parse-failure={} plan-failure={} \
+             inference-failure={} success={} total={}",
+            self.0[Outcome::Unsupported as usize],
+            self.0[Outcome::ParseFailure as usize],
+            self.0[Outcome::PlanFailure as usize],
+            self.0[Outcome::InferenceFailure as usize],
+            self.0[Outcome::Success as usize],
+            self.total(),
+        )
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -306,6 +359,35 @@ pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure
     }
 }
 
+pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
+    let mut outcomes = Outcomes::default();
+    let mut input = String::new();
+    let mut state = State::default();
+    input.clear();
+    File::open(filename)
+        .unwrap()
+        .read_to_string(&mut input)
+        .unwrap();
+    if verbosity >= 1 {
+        println!("==> {}", filename.display());
+    }
+    for record in parse_records(&input) {
+        let record = record.unwrap();
+        if verbosity >= 2 {
+            match record {
+                Record::Statement { sql, .. } => println!("{}", sql),
+                Record::Query { sql, .. } => println!("{}", sql),
+                _ => (),
+            }
+        }
+        let outcome = run_record(&mut state, &record)
+            .with_context(|err| format!("In {}:\n{}", filename.display(), err))
+            .unwrap();
+        outcomes.0[outcome as usize] += 1;
+    }
+    outcomes
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -314,29 +396,7 @@ mod test {
     use std::io::Read;
 
     use failure::ResultExt;
-
-    #[test]
-    #[ignore]
-    fn sqllogictest() {
-        let mut total = vec![0; 1 + Outcome::Success as usize];
-        let mut input = String::new();
-        for filename in all_files() {
-            let mut state = State::default();
-            input.clear();
-            File::open(&filename)
-                .unwrap()
-                .read_to_string(&mut input)
-                .unwrap();
-            for record in parse_records(&input) {
-                let outcome = run_record(&mut state, &record.unwrap())
-                    .with_context(|err| format!("In {}:\n{}", filename.to_str().unwrap(), err))
-                    .unwrap();
-                total[outcome as usize] += 1;
-            }
-        }
-
-        assert_eq!(total, vec![182_803, 535_485, 3_127_457, 0, 2_094_585]);
-    }
+    use walkdir::WalkDir;
 
     #[test]
     fn fuzz_artifacts() {
