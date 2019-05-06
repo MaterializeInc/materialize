@@ -3,7 +3,6 @@
 [package]
 name = "fuzz"
 version = "0.0.1"
-authors = []
 publish = false
 edition = "2018"
 

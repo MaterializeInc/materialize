@@ -2,8 +2,8 @@
 name = "testdrive"
 description = "Integration test driver for Materialize."
 version = "0.1.0"
-authors = ["Nikhil Benesch <nikhil.benesch@gmail.com>"]
 edition = "2018"
+publish = false
 
 [lib]
 path = "lib.rs"

@@ -2,8 +2,8 @@
 name = "materialize"
 description = "Streaming SQL materialized views."
 version = "0.1.0"
-authors = ["Nikhil Benesch <nikhil.benesch@gmail.com>"]
 edition = "2018"
+publish = false
 
 [[bin]]
 name = "materialized"
