@@ -90,7 +90,8 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
 
     let (sql_command_sender, sql_command_receiver) = unbounded::<SqlCommand>();
     let sql_response_mux = SqlResponseMux::default();
-    let (dataflow_command_sender, dataflow_command_receiver) = unbounded::<DataflowCommand>();
+    let (dataflow_command_sender, dataflow_command_receiver) =
+        std::sync::mpsc::channel::<DataflowCommand>();
     let peek_results_mux = PeekResultsMux::default();
 
     // timely dataflow

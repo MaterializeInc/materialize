@@ -7,7 +7,6 @@
 
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
-use futures::stream::Stream;
 use std::collections::HashMap;
 
 use timely::communication::initialize::WorkerGuards;
@@ -23,7 +22,7 @@ use crate::glue::*;
 use ore::sync::Lottery;
 
 pub fn serve(
-    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+    dataflow_command_receiver: std::sync::mpsc::Receiver<DataflowCommand>,
     peek_results_handler: PeekResultsHandler,
     clock: Clock,
     num_workers: usize,
@@ -33,7 +32,7 @@ pub fn serve(
         let dataflow_command_receiver = lottery.draw();
         Worker::new(
             worker,
-            dataflow_command_receiver.wait(),
+            dataflow_command_receiver,
             peek_results_handler.clone(),
             clock.clone(),
         )
@@ -41,8 +40,8 @@ pub fn serve(
     })
 }
 
-fn dummy_command_receiver() -> UnboundedReceiver<DataflowCommand> {
-    let (_tx, rx) = unbounded();
+fn dummy_command_receiver() -> std::sync::mpsc::Receiver<DataflowCommand> {
+    let (_tx, rx) = std::sync::mpsc::channel();
     rx
 }
 
@@ -65,7 +64,7 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     clock: Clock,
-    dataflow_command_receiver: futures::stream::Wait<UnboundedReceiver<DataflowCommand>>,
+    dataflow_command_receiver: std::sync::mpsc::Receiver<DataflowCommand>,
     peek_results_handler: PeekResultsHandler,
     sequencer: Sequencer<DataflowCommand>,
     pending_cmds: HashMap<String, Vec<DataflowCommand>>,
@@ -80,7 +79,7 @@ where
 {
     fn new(
         w: &'w mut TimelyWorker<A>,
-        dataflow_command_receiver: futures::stream::Wait<UnboundedReceiver<DataflowCommand>>,
+        dataflow_command_receiver: std::sync::mpsc::Receiver<DataflowCommand>,
         peek_results_handler: PeekResultsHandler,
         clock: Clock,
     ) -> Worker<'w, A> {
@@ -105,8 +104,8 @@ where
             // TOOD(jamii) would it be cheaper to replace the sequencer by just streaming `dataflow_command_receiver` into `num_workers` copies?
 
             // Submit any external commands for sequencing.
-            while let Some(cmd) = self.dataflow_command_receiver.next() {
-                self.sequencer.push(cmd.unwrap())
+            while let Ok(cmd) = self.dataflow_command_receiver.try_recv() {
+                self.sequencer.push(cmd)
             }
 
             // Handle any sequenced commands.
