@@ -11,13 +11,21 @@ use state_machine_future::{transition, RentToOwn};
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
+use uuid::Uuid;
 
+use crate::glue::*;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::repr::Datum;
-use crate::server::ConnState;
-use crate::sql::QueryResponse;
 use ore::future::{Recv, StreamExt};
+
+pub struct Context {
+    pub uuid: Uuid,
+    pub sql_command_sender: UnboundedSender<SqlCommand>,
+    pub sql_response_receiver: UnboundedReceiver<Result<SqlResponse, failure::Error>>,
+    pub peek_results_receiver: UnboundedReceiver<PeekResults>,
+    pub num_timely_workers: usize,
+}
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -79,8 +87,6 @@ pub trait Conn:
 
 impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Send {}
 
-type RowStream = Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>;
-
 type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
 
 /// A state machine that drives the pgwire backend.
@@ -91,7 +97,7 @@ type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Erro
 /// server without it is unbelievably painful. Consider revisiting once
 /// async/await support lands in stable.
 #[derive(Smf)]
-#[state_machine_future(context = "ConnState")]
+#[state_machine_future(context = "Context")]
 pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
     Start { stream: A },
@@ -114,13 +120,14 @@ pub enum StateMachine<A: Conn + 'static> {
         SendError,
         Error
     ))]
-    HandleQuery {
-        handle: Box<Future<Item = QueryResponse, Error = failure::Error> + Send>,
-        conn: A,
-    },
+    HandleQuery { conn: A },
 
-    #[state_machine_future(transitions(SendRows, Error))]
-    SendRowDescription { send: SinkSend<A>, rows: RowStream },
+    #[state_machine_future(transitions(SendRowDescription, SendRows, Error))]
+    SendRowDescription {
+        send: SinkSend<A>,
+        peek_results: Vec<Datum>,
+        remaining_peek_results: usize,
+    },
 
     #[state_machine_future(transitions(SendCommandComplete, SendError, Error))]
     SendRows {
@@ -143,7 +150,7 @@ pub enum StateMachine<A: Conn + 'static> {
 impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     fn poll_start<'s, 'c>(
         state: &'s mut RentToOwn<'s, Start<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterStart<A>, failure::Error> {
         let state = state.take();
         transition!(RecvStartup {
@@ -153,7 +160,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_recv_startup<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvStartup<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvStartup<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         let version = match msg {
@@ -188,7 +195,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_authentication_ok<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendAuthenticationOk<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendAuthenticationOk<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         transition!(SendReadyForQuery {
@@ -198,7 +205,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_ready_for_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendReadyForQuery<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendReadyForQuery<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         transition!(RecvQuery { recv: conn.recv() })
@@ -206,17 +213,18 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_recv_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvQuery<A>>,
-        conn_state: &'c mut RentToOwn<'c, ConnState>,
+        context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         match msg {
-            FrontendMessage::Query { query } => transition!(HandleQuery {
-                handle: Box::new(crate::sql::handle_query(
-                    String::from(String::from_utf8_lossy(&query)),
-                    conn_state
-                )),
-                conn: conn,
-            }),
+            FrontendMessage::Query { query } => {
+                let sql = String::from(String::from_utf8_lossy(&query));
+                context.sql_command_sender.unbounded_send(SqlCommand {
+                    sql,
+                    connection_uuid: context.uuid,
+                })?;
+                transition!(HandleQuery { conn: conn })
+            }
             FrontendMessage::Terminate => transition!(Done(())),
             _ => transition!(SendError {
                 send: conn.send(BackendMessage::ErrorResponse {
@@ -232,11 +240,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_handle_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, HandleQuery<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleQuery<A>, failure::Error> {
-        match state.handle.poll() {
+        match context.sql_response_receiver.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(response)) => {
+            Ok(Async::Ready(Some(Ok(response)))) => {
                 let state = state.take();
 
                 macro_rules! command_complete {
@@ -255,12 +263,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 }
 
                 match response {
-                    QueryResponse::CreatedDataSource => command_complete!("CREATE DATA SOURCE"),
-                    QueryResponse::CreatedView => command_complete!("CREATE VIEW"),
-                    QueryResponse::CreatedTable => command_complete!("CREATE TABLE"),
-                    QueryResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
-                    QueryResponse::DroppedView => command_complete!("DROP VIEW"),
-                    QueryResponse::DroppedTable => command_complete!("DROP TABLE"),
+                    SqlResponse::CreatedDataSource => command_complete!("CREATE DATA SOURCE"),
+                    SqlResponse::CreatedView => command_complete!("CREATE VIEW"),
+                    SqlResponse::CreatedTable => command_complete!("CREATE TABLE"),
+                    SqlResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
+                    SqlResponse::DroppedView => command_complete!("DROP VIEW"),
+                    SqlResponse::DroppedTable => command_complete!("DROP TABLE"),
                     // "On successful completion, an INSERT command returns a
                     // command tag of the form `INSERT <oid> <count>`."
                     //     -- https://www.postgresql.org/docs/11/sql-insert.html
@@ -268,16 +276,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     // OIDs are a PostgreSQL-specific historical quirk, but we
                     // can return a 0 OID to indicate that the table does not
                     // have OIDs.
-                    QueryResponse::Inserted(n) => command_complete!("INSERT 0 {}", n),
-                    QueryResponse::StreamingRows { typ, rows } => transition!(SendRowDescription {
+                    SqlResponse::Inserted(n) => command_complete!("INSERT 0 {}", n),
+                    SqlResponse::Peeking { typ } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
                         )),
-                        rows: rows,
+                        peek_results: vec![],
+                        remaining_peek_results: context.num_timely_workers,
                     }),
                 }
             }
-            Err(err) => {
+            Ok(Async::Ready(Some(Err(err)))) => {
                 let state = state.take();
                 transition!(SendError {
                     send: state.conn.send(BackendMessage::ErrorResponse {
@@ -289,29 +298,52 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     fatal: false,
                 });
             }
+            Ok(Async::Ready(None)) | Err(()) => {
+                panic!("Connection to sql planner closed unexpectedly")
+            }
         }
     }
 
     fn poll_send_row_description<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        let stream: MessageStream = Box::new(state.rows.map(|row| {
-            BackendMessage::DataRow(match row {
-                Datum::Tuple(t) => t,
-                _ => unimplemented!(),
-            })
-        }));
-        transition!(SendRows {
-            send: Box::new(stream.forward(conn)),
-        })
+        let mut state = state.take();
+        match context.peek_results_receiver.poll() {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Ok(Async::Ready(Some(peek_results))) => {
+                state.peek_results.extend(peek_results);
+                state.remaining_peek_results -= 1;
+                if state.remaining_peek_results == 0 {
+                    let stream: MessageStream = Box::new(futures::stream::iter_ok(
+                        state.peek_results.into_iter().map(|datum| match datum {
+                            Datum::Tuple(t) => BackendMessage::DataRow(t),
+                            _ => unimplemented!(),
+                        }),
+                    ));
+                    transition!(SendRows {
+                        send: Box::new(stream.forward(conn)),
+                    })
+                } else {
+                    transition!(state)
+                }
+            }
+            Ok(Async::Ready(None)) | Err(()) => {
+                panic!("Connection to dataflow server closed unexpectedly")
+            }
+        }
     }
+
+    // let stream: MessageStream = Box::new(state.rows.map(|row| {
+    //     BackendMessage::DataRow(match row {
+    // Datum::Tuple(t) => t,
+    //     _ => unimplemented!(),
+    // })
 
     fn poll_send_rows<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendRows<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendRows<A>, failure::Error> {
         let (_, conn) = try_ready!(state.send.poll());
         transition!(SendCommandComplete {
@@ -323,7 +355,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_command_complete<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendCommandComplete<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         transition!(SendReadyForQuery {
@@ -333,7 +365,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_error<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendError<A>>,
-        _: &'c mut RentToOwn<'c, ConnState>,
+        _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendError<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         if state.fatal {

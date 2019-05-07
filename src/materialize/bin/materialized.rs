@@ -32,7 +32,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let args: Vec<_> = env::args().collect();
     let mut opts = Options::new();
-    opts.optopt("", "zookeeper", "zookeeper URL", "URL");
     opts.optflag("h", "help", "show this usage information");
 
     let popts = opts.parse(&args[1..])?;
@@ -42,9 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    server::serve(server::Config {
-        zookeeper_url: popts.opt_str("zookeeper"),
-    })
+    server::serve(server::Config::default())
 }
 
 lazy_static! {

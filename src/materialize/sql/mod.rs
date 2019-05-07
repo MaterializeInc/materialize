@@ -6,7 +6,7 @@
 //! SQL-dataflow translation.
 
 use failure::{bail, format_err};
-use futures::{future, Future, Stream};
+use futures::Stream;
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
@@ -18,145 +18,133 @@ use sqlparser::sqlast::{
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
-use std::sync::Arc;
+use uuid::Uuid;
 
+use crate::clock::Clock;
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
-use crate::dataflow::server::{Command, CommandSender};
 use crate::dataflow::{
     Aggregate, Connector, Dataflow, Expr, KafkaConnector, LocalConnector, Plan, Source, View,
 };
+use crate::glue::*;
 use crate::repr::{Datum, FType, Type};
-use crate::server::{ConnState, ServerState};
-use metastore::MetaStore;
-use ore::future::FutureExt;
 use ore::vec::VecExt;
 use plan::SQLPlan;
 
 mod plan;
 
-pub enum QueryResponse {
-    CreatedDataSource,
-    CreatedView,
-    CreatedTable,
-    DroppedDataSource,
-    DroppedView,
-    DroppedTable,
-    Inserted(usize),
-    StreamingRows {
-        typ: Type,
-        rows: Box<dyn Stream<Item = Datum, Error = failure::Error> + Send>,
-    },
+pub fn serve(
+    sql_command_receiver: UnboundedReceiver<SqlCommand>,
+    sql_response_mux: SqlResponseMux,
+    dataflow_command_sender: UnboundedSender<DataflowCommand>,
+    clock: Clock,
+) {
+    std::thread::spawn(move || {
+        let mut server = Server {
+            planner: Default::default(),
+            sql_response_mux,
+            dataflow_command_sender,
+            clock,
+        };
+        for sql_command in sql_command_receiver.wait() {
+            server.handle_command(sql_command.unwrap()).unwrap();
+        }
+    });
 }
 
-pub fn handle_query(
-    stmt: String,
-    conn_state: &ConnState,
-) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    let ConnState {
-        meta_store,
-        cmd_tx,
-        server_state,
-    } = conn_state.clone();
-    future::lazy(|| {
-        let mut stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, stmt)?;
+pub struct Server {
+    planner: Planner,
+    sql_response_mux: SqlResponseMux,
+    dataflow_command_sender: UnboundedSender<DataflowCommand>,
+    clock: Clock,
+}
+
+impl Server {
+    fn send_sql_response(
+        &self,
+        connection_uuid: Uuid,
+        sql_response: SqlResponse,
+    ) -> Result<(), failure::Error> {
+        self.sql_response_mux
+            .read()
+            .map_err(|e| format_err!("{}", e))?
+            .sender(&connection_uuid)?
+            .unbounded_send(Ok(sql_response))?;
+        Ok(())
+    }
+
+    pub fn handle_command(&mut self, sql_command: SqlCommand) -> Result<(), failure::Error> {
+        let SqlCommand {
+            sql,
+            connection_uuid,
+        } = sql_command;
+        let mut stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, sql)?;
         if stmts.len() != 1 {
             bail!("expected one statement, but got {}", stmts.len());
         }
-        Ok(stmts.remove(0))
-    })
-    .and_then(|stmt| handle_statement(stmt, meta_store, cmd_tx, server_state))
-}
-
-fn handle_statement(
-    stmt: SQLStatement,
-    meta_store: MetaStore<Dataflow>,
-    cmd_tx: crate::dataflow::server::CommandSender,
-    server_state: Arc<ServerState>,
-) -> Box<dyn Future<Item = QueryResponse, Error = failure::Error> + Send> {
-    match stmt {
-        SQLStatement::SQLPeek { name } => {
-            Box::new(handle_peek(name, meta_store, cmd_tx, server_state))
-        }
-        SQLStatement::SQLTail { .. } => {
-            Box::new(future::err(format_err!("TAIL is not implemented yet")))
-        }
-        SQLStatement::SQLCreateDataSource { .. }
-        | SQLStatement::SQLCreateView { .. }
-        | SQLStatement::SQLCreateTable { .. } => Box::new(handle_create_dataflow(stmt, meta_store)),
-        SQLStatement::SQLDropDataSource { .. }
-        | SQLStatement::SQLDropView { .. }
-        | SQLStatement::SQLDropTable { .. } => Box::new(handle_drop_dataflow(stmt, meta_store)),
-
-        // these are intended mostly for testing:
-        SQLStatement::SQLQuery(query) => {
-            Box::new(handle_select(*query, meta_store, cmd_tx, server_state))
-        }
-        // SQLStatement::DropTable{name, columns} => {}
-        SQLStatement::SQLInsert {
-            table_name,
-            columns,
-            values,
-        } => Box::new(handle_insert(table_name, columns, values, meta_store)),
-        _ => Box::new(future::err(format_err!(
-            "unsupported SQL query: {:?}",
-            stmt
-        ))),
+        let stmt = stmts.remove(0);
+        self.handle_statement(stmt, connection_uuid)
     }
-}
 
-fn handle_create_dataflow(
-    stmt: SQLStatement,
-    meta_store: MetaStore<Dataflow>,
-) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    future::lazy(move || {
-        let mut visitor = ObjectNameVisitor::new();
-        visitor.visit_statement(&stmt);
-        visitor
-            .into_result()
-            .map(|object_names| (stmt, object_names))
-    })
-    .and_then(|(stmt, object_names)| {
-        meta_store
-            .read_dataflows(object_names)
-            .map(|dataflows| (stmt, dataflows))
-            .map(|(stmt, dataflows)| (meta_store, stmt, dataflows))
-    })
-    .and_then(|(meta_store, stmt, dataflows)| {
-        let parser = Parser::new(
-            dataflows
-                .iter()
-                .map(|(n, d)| (n.to_owned(), d.inner.typ().to_owned())),
-        );
-        let dataflow = match parser.parse_statement(&stmt) {
-            Ok(dataflow) => dataflow,
-            Err(err) => return future::err(err).left(),
-        };
-        let name = dataflow.name().to_owned();
-        meta_store
-            .create_dataflow(&name, dataflow, dataflows.into_iter().map(|(_, v)| v))
-            .map(|_| stmt)
-            .right()
-    })
-    .and_then(|stmt| {
-        Ok(match stmt {
-            SQLStatement::SQLCreateDataSource { .. } => QueryResponse::CreatedDataSource,
-            SQLStatement::SQLCreateView { .. } => QueryResponse::CreatedView,
-            SQLStatement::SQLCreateTable { .. } => QueryResponse::CreatedTable,
-            _ => unreachable!(),
-        })
-    })
-}
-
-fn handle_drop_dataflow(
-    stmt: SQLStatement,
-    meta_store: MetaStore<Dataflow>,
-) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    future::lazy(move || {
-        let (response, object_name) = match stmt {
-            SQLStatement::SQLDropDataSource { name, .. } => {
-                (QueryResponse::DroppedDataSource, name)
+    fn handle_statement(
+        &mut self,
+        stmt: SQLStatement,
+        connection_uuid: Uuid,
+    ) -> Result<(), failure::Error> {
+        match stmt {
+            SQLStatement::SQLPeek { name } => self.handle_peek(name, connection_uuid),
+            SQLStatement::SQLTail { .. } => bail!("TAIL is not implemented yet"),
+            SQLStatement::SQLCreateDataSource { .. }
+            | SQLStatement::SQLCreateView { .. }
+            | SQLStatement::SQLCreateTable { .. } => {
+                self.handle_create_dataflow(stmt, connection_uuid)
             }
-            SQLStatement::SQLDropView { name, .. } => (QueryResponse::DroppedView, name),
+            SQLStatement::SQLDropDataSource { .. }
+            | SQLStatement::SQLDropView { .. }
+            | SQLStatement::SQLDropTable { .. } => self.handle_drop_dataflow(stmt, connection_uuid),
+
+            // these are intended mostly for testing:
+            SQLStatement::SQLQuery(query) => self.handle_select(*query, connection_uuid),
+            SQLStatement::SQLInsert {
+                table_name,
+                columns,
+                values,
+            } => self.handle_insert(table_name, columns, values, connection_uuid),
+
+            _ => bail!("unsupported SQL statement: {:?}", stmt),
+        }
+    }
+
+    fn handle_create_dataflow(
+        &mut self,
+        stmt: SQLStatement,
+        connection_uuid: Uuid,
+    ) -> Result<(), failure::Error> {
+        let dataflow = self.planner.plan_statement(&stmt)?;
+        self.planner
+            .dataflows
+            .insert(dataflow.name().to_owned(), dataflow.clone());
+        self.send_sql_response(
+            connection_uuid,
+            match stmt {
+                SQLStatement::SQLCreateDataSource { .. } => SqlResponse::CreatedDataSource,
+                SQLStatement::SQLCreateView { .. } => SqlResponse::CreatedView,
+                SQLStatement::SQLCreateTable { .. } => SqlResponse::CreatedTable,
+                _ => unreachable!(),
+            },
+        )?;
+        self.dataflow_command_sender
+            .unbounded_send(DataflowCommand::CreateDataflow(dataflow))?;
+        Ok(())
+    }
+
+    fn handle_drop_dataflow(
+        &mut self,
+        stmt: SQLStatement,
+        connection_uuid: Uuid,
+    ) -> Result<(), failure::Error> {
+        let (sql_response, object_name) = match stmt {
+            SQLStatement::SQLDropDataSource { name, .. } => (SqlResponse::DroppedDataSource, name),
+            SQLStatement::SQLDropView { name, .. } => (SqlResponse::DroppedView, name),
             SQLStatement::SQLDropTable {
                 names,
                 if_exists,
@@ -175,246 +163,167 @@ fn handle_drop_dataflow(
                 if names.len() != 1 {
                     bail!("DROP TABLE with more than one name is not yet supported");
                 }
-                (QueryResponse::DroppedTable, names.into_element())
+                (SqlResponse::DroppedTable, names.into_element())
             }
             _ => unreachable!(),
         };
-        Ok((response, extract_sql_object_name(&object_name)?))
-    })
-    .and_then(move |(response, name)| meta_store.delete_dataflow(&name).map(|_| response))
-}
+        let name = extract_sql_object_name(&object_name)?;
+        self.planner.dataflows.remove(&name);
+        self.send_sql_response(connection_uuid, sql_response)?;
+        self.dataflow_command_sender
+            .unbounded_send(DataflowCommand::DropDataflow(name.clone()))?;
+        Ok(())
+    }
 
-fn handle_peek(
-    name: SQLObjectName,
-    meta_store: metastore::MetaStore<Dataflow>,
-    cmd_tx: CommandSender,
-    server_state: Arc<ServerState>,
-) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    let name = name.to_string();
-    let names = vec![name.clone()];
-    meta_store
-        .read_dataflows(names)
-        .and_then(move |mut dataflows| {
-            let dataflow = dataflows.remove(&name).unwrap();
-            let uuid = uuid::Uuid::new_v4();
-            let (tx, rx) = futures::sync::mpsc::unbounded();
-            {
-                let mut peek_results = server_state.peek_results.write().unwrap();
-                peek_results.insert(uuid, (tx, 4 /* XXX */));
-            }
-            let ts = server_state.clock.now();
-            cmd_tx
-                .send(Command::Peek(name.to_string(), uuid, ts))
-                .unwrap();
-            future::ok(QueryResponse::StreamingRows {
-                typ: dataflow.inner.typ().to_owned(),
-                rows: Box::new(rx.map_err(|_| format_err!("unreachable"))),
-            })
-        })
-}
+    fn handle_peek(
+        &mut self,
+        name: SQLObjectName,
+        connection_uuid: Uuid,
+    ) -> Result<(), failure::Error> {
+        let name = name.to_string();
+        let ts = self.clock.now();
+        let typ = self
+            .planner
+            .dataflows
+            .get(&name)
+            .ok_or_else(|| format_err!("Can't PEEK {} because it doesn't exist", name))?
+            .typ()
+            .clone();
+        self.send_sql_response(connection_uuid, SqlResponse::Peeking { typ })?;
+        self.dataflow_command_sender
+            .unbounded_send(DataflowCommand::Peek(name, connection_uuid, ts))?;
+        Ok(())
+    }
 
-fn handle_select(
-    query: SQLQuery,
-    meta_store: metastore::MetaStore<Dataflow>,
-    cmd_tx: CommandSender,
-    server_state: Arc<ServerState>,
-) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    let id: u64 = rand::random();
-    let name = SQLObjectName(vec![format!("<temp_{}>", id)]);
-    handle_statement(
-        SQLStatement::SQLCreateView {
-            name: name.clone(),
+    fn handle_select(
+        &mut self,
+        query: SQLQuery,
+        connection_uuid: Uuid,
+    ) -> Result<(), failure::Error> {
+        let id: u64 = rand::random();
+        let name = format!("<temp_{}>", id);
+        let ts = self.clock.now();
+        let dataflow = self.planner.plan_statement(&SQLStatement::SQLCreateView {
+            name: SQLObjectName(vec![name.clone()]),
             query: Box::new(query),
             materialized: true,
-        },
-        meta_store.clone(),
-        cmd_tx.clone(),
-        server_state.clone(),
-    )
-    .and_then(move |_| {
-        handle_statement(
-            SQLStatement::SQLPeek { name: name.clone() },
-            meta_store.clone(),
-            cmd_tx.clone(),
-            server_state.clone(),
-        )
-        .and_then(move |query_response| {
-            handle_statement(
-                SQLStatement::SQLDropView {
-                    name: name.clone(),
-                    materialized: true,
-                },
-                meta_store,
-                cmd_tx,
-                server_state,
-            )
-            .map(move |_| query_response)
-        })
-    })
-}
-
-fn handle_insert(
-    name: SQLObjectName,
-    columns: Vec<SQLIdent>,
-    values: Vec<Vec<ASTNode>>,
-    meta_store: metastore::MetaStore<Dataflow>,
-) -> impl Future<Item = QueryResponse, Error = failure::Error> {
-    let name = name.to_string();
-    meta_store
-        .read_dataflows(vec![name.clone()])
-        .and_then(move |dataflows| match dataflows[&name].inner {
-            Dataflow::Source(ref src) => handle_insert_source(src, columns, values),
-            Dataflow::View(_) => bail!("Can only insert into tables - {} is a view", name),
-        })
-}
-
-fn handle_insert_source(
-    source: &Source,
-    columns: Vec<SQLIdent>,
-    values: Vec<Vec<ASTNode>>,
-) -> Result<QueryResponse, failure::Error> {
-    let types = match &source.typ {
-        Type {
-            ftype: FType::Tuple(types),
-            ..
-        } => types,
-        _ => bail!(
-            "Can only insert into tables of tuple type - {} has type {:?}",
-            source.name,
-            source.typ
-        ),
-    };
-
-    let sender = match &source.connector {
-        Connector::Local(connector) => connector.get_sender(),
-        connector => bail!(
-            "Can only insert into tables - {} is a data source: {:?}",
-            source.name,
-            connector
-        ),
-    };
-
-    if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
-        bail!(
-            "Duplicate column in INSERT INTO ... COLUMNS ({})",
-            columns.join(", ")
-        );
-    }
-    let expected_columns = types
-        .iter()
-        .map(|typ| typ.name.clone().expect("Table columns should all be named"))
-        .collect::<Vec<_>>();
-    if HashSet::<&String>::from_iter(&columns).len()
-        != HashSet::<&String>::from_iter(&expected_columns).len()
-    {
-        bail!(
-            "Missing column in INSERT INTO ... COLUMNS ({}), expected {}",
-            columns.join(", "),
-            expected_columns.join(", ")
-        );
-    }
-    let permutation = expected_columns
-        .iter()
-        .map(|name| columns.iter().position(|name2| name == name2).unwrap())
-        .collect::<Vec<_>>();
-    let n = values.len();
-    let datums = values
-        .into_iter()
-        .map(|asts| {
-            let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
-            let datums = permuted_asts
-                .zip(types.iter())
-                .map(|(ast, typ)| {
-                    Ok(match ast {
-                        ASTNode::SQLValue(value) => match (value, &typ.ftype) {
-                            (Value::Null, _) => {
-                                if typ.nullable {
-                                    Datum::Null
-                                } else {
-                                    bail!("Tried to insert null into non-nullable column")
-                                }
-                            }
-                            (Value::Long(l), FType::Int64) => Datum::Int64(l),
-                            (Value::Double(f), FType::Float64) => Datum::Float64(f.into()),
-                            (Value::SingleQuotedString(s), FType::String)
-                            | (Value::NationalStringLiteral(s), FType::String) => Datum::String(s),
-                            (Value::Boolean(b), FType::Bool) => {
-                                if b {
-                                    Datum::True
-                                } else {
-                                    Datum::False
-                                }
-                            }
-                            (value, ftype) => bail!(
-                                "Don't know how to insert value {:?} into column of type {:?}",
-                                value,
-                                ftype
-                            ),
-                        },
-                        other => bail!("Can only insert plain values, not {:?}", other),
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(Datum::Tuple(datums))
-        })
-        .collect::<Result<Vec<_>, failure::Error>>()?;
-    for datum in datums {
-        sender.send(datum).map_err(|e| format_err!("{}", e))?;
-    }
-    Ok(QueryResponse::Inserted(n))
-}
-
-struct ObjectNameVisitor {
-    recording: bool,
-    object_names: Vec<String>,
-    err: Option<failure::Error>,
-}
-
-impl ObjectNameVisitor {
-    pub fn new() -> ObjectNameVisitor {
-        ObjectNameVisitor {
-            recording: false,
-            object_names: Vec::new(),
-            err: None,
-        }
+        })?;
+        let typ = dataflow.typ().clone();
+        self.dataflow_command_sender
+            .unbounded_send(DataflowCommand::CreateDataflow(dataflow))?;
+        self.dataflow_command_sender
+            .unbounded_send(DataflowCommand::Peek(name.clone(), connection_uuid, ts))?;
+        self.dataflow_command_sender
+            .unbounded_send(DataflowCommand::DropDataflow(name))?;
+        self.send_sql_response(connection_uuid, SqlResponse::Peeking { typ })?;
+        Ok(())
     }
 
-    pub fn into_result(self) -> Result<Vec<String>, failure::Error> {
-        match self.err {
-            Some(err) => Err(err),
-            None => Ok(self.object_names),
-        }
-    }
-}
-
-impl<'ast> Visit<'ast> for ObjectNameVisitor {
-    fn visit_query(&mut self, query: &'ast SQLQuery) {
-        self.recording = true;
-        visit::visit_query(self, query);
-    }
-
-    fn visit_function(
+    fn handle_insert(
         &mut self,
-        _name: &'ast SQLObjectName,
-        _args: &'ast Vec<ASTNode>,
-        _over: Option<&'ast SQLWindowSpec>,
-    ) {
-        // Terminate traversal early, to avoid considering a function name as
-        // a table name.
-    }
+        name: SQLObjectName,
+        columns: Vec<SQLIdent>,
+        values: Vec<Vec<ASTNode>>,
+        connection_uuid: Uuid,
+    ) -> Result<(), failure::Error> {
+        let name = name.to_string();
+        let typ = match self
+            .planner
+            .dataflows
+            .get(&name)
+            .ok_or_else(|| format_err!("Tried to insert into non-existent table: {}", name))?
+        {
+            Dataflow::Source(Source {
+                connector: Connector::Local(_),
+                typ,
+                ..
+            }) => typ,
+            other => bail!("Can only insert into tables - {} is a {:?}", name, other),
+        };
+        let types = match &typ {
+            Type {
+                ftype: FType::Tuple(types),
+                ..
+            } => types,
+            _ => bail!(
+                "Can only insert into tables of tuple type - {} has type {:?}",
+                name,
+                typ
+            ),
+        };
 
-    fn visit_object_name(&mut self, object_name: &'ast SQLObjectName) {
-        if self.err.is_some() || !self.recording {
-            return;
+        if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
+            bail!(
+                "Duplicate column in INSERT INTO ... COLUMNS ({})",
+                columns.join(", ")
+            );
         }
-        if object_name.0.len() != 1 {
-            self.err = Some(format_err!(
-                "qualified names are not yet supported: {}",
-                object_name.to_string()
-            ))
-        } else {
-            self.object_names.push(object_name.0[0].to_owned())
+        let expected_columns = types
+            .iter()
+            .map(|typ| typ.name.clone().expect("Table columns should all be named"))
+            .collect::<Vec<_>>();
+        if HashSet::<&String>::from_iter(&columns).len()
+            != HashSet::<&String>::from_iter(&expected_columns).len()
+        {
+            bail!(
+                "Missing column in INSERT INTO ... COLUMNS ({}), expected {}",
+                columns.join(", "),
+                expected_columns.join(", ")
+            );
         }
+        let permutation = expected_columns
+            .iter()
+            .map(|name| columns.iter().position(|name2| name == name2).unwrap())
+            .collect::<Vec<_>>();
+        let datums = values
+            .into_iter()
+            .map(|asts| {
+                let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
+                let datums = permuted_asts
+                    .zip(types.iter())
+                    .map(|(ast, typ)| Datum::from_sql(ast, typ))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Datum::Tuple(datums))
+            })
+            .collect::<Result<Vec<_>, failure::Error>>()?;
+
+        self.send_sql_response(connection_uuid, SqlResponse::Inserted(datums.len()))?;
+        self.dataflow_command_sender
+            .unbounded_send(DataflowCommand::Insert(datums))?;
+        Ok(())
+    }
+}
+
+impl Datum {
+    pub fn from_sql(ast: ASTNode, typ: &Type) -> Result<Self, failure::Error> {
+        Ok(match ast {
+            ASTNode::SQLValue(value) => match (value, &typ.ftype) {
+                (Value::Null, _) => {
+                    if typ.nullable {
+                        Datum::Null
+                    } else {
+                        bail!("Tried to insert null into non-nullable column")
+                    }
+                }
+                (Value::Long(l), FType::Int64) => Datum::Int64(l),
+                (Value::Double(f), FType::Float64) => Datum::Float64(f.into()),
+                (Value::SingleQuotedString(s), FType::String)
+                | (Value::NationalStringLiteral(s), FType::String) => Datum::String(s),
+                (Value::Boolean(b), FType::Bool) => {
+                    if b {
+                        Datum::True
+                    } else {
+                        Datum::False
+                    }
+                }
+                (value, ftype) => bail!(
+                    "Don't know how to insert value {:?} into column of type {:?}",
+                    value,
+                    ftype
+                ),
+            },
+            other => bail!("Can only insert plain values, not {:?}", other),
+        })
     }
 }
 
@@ -497,30 +406,24 @@ impl std::fmt::Display for Side {
     }
 }
 
-#[allow(dead_code)]
-pub struct Parser {
-    dataflows: HashMap<String, Type>,
+#[derive(Debug, Default)]
+pub struct Planner {
+    dataflows: HashMap<String, Dataflow>,
 }
 
-#[allow(dead_code)]
-impl Parser {
-    pub fn new<I>(iter: I) -> Parser
-    where
-        I: IntoIterator<Item = (String, Type)>,
-    {
-        Parser {
-            dataflows: iter.into_iter().collect(),
-        }
+impl Planner {
+    fn get_type(&self, name: &str) -> Option<&Type> {
+        self.dataflows.get(name).map(Dataflow::typ)
     }
 
-    pub fn parse_statement(&self, stmt: &SQLStatement) -> Result<Dataflow, failure::Error> {
+    pub fn plan_statement(&self, stmt: &SQLStatement) -> Result<Dataflow, failure::Error> {
         match stmt {
             SQLStatement::SQLCreateView {
                 name,
                 query,
                 materialized: true,
             } => {
-                let (plan, typ) = self.parse_view_query(query)?;
+                let (plan, typ) = self.plan_view_query(query)?;
                 Ok(Dataflow::View(View {
                     name: extract_sql_object_name(name)?,
                     plan,
@@ -612,7 +515,7 @@ impl Parser {
         }
     }
 
-    pub fn parse_view_query(&self, q: &SQLQuery) -> Result<(Plan, Type), failure::Error> {
+    pub fn plan_view_query(&self, q: &SQLQuery) -> Result<(Plan, Type), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -622,20 +525,20 @@ impl Parser {
         if q.order_by.is_some() {
             bail!("ORDER BY is not supported in a view definition");
         }
-        self.parse_set_expr(&q.body)
+        self.plan_set_expr(&q.body)
     }
 
-    fn parse_set_expr(&self, q: &SQLSetExpr) -> Result<(Plan, Type), failure::Error> {
+    fn plan_set_expr(&self, q: &SQLSetExpr) -> Result<(Plan, Type), failure::Error> {
         match q {
-            SQLSetExpr::Select(select) => self.parse_view_select(select),
+            SQLSetExpr::Select(select) => self.plan_view_select(select),
             SQLSetExpr::SetOperation {
                 op: SQLSetOperator::Union,
                 all,
                 left,
                 right,
             } => {
-                let (left_plan, left_type) = self.parse_set_expr(left)?;
-                let (right_plan, right_type) = self.parse_set_expr(right)?;
+                let (left_plan, left_type) = self.plan_set_expr(left)?;
+                let (right_plan, right_type) = self.plan_set_expr(right)?;
 
                 let plan = Plan::UnionAll(vec![left_plan, right_plan]);
                 let plan = if *all {
@@ -702,7 +605,7 @@ impl Parser {
         }
     }
 
-    fn parse_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
+    fn plan_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
         let mut plan = match &s.relation {
             Some(TableFactor::Table {
@@ -718,7 +621,7 @@ impl Parser {
                     bail!("WITH hints are not supported");
                 }
                 let name = extract_sql_object_name(name)?;
-                let types = match self.dataflows.get(&name) {
+                let types = match self.get_type(&name) {
                     Some(Type {
                         ftype: FType::Tuple(types),
                         ..
@@ -761,7 +664,7 @@ impl Parser {
                         bail!("WITH hints are not supported");
                     }
                     let name = extract_sql_object_name(&name)?;
-                    let types = match self.dataflows.get(&name) {
+                    let types = match self.get_type(&name) {
                         Some(Type {
                             ftype: FType::Tuple(types),
                             ..
@@ -774,7 +677,7 @@ impl Parser {
                         right = right.alias_table(alias);
                     }
                     plan =
-                        self.parse_join_operator(&join.join_operator, &mut selection, plan, right)?;
+                        self.plan_join_operator(&join.join_operator, &mut selection, plan, right)?;
                 }
                 TableFactor::Derived { .. } => {
                     bail!("subqueries are not yet supported");
@@ -788,7 +691,7 @@ impl Parser {
                 scope: "WHERE clause",
                 allow_aggregates: false,
             };
-            let (expr, typ) = self.parse_expr(ctx, &selection, &plan)?;
+            let (expr, typ) = self.plan_expr(ctx, &selection, &plan)?;
             if typ.ftype != FType::Bool {
                 bail!("WHERE clause must have boolean type, not {:?}", typ.ftype);
             }
@@ -811,7 +714,7 @@ impl Parser {
             };
             let mut aggs = Vec::new();
             for frag in agg_frags {
-                let (expr, typ) = self.parse_expr(ctx, &frag.expr, &plan)?;
+                let (expr, typ) = self.plan_expr(ctx, &frag.expr, &plan)?;
                 let func = AggregateFunc::from_name_and_ftype(frag.name.as_ref(), &typ.ftype)?;
                 aggs.push((frag.id, Aggregate { func, expr }, typ));
             }
@@ -819,7 +722,7 @@ impl Parser {
             let mut key_exprs = Vec::new();
             let mut retained_columns = Vec::new();
             for expr in &s.group_by {
-                let (expr, typ) = self.parse_expr(ctx, &expr, &plan)?;
+                let (expr, typ) = self.plan_expr(ctx, &expr, &plan)?;
                 retained_columns.push(typ);
                 key_exprs.push(expr);
             }
@@ -834,7 +737,7 @@ impl Parser {
                 scope: "HAVING clause",
                 allow_aggregates: true,
             };
-            let (expr, typ) = self.parse_expr(ctx, having, &plan)?;
+            let (expr, typ) = self.plan_expr(ctx, having, &plan)?;
             if typ.ftype != FType::Bool {
                 bail!("HAVING clause must have boolean type, not {:?}", typ.ftype);
             }
@@ -844,7 +747,7 @@ impl Parser {
         // Step 5. Handle projections.
         let mut outputs = Vec::new();
         for p in &s.projection {
-            for (expr, typ) in self.parse_select_item(p, &plan)? {
+            for (expr, typ) in self.plan_select_item(p, &plan)? {
                 outputs.push((expr, typ));
             }
         }
@@ -858,7 +761,7 @@ impl Parser {
         Ok(plan.finish())
     }
 
-    fn parse_select_item<'a>(
+    fn plan_select_item<'a>(
         &self,
         s: &'a SQLSelectItem,
         plan: &SQLPlan,
@@ -868,9 +771,9 @@ impl Parser {
             allow_aggregates: true,
         };
         match s {
-            SQLSelectItem::UnnamedExpression(e) => Ok(vec![self.parse_expr(ctx, e, plan)?]),
+            SQLSelectItem::UnnamedExpression(e) => Ok(vec![self.plan_expr(ctx, e, plan)?]),
             SQLSelectItem::ExpressionWithAlias { expr, alias } => {
-                let (expr, mut typ) = self.parse_expr(ctx, expr, plan)?;
+                let (expr, mut typ) = self.plan_expr(ctx, expr, plan)?;
                 typ.name = Some(alias.clone());
                 Ok(vec![(expr, typ)])
             }
@@ -888,7 +791,7 @@ impl Parser {
         }
     }
 
-    fn parse_join_operator(
+    fn plan_join_operator(
         &self,
         operator: &JoinOperator,
         selection: &mut Option<ASTNode>,
@@ -897,20 +800,20 @@ impl Parser {
     ) -> Result<SQLPlan, failure::Error> {
         match operator {
             JoinOperator::Inner(constraint) => {
-                self.parse_join_constraint(constraint, left, right, false, false)
+                self.plan_join_constraint(constraint, left, right, false, false)
             }
             JoinOperator::LeftOuter(constraint) => {
-                self.parse_join_constraint(constraint, left, right, true, false)
+                self.plan_join_constraint(constraint, left, right, true, false)
             }
             JoinOperator::RightOuter(constraint) => {
-                self.parse_join_constraint(constraint, left, right, false, true)
+                self.plan_join_constraint(constraint, left, right, false, true)
             }
             JoinOperator::FullOuter(constraint) => {
-                self.parse_join_constraint(constraint, left, right, true, true)
+                self.plan_join_constraint(constraint, left, right, true, true)
             }
             JoinOperator::Implicit => {
                 let (left_key, right_key, new_selection) =
-                    self.parse_implicit_join_expr(selection, &left, &right)?;
+                    self.plan_implicit_join_expr(selection, &left, &right)?;
                 *selection = new_selection;
                 Ok(left.join_on(right, left_key, right_key, false, false))
             }
@@ -924,7 +827,7 @@ impl Parser {
         }
     }
 
-    fn parse_join_constraint<'a>(
+    fn plan_join_constraint<'a>(
         &self,
         constraint: &'a JoinConstraint,
         left: SQLPlan,
@@ -934,7 +837,7 @@ impl Parser {
     ) -> Result<SQLPlan, failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
-                let (left_key, right_key) = self.parse_join_on_expr(expr, &left, &right)?;
+                let (left_key, right_key) = self.plan_join_on_expr(expr, &left, &right)?;
                 Ok(left.join_on(
                     right,
                     left_key,
@@ -1000,7 +903,7 @@ impl Parser {
         }
     }
 
-    fn parse_eq_expr(
+    fn plan_eq_expr(
         &self,
         left: &ASTNode,
         right: &ASTNode,
@@ -1025,7 +928,7 @@ impl Parser {
         ))
     }
 
-    fn parse_join_on_expr(
+    fn plan_join_on_expr(
         &self,
         expr: &ASTNode,
         left_plan: &SQLPlan,
@@ -1044,7 +947,7 @@ impl Parser {
                     }
                     SQLOperator::Eq => {
                         let (left_expr, right_expr) =
-                            self.parse_eq_expr(left, right, left_plan, right_plan)?;
+                            self.plan_eq_expr(left, right, left_plan, right_plan)?;
                         left_keys.push(left_expr);
                         right_keys.push(right_expr);
                     }
@@ -1060,8 +963,8 @@ impl Parser {
         Ok((Expr::Tuple(left_keys), Expr::Tuple(right_keys)))
     }
 
-    // This is basically the same as parse_join_on_expr, except that we allow `expr` to contain irrelevant constraints that need to be saved for later
-    fn parse_implicit_join_expr(
+    // This is basically the same as plan_join_on_expr, except that we allow `expr` to contain irrelevant constraints that need to be saved for later
+    fn plan_implicit_join_expr(
         &self,
         expr: &Option<ASTNode>,
         left_plan: &SQLPlan,
@@ -1080,7 +983,7 @@ impl Parser {
                         exprs.push(right);
                     }
                     SQLOperator::Eq => {
-                        match self.parse_eq_expr(left, right, left_plan, right_plan) {
+                        match self.plan_eq_expr(left, right, left_plan, right_plan) {
                             Ok((left_expr, right_expr)) => {
                                 left_keys.push(left_expr);
                                 right_keys.push(right_expr);
@@ -1106,7 +1009,7 @@ impl Parser {
         Ok((Expr::Tuple(left_keys), Expr::Tuple(right_keys), left_over))
     }
 
-    fn parse_expr<'a>(
+    fn plan_expr<'a>(
         &self,
         ctx: &ExprContext,
         e: &'a ASTNode,
@@ -1123,20 +1026,18 @@ impl Parser {
                 let expr = Expr::Column(i, Box::new(Expr::Ambient));
                 Ok((expr, typ.clone()))
             }
-            ASTNode::SQLValue(val) => self.parse_literal(val),
+            ASTNode::SQLValue(val) => self.plan_literal(val),
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            ASTNode::SQLIsNull(expr) => self.parse_is_null_expr(ctx, expr, false, plan),
-            ASTNode::SQLIsNotNull(expr) => self.parse_is_null_expr(ctx, expr, true, plan),
+            ASTNode::SQLIsNull(expr) => self.plan_is_null_expr(ctx, expr, false, plan),
+            ASTNode::SQLIsNotNull(expr) => self.plan_is_null_expr(ctx, expr, true, plan),
             // TODO(benesch): "SQLUnary" but "SQLBinaryExpr"?
-            ASTNode::SQLUnary { operator, expr } => {
-                self.parse_unary_expr(ctx, operator, expr, plan)
-            }
+            ASTNode::SQLUnary { operator, expr } => self.plan_unary_expr(ctx, operator, expr, plan),
             ASTNode::SQLBinaryExpr { op, left, right } => {
-                self.parse_binary_expr(ctx, op, left, right, plan)
+                self.plan_binary_expr(ctx, op, left, right, plan)
             }
-            ASTNode::SQLNested(expr) => self.parse_expr(ctx, expr, plan),
+            ASTNode::SQLNested(expr) => self.plan_expr(ctx, expr, plan),
             ASTNode::SQLFunction { name, args, over } => {
-                self.parse_function(ctx, name, args, over, plan)
+                self.plan_function(ctx, name, args, over, plan)
             }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
@@ -1146,7 +1047,7 @@ impl Parser {
     }
 
     #[allow(clippy::ptr_arg)]
-    fn parse_function<'a>(
+    fn plan_function<'a>(
         &self,
         ctx: &ExprContext,
         name: &'a SQLObjectName,
@@ -1167,14 +1068,14 @@ impl Parser {
         }
     }
 
-    fn parse_is_null_expr<'a>(
+    fn plan_is_null_expr<'a>(
         &self,
         ctx: &ExprContext,
         inner: &'a ASTNode,
         not: bool,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (expr, _) = self.parse_expr(ctx, inner, plan)?;
+        let (expr, _) = self.plan_expr(ctx, inner, plan)?;
         let mut expr = Expr::CallUnary {
             func: UnaryFunc::IsNull,
             expr: Box::new(expr),
@@ -1193,14 +1094,14 @@ impl Parser {
         Ok((expr, typ))
     }
 
-    fn parse_unary_expr<'a>(
+    fn plan_unary_expr<'a>(
         &self,
         ctx: &ExprContext,
         op: &'a SQLOperator,
         expr: &'a ASTNode,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (expr, typ) = self.parse_expr(ctx, expr, plan)?;
+        let (expr, typ) = self.plan_expr(ctx, expr, plan)?;
         let (func, ftype) = match op {
             SQLOperator::Not => (UnaryFunc::Not, FType::Bool),
             SQLOperator::Plus => return Ok((expr, typ)), // no-op
@@ -1230,7 +1131,7 @@ impl Parser {
         Ok((expr, typ))
     }
 
-    fn parse_binary_expr<'a>(
+    fn plan_binary_expr<'a>(
         &self,
         ctx: &ExprContext,
         op: &'a SQLOperator,
@@ -1238,8 +1139,8 @@ impl Parser {
         right: &'a ASTNode,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (lexpr, ltype) = self.parse_expr(ctx, left, plan)?;
-        let (rexpr, rtype) = self.parse_expr(ctx, right, plan)?;
+        let (lexpr, ltype) = self.plan_expr(ctx, left, plan)?;
+        let (rexpr, rtype) = self.plan_expr(ctx, right, plan)?;
         let (func, ftype) = match op {
             SQLOperator::Plus => match (&ltype.ftype, &rtype.ftype) {
                 (FType::Int32, FType::Int32) => (BinaryFunc::AddInt32, FType::Int32),
@@ -1311,7 +1212,7 @@ impl Parser {
         Ok((expr, typ))
     }
 
-    fn parse_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {
+    fn plan_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {
         let (datum, ftype) = match l {
             Value::Long(i) => (Datum::Int64(*i), FType::Int64),
             Value::Double(f) => (Datum::Float64((*f).into()), FType::Float64),
@@ -1358,6 +1259,29 @@ fn unnest(expr: &ASTNode) -> &ASTNode {
     }
 }
 
+impl Planner {
+    pub fn mock<I>(dataflows: I) -> Self
+    where
+        I: IntoIterator<Item = (String, Type)>,
+    {
+        Planner {
+            dataflows: dataflows
+                .into_iter()
+                .map(|(name, typ)| {
+                    (
+                        name.clone(),
+                        Dataflow::Source(Source {
+                            name,
+                            connector: Connector::Local(LocalConnector { id: Uuid::new_v4() }),
+                            typ,
+                        }),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -1387,13 +1311,13 @@ mod tests {
                 },
             ]),
         };
-        let parser = Parser::new(vec![("src".into(), typ)]);
+        let planner = Planner::mock(vec![("src".into(), typ)]);
 
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},
             "CREATE MATERIALIZED VIEW v AS SELECT b FROM src".into(),
         )?;
-        let dataflow = parser.parse_statement(&stmts[0])?;
+        let dataflow = planner.plan_statement(&stmts[0])?;
         assert_eq!(
             dataflow,
             Dataflow::View(View {
@@ -1419,7 +1343,7 @@ mod tests {
 
     #[test]
     fn test_basic_source() -> Result<(), failure::Error> {
-        let parser = Parser::new(vec![]);
+        let planner = Planner::mock(vec![]);
 
         let raw_schema = r#"{
     "type": "record",
@@ -1437,7 +1361,7 @@ mod tests {
                 raw_schema
             ),
         )?;
-        let dataflow = parser.parse_statement(&stmts[0])?;
+        let dataflow = planner.plan_statement(&stmts[0])?;
         assert_eq!(
             dataflow,
             Dataflow::Source(Source {
@@ -1487,13 +1411,13 @@ mod tests {
                 },
             ]),
         };
-        let parser = Parser::new(vec![("src".into(), typ)]);
+        let planner = Planner::mock(vec![("src".into(), typ)]);
 
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},
             "CREATE MATERIALIZED VIEW v AS SELECT 1 + sum(a + 1) FROM src GROUP BY b".into(),
         )?;
-        let dataflow = parser.parse_statement(&stmts[0])?;
+        let dataflow = planner.plan_statement(&stmts[0])?;
         assert_eq!(
             dataflow,
             Dataflow::View(View {
@@ -1566,13 +1490,13 @@ mod tests {
                 },
             ]),
         };
-        let parser = Parser::new(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
+        let planner = Planner::mock(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
 
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},
             "CREATE MATERIALIZED VIEW v AS SELECT a, b, d FROM src1 JOIN src2 ON c = b".into(),
         )?;
-        let dataflow = parser.parse_statement(&stmts[0])?;
+        let dataflow = planner.plan_statement(&stmts[0])?;
         assert_eq!(
             dataflow,
             Dataflow::View(View {
@@ -1653,14 +1577,14 @@ mod tests {
                 },
             ]),
         };
-        let parser = Parser::new(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
+        let planner = Planner::mock(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
 
         let stmts = SQLParser::parse_sql(
             &AnsiSqlDialect {},
             "CREATE MATERIALIZED VIEW v AS SELECT a, b FROM src1 UNION ALL SELECT a, b FROM src2"
                 .into(),
         )?;
-        let dataflow = parser.parse_statement(&stmts[0])?;
+        let dataflow = planner.plan_statement(&stmts[0])?;
         assert_eq!(
             dataflow,
             Dataflow::View(View {

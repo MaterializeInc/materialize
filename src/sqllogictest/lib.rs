@@ -336,9 +336,9 @@ pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure
                 }
             };
 
-            let parser = materialize::sql::Parser::new(state.table_types.clone());
+            let planner = materialize::sql::Planner::mock(state.table_types.clone());
 
-            let (_plan, typ) = match parser.parse_view_query(&query) {
+            let (_plan, typ) = match planner.plan_view_query(&query) {
                 Ok(result) => result,
                 _ => return Ok(Outcome::PlanFailure),
             };
@@ -395,7 +395,6 @@ mod test {
     use std::fs::File;
     use std::io::Read;
 
-    use failure::ResultExt;
     use walkdir::WalkDir;
 
     #[test]

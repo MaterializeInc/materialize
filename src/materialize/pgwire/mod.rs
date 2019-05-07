@@ -16,10 +16,37 @@
 //!   * [CockroachDB pgwire implementation](https://github.com/cockroachdb/cockroach/tree/master/pkg/sql/pgwire)
 //!   * ["Postgres on the wire" PGCon talk](https://www.pgcon.org/2014/schedule/attachments/330_postgres-for-the-wire.pdf)
 
+use futures::Future;
+use tokio::codec::Framed;
+use tokio::io::{AsyncRead, AsyncWrite};
+
+use crate::glue::*;
+
 mod codec;
 mod message;
 mod protocol;
 mod types;
 
 pub use codec::Codec;
-pub use protocol::{match_handshake, Conn, StateMachine};
+pub use protocol::match_handshake;
+
+pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
+    a: A,
+    sql_command_sender: UnboundedSender<SqlCommand>,
+    sql_response_mux: SqlResponseMux,
+    peek_results_mux: PeekResultsMux,
+    num_timely_workers: usize,
+) -> impl Future<Item = (), Error = failure::Error> {
+    let uuid = Uuid::new_v4();
+    let stream = Framed::new(a, codec::Codec::new());
+    protocol::StateMachine::start(
+        stream,
+        protocol::Context {
+            uuid,
+            sql_command_sender,
+            sql_response_receiver: sql_response_mux.write().unwrap().channel(uuid).unwrap(),
+            peek_results_receiver: peek_results_mux.write().unwrap().channel(uuid).unwrap(),
+            num_timely_workers,
+        },
+    )
+}

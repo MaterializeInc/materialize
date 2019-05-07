@@ -14,4 +14,5 @@ mod source;
 mod trace;
 mod types;
 
+pub use server::{serve, PeekResultsHandler};
 pub use types::*;

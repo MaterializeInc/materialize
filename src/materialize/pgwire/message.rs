@@ -8,6 +8,7 @@ use bytes::Bytes;
 use super::types::PgType;
 use crate::repr::{Datum, FType, Type};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum Severity {
     Error,
@@ -42,12 +43,14 @@ pub enum FrontendMessage {
     Terminate,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum BackendMessage {
     AuthenticationOk,
     CommandComplete {
         tag: String,
     },
+    // TODO(jamii) was this important?
     EmptyQueryResponse,
     ReadyForQuery,
     RowDescription(Vec<FieldDescription>),
@@ -72,6 +75,7 @@ pub struct FieldDescription {
     pub format: FieldFormat,
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug)]
 pub enum FieldFormat {
     Text = 0,

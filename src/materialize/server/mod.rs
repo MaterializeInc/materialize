@@ -5,53 +5,51 @@
 
 //! Main materialized server.
 
-use failure::format_err;
-use futures::sync::mpsc::UnboundedSender;
-use futures::{future, Future};
+use futures::Future;
 use log::error;
 use std::boxed::Box;
-use std::collections::HashMap;
 use std::error::Error as StdError;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, RwLock};
+use std::net::SocketAddr;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
 use crate::clock::Clock;
 use crate::dataflow;
-use crate::dataflow::server::Command;
-use crate::dataflow::Dataflow;
-use crate::repr::Datum;
-use metastore::{DataflowEvent, MetaStore};
-use ore::closure;
+use crate::glue::*;
+use crate::pgwire;
+use crate::sql;
 use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::SniffingStream;
 
 mod http;
-mod pgwire;
+
+pub enum PeekResultsConfig {
+    Local,
+    Remote,
+}
 
 pub struct Config {
-    pub zookeeper_url: Option<String>,
+    num_timely_workers: usize,
+    peek_results: PeekResultsConfig,
 }
 
-#[derive(Default)]
-pub struct ServerState {
-    pub clock: Clock,
-    pub peek_results: RwLock<HashMap<uuid::Uuid, (UnboundedSender<Datum>, usize)>>,
-}
-
-#[derive(Clone)]
-pub struct ConnState {
-    pub meta_store: MetaStore<Dataflow>,
-    pub cmd_tx: dataflow::server::CommandSender,
-    pub server_state: Arc<ServerState>,
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            num_timely_workers: 4,
+            peek_results: PeekResultsConfig::Remote,
+        }
+    }
 }
 
 fn handle_connection(
     tcp_stream: TcpStream,
-    state: ConnState,
+    sql_command_sender: UnboundedSender<SqlCommand>,
+    sql_response_mux: SqlResponseMux,
+    peek_results_mux: PeekResultsMux,
+    num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
@@ -65,9 +63,16 @@ fn handle_connection(
         .and_then(move |(ss, buf, nread)| {
             let buf = &buf[..nread];
             if pgwire::match_handshake(buf) {
-                pgwire::handle_connection(ss.into_sniffed(), state).either_a()
+                pgwire::serve(
+                    ss.into_sniffed(),
+                    sql_command_sender,
+                    sql_response_mux,
+                    peek_results_mux,
+                    num_timely_workers,
+                )
+                .either_a()
             } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed(), state).either_b()
+                http::handle_connection(ss.into_sniffed(), peek_results_mux).either_b()
             } else {
                 reject_connection(ss.into_sniffed()).from_err().either_c()
             }
@@ -81,44 +86,46 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
-    let zookeeper_url = config
-        .zookeeper_url
-        .unwrap_or_else(|| "127.0.0.1:2181".into());
-    let zookeeper_addr = to_socket_addr(zookeeper_url)?;
+    let clock = Clock::default();
+
+    let (sql_command_sender, sql_command_receiver) = unbounded::<SqlCommand>();
+    let sql_response_mux = SqlResponseMux::default();
+    let (dataflow_command_sender, dataflow_command_receiver) = unbounded::<DataflowCommand>();
+    let peek_results_mux = PeekResultsMux::default();
+
+    // timely dataflow
+    let peek_results_handler = match config.peek_results {
+        PeekResultsConfig::Local => dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
+        PeekResultsConfig::Remote => dataflow::PeekResultsHandler::Remote,
+    };
+    let _dd_workers = dataflow::serve(
+        dataflow_command_receiver,
+        peek_results_handler,
+        clock.clone(),
+        config.num_timely_workers,
+    );
+
+    // planner
+    sql::serve(
+        sql_command_receiver,
+        sql_response_mux.clone(),
+        dataflow_command_sender,
+        clock.clone(),
+    );
+
+    // pgwire / http server
     let listen_addr: SocketAddr = "127.0.0.1:6875".parse()?;
-
     let listener = TcpListener::bind(&listen_addr)?;
-
     let start = future::lazy(move || {
-        let server_state: Arc<ServerState> = Default::default();
-
-        let meta_store = MetaStore::new(&zookeeper_addr, "materialized");
-
-        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-        let _dd_workers = dataflow::server::serve(server_state.clock.clone(), cmd_rx);
-
-        // TODO(benesch): only pipe the metastore watch to the dataflow
-        // on one machine, to avoid duplicating dataflows.
-        tokio::spawn(meta_store.register_dataflow_watch().for_each(
-            closure!([clone cmd_tx] |event| {
-                cmd_tx.send(match event {
-                    DataflowEvent::Created(dataflow) => Command::CreateDataflow(dataflow),
-                    DataflowEvent::Deleted(name) => Command::DropDataflow(name),
-                }).unwrap();
-                Ok(())
-            }),
-        ));
-
         let server = listener
             .incoming()
             .for_each(move |stream| {
                 tokio::spawn(handle_connection(
                     stream,
-                    ConnState {
-                        meta_store: meta_store.clone(),
-                        cmd_tx: cmd_tx.clone(),
-                        server_state: server_state.clone(),
-                    },
+                    sql_command_sender.clone(),
+                    sql_response_mux.clone(),
+                    peek_results_mux.clone(),
+                    config.num_timely_workers,
                 ));
                 Ok(())
             })
@@ -127,16 +134,8 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
 
         Ok(())
     });
-
-    println!("materialized listening on {}...", listen_addr);
     tokio::run(start);
+    println!("materialized listening on {}...", listen_addr);
 
     Ok(())
-}
-
-fn to_socket_addr<TSA: ToSocketAddrs>(tsa: TSA) -> Result<SocketAddr, failure::Error> {
-    let mut addrs = tsa.to_socket_addrs()?;
-    addrs
-        .next()
-        .ok_or_else(|| format_err!("address did not resolve"))
 }

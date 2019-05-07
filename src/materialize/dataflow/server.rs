@@ -7,9 +7,9 @@
 
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
-use serde::{Deserialize, Serialize};
+use futures::stream::Stream;
 use std::collections::HashMap;
-use std::sync::mpsc;
+
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -18,34 +18,38 @@ use timely::worker::Worker as TimelyWorker;
 
 use super::render;
 use super::trace::{KeysOnlyHandle, TraceManager};
-use super::types::Dataflow;
 use crate::clock::{Clock, Timestamp};
+use crate::glue::*;
 use ore::sync::Lottery;
 
-pub fn serve(clock: Clock, cmd_rx: CommandReceiver) -> Result<WorkerGuards<()>, String> {
-    let lottery = Lottery::new(cmd_rx, dummy_command_receiver);
-    timely::execute(timely::Configuration::Process(4), move |worker| {
-        let cmd_rx = lottery.draw();
-        Worker::new(worker, clock.clone(), cmd_rx).run()
+pub fn serve(
+    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+    peek_results_handler: PeekResultsHandler,
+    clock: Clock,
+    num_workers: usize,
+) -> Result<WorkerGuards<()>, String> {
+    let lottery = Lottery::new(dataflow_command_receiver, dummy_command_receiver);
+    timely::execute(timely::Configuration::Process(num_workers), move |worker| {
+        let dataflow_command_receiver = lottery.draw();
+        Worker::new(
+            worker,
+            dataflow_command_receiver.wait(),
+            peek_results_handler.clone(),
+            clock.clone(),
+        )
+        .run()
     })
 }
 
-/// The commands that a running dataflow server can accept.
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Command {
-    CreateDataflow(Dataflow),
-    DropDataflow(String),
-    Peek(String, uuid::Uuid, Timestamp),
-    Tail(String),
+fn dummy_command_receiver() -> UnboundedReceiver<DataflowCommand> {
+    let (_tx, rx) = unbounded();
+    rx
 }
 
-pub type CommandSender = mpsc::Sender<Command>;
-pub type CommandReceiver = mpsc::Receiver<Command>;
-
-fn dummy_command_receiver() -> CommandReceiver {
-    let (_tx, rx) = mpsc::channel();
-    rx
+#[derive(Clone)]
+pub enum PeekResultsHandler {
+    Local(PeekResultsMux),
+    Remote,
 }
 
 struct PendingPeek {
@@ -61,9 +65,10 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     clock: Clock,
-    cmd_rx: CommandReceiver,
-    sequencer: Sequencer<Command>,
-    pending_cmds: HashMap<String, Vec<Command>>,
+    dataflow_command_receiver: futures::stream::Wait<UnboundedReceiver<DataflowCommand>>,
+    peek_results_handler: PeekResultsHandler,
+    sequencer: Sequencer<DataflowCommand>,
+    pending_cmds: HashMap<String, Vec<DataflowCommand>>,
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
@@ -73,14 +78,20 @@ impl<'w, A> Worker<'w, A>
 where
     A: Allocate,
 {
-    fn new(w: &'w mut TimelyWorker<A>, clock: Clock, cmd_rx: CommandReceiver) -> Worker<'w, A> {
+    fn new(
+        w: &'w mut TimelyWorker<A>,
+        dataflow_command_receiver: futures::stream::Wait<UnboundedReceiver<DataflowCommand>>,
+        peek_results_handler: PeekResultsHandler,
+        clock: Clock,
+    ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, std::time::Instant::now());
         let mut traces = TraceManager::new();
         render::add_builtin_dataflows(&mut traces, w);
         Worker {
             inner: w,
             clock,
-            cmd_rx,
+            dataflow_command_receiver,
+            peek_results_handler,
             sequencer,
             pending_cmds: HashMap::new(),
             pending_peeks: Vec::new(),
@@ -91,9 +102,11 @@ where
 
     fn run(&mut self) {
         loop {
+            // TOOD(jamii) would it be cheaper to replace the sequencer by just streaming `dataflow_command_receiver` into `num_workers` copies?
+
             // Submit any external commands for sequencing.
-            while let Ok(cmd) = self.cmd_rx.try_recv() {
-                self.sequencer.push(cmd)
+            while let Some(cmd) = self.dataflow_command_receiver.next() {
+                self.sequencer.push(cmd.unwrap())
             }
 
             // Handle any sequenced commands.
@@ -106,8 +119,13 @@ where
 
             // See if time has advanced enough to handle any of our pending
             // peeks.
-            let rpc_client = &self.rpc_client;
-            self.pending_peeks.retain(|peek| {
+            let Worker {
+                pending_peeks,
+                peek_results_handler,
+                rpc_client,
+                ..
+            } = self;
+            pending_peeks.retain(|peek| {
                 if peek.probe.less_than(&peek.timestamp) {
                     return true; // retain
                 }
@@ -125,34 +143,47 @@ where
                     }
                     cur.step_key(&storage)
                 }
-                let encoded = bincode::serialize(&out).unwrap();
-                rpc_client
-                    .post("http://localhost:6875/api/peek-results")
-                    .header("X-Materialize-Query-UUID", peek.id.to_string())
-                    .body(encoded)
-                    .send()
-                    .unwrap();
+                match peek_results_handler {
+                    PeekResultsHandler::Local(peek_results_mux) => {
+                        peek_results_mux
+                            .read()
+                            .unwrap()
+                            .sender(&peek.id)
+                            .unwrap()
+                            .unbounded_send(out)
+                            .unwrap();
+                    }
+                    PeekResultsHandler::Remote => {
+                        let encoded = bincode::serialize(&out).unwrap();
+                        rpc_client
+                            .post("http://localhost:6875/api/peek-results")
+                            .header("X-Materialize-Query-UUID", peek.id.to_string())
+                            .body(encoded)
+                            .send()
+                            .unwrap();
+                    }
+                }
                 false // don't retain
             });
         }
     }
 
-    fn handle_command(&mut self, cmd: Command) {
-        match &cmd {
-            Command::CreateDataflow(dataflow) => {
-                render::build_dataflow(dataflow, &mut self.traces, self.inner, &self.clock);
+    fn handle_command(&mut self, cmd: DataflowCommand) {
+        match cmd {
+            DataflowCommand::CreateDataflow(dataflow) => {
+                render::build_dataflow(&dataflow, &mut self.traces, self.inner, &self.clock);
                 if let Some(cmds) = self.pending_cmds.remove(dataflow.name()) {
                     for cmd in cmds {
                         self.handle_command(cmd);
                     }
                 }
             }
-            Command::DropDataflow(name) => self.traces.del_trace(name),
-            Command::Peek(name, id, timestamp) => {
+            DataflowCommand::DropDataflow(name) => self.traces.del_trace(&name),
+            DataflowCommand::Peek(ref name, id, timestamp) => {
                 match self.traces.get_trace_and_probe(name.clone()) {
                     Some((trace, probe)) => self.pending_peeks.push(PendingPeek {
-                        id: *id,
-                        timestamp: *timestamp,
+                        id,
+                        timestamp,
                         trace,
                         probe,
                     }),
@@ -168,7 +199,8 @@ where
                     }
                 }
             }
-            Command::Tail(_) => unimplemented!(),
+            DataflowCommand::Tail(_) => unimplemented!(),
+            DataflowCommand::Insert(_) => unimplemented!(),
         }
     }
 }
