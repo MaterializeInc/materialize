@@ -1277,7 +1277,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_basic_view() -> Result<SqlResponse, failure::Error> {
+    fn test_basic_view() -> Result<(), failure::Error> {
         let typ = Type {
             name: None,
             nullable: false,
@@ -1330,7 +1330,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_source() -> Result<SqlResponse, failure::Error> {
+    fn test_basic_source() -> Result<(), failure::Error> {
         let planner = Planner::mock(vec![]);
 
         let raw_schema = r#"{
@@ -1382,7 +1382,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_sum() -> Result<SqlResponse, failure::Error> {
+    fn test_basic_sum() -> Result<(), failure::Error> {
         let typ = Type {
             name: None,
             nullable: false,
@@ -1445,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_join() -> Result<SqlResponse, failure::Error> {
+    fn test_basic_join() -> Result<(), failure::Error> {
         let src1_type = Type {
             name: None,
             nullable: false,
@@ -1532,7 +1532,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_union() -> Result<SqlResponse, failure::Error> {
+    fn test_basic_union() -> Result<(), failure::Error> {
         let src1_type = Type {
             name: None,
             nullable: false,
