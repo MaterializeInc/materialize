@@ -122,9 +122,12 @@ pub enum StateMachine<A: Conn + 'static> {
     ))]
     HandleQuery { conn: A },
 
-    #[state_machine_future(transitions(SendRowDescription, SendRows, Error))]
-    SendRowDescription {
-        send: SinkSend<A>,
+    #[state_machine_future(transitions(WaitForRows, Error))]
+    SendRowDescription { send: SinkSend<A> },
+
+    #[state_machine_future(transitions(WaitForRows, SendRows, Error))]
+    WaitForRows {
+        conn: A,
         peek_results: Vec<Datum>,
         remaining_peek_results: usize,
     },
@@ -281,8 +284,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
                         )),
-                        peek_results: vec![],
-                        remaining_peek_results: context.num_timely_workers,
                     }),
                 }
             }
@@ -309,10 +310,21 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
-        let mut state = state.take();
+        transition!(WaitForRows {
+            conn,
+            peek_results: vec![],
+            remaining_peek_results: context.num_timely_workers,
+        })
+    }
+
+    fn poll_wait_for_rows<'s, 'c>(
+        state: &'s mut RentToOwn<'s, WaitForRows<A>>,
+        context: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterWaitForRows<A>, failure::Error> {
         match context.peek_results_receiver.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(Some(peek_results))) => {
+                let mut state = state.take();
                 state.peek_results.extend(peek_results);
                 state.remaining_peek_results -= 1;
                 if state.remaining_peek_results == 0 {
@@ -323,7 +335,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         }),
                     ));
                     transition!(SendRows {
-                        send: Box::new(stream.forward(conn)),
+                        send: Box::new(stream.forward(state.conn)),
                     })
                 } else {
                     transition!(state)
@@ -334,12 +346,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             }
         }
     }
-
-    // let stream: MessageStream = Box::new(state.rows.map(|row| {
-    //     BackendMessage::DataRow(match row {
-    // Datum::Tuple(t) => t,
-    //     _ => unimplemented!(),
-    // })
 
     fn poll_send_rows<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendRows<A>>,
