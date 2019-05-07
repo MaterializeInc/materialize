@@ -67,7 +67,7 @@ try bin/check
 if [[ ! "$fast" ]]; then
     try cargo build
 
-    target/debug/materialized
+    target/debug/materialized &
     materialized_pid=$!
     trap "kill -9 $materialized_pid &> /dev/null" EXIT
 
