@@ -145,13 +145,10 @@ where
                 }
                 match peek_results_handler {
                     PeekResultsHandler::Local(peek_results_mux) => {
-                        peek_results_mux
-                            .read()
-                            .unwrap()
-                            .sender(&peek.id)
-                            .unwrap()
-                            .unbounded_send(out)
-                            .unwrap();
+                        // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
+                        if let Ok(sender) = peek_results_mux.read().unwrap().sender(&peek.id) {
+                            drop(sender.unbounded_send(out))
+                        }
                     }
                     PeekResultsHandler::Remote => {
                         let encoded = bincode::serialize(&out).unwrap();

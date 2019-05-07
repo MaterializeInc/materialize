@@ -46,7 +46,7 @@ pub fn serve(
             clock,
         };
         for sql_command in sql_command_receiver.wait() {
-            server.handle_command(sql_command.unwrap()).unwrap();
+            server.handle_command(sql_command.unwrap());
         }
     });
 }
@@ -59,24 +59,25 @@ pub struct Server {
 }
 
 impl Server {
-    fn send_sql_response(
-        &self,
-        connection_uuid: Uuid,
-        sql_response: SqlResponse,
-    ) -> Result<(), failure::Error> {
-        self.sql_response_mux
+    pub fn handle_command(&mut self, sql_command: SqlCommand) {
+        let connection_uuid = sql_command.connection_uuid;
+        let sql_response = self.try_handle_command(sql_command.sql, connection_uuid);
+        // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
+        if let Ok(sender) = self
+            .sql_response_mux
             .read()
-            .map_err(|e| format_err!("{}", e))?
-            .sender(&connection_uuid)?
-            .unbounded_send(Ok(sql_response))?;
-        Ok(())
+            .unwrap()
+            .sender(&connection_uuid)
+        {
+            drop(sender.unbounded_send(sql_response));
+        }
     }
 
-    pub fn handle_command(&mut self, sql_command: SqlCommand) -> Result<(), failure::Error> {
-        let SqlCommand {
-            sql,
-            connection_uuid,
-        } = sql_command;
+    fn try_handle_command(
+        &mut self,
+        sql: String,
+        connection_uuid: Uuid,
+    ) -> Result<SqlResponse, failure::Error> {
         let mut stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, sql)?;
         if stmts.len() != 1 {
             bail!("expected one statement, but got {}", stmts.len());
@@ -89,18 +90,16 @@ impl Server {
         &mut self,
         stmt: SQLStatement,
         connection_uuid: Uuid,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<SqlResponse, failure::Error> {
         match stmt {
             SQLStatement::SQLPeek { name } => self.handle_peek(name, connection_uuid),
             SQLStatement::SQLTail { .. } => bail!("TAIL is not implemented yet"),
             SQLStatement::SQLCreateDataSource { .. }
             | SQLStatement::SQLCreateView { .. }
-            | SQLStatement::SQLCreateTable { .. } => {
-                self.handle_create_dataflow(stmt, connection_uuid)
-            }
+            | SQLStatement::SQLCreateTable { .. } => self.handle_create_dataflow(stmt),
             SQLStatement::SQLDropDataSource { .. }
             | SQLStatement::SQLDropView { .. }
-            | SQLStatement::SQLDropTable { .. } => self.handle_drop_dataflow(stmt, connection_uuid),
+            | SQLStatement::SQLDropTable { .. } => self.handle_drop_dataflow(stmt),
 
             // these are intended mostly for testing:
             SQLStatement::SQLQuery(query) => self.handle_select(*query, connection_uuid),
@@ -108,7 +107,7 @@ impl Server {
                 table_name,
                 columns,
                 values,
-            } => self.handle_insert(table_name, columns, values, connection_uuid),
+            } => self.handle_insert(table_name, columns, values),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
@@ -117,31 +116,22 @@ impl Server {
     fn handle_create_dataflow(
         &mut self,
         stmt: SQLStatement,
-        connection_uuid: Uuid,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<SqlResponse, failure::Error> {
         let dataflow = self.planner.plan_statement(&stmt)?;
         self.planner
             .dataflows
             .insert(dataflow.name().to_owned(), dataflow.clone());
-        self.send_sql_response(
-            connection_uuid,
-            match stmt {
-                SQLStatement::SQLCreateDataSource { .. } => SqlResponse::CreatedDataSource,
-                SQLStatement::SQLCreateView { .. } => SqlResponse::CreatedView,
-                SQLStatement::SQLCreateTable { .. } => SqlResponse::CreatedTable,
-                _ => unreachable!(),
-            },
-        )?;
-        self.dataflow_command_sender
-            .unbounded_send(DataflowCommand::CreateDataflow(dataflow))?;
-        Ok(())
+
+        self.send_dataflow_command(DataflowCommand::CreateDataflow(dataflow));
+        Ok(match stmt {
+            SQLStatement::SQLCreateDataSource { .. } => SqlResponse::CreatedDataSource,
+            SQLStatement::SQLCreateView { .. } => SqlResponse::CreatedView,
+            SQLStatement::SQLCreateTable { .. } => SqlResponse::CreatedTable,
+            _ => unreachable!(),
+        })
     }
 
-    fn handle_drop_dataflow(
-        &mut self,
-        stmt: SQLStatement,
-        connection_uuid: Uuid,
-    ) -> Result<(), failure::Error> {
+    fn handle_drop_dataflow(&mut self, stmt: SQLStatement) -> Result<SqlResponse, failure::Error> {
         let (sql_response, object_name) = match stmt {
             SQLStatement::SQLDropDataSource { name, .. } => (SqlResponse::DroppedDataSource, name),
             SQLStatement::SQLDropView { name, .. } => (SqlResponse::DroppedView, name),
@@ -168,18 +158,17 @@ impl Server {
             _ => unreachable!(),
         };
         let name = extract_sql_object_name(&object_name)?;
+
         self.planner.dataflows.remove(&name);
-        self.send_sql_response(connection_uuid, sql_response)?;
-        self.dataflow_command_sender
-            .unbounded_send(DataflowCommand::DropDataflow(name.clone()))?;
-        Ok(())
+        self.send_dataflow_command(DataflowCommand::DropDataflow(name.clone()));
+        Ok(sql_response)
     }
 
     fn handle_peek(
         &mut self,
         name: SQLObjectName,
         connection_uuid: Uuid,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<SqlResponse, failure::Error> {
         let name = name.to_string();
         let ts = self.clock.now();
         let typ = self
@@ -189,17 +178,16 @@ impl Server {
             .ok_or_else(|| format_err!("Can't PEEK {} because it doesn't exist", name))?
             .typ()
             .clone();
-        self.send_sql_response(connection_uuid, SqlResponse::Peeking { typ })?;
-        self.dataflow_command_sender
-            .unbounded_send(DataflowCommand::Peek(name, connection_uuid, ts))?;
-        Ok(())
+
+        self.send_dataflow_command(DataflowCommand::Peek(name, connection_uuid, ts));
+        Ok(SqlResponse::Peeking { typ })
     }
 
     fn handle_select(
         &mut self,
         query: SQLQuery,
         connection_uuid: Uuid,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<SqlResponse, failure::Error> {
         let id: u64 = rand::random();
         let name = format!("<temp_{}>", id);
         let ts = self.clock.now();
@@ -209,14 +197,11 @@ impl Server {
             materialized: true,
         })?;
         let typ = dataflow.typ().clone();
-        self.dataflow_command_sender
-            .unbounded_send(DataflowCommand::CreateDataflow(dataflow))?;
-        self.dataflow_command_sender
-            .unbounded_send(DataflowCommand::Peek(name.clone(), connection_uuid, ts))?;
-        self.dataflow_command_sender
-            .unbounded_send(DataflowCommand::DropDataflow(name))?;
-        self.send_sql_response(connection_uuid, SqlResponse::Peeking { typ })?;
-        Ok(())
+
+        self.send_dataflow_command(DataflowCommand::CreateDataflow(dataflow));
+        self.send_dataflow_command(DataflowCommand::Peek(name.clone(), connection_uuid, ts));
+        self.send_dataflow_command(DataflowCommand::DropDataflow(name));
+        Ok(SqlResponse::Peeking { typ })
     }
 
     fn handle_insert(
@@ -224,8 +209,7 @@ impl Server {
         name: SQLObjectName,
         columns: Vec<SQLIdent>,
         values: Vec<Vec<ASTNode>>,
-        connection_uuid: Uuid,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<SqlResponse, failure::Error> {
         let name = name.to_string();
         let typ = match self
             .planner
@@ -286,11 +270,17 @@ impl Server {
                 Ok(Datum::Tuple(datums))
             })
             .collect::<Result<Vec<_>, failure::Error>>()?;
+        let datums_len = datums.len();
 
-        self.send_sql_response(connection_uuid, SqlResponse::Inserted(datums.len()))?;
+        self.send_dataflow_command(DataflowCommand::Insert(datums));
+        Ok(SqlResponse::Inserted(datums_len))
+    }
+
+    fn send_dataflow_command(&self, dataflow_command: DataflowCommand) {
+        // if the dataflow server has gone down, just explode
         self.dataflow_command_sender
-            .unbounded_send(DataflowCommand::Insert(datums))?;
-        Ok(())
+            .unbounded_send(dataflow_command)
+            .unwrap();
     }
 }
 
@@ -1289,7 +1279,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_basic_view() -> Result<(), failure::Error> {
+    fn test_basic_view() -> Result<SqlResponse, failure::Error> {
         let typ = Type {
             name: None,
             nullable: false,
@@ -1342,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_source() -> Result<(), failure::Error> {
+    fn test_basic_source() -> Result<SqlResponse, failure::Error> {
         let planner = Planner::mock(vec![]);
 
         let raw_schema = r#"{
@@ -1394,7 +1384,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_sum() -> Result<(), failure::Error> {
+    fn test_basic_sum() -> Result<SqlResponse, failure::Error> {
         let typ = Type {
             name: None,
             nullable: false,
@@ -1457,7 +1447,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_join() -> Result<(), failure::Error> {
+    fn test_basic_join() -> Result<SqlResponse, failure::Error> {
         let src1_type = Type {
             name: None,
             nullable: false,
@@ -1544,7 +1534,7 @@ mod tests {
     }
 
     #[test]
-    fn test_basic_union() -> Result<(), failure::Error> {
+    fn test_basic_union() -> Result<SqlResponse, failure::Error> {
         let src1_type = Type {
             name: None,
             nullable: false,
