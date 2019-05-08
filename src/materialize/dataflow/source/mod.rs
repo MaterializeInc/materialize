@@ -7,4 +7,4 @@ mod kafka;
 mod local;
 
 pub use kafka::kafka;
-pub use local::local;
+pub use local::{local, InsertMux};

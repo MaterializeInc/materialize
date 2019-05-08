@@ -39,13 +39,16 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     clock: &Clock,
+    insert_mux: &source::InsertMux,
 ) {
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
             let done = Rc::new(Cell::new(false));
             let plan = match &src.connector {
                 Connector::Kafka(c) => source::kafka(scope, &src.name, &c, done.clone(), clock),
-                Connector::Local(l) => source::local(scope, &src.name, &l, done.clone(), clock),
+                Connector::Local(l) => {
+                    source::local(scope, &src.name, &l, done.clone(), clock, insert_mux)
+                }
             };
             let arrangement = plan.as_collection().arrange_by_self();
             let on_delete = Box::new(move || done.set(true));

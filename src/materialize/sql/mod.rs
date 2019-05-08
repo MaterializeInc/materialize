@@ -272,7 +272,7 @@ impl Server {
             .collect::<Result<Vec<_>, failure::Error>>()?;
         let datums_len = datums.len();
 
-        self.send_dataflow_command(DataflowCommand::Insert(datums));
+        self.send_dataflow_command(DataflowCommand::Insert(name, datums));
         Ok(SqlResponse::Inserted(datums_len))
     }
 
@@ -495,7 +495,7 @@ impl Planner {
                 };
                 Ok(Dataflow::Source(Source {
                     name: extract_sql_object_name(name)?,
-                    connector: Connector::Local(LocalConnector::new()),
+                    connector: Connector::Local(LocalConnector {}),
                     typ,
                 }))
             }
@@ -1260,7 +1260,7 @@ impl Planner {
                         name.clone(),
                         Dataflow::Source(Source {
                             name,
-                            connector: Connector::Local(LocalConnector { id: Uuid::new_v4() }),
+                            connector: Connector::Local(LocalConnector {}),
                             typ,
                         }),
                     )

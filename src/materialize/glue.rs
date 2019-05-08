@@ -49,7 +49,7 @@ pub enum DataflowCommand {
     DropDataflow(String),
     Peek(String, Uuid, Timestamp), // connection_uuid
     Tail(String),
-    Insert(Vec<Datum>),
+    Insert(String, Vec<Datum>),
 }
 
 pub type PeekResults = Vec<Datum>;

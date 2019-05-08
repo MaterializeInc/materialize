@@ -18,6 +18,7 @@ use timely::worker::Worker as TimelyWorker;
 use super::render;
 use super::trace::{KeysOnlyHandle, TraceManager};
 use crate::clock::{Clock, Timestamp};
+use crate::dataflow::source;
 use crate::glue::*;
 use ore::sync::Lottery;
 
@@ -27,6 +28,7 @@ pub fn serve(
     clock: Clock,
     num_workers: usize,
 ) -> Result<WorkerGuards<()>, String> {
+    let insert_mux = source::InsertMux::default();
     let lottery = Lottery::new(dataflow_command_receiver, dummy_command_receiver);
     timely::execute(timely::Configuration::Process(num_workers), move |worker| {
         let dataflow_command_receiver = lottery.draw();
@@ -35,6 +37,7 @@ pub fn serve(
             dataflow_command_receiver,
             peek_results_handler.clone(),
             clock.clone(),
+            insert_mux.clone(),
         )
         .run()
     })
@@ -71,6 +74,7 @@ where
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
+    insert_mux: source::InsertMux,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -82,6 +86,7 @@ where
         dataflow_command_receiver: std::sync::mpsc::Receiver<DataflowCommand>,
         peek_results_handler: PeekResultsHandler,
         clock: Clock,
+        insert_mux: source::InsertMux,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, std::time::Instant::now());
         let mut traces = TraceManager::new();
@@ -96,6 +101,7 @@ where
             pending_peeks: Vec::new(),
             traces,
             rpc_client: reqwest::Client::new(),
+            insert_mux,
         }
     }
 
@@ -167,7 +173,13 @@ where
     fn handle_command(&mut self, cmd: DataflowCommand) {
         match cmd {
             DataflowCommand::CreateDataflow(dataflow) => {
-                render::build_dataflow(&dataflow, &mut self.traces, self.inner, &self.clock);
+                render::build_dataflow(
+                    &dataflow,
+                    &mut self.traces,
+                    self.inner,
+                    &self.clock,
+                    &self.insert_mux,
+                );
                 if let Some(cmds) = self.pending_cmds.remove(dataflow.name()) {
                     for cmd in cmds {
                         self.handle_command(cmd);
@@ -195,8 +207,19 @@ where
                     }
                 }
             }
+            DataflowCommand::Insert(name, datums) => {
+                // Only the first worker actually broadcasts the insert to the sources, otherwise we would get multiple copies
+                if self.inner.index() == 0 {
+                    self.insert_mux
+                        .read()
+                        .unwrap()
+                        .sender(&name)
+                        .unwrap()
+                        .unbounded_send(datums)
+                        .unwrap();
+                }
+            }
             DataflowCommand::Tail(_) => unimplemented!(),
-            DataflowCommand::Insert(_) => unimplemented!(),
         }
     }
 }

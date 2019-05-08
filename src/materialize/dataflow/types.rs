@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::repr::{Datum, Type};
@@ -63,10 +62,7 @@ pub struct KafkaConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LocalConnector {
-    /// The id maps to a mutable queue in memory
-    pub id: Uuid,
-}
+pub struct LocalConnector {}
 
 /// A view transforms one dataflow into another.
 #[serde(rename_all = "snake_case")]
