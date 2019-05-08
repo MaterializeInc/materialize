@@ -35,7 +35,7 @@ mod plan;
 pub fn serve(
     sql_command_receiver: UnboundedReceiver<SqlCommand>,
     sql_response_mux: SqlResponseMux,
-    dataflow_command_sender: std::sync::mpsc::Sender<DataflowCommand>,
+    dataflow_command_sender: UnboundedSender<DataflowCommand>,
     clock: Clock,
 ) {
     std::thread::spawn(move || {
@@ -54,7 +54,7 @@ pub fn serve(
 pub struct Server {
     planner: Planner,
     sql_response_mux: SqlResponseMux,
-    dataflow_command_sender: std::sync::mpsc::Sender<DataflowCommand>,
+    dataflow_command_sender: UnboundedSender<DataflowCommand>,
     clock: Clock,
 }
 
@@ -278,7 +278,9 @@ impl Server {
 
     fn send_dataflow_command(&self, dataflow_command: DataflowCommand) {
         // if the dataflow server has gone down, just explode
-        self.dataflow_command_sender.send(dataflow_command).unwrap();
+        self.dataflow_command_sender
+            .unbounded_send(dataflow_command)
+            .unwrap();
     }
 }
 

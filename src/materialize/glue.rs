@@ -17,6 +17,7 @@ use std::sync::{Arc, RwLock};
 pub use uuid::Uuid;
 
 // These work in both async and sync settings, so prefer them over std::sync::mpsc
+// (For sync settings, use `sender.unbounded_send`, `receiver.try_next` and `receiver.wait`)
 pub use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 
 /// Incoming sql from users

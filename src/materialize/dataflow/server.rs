@@ -23,7 +23,7 @@ use crate::glue::*;
 use ore::sync::Lottery;
 
 pub fn serve(
-    dataflow_command_receiver: std::sync::mpsc::Receiver<DataflowCommand>,
+    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
     peek_results_handler: PeekResultsHandler,
     clock: Clock,
     num_workers: usize,
@@ -43,8 +43,8 @@ pub fn serve(
     })
 }
 
-fn dummy_command_receiver() -> std::sync::mpsc::Receiver<DataflowCommand> {
-    let (_tx, rx) = std::sync::mpsc::channel();
+fn dummy_command_receiver() -> UnboundedReceiver<DataflowCommand> {
+    let (_tx, rx) = unbounded();
     rx
 }
 
@@ -67,7 +67,7 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     clock: Clock,
-    dataflow_command_receiver: std::sync::mpsc::Receiver<DataflowCommand>,
+    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
     peek_results_handler: PeekResultsHandler,
     sequencer: Sequencer<DataflowCommand>,
     pending_cmds: HashMap<String, Vec<DataflowCommand>>,
@@ -83,7 +83,7 @@ where
 {
     fn new(
         w: &'w mut TimelyWorker<A>,
-        dataflow_command_receiver: std::sync::mpsc::Receiver<DataflowCommand>,
+        dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
         peek_results_handler: PeekResultsHandler,
         clock: Clock,
         insert_mux: source::InsertMux,
@@ -110,7 +110,7 @@ where
             // TOOD(jamii) would it be cheaper to replace the sequencer by just streaming `dataflow_command_receiver` into `num_workers` copies?
 
             // Submit any external commands for sequencing.
-            while let Ok(cmd) = self.dataflow_command_receiver.try_recv() {
+            while let Ok(Some(cmd)) = self.dataflow_command_receiver.try_next() {
                 self.sequencer.push(cmd)
             }
 
