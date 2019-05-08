@@ -11,3 +11,4 @@ members = [
 # lands.
 [patch.crates-io]
 rdkafka = { git = "ssh://git@github.com/MaterializeInc/rust-rdkafka.git" }
+futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch = "0.1" }
