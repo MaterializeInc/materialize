@@ -19,11 +19,12 @@ services:
     - SCCACHE_DIR=/sccache
     - CARGO_HOME=/cargo
     - ZOOKEEPER_URL=zookeeper:2181
+    - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     - RUSTC_WRAPPER=sccache
     - KAFKA_HOST=kafka
     - ZOOKEEPER_HOST=zookeeper
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
-    depends_on: [kafka, zookeeper]
+    depends_on: [kafka, zookeeper, schema-registry]
   zookeeper:
     image: zookeeper:3.4.13
   kafka:
@@ -31,3 +32,9 @@ services:
     environment:
     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_HOST_NAME=kafka
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.2.1
+    environment:
+    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
+    - SCHEMA_REGISTRY_HOST_NAME=localhost
+    depends_on: [kafka, zookeeper]
