@@ -32,7 +32,7 @@ pub fn serve(
     let dataflow_command_receivers = Arc::new(Mutex::new(
         dataflow_command_receivers
             .into_iter()
-            .map(|r| Some(r))
+            .map(Some)
             .collect::<Vec<_>>(),
     ));
     let insert_mux = source::InsertMux::default();
