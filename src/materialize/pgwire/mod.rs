@@ -32,7 +32,7 @@ pub use protocol::match_handshake;
 
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
-    sql_command_sender: UnboundedSender<SqlCommand>,
+    sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
     sql_response_mux: SqlResponseMux,
     peek_results_mux: PeekResultsMux,
     num_timely_workers: usize,

@@ -7,7 +7,6 @@
 
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
-use std::collections::HashMap;
 
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
@@ -23,7 +22,7 @@ use crate::glue::*;
 use ore::sync::Lottery;
 
 pub fn serve(
-    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+    dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
     peek_results_handler: PeekResultsHandler,
     clock: Clock,
     num_workers: usize,
@@ -43,7 +42,7 @@ pub fn serve(
     })
 }
 
-fn dummy_command_receiver() -> UnboundedReceiver<DataflowCommand> {
+fn dummy_command_receiver() -> UnboundedReceiver<(DataflowCommand, CommandMeta)> {
     let (_tx, rx) = unbounded();
     rx
 }
@@ -55,7 +54,7 @@ pub enum PeekResultsHandler {
 }
 
 struct PendingPeek {
-    id: uuid::Uuid,
+    connection_uuid: uuid::Uuid,
     timestamp: Timestamp,
     trace: KeysOnlyHandle,
     probe: ProbeHandle<Timestamp>,
@@ -67,10 +66,9 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     clock: Clock,
-    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+    dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
     peek_results_handler: PeekResultsHandler,
-    sequencer: Sequencer<DataflowCommand>,
-    pending_cmds: HashMap<String, Vec<DataflowCommand>>,
+    sequencer: Sequencer<(DataflowCommand, CommandMeta)>,
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
@@ -83,7 +81,7 @@ where
 {
     fn new(
         w: &'w mut TimelyWorker<A>,
-        dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+        dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
         peek_results_handler: PeekResultsHandler,
         clock: Clock,
         insert_mux: source::InsertMux,
@@ -97,7 +95,6 @@ where
             dataflow_command_receiver,
             peek_results_handler,
             sequencer,
-            pending_cmds: HashMap::new(),
             pending_peeks: Vec::new(),
             traces,
             rpc_client: reqwest::Client::new(),
@@ -115,8 +112,8 @@ where
             }
 
             // Handle any sequenced commands.
-            while let Some(cmd) = self.sequencer.next() {
-                self.handle_command(cmd)
+            while let Some((cmd, cmd_meta)) = self.sequencer.next() {
+                self.handle_command(cmd, cmd_meta)
             }
 
             // Ask Timely to execute a unit of work.
@@ -151,7 +148,11 @@ where
                 match peek_results_handler {
                     PeekResultsHandler::Local(peek_results_mux) => {
                         // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-                        if let Ok(sender) = peek_results_mux.read().unwrap().sender(&peek.id) {
+                        if let Ok(sender) = peek_results_mux
+                            .read()
+                            .unwrap()
+                            .sender(&peek.connection_uuid)
+                        {
                             drop(sender.unbounded_send(out))
                         }
                     }
@@ -159,7 +160,7 @@ where
                         let encoded = bincode::serialize(&out).unwrap();
                         rpc_client
                             .post("http://localhost:6875/api/peek-results")
-                            .header("X-Materialize-Query-UUID", peek.id.to_string())
+                            .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
                             .body(encoded)
                             .send()
                             .unwrap();
@@ -170,7 +171,7 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: DataflowCommand) {
+    fn handle_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
         match cmd {
             DataflowCommand::CreateDataflow(dataflow) => {
                 render::build_dataflow(
@@ -180,32 +181,25 @@ where
                     &self.clock,
                     &self.insert_mux,
                 );
-                if let Some(cmds) = self.pending_cmds.remove(dataflow.name()) {
-                    for cmd in cmds {
-                        self.handle_command(cmd);
-                    }
-                }
             }
             DataflowCommand::DropDataflow(name) => self.traces.del_trace(&name),
-            DataflowCommand::Peek(ref name, id, timestamp) => {
-                match self.traces.get_trace_and_probe(name.clone()) {
-                    Some((trace, probe)) => self.pending_peeks.push(PendingPeek {
-                        id,
-                        timestamp,
-                        trace,
-                        probe,
-                    }),
-                    None => {
-                        // We might see a Peek command before the corresponding
-                        // CreateDataflow command. That's entirely expected.
-                        // Just stash the Peek command so that it can be run
-                        // after the dataflow is created.
-                        self.pending_cmds
-                            .entry(name.clone())
-                            .or_insert_with(Vec::new)
-                            .push(cmd);
-                    }
-                }
+            DataflowCommand::PeekExisting(ref name) => {
+                let (trace, probe) = self.traces.get_trace_and_probe(name.clone()).unwrap();
+                self.pending_peeks.push(PendingPeek {
+                    connection_uuid: cmd_meta.connection_uuid,
+                    timestamp: cmd_meta.timestamp.unwrap(),
+                    trace,
+                    probe,
+                });
+            }
+            DataflowCommand::PeekTransient(dataflow) => {
+                let name = dataflow.name().to_string();
+                self.handle_command(DataflowCommand::CreateDataflow(dataflow), cmd_meta.clone());
+                self.handle_command(
+                    DataflowCommand::PeekExisting(name.clone()),
+                    cmd_meta.clone(),
+                );
+                self.handle_command(DataflowCommand::DropDataflow(name), cmd_meta);
             }
             DataflowCommand::Insert(name, datums) => {
                 // Only the first worker actually broadcasts the insert to the sources, otherwise we would get multiple copies

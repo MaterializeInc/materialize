@@ -21,7 +21,7 @@ use ore::future::{Recv, StreamExt};
 
 pub struct Context {
     pub uuid: Uuid,
-    pub sql_command_sender: UnboundedSender<SqlCommand>,
+    pub sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
     pub sql_response_receiver: UnboundedReceiver<Result<SqlResponse, failure::Error>>,
     pub peek_results_receiver: UnboundedReceiver<PeekResults>,
     pub num_timely_workers: usize,
@@ -222,10 +222,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         match msg {
             FrontendMessage::Query { query } => {
                 let sql = String::from(String::from_utf8_lossy(&query));
-                context.sql_command_sender.unbounded_send(SqlCommand {
+                context.sql_command_sender.unbounded_send((
                     sql,
-                    connection_uuid: context.uuid,
-                })?;
+                    CommandMeta {
+                        connection_uuid: context.uuid,
+                        timestamp: None, // will be assigned by the command queue
+                    },
+                ))?;
                 transition!(HandleQuery { conn: conn })
             }
             FrontendMessage::Terminate => transition!(Done(())),

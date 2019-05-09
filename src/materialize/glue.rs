@@ -3,7 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-/// Types and data-structures used to glue all the various components of materialize together
+//! Types and data-structures used to glue all the various components of materialize together
+
 use crate::clock::Timestamp;
 use crate::dataflow::Dataflow;
 use crate::repr::{Datum, Type};
@@ -20,12 +21,17 @@ pub use uuid::Uuid;
 // (For sync settings, use `sender.unbounded_send`, `receiver.try_next` and `receiver.wait`)
 pub use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 
-/// Incoming sql from users
-#[derive(Debug)]
-pub struct SqlCommand {
-    pub sql: String,
+/// Various metadata that gets attached to commands at all stages
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandMeta {
+    /// The pgwire connection on which this command originated
     pub connection_uuid: Uuid,
+    /// The time this command was inserted in the command queue
+    pub timestamp: Option<Timestamp>,
 }
+
+/// Incoming sql from users
+pub type SqlCommand = String;
 
 /// Responses from the planner to sql commands
 #[derive(Debug)]
@@ -48,7 +54,8 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 pub enum DataflowCommand {
     CreateDataflow(Dataflow),
     DropDataflow(String),
-    Peek(String, Uuid, Timestamp), // connection_uuid
+    PeekExisting(String),
+    PeekTransient(Dataflow),
     Tail(String),
     Insert(String, Vec<Datum>),
 }
