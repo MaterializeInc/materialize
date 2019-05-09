@@ -11,26 +11,38 @@ use differential_dataflow::trace::TraceReader;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::probe::Handle as ProbeHandle;
-use timely::synchronization::Sequencer;
 use timely::worker::Worker as TimelyWorker;
+
+use std::sync::{Arc, Mutex};
 
 use super::render;
 use super::trace::{KeysOnlyHandle, TraceManager};
 use crate::clock::{Clock, Timestamp};
 use crate::dataflow::source;
 use crate::glue::*;
-use ore::sync::Lottery;
 
 pub fn serve(
-    dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    dataflow_command_receivers: Vec<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
     peek_results_handler: PeekResultsHandler,
     clock: Clock,
     num_workers: usize,
 ) -> Result<WorkerGuards<()>, String> {
+    assert_eq!(dataflow_command_receivers.len(), num_workers);
+    // wrap up receivers so individual workers can take them
+    let dataflow_command_receivers = Arc::new(Mutex::new(
+        dataflow_command_receivers
+            .into_iter()
+            .map(|r| Some(r))
+            .collect::<Vec<_>>(),
+    ));
     let insert_mux = source::InsertMux::default();
-    let lottery = Lottery::new(dataflow_command_receiver, dummy_command_receiver);
     timely::execute(timely::Configuration::Process(num_workers), move |worker| {
-        let dataflow_command_receiver = lottery.draw();
+        let dataflow_command_receivers = dataflow_command_receivers.clone();
+        let dataflow_command_receiver = {
+            dataflow_command_receivers.lock().unwrap()[worker.index()]
+                .take()
+                .unwrap()
+        };
         Worker::new(
             worker,
             dataflow_command_receiver,
@@ -40,11 +52,6 @@ pub fn serve(
         )
         .run()
     })
-}
-
-fn dummy_command_receiver() -> UnboundedReceiver<(DataflowCommand, CommandMeta)> {
-    let (_tx, rx) = unbounded();
-    rx
 }
 
 #[derive(Clone)]
@@ -68,7 +75,6 @@ where
     clock: Clock,
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
     peek_results_handler: PeekResultsHandler,
-    sequencer: Sequencer<(DataflowCommand, CommandMeta)>,
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
@@ -86,7 +92,6 @@ where
         clock: Clock,
         insert_mux: source::InsertMux,
     ) -> Worker<'w, A> {
-        let sequencer = Sequencer::new(w, std::time::Instant::now());
         let mut traces = TraceManager::new();
         render::add_builtin_dataflows(&mut traces, w);
         Worker {
@@ -94,7 +99,6 @@ where
             clock,
             dataflow_command_receiver,
             peek_results_handler,
-            sequencer,
             pending_peeks: Vec::new(),
             traces,
             rpc_client: reqwest::Client::new(),
@@ -104,15 +108,8 @@ where
 
     fn run(&mut self) {
         loop {
-            // TOOD(jamii) would it be cheaper to replace the sequencer by just streaming `dataflow_command_receiver` into `num_workers` copies?
-
-            // Submit any external commands for sequencing.
-            while let Ok(Some(cmd)) = self.dataflow_command_receiver.try_next() {
-                self.sequencer.push(cmd)
-            }
-
-            // Handle any sequenced commands.
-            while let Some((cmd, cmd_meta)) = self.sequencer.next() {
+            // Handle any received commands
+            while let Ok(Some((cmd, cmd_meta))) = self.dataflow_command_receiver.try_next() {
                 self.handle_command(cmd, cmd_meta)
             }
 

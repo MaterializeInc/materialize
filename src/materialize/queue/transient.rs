@@ -14,7 +14,7 @@ use crate::sql;
 pub fn serve(
     sql_command_receiver: UnboundedReceiver<(SqlCommand, CommandMeta)>,
     sql_response_mux: SqlResponseMux,
-    dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
+    dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
     clock: Clock,
 ) {
     std::thread::spawn(move || {
@@ -30,10 +30,12 @@ pub fn serve(
             };
 
             if let Some(dataflow_command) = dataflow_command {
-                dataflow_command_sender
-                    .unbounded_send((dataflow_command, command_meta))
-                    // if the dataflow server has gone down, just explode
-                    .unwrap();
+                for dataflow_command_sender in &dataflow_command_senders {
+                    dataflow_command_sender
+                        .unbounded_send((dataflow_command.clone(), command_meta.clone()))
+                        // if the dataflow server has gone down, just explode
+                        .unwrap();
+                }
             }
 
             // the response sender is allowed disappear at any time, so the error handling here is deliberately relaxed

@@ -96,8 +96,9 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
 
     let (sql_command_sender, sql_command_receiver) = unbounded::<(SqlCommand, CommandMeta)>();
     let sql_response_mux = SqlResponseMux::default();
-    let (dataflow_command_sender, dataflow_command_receiver) =
-        unbounded::<(DataflowCommand, CommandMeta)>();
+    let (dataflow_command_senders, dataflow_command_receivers) = (0..config.num_timely_workers)
+        .map(|_| unbounded::<(DataflowCommand, CommandMeta)>())
+        .unzip();
     let peek_results_mux = PeekResultsMux::default();
 
     // timely dataflow
@@ -106,7 +107,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         PeekResultsConfig::Remote => dataflow::PeekResultsHandler::Remote,
     };
     let _dd_workers = dataflow::serve(
-        dataflow_command_receiver,
+        dataflow_command_receivers,
         peek_results_handler,
         clock.clone(),
         config.num_timely_workers,
@@ -118,7 +119,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
             queue::transient::serve(
                 sql_command_receiver,
                 sql_response_mux.clone(),
-                dataflow_command_sender,
+                dataflow_command_senders,
                 clock.clone(),
             );
         }
