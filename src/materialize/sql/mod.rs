@@ -34,16 +34,16 @@ pub struct Planner {
     dataflows: HashMap<String, Dataflow>,
 }
 
-pub type PlannerResult = Result<(SqlResponse, DataflowCommand), failure::Error>;
+pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure::Error>;
 
 impl Planner {
     pub fn handle_command(&mut self, sql: String) -> PlannerResult {
-        let mut stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, sql)?;
-        if stmts.len() != 1 {
-            bail!("expected one statement, but got {}", stmts.len());
+        let stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, sql)?;
+        match stmts.len() {
+            0 => Ok((SqlResponse::EmptyQuery, None)),
+            1 => self.handle_statement(stmts.into_element()),
+            _ => bail!("expected one statement, but got {}", stmts.len()),
         }
-        let stmt = stmts.remove(0);
-        self.handle_statement(stmt)
     }
 
     fn handle_statement(&mut self, stmt: SQLStatement) -> PlannerResult {
@@ -80,7 +80,10 @@ impl Planner {
 
         self.dataflows
             .insert(dataflow.name().to_owned(), dataflow.clone());
-        Ok((sql_response, DataflowCommand::CreateDataflow(dataflow)))
+        Ok((
+            sql_response,
+            Some(DataflowCommand::CreateDataflow(dataflow)),
+        ))
     }
 
     fn handle_drop_dataflow(&mut self, stmt: SQLStatement) -> PlannerResult {
@@ -112,7 +115,10 @@ impl Planner {
         let name = extract_sql_object_name(&object_name)?;
 
         self.dataflows.remove(&name);
-        Ok((sql_response, DataflowCommand::DropDataflow(name.clone())))
+        Ok((
+            sql_response,
+            Some(DataflowCommand::DropDataflow(name.clone())),
+        ))
     }
 
     fn handle_peek(&mut self, name: SQLObjectName) -> PlannerResult {
@@ -126,7 +132,7 @@ impl Planner {
 
         Ok((
             SqlResponse::Peeking { typ },
-            DataflowCommand::PeekExisting(name),
+            Some(DataflowCommand::PeekExisting(name)),
         ))
     }
 
@@ -142,7 +148,7 @@ impl Planner {
 
         Ok((
             SqlResponse::Peeking { typ },
-            DataflowCommand::PeekTransient(dataflow),
+            Some(DataflowCommand::PeekTransient(dataflow)),
         ))
     }
 
@@ -214,7 +220,7 @@ impl Planner {
 
         Ok((
             SqlResponse::Inserted(datums.len()),
-            DataflowCommand::Insert(name, datums),
+            Some(DataflowCommand::Insert(name, datums)),
         ))
     }
 }

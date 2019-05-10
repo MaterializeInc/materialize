@@ -255,16 +255,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
                 macro_rules! command_complete {
                     ($($arg:tt)*) => {
-                        return Ok(Async::Ready(
-                            SendCommandComplete {
-                                send: state
-                                    .conn
-                                    .send(BackendMessage::CommandComplete {
-                                        tag: std::fmt::format(format_args!($($arg)*))
-                                    }),
-                            }
-                            .into(),
-                        ));
+                        transition!(SendCommandComplete {
+                            send: state.conn.send(BackendMessage::CommandComplete {
+                                tag: std::fmt::format(format_args!($($arg)*))
+                            }),
+                        })
                     };
                 }
 
@@ -275,6 +270,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     SqlResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
                     SqlResponse::DroppedView => command_complete!("DROP VIEW"),
                     SqlResponse::DroppedTable => command_complete!("DROP TABLE"),
+                    SqlResponse::EmptyQuery => transition!(SendCommandComplete {
+                        send: state.conn.send(BackendMessage::EmptyQueryResponse),
+                    }),
                     // "On successful completion, an INSERT command returns a
                     // command tag of the form `INSERT <oid> <count>`."
                     //     -- https://www.postgresql.org/docs/11/sql-insert.html

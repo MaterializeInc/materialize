@@ -50,7 +50,6 @@ pub enum BackendMessage {
     CommandComplete {
         tag: String,
     },
-    // TODO(jamii) was this important?
     EmptyQueryResponse,
     ReadyForQuery,
     RowDescription(Vec<FieldDescription>),

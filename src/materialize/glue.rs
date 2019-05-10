@@ -42,6 +42,7 @@ pub enum SqlResponse {
     DroppedDataSource,
     DroppedView,
     DroppedTable,
+    EmptyQuery,
     Inserted(usize),
     Peeking { typ: Type },
 }

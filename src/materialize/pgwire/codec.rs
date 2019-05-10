@@ -64,7 +64,7 @@ impl Encoder for Codec {
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
-            BackendMessage::EmptyQueryResponse => panic!("unimplemented"),
+            BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
             BackendMessage::ErrorResponse { .. } => b'E',
         });
@@ -116,7 +116,7 @@ impl Encoder for Codec {
             BackendMessage::CommandComplete { tag } => {
                 buf.put_string(tag);
             }
-            BackendMessage::EmptyQueryResponse => panic!("unimplemented"),
+            BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
                 buf.put(b'I'); // transaction indicator
             }

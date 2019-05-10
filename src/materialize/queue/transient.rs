@@ -25,7 +25,7 @@ pub fn serve(
             let connection_uuid = command_meta.connection_uuid;
 
             let (sql_response, dataflow_command) = match planner.handle_command(sql_command) {
-                Ok((sql_response, dataflow_command)) => (Ok(sql_response), Some(dataflow_command)),
+                Ok((sql_response, dataflow_command)) => (Ok(sql_response), dataflow_command),
                 Err(err) => (Err(err), None),
             };
 
