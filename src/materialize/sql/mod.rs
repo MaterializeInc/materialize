@@ -15,7 +15,7 @@ use sqlparser::sqlast::{
     SQLWindowSpec, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::iter::FromIterator;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
@@ -26,12 +26,14 @@ use crate::glue::*;
 use crate::repr::{Datum, FType, Type};
 use ore::vec::VecExt;
 use plan::SQLPlan;
+use store::DataflowStore;
 
 mod plan;
+mod store;
 
 #[derive(Debug, Default)]
 pub struct Planner {
-    dataflows: HashMap<String, Dataflow>,
+    dataflows: DataflowStore,
 }
 
 pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure::Error>;
@@ -78,8 +80,7 @@ impl Planner {
             _ => unreachable!(),
         };
 
-        self.dataflows
-            .insert(dataflow.name().to_owned(), dataflow.clone());
+        self.dataflows.insert(dataflow.clone())?;
         Ok((
             sql_response,
             Some(DataflowCommand::CreateDataflow(dataflow)),
@@ -114,7 +115,7 @@ impl Planner {
         };
         let name = extract_sql_object_name(&object_name)?;
 
-        self.dataflows.remove(&name);
+        self.dataflows.remove(&name)?;
         Ok((
             sql_response,
             Some(DataflowCommand::DropDataflow(name.clone())),
@@ -123,12 +124,7 @@ impl Planner {
 
     fn handle_peek(&mut self, name: SQLObjectName) -> PlannerResult {
         let name = name.to_string();
-        let typ = self
-            .dataflows
-            .get(&name)
-            .ok_or_else(|| format_err!("Can't PEEK {} because it doesn't exist", name))?
-            .typ()
-            .clone();
+        let typ = self.dataflows.get_type(&name)?.clone();
 
         Ok((
             SqlResponse::Peeking { typ },
@@ -159,11 +155,7 @@ impl Planner {
         values: Vec<Vec<ASTNode>>,
     ) -> PlannerResult {
         let name = name.to_string();
-        let typ = match self
-            .dataflows
-            .get(&name)
-            .ok_or_else(|| format_err!("Tried to insert into non-existent table: {}", name))?
-        {
+        let typ = match self.dataflows.get(&name)? {
             Dataflow::Source(Source {
                 connector: Connector::Local(_),
                 typ,
@@ -338,10 +330,6 @@ impl std::fmt::Display for Side {
 }
 
 impl Planner {
-    fn get_type(&self, name: &str) -> Option<&Type> {
-        self.dataflows.get(name).map(Dataflow::typ)
-    }
-
     pub fn plan_statement(&self, stmt: &SQLStatement) -> Result<Dataflow, failure::Error> {
         match stmt {
             SQLStatement::SQLCreateView {
@@ -533,7 +521,8 @@ impl Planner {
 
     fn plan_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
-        let mut plan = match &s.relation {
+        let none = None;
+        let (from_name, from_alias) = match &s.relation {
             Some(TableFactor::Table {
                 name,
                 alias,
@@ -546,33 +535,26 @@ impl Planner {
                 if !with_hints.is_empty() {
                     bail!("WITH hints are not supported");
                 }
-                let name = extract_sql_object_name(name)?;
-                let types = match self.get_type(&name) {
-                    Some(Type {
-                        ftype: FType::Tuple(types),
-                        ..
-                    }) => types.clone(),
-                    Some(typ) => panic!("Table {} has non-tuple type {:?}", name, typ),
-                    None => bail!("no table named {} in scope", name),
-                };
-                let mut plan = SQLPlan::from_source(&name, types);
-                if let Some(alias) = alias {
-                    plan = plan.alias_table(alias);
-                }
-                plan
+                (extract_sql_object_name(name)?, alias)
             }
             Some(TableFactor::Derived { .. }) => {
                 bail!("subqueries are not yet supported");
             }
-            None => {
-                // https://en.wikipedia.org/wiki/DUAL_table
-                let types = vec![Type {
-                    name: Some("x".into()),
-                    nullable: false,
-                    ftype: FType::String,
-                }];
-                SQLPlan::from_source("dual", types)
+            None => ("dual".into(), &none),
+        };
+        let mut plan = {
+            let types = match self.dataflows.get_type(&from_name)? {
+                Type {
+                    ftype: FType::Tuple(types),
+                    ..
+                } => types.clone(),
+                typ => panic!("table {} has non-tuple type {:?}", from_name, typ),
+            };
+            let mut plan = SQLPlan::from_source(&from_name, types);
+            if let Some(alias) = from_alias {
+                plan = plan.alias_table(alias);
             }
+            plan
         };
         let mut selection = s.selection.clone();
         for join in &s.joins {
@@ -590,13 +572,12 @@ impl Planner {
                         bail!("WITH hints are not supported");
                     }
                     let name = extract_sql_object_name(&name)?;
-                    let types = match self.get_type(&name) {
-                        Some(Type {
+                    let types = match self.dataflows.get_type(&name)? {
+                        Type {
                             ftype: FType::Tuple(types),
                             ..
-                        }) => types.clone(),
-                        Some(typ) => panic!("Table {} has non-tuple type {:?}", name, typ),
-                        None => bail!("no table named {} in scope", name),
+                        } => types.clone(),
+                        typ => panic!("Table {} has non-tuple type {:?}", name, typ),
                     };
                     let mut right = SQLPlan::from_source(&name, types);
                     if let Some(alias) = alias {
@@ -1194,14 +1175,11 @@ impl Planner {
             dataflows: dataflows
                 .into_iter()
                 .map(|(name, typ)| {
-                    (
-                        name.clone(),
-                        Dataflow::Source(Source {
-                            name,
-                            connector: Connector::Local(LocalConnector {}),
-                            typ,
-                        }),
-                    )
+                    Dataflow::Source(Source {
+                        name,
+                        connector: Connector::Local(LocalConnector {}),
+                        typ,
+                    })
                 })
                 .collect(),
         }

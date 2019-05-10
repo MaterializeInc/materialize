@@ -21,6 +21,7 @@ pub enum Dataflow {
 }
 
 impl Dataflow {
+    /// Reports the name of this dataflow.
     pub fn name(&self) -> &str {
         match self {
             Dataflow::Source(src) => &src.name,
@@ -28,11 +29,22 @@ impl Dataflow {
         }
     }
 
+    /// Reports the type of this datums produced by this dataflow.
     pub fn typ(&self) -> &Type {
         match self {
             Dataflow::Source(src) => &src.typ,
             Dataflow::View(view) => &view.typ,
         }
+    }
+
+    /// Collects the names of the dataflows that this dataflow depends upon.
+    pub fn uses(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        match self {
+            Dataflow::Source(_) => (),
+            Dataflow::View(view) => view.plan.uses_inner(&mut out),
+        }
+        out
     }
 }
 
@@ -111,6 +123,41 @@ pub enum Plan {
         aggs: Vec<Aggregate>,
         input: Box<Plan>,
     },
+}
+
+impl Plan {
+    /// Collects the names of the dataflows that this plan depends upon.
+    // Intentionally match on all field names to force changes to the AST to
+    // be reflected in this function.
+    #[allow(clippy::unneeded_field_pattern)]
+    fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
+        match self {
+            Plan::Source(name) => out.push(&name),
+            Plan::Project { outputs: _, input } => input.uses_inner(out),
+            Plan::Distinct(p) => p.uses_inner(out),
+            Plan::UnionAll(ps) => ps.iter().for_each(|p| p.uses_inner(out)),
+            Plan::Join {
+                left_key: _,
+                right_key: _,
+                left,
+                right,
+                include_left_outer: _,
+                include_right_outer: _,
+            } => {
+                left.uses_inner(out);
+                right.uses_inner(out);
+            }
+            Plan::Filter {
+                predicate: _,
+                input,
+            } => input.uses_inner(out),
+            Plan::Aggregate {
+                key: _,
+                aggs: _,
+                input,
+            } => input.uses_inner(out),
+        }
+    }
 }
 
 #[serde(rename_all = "snake_case")]
