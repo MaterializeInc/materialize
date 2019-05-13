@@ -25,6 +25,7 @@ use materialize::glue::*;
 use materialize::repr::{Datum, FType};
 use materialize::sql::Planner;
 use sqlparser::dialect::AnsiSqlDialect;
+use sqlparser::sqlparser::Parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record<'a> {
@@ -313,9 +314,7 @@ impl State {
                     return Ok(Outcome::Unsupported);
                 }
 
-                if let Err(_) =
-                    sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string())
-                {
+                if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
                     if *should_run {
                         return Ok(Outcome::ParseFailure);
                     } else {
@@ -342,9 +341,7 @@ impl State {
                 types: expected_types,
                 ..
             } => {
-                if let Err(_) =
-                    sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string())
-                {
+                if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
                     return Ok(Outcome::ParseFailure);
                 }
 
