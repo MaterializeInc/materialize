@@ -105,6 +105,16 @@ where
             .ok_or_else(|| format_err!("Key {:?} is not registered", key))
     }
 
+    /// Closes the sender for the specified key. It is not an error if no
+    /// such key exists.
+    ///
+    /// This is not necessary in general, as the sender will be automatically
+    /// garbage collected when the receiver is dropped. It can be useful,
+    /// however, to eagerly reclaim the key so that the key can be reused.
+    pub fn close(&mut self, key: &K) {
+        self.senders.remove(key);
+    }
+
     /// Remove references to channels where the receiver has been closed or dropped
     fn gc(&mut self) {
         self.senders.retain(|_, sender| !sender.is_closed())

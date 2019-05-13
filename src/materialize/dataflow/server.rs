@@ -180,7 +180,9 @@ where
                 );
             }
             DataflowCommand::DropDataflows(names) => {
+                let mut insert_mux = self.insert_mux.write().unwrap();
                 for name in names {
+                    insert_mux.close(&name);
                     self.traces.del_trace(&name);
                 }
             }
