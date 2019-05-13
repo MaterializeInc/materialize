@@ -57,9 +57,14 @@ impl DataflowStore {
         Ok(())
     }
 
-    pub fn remove(&mut self, name: &str) -> Result<(), failure::Error> {
-        match self.inner.get(name) {
-            Some(metadata) => {
+    pub fn remove(&mut self, name: &str, mode: RemoveMode) -> Result<(), failure::Error> {
+        let metadata = match self.inner.get(name) {
+            Some(metadata) => metadata,
+            None => return Ok(()),
+        };
+
+        match mode {
+            RemoveMode::Restrict => {
                 if !metadata.used_by.is_empty() {
                     bail!(
                         "cannot delete {}: still depended upon by dataflow '{}'",
@@ -67,22 +72,33 @@ impl DataflowStore {
                         metadata.used_by[0]
                     )
                 }
-                // Safe to unwrap, because this branch is only taken if the
-                // entry exists.
-                let metadata = self.inner.remove(name).unwrap();
-                for u in metadata.inner.uses() {
-                    match self.inner.get_mut(u) {
-                        Some(entry) => entry.used_by.retain(|u| u != name),
-                        None => panic!(
-                            "DataflowStore: missing dependent dataflow {} while removing {}",
-                            u, name
-                        ),
-                    }
-                }
-                Ok(())
             }
-            None => bail!("no such dataflow: {}", name),
+            RemoveMode::Cascade => {
+                let used_by = metadata.used_by.clone();
+                for u in used_by {
+                    // We may have removed other dependent dataflows on a prior
+                    // turn of the loop, so cascading removes must not fail, or
+                    // we'll have violated atomicity. Therefore unwrap instead
+                    // of propagating the error.
+                    self.remove(&u, RemoveMode::Cascade).unwrap();
+                }
+            }
         }
+
+        // Safe to unwrap, because we already proved above that name exists in
+        // self.inner.
+        let metadata = self.inner.remove(name).unwrap();
+        for u in metadata.inner.uses() {
+            match self.inner.get_mut(u) {
+                Some(entry) => entry.used_by.retain(|u| u != name),
+                None => panic!(
+                    "DataflowStore: missing dependent dataflow {} while removing {}",
+                    u, name
+                ),
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -119,5 +135,21 @@ impl FromIterator<Dataflow> for DataflowStore {
             store.insert(dataflow).unwrap();
         }
         store
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum RemoveMode {
+    Cascade,
+    Restrict,
+}
+
+impl RemoveMode {
+    pub fn from_cascade(cascade: bool) -> RemoveMode {
+        if cascade {
+            RemoveMode::Cascade
+        } else {
+            RemoveMode::Restrict
+        }
     }
 }

@@ -303,11 +303,11 @@ pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure
                     };
                     state.table_types.insert(name.to_string(), typ);
                 }
-                SQLStatement::SQLDropTable { names, cascade, .. } => {
-                    if *cascade {
+                SQLStatement::SQLDropTable(drop) => {
+                    if drop.cascade {
                         return Ok(Outcome::Unsupported);
                     }
-                    for name in names {
+                    for name in &drop.names {
                         state.table_types.remove(&name.to_string());
                     }
                 }

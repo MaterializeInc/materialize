@@ -11,25 +11,25 @@
 
 > CREATE MATERIALIZED VIEW test3b AS SELECT * FROM test2;
 
-! DROP MATERIALIZED VIEW test1;
+! DROP VIEW test1;
 cannot delete test1: still depended upon by dataflow 'test2'
 
-! DROP MATERIALIZED VIEW test2;
+! DROP VIEW test2;
 cannot delete test2: still depended upon by dataflow 'test3a'
 
-> DROP MATERIALIZED VIEW test3a;
+> DROP VIEW test3a;
 
-! DROP MATERIALIZED VIEW test1;
+! DROP VIEW test1;
 cannot delete test1: still depended upon by dataflow 'test2'
 
-! DROP MATERIALIZED VIEW test2;
+! DROP VIEW test2;
 cannot delete test2: still depended upon by dataflow 'test3b'
 
-> DROP MATERIALIZED VIEW test3b;
+> DROP VIEW test3b;
 
-! DROP MATERIALIZED VIEW test1;
+! DROP VIEW test1;
 cannot delete test1: still depended upon by dataflow 'test2'
 
-> DROP MATERIALIZED VIEW test2;
+> DROP VIEW test2;
 
-> DROP MATERIALIZED VIEW test1;
+> DROP VIEW test1;

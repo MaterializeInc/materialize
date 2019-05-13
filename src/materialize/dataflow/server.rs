@@ -179,7 +179,11 @@ where
                     &self.insert_mux,
                 );
             }
-            DataflowCommand::DropDataflow(name) => self.traces.del_trace(&name),
+            DataflowCommand::DropDataflows(names) => {
+                for name in names {
+                    self.traces.del_trace(&name);
+                }
+            }
             DataflowCommand::PeekExisting(ref name) => {
                 let (trace, probe) = self.traces.get_trace_and_probe(name.clone()).unwrap();
                 self.pending_peeks.push(PendingPeek {
@@ -196,7 +200,7 @@ where
                     DataflowCommand::PeekExisting(name.clone()),
                     cmd_meta.clone(),
                 );
-                self.handle_command(DataflowCommand::DropDataflow(name), cmd_meta);
+                self.handle_command(DataflowCommand::DropDataflows(vec![name]), cmd_meta);
             }
             DataflowCommand::Insert(name, datums) => {
                 // Only the first worker actually broadcasts the insert to the sources, otherwise we would get multiple copies

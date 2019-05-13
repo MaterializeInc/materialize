@@ -54,7 +54,7 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {
     CreateDataflow(Dataflow),
-    DropDataflow(String),
+    DropDataflows(Vec<String>),
     PeekExisting(String),
     PeekTransient(Dataflow),
     Tail(String),
