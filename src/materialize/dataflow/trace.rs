@@ -19,7 +19,7 @@ pub type TraceKeyHandle<K, T, R> = TraceAgent<K, (), T, R, OrdKeySpine<K, T, R>>
 
 pub type KeysOnlyHandle = TraceKeyHandle<Datum, Timestamp, Diff>;
 
-pub type DeleteCallback = Box<Fn()>;
+pub type DeleteCallback = Box<FnMut()>;
 
 pub struct TraceManager {
     traces: HashMap<String, TraceInfo>,
@@ -73,13 +73,13 @@ impl TraceManager {
     }
 
     pub fn del_trace(&mut self, name: &str) {
-        if let Some(ti) = self.traces.remove(name) {
+        if let Some(mut ti) = self.traces.remove(name) {
             (ti.delete_callback)();
         }
     }
 
     pub fn del_all_traces(&mut self) {
-        for (_, ti) in self.traces.drain() {
+        for (_, mut ti) in self.traces.drain() {
             (ti.delete_callback)();
         }
     }
