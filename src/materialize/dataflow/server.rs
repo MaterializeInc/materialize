@@ -131,7 +131,18 @@ where
                 let mut upper = timely::progress::frontier::Antichain::new();
                 let mut trace = peek.trace.clone();
                 trace.read_upper(&mut upper);
-                if upper.less_than(&peek.timestamp) {
+
+                // To produce output at `peek.timestamp`, we must be certain that
+                // it is no longer changing. A trace guarantees that all future
+                // changes will be greater than or equal to an element of `upper`.
+                //
+                // If an element of `upper` is less or equal to `peek.timestamp`,
+                // then there can be further updates that would change the output.
+                // If no element of `upper` is less or equal to `peek.timestamp`,
+                // then for any time `t` less or equal to `peek.timestamp` it is
+                // not the case that `upper` is less or equal to that timestamp,
+                // and so the result cannot further evolve.
+                if !upper.less_equal(&peek.timestamp) {
                     let (mut cur, storage) = peek.trace.clone().cursor();
                     let mut out = Vec::new();
                     while let Some(key) = cur.get_key(&storage) {
