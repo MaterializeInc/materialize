@@ -16,8 +16,8 @@ use timely::worker::Worker as TimelyWorker;
 use std::sync::{Arc, Mutex};
 
 use super::render;
-use super::types;
 use super::trace::{KeysOnlyHandle, TraceManager};
+use super::types;
 use crate::clock::{Clock, Timestamp};
 use crate::dataflow::source;
 use crate::glue::*;
@@ -128,7 +128,6 @@ where
                 ..
             } = self;
             pending_peeks.retain(|peek| {
-
                 let mut upper = timely::progress::frontier::Antichain::new();
                 let mut trace = peek.trace.clone();
                 trace.read_upper(&mut upper);
@@ -136,7 +135,6 @@ where
                     let (mut cur, storage) = peek.trace.clone().cursor();
                     let mut out = Vec::new();
                     while let Some(key) = cur.get_key(&storage) {
-
                         // TODO: Absent value iteration might be weird (in principle
                         // the cursor *could* say no `()` values associated with the
                         // key, though I can't imagine how that would happen for this
@@ -171,15 +169,17 @@ where
                             let encoded = bincode::serialize(&out).unwrap();
                             rpc_client
                                 .post("http://localhost:6875/api/peek-results")
-                                .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
+                                .header(
+                                    "X-Materialize-Query-UUID",
+                                    peek.connection_uuid.to_string(),
+                                )
                                 .body(encoded)
                                 .send()
                                 .unwrap();
                         }
                     }
                     false // don't retain
-                }
-                else {
+                } else {
                     true
                 }
             });
@@ -210,8 +210,7 @@ where
                         timestamp: cmd_meta.timestamp.unwrap(),
                         trace,
                     });
-                }
-                else {
+                } else {
                     eprintln!("Failed to find arrangement for Peek({})", name);
                 }
             }

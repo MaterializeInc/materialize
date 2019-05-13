@@ -12,10 +12,9 @@ use std::collections::HashMap;
 // use timely::dataflow::operators::probe::Probe;
 // use timely::dataflow::Scope;
 
-use super::types::{Diff, Plan, Expr};
+use super::types::{Diff, Expr, Plan};
 use crate::clock::Timestamp;
 use crate::repr::Datum;
-
 
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
@@ -45,7 +44,6 @@ struct TraceInfoUnkeyed {
 }
 
 impl TraceManager {
-
     pub fn new() -> Self {
         TraceManager {
             traces: HashMap::new(),
@@ -89,10 +87,13 @@ impl TraceManager {
         plan: &Plan,
         trace: KeysOnlyHandle,
         delete_callback: DeleteCallback,
-    )
-    {
-        let trace_info = TraceInfoUnkeyed { trace, delete_callback };
-        self.traces.insert(plan.clone(), (Some(trace_info), HashMap::new()));
+    ) {
+        let trace_info = TraceInfoUnkeyed {
+            trace,
+            delete_callback,
+        };
+        self.traces
+            .insert(plan.clone(), (Some(trace_info), HashMap::new()));
     }
 
     pub fn set_keyed_trace(
@@ -101,9 +102,11 @@ impl TraceManager {
         key: &Expr,
         trace: KeysValsHandle,
         delete_callback: DeleteCallback,
-    )
-    {
-        let trace_info = TraceInfoKeyed { trace, delete_callback };
+    ) {
+        let trace_info = TraceInfoKeyed {
+            trace,
+            delete_callback,
+        };
         self.traces
             .entry(plan.clone())
             .or_insert((None, HashMap::new()))

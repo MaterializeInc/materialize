@@ -52,12 +52,20 @@ pub fn build_dataflow<A: Allocate>(
             };
             let arrangement = plan.as_collection().arrange_by_self();
             let on_delete = Box::new(move || done.set(true));
-            manager.set_trace(&Plan::Source(src.name.clone()), arrangement.trace, on_delete);
+            manager.set_trace(
+                &Plan::Source(src.name.clone()),
+                arrangement.trace,
+                on_delete,
+            );
         }
         Dataflow::View(view) => {
             let arrangement = build_plan(&view.plan, manager, scope).arrange_by_self();
             let on_delete = Box::new(|| ());
-            manager.set_trace(&Plan::Source(view.name.clone()), arrangement.trace, on_delete);
+            manager.set_trace(
+                &Plan::Source(view.name.clone()),
+                arrangement.trace,
+                on_delete,
+            );
         }
     })
 }
@@ -129,65 +137,62 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             include_left_outer,
             include_right_outer,
         } => {
-
-            use differential_dataflow::operators::reduce::Threshold;
-            use differential_dataflow::operators::join::JoinCore;
             use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+            use differential_dataflow::operators::join::JoinCore;
+            use differential_dataflow::operators::reduce::Threshold;
 
             let left_plan = left;
             let right_plan = right;
 
             // Ensure left arrangement.
-            let left_arranged =
-            if let Some(mut trace) = manager.get_keyed_trace(&left, &left_key) {
+            let left_arranged = if let Some(mut trace) = manager.get_keyed_trace(&left, &left_key) {
                 trace.import(scope)
-            }
-            else {
-
+            } else {
                 let left_key2 = left_key.clone();
-                let left_trace =
-                build_plan(&left_plan, manager, scope)
+                let left_trace = build_plan(&left_plan, manager, scope)
                     .map(move |datum| (eval_expr(&left_key2, &datum), datum))
                     .arrange_by_key();
 
-                manager.set_keyed_trace(&left_plan, &left_key, left_trace.trace.clone(), Box::new(|| ()));
+                manager.set_keyed_trace(
+                    &left_plan,
+                    &left_key,
+                    left_trace.trace.clone(),
+                    Box::new(|| ()),
+                );
                 left_trace
             };
 
             // Ensure right arrangement.
             let right_arranged =
-            if let Some(mut trace) = manager.get_keyed_trace(&right, &right_key) {
-                trace.import(scope)
-            }
-            else {
-                let right_key2 = right_key.clone();
-                let right_trace =
-                build_plan(&right_plan, manager, scope)
-                    .map(move |datum| (eval_expr(&right_key2, &datum), datum))
-                    .arrange_by_key();
+                if let Some(mut trace) = manager.get_keyed_trace(&right, &right_key) {
+                    trace.import(scope)
+                } else {
+                    let right_key2 = right_key.clone();
+                    let right_trace = build_plan(&right_plan, manager, scope)
+                        .map(move |datum| (eval_expr(&right_key2, &datum), datum))
+                        .arrange_by_key();
 
-                manager.set_keyed_trace(&right_plan, &right_key, right_trace.trace.clone(), Box::new(|| ()));
-                right_trace
-            };
+                    manager.set_keyed_trace(
+                        &right_plan,
+                        &right_key,
+                        right_trace.trace.clone(),
+                        Box::new(|| ()),
+                    );
+                    right_trace
+                };
 
-            let mut flow =
-            left_arranged
-                .join_core(&right_arranged, |_key, left, right| {
-                    let mut tuple = left.clone().unwrap_tuple();
-                    tuple.extend(right.clone().unwrap_tuple());
-                    Some(Datum::Tuple(tuple))
-                });
+            let mut flow = left_arranged.join_core(&right_arranged, |_key, left, right| {
+                let mut tuple = left.clone().unwrap_tuple();
+                tuple.extend(right.clone().unwrap_tuple());
+                Some(Datum::Tuple(tuple))
+            });
 
             if let Some(num_cols) = include_left_outer {
                 let num_cols = *num_cols;
 
-                let right_keys =
-                right_arranged
-                    .as_collection(|k,_v| k.clone())
-                    .distinct();
+                let right_keys = right_arranged.as_collection(|k, _v| k.clone()).distinct();
 
-                flow =
-                left_arranged
+                flow = left_arranged
                     // .as_collection(|k,v| (k.clone(), v.clone()))
                     .antijoin(&right_keys)
                     .map(move |(_key, left)| {
@@ -201,13 +206,9 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             if let Some(num_cols) = include_right_outer {
                 let num_cols = *num_cols;
 
-                let left_keys =
-                left_arranged
-                    .as_collection(|k,_v| k.clone())
-                    .distinct();
+                let left_keys = left_arranged.as_collection(|k, _v| k.clone()).distinct();
 
-                flow =
-                right_arranged
+                flow = right_arranged
                     // .as_collection(|k,v| (k.clone(), v.clone()))
                     .antijoin(&left_keys)
                     .map(move |(_key, right)| {
