@@ -39,15 +39,15 @@ impl Action for SqlAction {
         match &self.stmt {
             SQLStatement::SQLCreateDataSource { name, .. } => self.try_drop(
                 &mut state.pgconn,
-                &format!("DROP DATA SOURCE {}", name.to_string()),
+                &format!("DROP DATA SOURCE IF EXISTS {} CASCADE", name.to_string()),
             ),
             SQLStatement::SQLCreateView { name, .. } => self.try_drop(
                 &mut state.pgconn,
-                &format!("DROP VIEW {}", name.to_string()),
+                &format!("DROP VIEW IF EXISTS {} CASCADE", name.to_string()),
             ),
             SQLStatement::SQLCreateTable { name, .. } => self.try_drop(
                 &mut state.pgconn,
-                &format!("DROP TABLE {}", name.to_string()),
+                &format!("DROP TABLE IF EXISTS {} CASCADE", name.to_string()),
             ),
             _ => Ok(()),
         }
@@ -91,16 +91,7 @@ impl SqlAction {
     fn try_drop(&self, pgconn: &mut postgres::Client, query: &str) -> Result<(), String> {
         print_query(&query);
         match pgconn.simple_query(query) {
-            Err(err) => {
-                let err_string = err.to_string();
-                if let Some(err) = try_extract_db_error(err) {
-                    // TODO(benesch): we need structured errors here.
-                    if err.message().starts_with("no such dataflow: ") {
-                        return Ok(());
-                    }
-                }
-                Err(err_string)
-            }
+            Err(err) => Err(err.to_string()),
             Ok(_) => Ok(()),
         }
     }

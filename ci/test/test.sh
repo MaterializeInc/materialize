@@ -57,7 +57,7 @@ if [[ ! "$fast" ]]; then
     # it.
     try cargo run --release --bin=sqllogictest -- sqllogictest/test \
         --verbose \
-        --expect-outcomes 182803,457182,3116321,0,2184024
+        --expect-outcomes 197383,442602,3116321,0,2184024
 fi
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840

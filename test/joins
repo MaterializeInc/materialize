@@ -15,7 +15,7 @@ $ kafka-ingest format=avro topic=names schema={
 {"num": 2, "name": "two"}
 {"num": 3, "name": "three"}
 
-> CREATE DATA SOURCE names FROM 'kafka://localhost/names' USING SCHEMA '{
+> CREATE DATA SOURCE names FROM 'kafka://${KAFKA_URL}/names' USING SCHEMA '{
     "type": "record",
     "name": "na",
     "fields": [
@@ -36,7 +36,7 @@ $ kafka-ingest format=avro topic=mods schema={
 {"num": 1, "name": "odd"}
 {"num": 2, "name": "even"}
 
-> CREATE DATA SOURCE mods FROM 'kafka://localhost/mods' USING SCHEMA '{
+> CREATE DATA SOURCE mods FROM 'kafka://${KAFKA_URL}/mods' USING SCHEMA '{
     "type": "record",
     "name": "na",
     "fields": [

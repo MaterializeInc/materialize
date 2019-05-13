@@ -26,7 +26,7 @@ use crate::glue::*;
 use crate::repr::{Datum, FType, Type};
 use ore::vec::VecExt;
 use plan::SQLPlan;
-use store::DataflowStore;
+use store::{DataflowStore, RemoveMode};
 
 mod plan;
 mod store;
@@ -88,38 +88,28 @@ impl Planner {
     }
 
     fn handle_drop_dataflow(&mut self, stmt: SQLStatement) -> PlannerResult {
-        let (sql_response, object_name) = match stmt {
-            SQLStatement::SQLDropDataSource { name, .. } => (SqlResponse::DroppedDataSource, name),
-            SQLStatement::SQLDropView { name, .. } => (SqlResponse::DroppedView, name),
-            SQLStatement::SQLDropTable {
-                names,
-                if_exists,
-                cascade,
-                restrict,
-            } => {
-                if if_exists {
-                    bail!("DROP TABLE IF EXISTS is not yet supported");
-                }
-                if cascade {
-                    bail!("DROP TABLE ... CASCADE is not yet supported");
-                }
-                if restrict {
-                    bail!("DROP TABLE ... RESTRICT is not yet supported");
-                }
-                if names.len() != 1 {
-                    bail!("DROP TABLE with more than one name is not yet supported");
-                }
-                (SqlResponse::DroppedTable, names.into_element())
-            }
+        // TODO(benesch): DROP <TYPE> should error if the named object is not
+        // of the correct type (#38).
+        let (sql_response, drop) = match stmt {
+            SQLStatement::SQLDropDataSource(drop) => (SqlResponse::DroppedDataSource, drop),
+            SQLStatement::SQLDropTable(drop) => (SqlResponse::DroppedTable, drop),
+            SQLStatement::SQLDropView(drop) => (SqlResponse::DroppedView, drop),
             _ => unreachable!(),
         };
-        let name = extract_sql_object_name(&object_name)?;
-
-        self.dataflows.remove(&name)?;
-        Ok((
-            sql_response,
-            Some(DataflowCommand::DropDataflow(name.clone())),
-        ))
+        let names: Vec<String> = Result::from_iter(drop.names.iter().map(extract_sql_object_name))?;
+        if !drop.if_exists {
+            // Without IF EXISTS, we need to verify that every named
+            // dataflow exists before proceeding with the drop
+            // implementation.
+            for name in &names {
+                let _ = self.dataflows.get(name)?;
+            }
+        }
+        let mode = RemoveMode::from_cascade(drop.cascade);
+        for name in &names {
+            self.dataflows.remove(name, mode)?;
+        }
+        Ok((sql_response, Some(DataflowCommand::DropDataflows(names))))
     }
 
     fn handle_peek(&mut self, name: SQLObjectName) -> PlannerResult {
