@@ -371,9 +371,11 @@ impl State {
             _ => Ok(Outcome::Success),
         }
     }
+}
 
-    fn shutdown(self) {
-        for dataflow_command_sender in self.dataflow_command_senders {
+impl Drop for State {
+    fn drop(&mut self) {
+        for dataflow_command_sender in &self.dataflow_command_senders {
             dataflow_command_sender
                 .unbounded_send((
                     DataflowCommand::Shutdown,
@@ -401,7 +403,6 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
     }
     for record in parse_records(&input) {
         let record = record.unwrap();
-        // dbg!(&record);
         if verbosity >= 2 {
             match record {
                 Record::Statement { sql, .. } => println!("{}", sql),
@@ -413,11 +414,8 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
             .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", filename.display(), err))
             .unwrap();
-        // dbg!(&outcome);
         outcomes.0[outcome as usize] += 1;
     }
-    println!("Shutting down...");
-    state.shutdown();
     outcomes
 }
 
