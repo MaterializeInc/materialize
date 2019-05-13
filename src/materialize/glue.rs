@@ -66,7 +66,11 @@ pub type PeekResults = Vec<Datum>;
 pub type PeekResultsMux = Arc<RwLock<Mux<Uuid, PeekResults>>>;
 
 /// A multiple-sender, multiple-receiver channel where receivers are keyed by K
-pub struct Mux<K, T> {
+#[derive(Debug)]
+pub struct Mux<K, T>
+where
+    K: Hash + Eq,
+{
     senders: HashMap<K, UnboundedSender<T>>,
 }
 
