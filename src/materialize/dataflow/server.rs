@@ -110,7 +110,15 @@ where
         loop {
             // Handle any received commands
             while let Ok(Some((cmd, cmd_meta))) = self.dataflow_command_receiver.try_next() {
-                self.handle_command(cmd, cmd_meta)
+                let is_shutdown = if let DataflowCommand::Shutdown = cmd {
+                    true
+                } else {
+                    false
+                };
+                self.handle_command(cmd, cmd_meta);
+                if is_shutdown {
+                    return;
+                }
             }
 
             // Ask Timely to execute a unit of work.
@@ -217,6 +225,10 @@ where
                 }
             }
             DataflowCommand::Tail(_) => unimplemented!(),
+            DataflowCommand::Shutdown => {
+                // this should lead timely to wind down eventually
+                self.traces.del_all_traces();
+            }
         }
     }
 }

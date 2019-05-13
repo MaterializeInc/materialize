@@ -59,6 +59,7 @@ pub enum DataflowCommand {
     PeekTransient(Dataflow),
     Tail(String),
     Insert(String, Vec<Datum>),
+    Shutdown,
 }
 
 pub type PeekResults = Vec<Datum>;

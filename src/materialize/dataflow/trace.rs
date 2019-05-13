@@ -77,4 +77,10 @@ impl TraceManager {
             (ti.delete_callback)();
         }
     }
+
+    pub fn del_all_traces(&mut self) {
+        for (_, ti) in self.traces.drain() {
+            (ti.delete_callback)();
+        }
+    }
 }
