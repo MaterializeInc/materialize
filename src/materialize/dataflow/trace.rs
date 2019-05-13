@@ -115,9 +115,12 @@ impl TraceManager {
     }
 
     pub fn del_trace(&mut self, plan: &Plan) {
-        if let Some(ti) = self.traces.remove(plan) {
-            if let Some(ti) = ti.0 {
-                (ti.delete_callback)();
+        if let Some((unkeyed, maps)) = self.traces.remove(plan) {
+            if let Some(unkeyed) = unkeyed {
+                (unkeyed.delete_callback)();
+            }
+            for (_, keyed) in maps.into_iter() {
+                (keyed.delete_callback)();
             }
         }
     }
