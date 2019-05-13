@@ -3,8 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// use std::hash::Hash;
-
 use serde::{Deserialize, Serialize};
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};

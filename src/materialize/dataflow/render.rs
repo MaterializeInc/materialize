@@ -193,7 +193,6 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                 let right_keys = right_arranged.as_collection(|k, _v| k.clone()).distinct();
 
                 flow = left_arranged
-                    // .as_collection(|k,v| (k.clone(), v.clone()))
                     .antijoin(&right_keys)
                     .map(move |(_key, left)| {
                         let mut tuple = left.unwrap_tuple();
@@ -209,7 +208,6 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                 let left_keys = left_arranged.as_collection(|k, _v| k.clone()).distinct();
 
                 flow = right_arranged
-                    // .as_collection(|k,v| (k.clone(), v.clone()))
                     .antijoin(&left_keys)
                     .map(move |(_key, right)| {
                         let mut tuple = (0..num_cols).map(|_| Datum::Null).collect::<Vec<_>>();

@@ -223,7 +223,7 @@ where
                         trace,
                     });
                 } else {
-                    eprintln!("Failed to find arrangement for Peek({})", name);
+                    panic!(format!("Failed to find arrangement for Peek({})", name));
                 }
             }
             DataflowCommand::PeekTransient(dataflow) => {
