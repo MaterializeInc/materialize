@@ -21,4 +21,4 @@ run() {
 
 pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,-p \1,p' Cargo.toml)
 run cargo clean $pkgspec
-run cargo clippy -- -D warnings -A clippy::match_bool
+run cargo clippy -- -D warnings -A clippy::match_bool -A clippy::let_and_return

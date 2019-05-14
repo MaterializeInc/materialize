@@ -97,6 +97,7 @@ impl TraceManager {
             .insert(plan.clone(), (Some(trace_info), HashMap::new()));
     }
 
+    #[allow(dead_code)]
     pub fn set_keyed_trace(
         &mut self,
         plan: &Plan,
