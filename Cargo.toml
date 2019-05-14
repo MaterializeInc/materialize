@@ -7,6 +7,9 @@ members = [
     "src/sqllogictest",
 ]
 
+[profile.release]
+debug = true
+
 # TODO(benesch): remove when https://github.com/fede1024/rust-rdkafka/pull/117
 # lands.
 [patch.crates-io]
