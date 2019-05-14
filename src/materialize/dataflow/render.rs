@@ -104,7 +104,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             let predicate = predicate.clone();
             build_plan(&input, manager, scope, buttons).filter(move |datum| {
                 match eval_expr(&predicate, &datum) {
-                    Datum::False => false,
+                    Datum::False | Datum::Null => false,
                     Datum::True => true,
                     _ => unreachable!(),
                 }
