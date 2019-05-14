@@ -5,7 +5,6 @@
 
 //! https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
-use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
@@ -28,17 +27,37 @@ use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlparser::Parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Type {
+    Text,
+    Integer,
+    Real,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sort {
+    No,
+    Row,
+    Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Output<'a> {
+    Values(Vec<&'a str>),
+    Hash(usize, &'a str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record<'a> {
     Statement {
         should_run: bool,
         sql: &'a str,
     },
     Query {
-        types: Vec<FType>,
-        sort: &'a str,
+        types: Vec<Type>,
+        sort: Sort,
         label: Option<&'a str>,
         sql: &'a str,
-        output: &'a str,
+        output: Output<'a>,
     },
     HashThreshold {
         threshold: u64,
@@ -58,14 +77,14 @@ fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> Result<&'a str, failure::Er
     }
 }
 
-fn parse_types(input: &str) -> Result<Vec<FType>, failure::Error> {
+fn parse_types(input: &str) -> Result<Vec<Type>, failure::Error> {
     input
         .chars()
         .map(|char| {
             Ok(match char {
-                'T' => FType::String,
-                'I' => FType::Int64,
-                'R' => FType::Float64,
+                'T' => Type::Text,
+                'I' => Type::Integer,
+                'R' => Type::Real,
                 _ => bail!("Unexpected type char {} in: {}", char, input),
             })
         })
@@ -118,12 +137,28 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                     .next()
                     .ok_or_else(|| format_err!("missing types in: {}", first_line))?,
             )?;
-            let sort = words
+            let sort = match words
                 .next()
-                .ok_or_else(|| format_err!("missing sort in: {}", first_line))?;
+                .ok_or_else(|| format_err!("missing sort in: {}", first_line))?
+            {
+                "nosort" => Sort::No,
+                "rowsort" => Sort::Row,
+                "valuesort" => Sort::Value,
+                other => bail!("Unknown sort option: {}", other),
+            };
             let label = words.next();
             let sql = parse_sql(&mut input)?;
-            let output = input.trim();
+            lazy_static! {
+                static ref HASH_REGEX: Regex =
+                    Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
+            }
+            let output = match HASH_REGEX.captures(input) {
+                Some(captures) => Output::Hash(
+                    captures.get(1).unwrap().as_str().parse::<usize>()?,
+                    captures.get(2).unwrap().as_str(),
+                ),
+                None => Output::Values(input.trim().lines().collect()),
+            };
             Ok(Some(Record::Query {
                 types,
                 sort,
@@ -177,7 +212,8 @@ pub enum Outcome {
     ParseFailure = 1,
     PlanFailure = 2,
     InferenceFailure = 3,
-    Success = 4,
+    OutputFailure = 4,
+    Success = 5,
 }
 
 #[derive(Default, Debug, Eq, PartialEq)]
@@ -202,12 +238,16 @@ impl ops::AddAssign<Outcomes> for Outcomes {
 }
 
 impl FromStr for Outcomes {
-    type Err = Box<dyn Error>;
+    type Err = failure::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let pieces: Vec<_> = s.split(',').collect();
-        if pieces.len() != 5 {
-            return Err("expected-outcomes argument needs five comma-separated ints".into());
+        let len = (Outcome::Success as usize) + 1;
+        if pieces.len() != len {
+            bail!(
+                "expected-outcomes argument needs {} comma-separated ints",
+                len
+            );
         }
         Ok(Outcomes([
             pieces[0].parse()?,
@@ -215,6 +255,7 @@ impl FromStr for Outcomes {
             pieces[2].parse()?,
             pieces[3].parse()?,
             pieces[4].parse()?,
+            pieces[5].parse()?,
         ]))
     }
 }
@@ -224,11 +265,12 @@ impl fmt::Display for Outcomes {
         write!(
             f,
             "unsupported={} parse-failure={} plan-failure={} \
-             inference-failure={} success={} total={}",
+             inference-failure={} output-failure={} success={} total={}",
             self.0[Outcome::Unsupported as usize],
             self.0[Outcome::ParseFailure as usize],
             self.0[Outcome::PlanFailure as usize],
             self.0[Outcome::InferenceFailure as usize],
+            self.0[Outcome::OutputFailure as usize],
             self.0[Outcome::Success as usize],
             self.total(),
         )
@@ -244,6 +286,33 @@ pub struct State {
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<Drop>,
     peek_results_mux: PeekResultsMux,
+}
+
+fn format_datum(datum: Datum, types: &[Type]) -> Vec<String> {
+    match datum {
+        Datum::Tuple(datums) => types
+            .iter()
+            .zip(datums.into_iter())
+            .map(|(typ, datum)| match (typ, datum) {
+                (_, Datum::Null) => "NULL".to_owned(),
+
+                (Type::Integer, Datum::Int64(i)) => format!("{}", i),
+                (Type::Integer, _) => "0".to_owned(),
+
+                (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
+
+                (Type::Text, Datum::String(string)) => {
+                    if string.is_empty() {
+                        "(empty)".to_owned()
+                    } else {
+                        string
+                    }
+                }
+                other => panic!("Don't know how to format {:?}", other),
+            })
+            .collect(),
+        _ => panic!("Non-datum tuple in select output: {:?}", datum),
+    }
 }
 
 impl State {
@@ -338,7 +407,9 @@ impl State {
             }
             Record::Query {
                 sql,
+                sort,
                 types: expected_types,
+                output: expected_output,
                 ..
             } => {
                 if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
@@ -362,9 +433,42 @@ impl State {
                 }
 
                 let receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                let _results = self.receive_peek_results(receiver);
+                let results = self.receive_peek_results(receiver);
 
-                // TODO(jamii) check results
+                if let Sort::No = sort {
+                    // TODO(jamii) we don't support ORDER BY yet, so this test is never going to pass
+                    return Ok(Outcome::Unsupported);
+                }
+                let mut rows = results
+                    .into_iter()
+                    .map(|datum| format_datum(datum, &**expected_types))
+                    .collect::<Vec<_>>();
+                if let Sort::Row = sort {
+                    rows.sort();
+                }
+                let mut values = rows.into_iter().flat_map(|row| row).collect::<Vec<_>>();
+                if let Sort::Value = sort {
+                    values.sort();
+                }
+
+                match expected_output {
+                    Output::Values(expected_values) => {
+                        if values != *expected_values {
+                            return Ok(Outcome::OutputFailure);
+                        }
+                    }
+                    Output::Hash(expected_len, expected_md5) => {
+                        let mut md5_context = md5::Context::new();
+                        for value in &values {
+                            md5_context.consume(value);
+                            md5_context.consume("\n");
+                        }
+                        let md5 = format!("{:x}", md5_context.compute());
+                        if values.len() != *expected_len || md5 != *expected_md5 {
+                            return Ok(Outcome::OutputFailure);
+                        }
+                    }
+                }
 
                 Ok(Outcome::Success)
             }
@@ -414,6 +518,9 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
             .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", filename.display(), err))
             .unwrap();
+        if verbosity >= 2 {
+            println!("{:?}", outcome);
+        }
         outcomes.0[outcome as usize] += 1;
     }
     outcomes
