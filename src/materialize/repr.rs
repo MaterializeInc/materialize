@@ -53,6 +53,13 @@ pub enum Datum {
 }
 
 impl Datum {
+    pub fn is_null(&self) -> bool {
+        match self {
+            Datum::Null => true,
+            _ => false,
+        }
+    }
+
     pub fn unwrap_bool(&self) -> bool {
         match self {
             Datum::False => false,

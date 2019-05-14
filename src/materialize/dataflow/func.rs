@@ -13,134 +13,243 @@ use crate::repr::Datum;
 use crate::repr::FType;
 
 pub fn and(a: Datum, b: Datum) -> Datum {
-    Datum::from(a.unwrap_bool() && b.unwrap_bool())
+    match (&a, &b) {
+        (Datum::False, _) => Datum::False,
+        (_, Datum::False) => Datum::False,
+        (Datum::Null, _) => Datum::Null,
+        (_, Datum::Null) => Datum::Null,
+        (Datum::True, Datum::True) => Datum::True,
+        _ => panic!("Cannot compute {:?} AND {:?}", a, b),
+    }
 }
 
 pub fn or(a: Datum, b: Datum) -> Datum {
-    Datum::from(a.unwrap_bool() || b.unwrap_bool())
+    match (&a, &b) {
+        (Datum::True, _) => Datum::True,
+        (_, Datum::True) => Datum::True,
+        (Datum::Null, _) => Datum::Null,
+        (_, Datum::Null) => Datum::Null,
+        (Datum::False, Datum::False) => Datum::False,
+        _ => panic!("Cannot compute {:?} OR {:?}", a, b),
+    }
 }
 
 pub fn not(a: Datum) -> Datum {
-    Datum::from(!a.unwrap_bool())
+    match &a {
+        Datum::False => Datum::True,
+        Datum::True => Datum::False,
+        Datum::Null => Datum::Null,
+        _ => panic!("Cannot compute NOT {:?}", a),
+    }
 }
 
 pub fn add_int32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int32() + b.unwrap_int32())
 }
 
 pub fn add_int64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int64() + b.unwrap_int64())
 }
 
 pub fn add_float32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float32() + b.unwrap_float32())
 }
 
 pub fn add_float64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
 }
 
 pub fn sub_int32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int32() - b.unwrap_int32())
 }
 
 pub fn sub_int64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int64() - b.unwrap_int64())
 }
 
 pub fn sub_float32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float32() - b.unwrap_float32())
 }
 
 pub fn sub_float64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float64() - b.unwrap_float64())
 }
 
 pub fn mul_int32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int32() * b.unwrap_int32())
 }
 
 pub fn mul_int64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int64() * b.unwrap_int64())
 }
 
 pub fn mul_float32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float32() * b.unwrap_float32())
 }
 
 pub fn mul_float64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
 }
 
 pub fn div_int32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int32() / b.unwrap_int32())
 }
 
 pub fn div_int64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int64() / b.unwrap_int64())
 }
 
 pub fn div_float32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float32() / b.unwrap_float32())
 }
 
 pub fn div_float64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float64() / b.unwrap_float64())
 }
 
 pub fn mod_int32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int32() % b.unwrap_int32())
 }
 
 pub fn mod_int64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_int64() % b.unwrap_int64())
 }
 
 pub fn mod_float32(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float32() % b.unwrap_float32())
 }
 
 pub fn mod_float64(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a.unwrap_float64() % b.unwrap_float64())
 }
 
 pub fn neg_int32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
     Datum::from(-a.unwrap_int32())
 }
 
 pub fn neg_int64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
     Datum::from(-a.unwrap_int64())
 }
 
 pub fn neg_float32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
     Datum::from(-a.unwrap_float32())
 }
 
 pub fn neg_float64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
     Datum::from(-a.unwrap_float64())
 }
 
 pub fn eq(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a == b)
 }
 
 pub fn not_eq(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a != b)
 }
 
 pub fn lt(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a < b)
 }
 
 pub fn lte(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a <= b)
 }
 
 pub fn gt(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a > b)
 }
 
 pub fn gte(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     Datum::from(a >= b)
 }
 
@@ -314,7 +423,11 @@ pub fn max_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<i32> = datums.into_iter().map(|d| d.unwrap_int32()).max();
+    let x: Option<i32> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int32())
+        .max();
     Datum::from(x)
 }
 
@@ -322,7 +435,11 @@ pub fn max_int64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<i64> = datums.into_iter().map(|d| d.unwrap_int64()).max();
+    let x: Option<i64> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int64())
+        .max();
     Datum::from(x)
 }
 
@@ -330,7 +447,11 @@ pub fn max_float32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<OrderedFloat<f32>> = datums.into_iter().map(|d| d.unwrap_ordered_float32()).max();
+    let x: Option<OrderedFloat<f32>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_ordered_float32())
+        .max();
     Datum::from(x)
 }
 
@@ -338,7 +459,11 @@ pub fn max_float64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<OrderedFloat<f64>> = datums.into_iter().map(|d| d.unwrap_ordered_float64()).max();
+    let x: Option<OrderedFloat<f64>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_ordered_float64())
+        .max();
     Datum::from(x)
 }
 
@@ -346,7 +471,11 @@ pub fn min_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<i32> = datums.into_iter().map(|d| d.unwrap_int32()).min();
+    let x: Option<i32> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int32())
+        .min();
     Datum::from(x)
 }
 
@@ -354,7 +483,11 @@ pub fn min_int64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<i64> = datums.into_iter().map(|d| d.unwrap_int64()).min();
+    let x: Option<i64> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int64())
+        .min();
     Datum::from(x)
 }
 
@@ -362,7 +495,11 @@ pub fn min_float32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<OrderedFloat<f32>> = datums.into_iter().map(|d| d.unwrap_ordered_float32()).min();
+    let x: Option<OrderedFloat<f32>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_ordered_float32())
+        .min();
     Datum::from(x)
 }
 
@@ -370,7 +507,11 @@ pub fn min_float64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: Option<OrderedFloat<f64>> = datums.into_iter().map(|d| d.unwrap_ordered_float64()).min();
+    let x: Option<OrderedFloat<f64>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_ordered_float64())
+        .min();
     Datum::from(x)
 }
 
@@ -378,7 +519,11 @@ pub fn sum_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: i32 = datums.into_iter().map(|d| d.unwrap_int32()).sum();
+    let x: i32 = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int32())
+        .sum();
     Datum::from(x)
 }
 
@@ -386,7 +531,11 @@ pub fn sum_int64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: i64 = datums.into_iter().map(|d| d.unwrap_int64()).sum();
+    let x: i64 = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_int64())
+        .sum();
     Datum::from(x)
 }
 
@@ -394,7 +543,11 @@ pub fn sum_float32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: f32 = datums.into_iter().map(|d| d.unwrap_float32()).sum();
+    let x: f32 = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_float32())
+        .sum();
     Datum::from(x)
 }
 
@@ -402,7 +555,11 @@ pub fn sum_float64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let x: f64 = datums.into_iter().map(|d| d.unwrap_float64()).sum();
+    let x: f64 = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_float64())
+        .sum();
     Datum::from(x)
 }
 
