@@ -10,13 +10,14 @@ use differential_dataflow::trace::TraceReader;
 
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
-use timely::dataflow::operators::probe::Handle as ProbeHandle;
+// use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use timely::worker::Worker as TimelyWorker;
 
 use std::sync::{Arc, Mutex};
 
 use super::render;
 use super::trace::{KeysOnlyHandle, TraceManager};
+use super::types;
 use crate::clock::{Clock, Timestamp};
 use crate::dataflow::source;
 use crate::glue::*;
@@ -61,10 +62,12 @@ pub enum PeekResultsHandler {
 }
 
 struct PendingPeek {
+    /// Identifies intended recipient of the peek.
     connection_uuid: uuid::Uuid,
+    /// Time at which the collection should be materialized.
     timestamp: Timestamp,
+    /// Handle to trace.
     trace: KeysOnlyHandle,
-    probe: ProbeHandle<Timestamp>,
 }
 
 struct Worker<'w, A>
@@ -133,45 +136,71 @@ where
                 ..
             } = self;
             pending_peeks.retain(|peek| {
-                if peek.probe.less_than(&peek.timestamp) {
-                    return true; // retain
-                }
-                let (mut cur, storage) = peek.trace.clone().cursor();
-                let mut out = Vec::new();
-                while cur.key_valid(&storage) {
-                    let key = cur.key(&storage).clone();
-                    let mut copies = 0;
-                    cur.map_times(&storage, |_, diff| {
-                        copies += diff;
-                    });
-                    assert!(copies >= 0);
-                    for _ in 0..copies {
-                        out.push(key.clone());
+                let mut upper = timely::progress::frontier::Antichain::new();
+                let mut trace = peek.trace.clone();
+                trace.read_upper(&mut upper);
+
+                // To produce output at `peek.timestamp`, we must be certain that
+                // it is no longer changing. A trace guarantees that all future
+                // changes will be greater than or equal to an element of `upper`.
+                //
+                // If an element of `upper` is less or equal to `peek.timestamp`,
+                // then there can be further updates that would change the output.
+                // If no element of `upper` is less or equal to `peek.timestamp`,
+                // then for any time `t` less or equal to `peek.timestamp` it is
+                // not the case that `upper` is less or equal to that timestamp,
+                // and so the result cannot further evolve.
+                if !upper.less_equal(&peek.timestamp) {
+                    let (mut cur, storage) = peek.trace.clone().cursor();
+                    let mut out = Vec::new();
+                    while let Some(key) = cur.get_key(&storage) {
+                        // TODO: Absent value iteration might be weird (in principle
+                        // the cursor *could* say no `()` values associated with the
+                        // key, though I can't imagine how that would happen for this
+                        // specific trace implementation).
+
+                        let mut copies = 0;
+                        cur.map_times(&storage, |time, diff| {
+                            use timely::order::PartialOrder;
+                            if time.less_equal(&peek.timestamp) {
+                                copies += diff;
+                            }
+                        });
+                        assert!(copies >= 0);
+                        for _ in 0..copies {
+                            out.push(key.clone());
+                        }
+
+                        cur.step_key(&storage)
                     }
-                    cur.step_key(&storage)
-                }
-                match peek_results_handler {
-                    PeekResultsHandler::Local(peek_results_mux) => {
-                        // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-                        if let Ok(sender) = peek_results_mux
-                            .read()
-                            .unwrap()
-                            .sender(&peek.connection_uuid)
-                        {
-                            drop(sender.unbounded_send(out))
+                    match peek_results_handler {
+                        PeekResultsHandler::Local(peek_results_mux) => {
+                            // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
+                            if let Ok(sender) = peek_results_mux
+                                .read()
+                                .unwrap()
+                                .sender(&peek.connection_uuid)
+                            {
+                                drop(sender.unbounded_send(out))
+                            }
+                        }
+                        PeekResultsHandler::Remote => {
+                            let encoded = bincode::serialize(&out).unwrap();
+                            rpc_client
+                                .post("http://localhost:6875/api/peek-results")
+                                .header(
+                                    "X-Materialize-Query-UUID",
+                                    peek.connection_uuid.to_string(),
+                                )
+                                .body(encoded)
+                                .send()
+                                .unwrap();
                         }
                     }
-                    PeekResultsHandler::Remote => {
-                        let encoded = bincode::serialize(&out).unwrap();
-                        rpc_client
-                            .post("http://localhost:6875/api/peek-results")
-                            .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
-                            .body(encoded)
-                            .send()
-                            .unwrap();
-                    }
+                    false // don't retain
+                } else {
+                    true
                 }
-                false // don't retain
             });
         }
     }
@@ -191,17 +220,21 @@ where
                 let mut insert_mux = self.insert_mux.write().unwrap();
                 for name in names {
                     insert_mux.close(&name);
-                    self.traces.del_trace(&name);
+                    let plan = types::Plan::Source(name.to_string());
+                    self.traces.del_trace(&plan);
                 }
             }
             DataflowCommand::PeekExisting(ref name) => {
-                let (trace, probe) = self.traces.get_trace_and_probe(name.clone()).unwrap();
-                self.pending_peeks.push(PendingPeek {
-                    connection_uuid: cmd_meta.connection_uuid,
-                    timestamp: cmd_meta.timestamp.unwrap(),
-                    trace,
-                    probe,
-                });
+                let plan = types::Plan::Source(name.to_string());
+                if let Some(trace) = self.traces.get_trace(&plan) {
+                    self.pending_peeks.push(PendingPeek {
+                        connection_uuid: cmd_meta.connection_uuid,
+                        timestamp: cmd_meta.timestamp.unwrap(),
+                        trace,
+                    });
+                } else {
+                    panic!(format!("Failed to find arrangement for Peek({})", name));
+                }
             }
             DataflowCommand::PeekTransient(dataflow) => {
                 let name = dataflow.name().to_string();

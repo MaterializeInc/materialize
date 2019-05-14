@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+// use std::hash::Hash;
+
 use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -142,7 +144,7 @@ pub fn gte(a: Datum, b: Datum) -> Datum {
     Datum::from(a >= b)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
     Or,
@@ -213,7 +215,7 @@ pub fn is_null(a: Datum) -> Datum {
     Datum::from(a == Datum::Null)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UnaryFunc {
     Not,
     IsNull,
@@ -412,7 +414,7 @@ where
     Datum::from(x)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
     AvgInt32,
     AvgInt64,

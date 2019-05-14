@@ -86,7 +86,7 @@ pub struct View {
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum Plan {
     /// Source data from another dataflow.
     Source(String),
@@ -161,14 +161,14 @@ impl Plan {
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct Aggregate {
     pub func: AggregateFunc,
     pub expr: Expr,
 }
 
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum Expr {
     /// The ambient value.
     Ambient,
