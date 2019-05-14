@@ -233,7 +233,10 @@ where
             DataflowCommand::DropDataflows(names) => {
                 let mut insert_mux = self.insert_mux.write().unwrap();
                 for name in names {
-                    insert_mux.close(&name);
+                    // Only the first worker deals with inserts, otherwise we get terrible races
+                    if self.inner.index() == 0 {
+                        insert_mux.close(&name);
+                    }
                     let plan = types::Plan::Source(name.to_string());
                     self.traces.del_trace(&plan);
                 }
