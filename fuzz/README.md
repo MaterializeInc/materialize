@@ -13,7 +13,7 @@ To fuzz stuff:
 
 ``` sh
 cd materialize
-RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz run --release fuzz_sqllogictest
+RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz run --release fuzz_sqllogictest -- -dict=fuzz/sql.dict
 ```
 
 Failing tests are added to `./fuzz/artifacts/fuzz_sqllogictest` and can be rerun with `cargo test -p sqllogictest`.
