@@ -34,7 +34,7 @@ To fuzz stuff:
 
 ``` sh
 cd materialize
-RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz --release run fuzz_testdriver
+RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz run --release fuzz_testdriver
 ```
 
 Failing tests are added to `./fuzz/artifacts/fuzz_testdrive` and can be rerun with `cargo run --bin testdrive ./fuzz/artificats/fuzz_testdrive/<FAILING_TEST>`.
