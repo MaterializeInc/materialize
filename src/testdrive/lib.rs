@@ -9,7 +9,6 @@ use std::fs::File;
 use std::io;
 use std::io::Read;
 
-use self::action::Config;
 use self::error::{InputError, ResultExt};
 use self::parser::LineReader;
 
@@ -17,6 +16,7 @@ mod action;
 mod error;
 mod parser;
 
+pub use self::action::Config;
 pub use self::error::Error;
 
 pub fn run() -> Result<(), Error> {

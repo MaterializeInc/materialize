@@ -279,7 +279,7 @@ impl fmt::Display for Outcomes {
 
 const NUM_TIMELY_WORKERS: usize = 3;
 
-pub struct State {
+struct State {
     clock: Clock,
     planner: Planner,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
@@ -526,6 +526,39 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
     outcomes
 }
 
+pub fn fuzz(sqls: &str) {
+    let mut state = State::start();
+    for sql in sqls.split(";") {
+        if let Ok((sql_response, dataflow_command)) = state.planner.handle_command(sql.to_owned()) {
+            if let Some(dataflow_command) = dataflow_command {
+                let receiver = state.send_dataflow_command(dataflow_command);
+                if let SqlResponse::Peeking { typ } = sql_response {
+                    let types = match typ.ftype {
+                        FType::Tuple(types) => types,
+                        _ => panic!(),
+                    };
+                    for datum in state.receive_peek_results(receiver) {
+                        match datum {
+                            Datum::Tuple(datums) => {
+                                for (typ, datum) in types.iter().zip(datums.into_iter()) {
+                                    assert!(
+                                        (typ.ftype == datum.ftype())
+                                            || (typ.nullable && datum.is_null()),
+                                        "{:?} was inferred to have type {:?}",
+                                        typ.ftype,
+                                        datum.ftype()
+                                    );
+                                }
+                            }
+                            _ => panic!(),
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -541,18 +574,12 @@ mod test {
         for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
             if entry.path().is_file() {
-                let mut state = State::start();
                 input.clear();
                 File::open(&entry.path())
                     .unwrap()
                     .read_to_string(&mut input)
                     .unwrap();
-                for record in parse_records(&input) {
-                    match record {
-                        Ok(record) => drop(state.run_record(&record)),
-                        _ => (),
-                    }
-                }
+                fuzz(&input);
             }
         }
     }

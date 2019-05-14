@@ -1,4 +1,4 @@
-# this has to live in the testdrive crate until https://github.com/rust-fuzz/cargo-fuzz/issues/42 is fixed
+# this has to live outside the workspace until https://github.com/rust-fuzz/cargo-fuzz/issues/42 is fixed
 
 [package]
 name = "fuzz"
@@ -28,3 +28,7 @@ path = "fuzz_targets/fuzz_sqllogictest.rs"
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]
+
+[patch.crates-io]
+rdkafka = { git = "ssh://git@github.com/MaterializeInc/rust-rdkafka.git" }
+futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch = "0.1" }

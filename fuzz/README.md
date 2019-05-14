@@ -7,8 +7,6 @@ Before first use:
 ``` sh
 cd materialize
 cargo install cargo-fuzz
-cp -ar sqllogictest/test/ fuzz/corpus/fuzz_sqllogictest/
-RUSTFLAGS='-C codegen-units=1' cargo +nightly fuzz cmin --release fuzz_sqllogictest
 ```
 
 To fuzz stuff:

@@ -225,3 +225,29 @@ pub enum FType {
     Array(Box<Type>),
     OneOf(Vec<Type>),
 }
+
+impl Datum {
+    pub fn ftype(&self) -> FType {
+        match self {
+            Datum::Null => FType::Null,
+            Datum::False => FType::Bool,
+            Datum::True => FType::Bool,
+            Datum::Int32(_) => FType::Int32,
+            Datum::Int64(_) => FType::Int64,
+            Datum::Float32(_) => FType::Float32,
+            Datum::Float64(_) => FType::Float64,
+            Datum::Bytes(_) => FType::Bytes,
+            Datum::String(_) => FType::String,
+            Datum::Tuple(datums) => FType::Tuple(
+                datums
+                    .iter()
+                    .map(|datum| Type {
+                        name: None,
+                        nullable: true,
+                        ftype: datum.ftype(),
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}

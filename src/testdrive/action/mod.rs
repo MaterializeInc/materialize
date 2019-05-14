@@ -12,6 +12,7 @@ use ore::option::OptionExt;
 mod kafka;
 mod sql;
 
+#[derive(Default)]
 pub struct Config {
     pub kafka_url: Option<String>,
     pub materialized_url: Option<String>,
