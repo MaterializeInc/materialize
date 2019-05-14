@@ -165,29 +165,35 @@ impl Planner {
             ),
         };
 
-        if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
-            bail!(
-                "Duplicate column in INSERT INTO ... COLUMNS ({})",
-                columns.join(", ")
-            );
-        }
-        let expected_columns = types
-            .iter()
-            .map(|typ| typ.name.clone().expect("Table columns should all be named"))
-            .collect::<Vec<_>>();
-        if HashSet::<&String>::from_iter(&columns).len()
-            != HashSet::<&String>::from_iter(&expected_columns).len()
-        {
-            bail!(
-                "Missing column in INSERT INTO ... COLUMNS ({}), expected {}",
-                columns.join(", "),
-                expected_columns.join(", ")
-            );
-        }
-        let permutation = expected_columns
-            .iter()
-            .map(|name| columns.iter().position(|name2| name == name2).unwrap())
-            .collect::<Vec<_>>();
+        let permutation = if columns.is_empty() {
+            // if not specified, just insert in natural order
+            (0..types.len()).collect::<Vec<_>>()
+        } else {
+            // otherwise, check that we have a sensible list of columns
+            if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
+                bail!(
+                    "Duplicate column in INSERT INTO ... COLUMNS ({})",
+                    columns.join(", ")
+                );
+            }
+            let expected_columns = types
+                .iter()
+                .map(|typ| typ.name.clone().expect("Table columns should all be named"))
+                .collect::<Vec<_>>();
+            if HashSet::<&String>::from_iter(&columns).len()
+                != HashSet::<&String>::from_iter(&expected_columns).len()
+            {
+                bail!(
+                    "Missing column in INSERT INTO ... COLUMNS ({}), expected {}",
+                    columns.join(", "),
+                    expected_columns.join(", ")
+                );
+            }
+            expected_columns
+                .iter()
+                .map(|name| columns.iter().position(|name2| name == name2).unwrap())
+                .collect::<Vec<_>>()
+        };
         let datums = values
             .into_iter()
             .map(|asts| {
