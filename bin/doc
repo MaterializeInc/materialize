@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 # overflow its stack: https://github.com/rust-lang/rust/issues/59502.
 cargo +nightly doc --no-deps
 
-crates=$(cargo metadata --format-version=1 \
+crates=$(cargo +nightly metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")
 
 # Create a nice homepage for the docs. It's awful that we have to copy the
