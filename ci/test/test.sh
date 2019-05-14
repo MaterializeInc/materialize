@@ -81,6 +81,9 @@ if [[ ! "$fast" ]]; then
     target/debug/testdrive --kafka "${KAFKA_HOST:-localhost}:9092" test/*
 fi
 
+cd fuzz
+try cargo build
+
 echo "+++ Status report"
 echo "$passed/$total commands passed"
 if ((passed != total)); then
