@@ -528,7 +528,7 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
 
 pub fn fuzz(sqls: &str) {
     let mut state = State::start();
-    for sql in sqls.split(";") {
+    for sql in sqls.split(';') {
         if let Ok((sql_response, dataflow_command)) = state.planner.handle_command(sql.to_owned()) {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);
