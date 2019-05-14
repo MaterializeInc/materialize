@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::arrange::{ArrangeBySelf, ShutdownButton};
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::threshold::ThresholdTotal;
@@ -13,6 +13,7 @@ use std::cell::Cell;
 use std::iter;
 use std::rc::Rc;
 use timely::communication::Allocate;
+use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
@@ -59,8 +60,14 @@ pub fn build_dataflow<A: Allocate>(
             );
         }
         Dataflow::View(view) => {
-            let arrangement = build_plan(&view.plan, manager, scope).arrange_by_self();
-            let on_delete = Box::new(|| ());
+            let mut buttons = Vec::new();
+            let arrangement =
+                build_plan(&view.plan, manager, scope, &mut buttons).arrange_by_self();
+            let on_delete = Box::new(move || {
+                for button in &mut buttons {
+                    button.press();
+                }
+            });
             manager.set_trace(
                 &Plan::Source(view.name.clone()),
                 arrangement.trace,
@@ -74,24 +81,28 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
     plan: &Plan,
     manager: &mut TraceManager,
     scope: &mut S,
+    buttons: &mut Vec<ShutdownButton<CapabilitySet<Timestamp>>>,
 ) -> Collection<S, Datum, Diff> {
     match plan {
-        Plan::Source(name) => manager
-            .get_trace(&Plan::Source(name.to_owned()))
-            .unwrap_or_else(|| panic!(format!("unable to find dataflow {}", name)))
-            .import(scope)
-            .as_collection(|k, ()| k.to_owned()),
+        Plan::Source(name) => {
+            let (arrangement, button) = manager
+                .get_trace(&Plan::Source(name.to_owned()))
+                .unwrap_or_else(|| panic!(format!("unable to find dataflow {}", name)))
+                .import_core(scope, &format!("Import({})", name));
+            buttons.push(button);
+            arrangement.as_collection(|k, ()| k.to_owned())
+        }
 
         Plan::Project { outputs, input } => {
             let outputs = outputs.clone();
-            build_plan(&input, manager, scope).map(move |datum| {
+            build_plan(&input, manager, scope, buttons).map(move |datum| {
                 Datum::Tuple(outputs.iter().map(|expr| eval_expr(expr, &datum)).collect())
             })
         }
 
         Plan::Filter { predicate, input } => {
             let predicate = predicate.clone();
-            build_plan(&input, manager, scope).filter(move |datum| {
+            build_plan(&input, manager, scope, buttons).filter(move |datum| {
                 match eval_expr(&predicate, &datum) {
                     Datum::False => false,
                     Datum::True => true,
@@ -104,7 +115,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
         Plan::Aggregate { key, aggs, input } => {
             let key = key.clone();
             let aggs = aggs.clone();
-            build_plan(&input, manager, scope)
+            build_plan(&input, manager, scope, buttons)
                 .map(move |datum| (eval_expr(&key, &datum), datum))
                 .reduce(move |_key, input, output| {
                     let res: Vec<_> = aggs
@@ -149,7 +160,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                 trace.import(scope)
             } else {
                 let left_key2 = left_key.clone();
-                let left_trace = build_plan(&left_plan, manager, scope)
+                let left_trace = build_plan(&left_plan, manager, scope, buttons)
                     .map(move |datum| (eval_expr(&left_key2, &datum), datum))
                     .arrange_by_key();
 
@@ -168,7 +179,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                     trace.import(scope)
                 } else {
                     let right_key2 = right_key.clone();
-                    let right_trace = build_plan(&right_plan, manager, scope)
+                    let right_trace = build_plan(&right_plan, manager, scope, buttons)
                         .map(move |datum| (eval_expr(&right_key2, &datum), datum))
                         .arrange_by_key();
 
@@ -220,10 +231,12 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             flow
         }
 
-        Plan::Distinct(plan) => build_plan(plan, manager, scope).distinct_total(),
+        Plan::Distinct(plan) => build_plan(plan, manager, scope, buttons).distinct_total(),
         Plan::UnionAll(plans) => {
             assert!(!plans.is_empty());
-            let mut plans = plans.iter().map(|plan| build_plan(plan, manager, scope));
+            let mut plans = plans
+                .iter()
+                .map(|plan| build_plan(plan, manager, scope, buttons));
             let plan = plans.next().unwrap();
             plans.fold(plan, |p1, p2| p1.concat(&p2))
         }

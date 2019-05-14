@@ -5,7 +5,6 @@
 
 //! https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -15,12 +14,18 @@ use std::path::Path;
 use std::str::FromStr;
 
 use failure::{bail, format_err, ResultExt};
+use futures::stream::Stream;
 use lazy_static::lazy_static;
 use regex::Regex;
+use uuid::Uuid;
 
-use materialize::repr::{FType, Type};
+use materialize::clock::Clock;
+use materialize::dataflow;
+use materialize::glue::*;
+use materialize::repr::{Datum, FType};
+use materialize::sql::Planner;
 use sqlparser::dialect::AnsiSqlDialect;
-use sqlparser::sqlast::{SQLStatement, SQLType};
+use sqlparser::sqlparser::Parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record<'a> {
@@ -230,139 +235,164 @@ impl fmt::Display for Outcomes {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+const NUM_TIMELY_WORKERS: usize = 3;
+
 pub struct State {
-    table_types: HashMap<String, Type>,
+    clock: Clock,
+    planner: Planner,
+    dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
+    // this is only here to avoid dropping it too early
+    _dataflow_workers: Box<Drop>,
+    peek_results_mux: PeekResultsMux,
 }
 
-pub fn run_record(state: &mut State, record: &Record) -> Result<Outcome, failure::Error> {
-    match &record {
-        Record::Statement { should_run, sql } => {
-            lazy_static! {
-                static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new("^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP INDEX|DROP TRIGGER|INSERT INTO .* SELECT|UPDATE|REINDEX|REPLACE INTO)").unwrap();
-            }
-            if UNSUPPORTED_STATEMENT_REGEX.is_match(sql) {
-                return Ok(Outcome::Unsupported);
-            }
+impl State {
+    fn start() -> Self {
+        let clock = Clock::new();
+        let planner = Planner::default();
+        let (dataflow_command_senders, dataflow_command_receivers) =
+            (0..NUM_TIMELY_WORKERS).map(|_| unbounded()).unzip();
+        let peek_results_mux = PeekResultsMux::default();
+        let dataflow_workers = dataflow::serve(
+            dataflow_command_receivers,
+            dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
+            clock.clone(),
+            NUM_TIMELY_WORKERS,
+        )
+        .unwrap();
+        State {
+            clock,
+            planner,
+            dataflow_command_senders,
+            _dataflow_workers: Box::new(dataflow_workers),
+            peek_results_mux,
+        }
+    }
 
-            let parse =
-                sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
+    fn send_dataflow_command(
+        &self,
+        dataflow_command: DataflowCommand,
+    ) -> UnboundedReceiver<PeekResults> {
+        let timestamp = self.clock.now();
+        let uuid = Uuid::new_v4();
+        let receiver = self
+            .peek_results_mux
+            .write()
+            .unwrap()
+            .channel(uuid)
+            .unwrap();
+        for dataflow_command_sender in &self.dataflow_command_senders {
+            dataflow_command_sender
+                .unbounded_send((
+                    dataflow_command.clone(),
+                    CommandMeta {
+                        connection_uuid: uuid,
+                        timestamp: Some(timestamp),
+                    },
+                ))
+                .unwrap();
+        }
+        receiver
+    }
 
-            let statement = match parse {
-                Ok(ref statements) if statements.len() == 1 => statements.iter().next().unwrap(),
-                _ => {
+    fn receive_peek_results(&self, receiver: UnboundedReceiver<PeekResults>) -> Vec<Datum> {
+        let mut results = vec![];
+        let mut receiver = receiver.wait();
+        for _ in 0..NUM_TIMELY_WORKERS {
+            results.append(&mut receiver.next().unwrap().unwrap());
+        }
+        results
+    }
+
+    fn run_record(&mut self, record: &Record) -> Result<Outcome, failure::Error> {
+        match &record {
+            Record::Statement { should_run, sql } => {
+                lazy_static! {
+                    static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new("^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP INDEX|DROP TRIGGER|INSERT INTO .* SELECT|UPDATE|REINDEX|REPLACE INTO)").unwrap();
+                }
+                if UNSUPPORTED_STATEMENT_REGEX.is_match(sql) {
+                    return Ok(Outcome::Unsupported);
+                }
+
+                if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
                     if *should_run {
                         return Ok(Outcome::ParseFailure);
                     } else {
                         return Ok(Outcome::Success);
                     }
                 }
-            };
 
-            // this is mostly testing database constraints, which we don't support
-            if !should_run {
-                return Ok(Outcome::Success);
+                // this is mostly testing database constraints, which we don't support
+                if !should_run {
+                    return Ok(Outcome::Success);
+                }
+
+                let dataflow_command = match self.planner.handle_command(sql.to_string()) {
+                    Ok((_, dataflow_command)) => dataflow_command,
+                    Err(_) => return Ok(Outcome::PlanFailure),
+                };
+
+                let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
+
+                Ok(Outcome::Success)
             }
-
-            match statement {
-                SQLStatement::SQLCreateTable {
-                    name,
-                    columns,
-                    external,
-                    file_format,
-                    location,
-                } => {
-                    if *external || file_format.is_some() || location.is_some() {
-                        bail!("EXTERNAL tables shouldn't appear in sqllogictest");
-                    }
-                    let types = columns
-                        .iter()
-                        .map(|column| {
-                            Ok(Type {
-                                name: Some(column.name.clone()),
-                                ftype: match &column.data_type {
-                                    SQLType::Char(_) | SQLType::Varchar(_) | SQLType::Text => {
-                                        FType::String
-                                    }
-                                    SQLType::SmallInt | SQLType::Int | SQLType::BigInt => {
-                                        FType::Int64
-                                    }
-                                    SQLType::Float(_) | SQLType::Real | SQLType::Double => {
-                                        FType::Float64
-                                    }
-                                    other => bail!("Unexpected SQL type: {:?}", other),
-                                },
-                                nullable: column.allow_null,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let typ = Type {
-                        name: None,
-                        ftype: FType::Tuple(types),
-                        nullable: false,
-                    };
-                    state.table_types.insert(name.to_string(), typ);
-                }
-                SQLStatement::SQLDropTable(drop) => {
-                    if drop.cascade {
-                        return Ok(Outcome::Unsupported);
-                    }
-                    for name in &drop.names {
-                        state.table_types.remove(&name.to_string());
-                    }
-                }
-                _ => return Ok(Outcome::Unsupported),
-            }
-
-            Ok(Outcome::Success)
-        }
-        Record::Query {
-            sql,
-            types: expected_types,
-            ..
-        } => {
-            let parse =
-                sqlparser::sqlparser::Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
-
-            let query = match parse {
-                Ok(ref statements) if statements.len() == 1 => {
-                    match statements.iter().next().unwrap() {
-                        SQLStatement::SQLQuery(query) => query,
-                        _ => return Ok(Outcome::ParseFailure),
-                    }
-                }
-                _ => {
+            Record::Query {
+                sql,
+                types: expected_types,
+                ..
+            } => {
+                if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
                     return Ok(Outcome::ParseFailure);
                 }
-            };
 
-            let planner = materialize::sql::Planner::mock(state.table_types.clone());
+                let (typ, dataflow_command) = match self.planner.handle_command(sql.to_string()) {
+                    Ok((SqlResponse::Peeking { typ }, dataflow_command)) => (typ, dataflow_command),
+                    _ => return Ok(Outcome::PlanFailure),
+                };
 
-            let (_plan, typ) = match planner.plan_view_query(&query) {
-                Ok(result) => result,
-                _ => return Ok(Outcome::PlanFailure),
-            };
+                let inferred_types = match &typ.ftype {
+                    FType::Tuple(types) => types.iter().map(|typ| &typ.ftype).collect::<Vec<_>>(),
+                    other => panic!("Query with non-tuple type: {:?}", other),
+                };
 
-            let inferred_types = match &typ.ftype {
-                FType::Tuple(types) => types.iter().map(|typ| &typ.ftype).collect::<Vec<_>>(),
-                other => panic!("Query with non-tuple type: {:?}", other),
-            };
+                // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
+                // but at least it will be the correct length
+                if inferred_types.len() != expected_types.len() {
+                    return Ok(Outcome::InferenceFailure);
+                }
 
-            // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
-            if inferred_types.len() != expected_types.len() {
-                return Ok(Outcome::InferenceFailure);
+                let receiver = self.send_dataflow_command(dataflow_command.unwrap());
+                let _results = self.receive_peek_results(receiver);
+
+                // TODO(jamii) check results
+
+                Ok(Outcome::Success)
             }
-
-            Ok(Outcome::Success)
+            _ => Ok(Outcome::Success),
         }
-        _ => Ok(Outcome::Success),
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        for dataflow_command_sender in &self.dataflow_command_senders {
+            dataflow_command_sender
+                .unbounded_send((
+                    DataflowCommand::Shutdown,
+                    CommandMeta {
+                        connection_uuid: Uuid::nil(),
+                        timestamp: None,
+                    },
+                ))
+                .unwrap();
+        }
     }
 }
 
 pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
     let mut outcomes = Outcomes::default();
     let mut input = String::new();
-    let mut state = State::default();
+    let mut state = State::start();
     input.clear();
     File::open(filename)
         .unwrap()
@@ -380,7 +410,8 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
                 _ => (),
             }
         }
-        let outcome = run_record(&mut state, &record)
+        let outcome = state
+            .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", filename.display(), err))
             .unwrap();
         outcomes.0[outcome as usize] += 1;
@@ -403,7 +434,7 @@ mod test {
         for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
             if entry.path().is_file() {
-                let mut state = State::default();
+                let mut state = State::start();
                 input.clear();
                 File::open(&entry.path())
                     .unwrap()
@@ -411,7 +442,7 @@ mod test {
                     .unwrap();
                 for record in parse_records(&input) {
                     match record {
-                        Ok(record) => drop(run_record(&mut state, &record)),
+                        Ok(record) => drop(state.run_record(&record)),
                         _ => (),
                     }
                 }
