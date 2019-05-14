@@ -153,12 +153,12 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                     .map(move |datum| (eval_expr(&left_key2, &datum), datum))
                     .arrange_by_key();
 
-                manager.set_keyed_trace(
-                    &left_plan,
-                    &left_key,
-                    left_trace.trace.clone(),
-                    Box::new(|| ()),
-                );
+                // manager.set_keyed_trace(
+                //     &left_plan,
+                //     &left_key,
+                //     left_trace.trace.clone(),
+                //     Box::new(|| ()),
+                // );
                 left_trace
             };
 
@@ -172,12 +172,12 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                         .map(move |datum| (eval_expr(&right_key2, &datum), datum))
                         .arrange_by_key();
 
-                    manager.set_keyed_trace(
-                        &right_plan,
-                        &right_key,
-                        right_trace.trace.clone(),
-                        Box::new(|| ()),
-                    );
+                    // manager.set_keyed_trace(
+                    //     &right_plan,
+                    //     &right_key,
+                    //     right_trace.trace.clone(),
+                    //     Box::new(|| ()),
+                    // );
                     right_trace
                 };
 
