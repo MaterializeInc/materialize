@@ -82,7 +82,7 @@ if [[ ! "$fast" ]]; then
 fi
 
 cd fuzz
-try cargo build
+try cargo check
 
 echo "+++ Status report"
 echo "$passed/$total commands passed"
