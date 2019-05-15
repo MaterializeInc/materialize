@@ -11,7 +11,7 @@ use crate::dataflow::Plan::MultiwayJoin;
 use crate::sql::plan::SQLPlan;
 
 #[allow(dead_code)]
-fn plan_multiple_joins(
+pub fn plan_multiple_joins(
     plans: &[SQLPlan],
     joins: &[sqlast::Join],
     selection: Option<ASTNode>,

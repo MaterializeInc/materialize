@@ -764,60 +764,70 @@ impl Planner {
         joins: &[sqlast::Join],
         mut selection: Option<ASTNode>,
     ) -> Result<(SQLPlan, Option<ASTNode>), failure::Error> {
-        // Assemble participating tables.
-        let mut tables = Vec::new();
-        tables.push(plan.clone());
+        if joins.is_empty() {
+            Ok((plan, selection))
+        } else {
+            // Assemble participating tables.
+            let mut tables = Vec::new();
+            tables.push(plan.clone());
 
-        for join in joins.iter() {
-            match &join.relation {
-                TableFactor::Table {
-                    name,
-                    alias,
-                    args,
-                    with_hints,
-                } => {
-                    if !args.is_empty() {
-                        bail!("table arguments are not supported");
+            for join in joins.iter() {
+                match &join.relation {
+                    TableFactor::Table {
+                        name,
+                        alias,
+                        args,
+                        with_hints,
+                    } => {
+                        if !args.is_empty() {
+                            bail!("table arguments are not supported");
+                        }
+                        if !with_hints.is_empty() {
+                            bail!("WITH hints are not supported");
+                        }
+                        let name = extract_sql_object_name(&name)?;
+                        let types = match self.dataflows.get_type(&name)? {
+                            Type {
+                                ftype: FType::Tuple(types),
+                                ..
+                            } => types.clone(),
+                            typ => panic!("Table {} has non-tuple type {:?}", name, typ),
+                        };
+                        let mut right = SQLPlan::from_source(&name, types);
+                        if let Some(alias) = alias {
+                            right = right.alias_table(alias);
+                        }
+                        tables.push(right);
                     }
-                    if !with_hints.is_empty() {
-                        bail!("WITH hints are not supported");
+                    TableFactor::Derived { .. } => {
+                        bail!("subqueries are not yet supported");
                     }
-                    let name = extract_sql_object_name(&name)?;
-                    let types = match self.dataflows.get_type(&name)? {
-                        Type {
-                            ftype: FType::Tuple(types),
-                            ..
-                        } => types.clone(),
-                        typ => panic!("Table {} has non-tuple type {:?}", name, typ),
-                    };
-                    let mut right = SQLPlan::from_source(&name, types);
-                    if let Some(alias) = alias {
-                        right = right.alias_table(alias);
-                    }
-                    tables.push(right);
-                }
-                TableFactor::Derived { .. } => {
-                    bail!("subqueries are not yet supported");
                 }
             }
+
+            // Assert that we have the right number of tables at hand (e.g. that we didn't
+            // miss something in that loop above with the special cases).
+            assert!(tables.len() == joins.len() + 1);
+
+            // Extract all ASTNode join constraints
+
+            let attempt =
+                multiway_plan::plan_multiple_joins(&tables[..], &joins[..], selection.clone());
+
+            if let Ok((plan, selection)) = attempt {
+                Ok((plan, selection))
+            } else {
+                for (index, join) in joins.iter().enumerate() {
+                    plan = self.plan_join_operator(
+                        &join.join_operator,
+                        &mut selection,
+                        plan,
+                        tables[index + 1].clone(),
+                    )?;
+                }
+                Ok((plan, selection))
+            }
         }
-
-        // Assert that we have the right number of tables at hand (e.g. that we didn't
-        // miss something in that loop above with the special cases).
-        assert!(tables.len() == joins.len() + 1);
-
-        // Extract all ASTNode join constraints
-
-        for (index, join) in joins.iter().enumerate() {
-            plan = self.plan_join_operator(
-                &join.join_operator,
-                &mut selection,
-                plan,
-                tables[index + 1].clone(),
-            )?;
-        }
-
-        Ok((plan, selection))
     }
 
     fn plan_join_operator(
@@ -1582,6 +1592,91 @@ mod tests {
                         right: Box::new(Plan::Source("src2".into())),
                         include_left_outer: None,
                         include_right_outer: None,
+                    }),
+                },
+                typ: Type {
+                    name: None,
+                    nullable: false,
+                    ftype: FType::Tuple(vec![
+                        Type {
+                            name: Some("a".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                        Type {
+                            name: Some("b".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                        Type {
+                            name: Some("d".into()),
+                            nullable: false,
+                            ftype: FType::Int64,
+                        },
+                    ]),
+                }
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_basic_multiwayjoin() -> Result<(), failure::Error> {
+        let src1_type = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Tuple(vec![
+                Type {
+                    name: Some("a".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+                Type {
+                    name: Some("b".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+            ]),
+        };
+        let src2_type = Type {
+            name: None,
+            nullable: false,
+            ftype: FType::Tuple(vec![
+                Type {
+                    name: Some("c".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+                Type {
+                    name: Some("d".into()),
+                    nullable: false,
+                    ftype: FType::Int64,
+                },
+            ]),
+        };
+        let planner = Planner::mock(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
+
+        let stmts = SQLParser::parse_sql(
+            &AnsiSqlDialect {},
+            "CREATE MATERIALIZED VIEW v AS SELECT a, b, d FROM src1 JOIN src2 ON src2.c = src1.b"
+                .into(),
+        )?;
+        let dataflow = planner.plan_statement(&stmts[0])?;
+        assert_eq!(
+            dataflow,
+            Dataflow::View(View {
+                name: "v".into(),
+                plan: Plan::Project {
+                    outputs: vec![
+                        Expr::Column(0, Box::new(Expr::Ambient)),
+                        Expr::Column(1, Box::new(Expr::Ambient)),
+                        Expr::Column(3, Box::new(Expr::Ambient)),
+                    ],
+                    input: Box::new(Plan::MultiwayJoin {
+                        plans: vec![Plan::Source("src1".into()), Plan::Source("src2".into())],
+                        arities: vec![2, 2],
+                        equalities: vec![((1, 0), (0, 1))],
                     }),
                 },
                 typ: Type {
