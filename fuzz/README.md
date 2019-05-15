@@ -7,6 +7,8 @@ Before first use:
 ``` sh
 cd materialize
 cargo install cargo-fuzz
+cd fuzz
+cargo run --bin=build_corpus
 ```
 
 To fuzz stuff:
