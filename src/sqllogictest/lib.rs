@@ -319,7 +319,7 @@ fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
     match datum {
         Datum::Tuple(datums) => types
             .iter()
-            .zip(datums.into_iter())
+            .zip(datums.iter())
             .map(|(typ, datum)| match (typ, datum) {
                 (_, Datum::Null) => "NULL".to_owned(),
 
@@ -458,7 +458,7 @@ impl State {
                                 "Query did not result in Peeking, instead got {:?}",
                                 other
                             ),
-                        })
+                        });
                     }
                     Err(error) => return Ok(Outcome::PlanFailure { error }),
                 };
