@@ -283,6 +283,8 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             flow
         }
 
+        Plan::MultiwayJoin { .. } => unimplemented!(),
+
         Plan::Distinct(plan) => {
             build_plan(plan, manager, worker_index, scope, buttons).distinct_total()
         }

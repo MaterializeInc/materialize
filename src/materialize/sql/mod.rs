@@ -7,6 +7,7 @@
 
 use failure::{bail, format_err};
 use sqlparser::dialect::AnsiSqlDialect;
+use sqlparser::sqlast;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
@@ -14,6 +15,7 @@ use sqlparser::sqlast::{
     SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement, SQLType,
     SQLWindowSpec, TableFactor, Value,
 };
+
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
 use std::iter::FromIterator;
@@ -32,6 +34,7 @@ use ore::vec::VecExt;
 use plan::SQLPlan;
 use store::{DataflowStore, RemoveMode};
 
+mod multiway_plan;
 mod plan;
 mod store;
 
@@ -581,7 +584,7 @@ impl Planner {
             }
             None => ("dual".into(), &none),
         };
-        let mut plan = {
+        let plan = {
             let types = match self.dataflows.get_type(&from_name)? {
                 Type {
                     ftype: FType::Tuple(types),
@@ -595,41 +598,10 @@ impl Planner {
             }
             plan
         };
-        let mut selection = s.selection.clone();
-        for join in &s.joins {
-            match &join.relation {
-                TableFactor::Table {
-                    name,
-                    alias,
-                    args,
-                    with_hints,
-                } => {
-                    if !args.is_empty() {
-                        bail!("table arguments are not supported");
-                    }
-                    if !with_hints.is_empty() {
-                        bail!("WITH hints are not supported");
-                    }
-                    let name = extract_sql_object_name(&name)?;
-                    let types = match self.dataflows.get_type(&name)? {
-                        Type {
-                            ftype: FType::Tuple(types),
-                            ..
-                        } => types.clone(),
-                        typ => panic!("Table {} has non-tuple type {:?}", name, typ),
-                    };
-                    let mut right = SQLPlan::from_source(&name, types);
-                    if let Some(alias) = alias {
-                        right = right.alias_table(alias);
-                    }
-                    plan =
-                        self.plan_join_operator(&join.join_operator, &mut selection, plan, right)?;
-                }
-                TableFactor::Derived { .. } => {
-                    bail!("subqueries are not yet supported");
-                }
-            }
-        }
+
+        let (mut plan, selection) =
+            self.plan_multiple_joins(plan, &s.joins[..], s.selection.clone())?;
+
         // if we have a `SELECT *` later, this is what it selects
         let named_columns = plan.named_columns();
 
@@ -784,6 +756,68 @@ impl Planner {
                     .collect::<Result<Vec<_>, _>>()
             }
         }
+    }
+
+    fn plan_multiple_joins(
+        &self,
+        mut plan: SQLPlan,
+        joins: &[sqlast::Join],
+        mut selection: Option<ASTNode>,
+    ) -> Result<(SQLPlan, Option<ASTNode>), failure::Error> {
+        // Assemble participating tables.
+        let mut tables = Vec::new();
+        tables.push(plan.clone());
+
+        for join in joins.iter() {
+            match &join.relation {
+                TableFactor::Table {
+                    name,
+                    alias,
+                    args,
+                    with_hints,
+                } => {
+                    if !args.is_empty() {
+                        bail!("table arguments are not supported");
+                    }
+                    if !with_hints.is_empty() {
+                        bail!("WITH hints are not supported");
+                    }
+                    let name = extract_sql_object_name(&name)?;
+                    let types = match self.dataflows.get_type(&name)? {
+                        Type {
+                            ftype: FType::Tuple(types),
+                            ..
+                        } => types.clone(),
+                        typ => panic!("Table {} has non-tuple type {:?}", name, typ),
+                    };
+                    let mut right = SQLPlan::from_source(&name, types);
+                    if let Some(alias) = alias {
+                        right = right.alias_table(alias);
+                    }
+                    tables.push(right);
+                }
+                TableFactor::Derived { .. } => {
+                    bail!("subqueries are not yet supported");
+                }
+            }
+        }
+
+        // Assert that we have the right number of tables at hand (e.g. that we didn't
+        // miss something in that loop above with the special cases).
+        assert!(tables.len() == joins.len() + 1);
+
+        // Extract all ASTNode join constraints
+
+        for (index, join) in joins.iter().enumerate() {
+            plan = self.plan_join_operator(
+                &join.join_operator,
+                &mut selection,
+                plan,
+                tables[index + 1].clone(),
+            )?;
+        }
+
+        Ok((plan, selection))
     }
 
     fn plan_join_operator(
