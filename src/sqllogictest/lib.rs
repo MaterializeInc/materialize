@@ -310,6 +310,7 @@ fn format_datum(datum: Datum, types: &[Type]) -> Vec<String> {
                 (_, Datum::Null) => "NULL".to_owned(),
 
                 (Type::Integer, Datum::Int64(i)) => format!("{}", i),
+                // sqllogictest does some weird type coercions in practice
                 (Type::Integer, _) => "0".to_owned(),
 
                 (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
@@ -390,11 +391,17 @@ impl State {
         match &record {
             Record::Statement { should_run, sql } => {
                 lazy_static! {
-                    static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new("^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP INDEX|DROP TRIGGER|INSERT INTO .* SELECT|UPDATE|REINDEX|REPLACE INTO)").unwrap();
+                    static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new(
+                        "^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP INDEX|DROP TRIGGER|REINDEX)"
+                    )
+                    .unwrap();
                 }
                 if UNSUPPORTED_STATEMENT_REGEX.is_match(sql) {
-                    return Ok(Outcome::Unsupported);
+                    return Ok(Outcome::Success);
                 }
+
+                // we don't support non-materialized views
+                let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
                 if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
                     if *should_run {
@@ -404,16 +411,16 @@ impl State {
                     }
                 }
 
-                // this is mostly testing database constraints, which we don't support
-                if !should_run {
-                    return Ok(Outcome::Success);
-                }
-
                 let dataflow_command = match self.planner.handle_command(sql.to_string()) {
                     Ok((_, dataflow_command)) => dataflow_command,
-                    Err(_) => return Ok(Outcome::PlanFailure),
+                    Err(_) => {
+                        if *should_run {
+                            return Ok(Outcome::PlanFailure);
+                        } else {
+                            return Ok(Outcome::Success);
+                        }
+                    }
                 };
-
                 let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
 
                 Ok(Outcome::Success)
@@ -525,6 +532,16 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             .unwrap();
         if verbosity >= 2 {
             println!("{:?}", outcome);
+        }
+        match (&record, &outcome) {
+            (_, Outcome::Success) => (),
+            (Record::Statement { sql, .. }, _) if !sql.contains("CREATE VIEW") => {
+                if verbosity >= 1 {
+                    println!("A statement failed. Bailing on remaining tests.");
+                }
+                break;
+            }
+            _ => (),
         }
         outcomes.0[outcome as usize] += 1;
     }
