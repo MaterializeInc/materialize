@@ -491,17 +491,11 @@ impl Drop for State {
     }
 }
 
-pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
+pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     let mut outcomes = Outcomes::default();
-    let mut input = String::new();
     let mut state = State::start();
-    input.clear();
-    File::open(filename)
-        .unwrap()
-        .read_to_string(&mut input)
-        .unwrap();
     if verbosity >= 1 {
-        println!("==> {}", filename.display());
+        println!("==> {}", source);
     }
     for record in parse_records(&input) {
         let record = record.unwrap();
@@ -514,7 +508,7 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
         }
         let outcome = state
             .run_record(&record)
-            .with_context(|err| format!("In {}:\n{}", filename.display(), err))
+            .with_context(|err| format!("In {}:\n{}", source, err))
             .unwrap();
         if verbosity >= 2 {
             println!("{:?}", outcome);
@@ -522,6 +516,21 @@ pub fn run(filename: &Path, verbosity: usize) -> Outcomes {
         outcomes.0[outcome as usize] += 1;
     }
     outcomes
+}
+
+pub fn run_file(filename: &Path, verbosity: usize) -> Outcomes {
+    let mut input = String::new();
+    File::open(filename)
+        .unwrap()
+        .read_to_string(&mut input)
+        .unwrap();
+    run_string(&format!("{}", filename.display()), &input, verbosity)
+}
+
+pub fn run_stdin(verbosity: usize) -> Outcomes {
+    let mut input = String::new();
+    std::io::stdin().lock().read_to_string(&mut input).unwrap();
+    run_string("<stdin>", &input, verbosity)
 }
 
 pub fn fuzz(sqls: &str) {

@@ -56,18 +56,22 @@ fn main() {
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
     for path in popts.free {
-        for entry in WalkDir::new(path) {
-            match entry {
-                Ok(entry) => {
-                    if entry.file_type().is_file() {
-                        outcomes += sqllogictest::run(entry.path(), verbosity);
-                    } else {
-                        continue;
+        if path == "-" {
+            outcomes += sqllogictest::run_stdin(verbosity);
+        } else {
+            for entry in WalkDir::new(path) {
+                match entry {
+                    Ok(entry) => {
+                        if entry.file_type().is_file() {
+                            outcomes += sqllogictest::run_file(entry.path(), verbosity);
+                        } else {
+                            continue;
+                        }
                     }
-                }
-                Err(err) => {
-                    eprintln!("{}", err);
-                    bad_file = true;
+                    Err(err) => {
+                        eprintln!("{}", err);
+                        bad_file = true;
+                    }
                 }
             }
         }
