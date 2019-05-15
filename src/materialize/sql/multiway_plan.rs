@@ -1,3 +1,8 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
 use failure::bail;
 use sqlparser::sqlast;
 use sqlparser::sqlast::ASTNode;
