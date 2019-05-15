@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# pre-push.lite — a faster version of the pre-push hook.
+#
+# To install this hook, copy or symlink it into .git/hooks/pre-push:
+#
+#     $ ln -s ../../misc/githooks/pre-push.lite .git/hooks/pre-push
+#
+# If you want a stronger guarantee that CI will succeed, try the more
+# complete pre-push hook.
+
+# TODO(benesch): reduce duplication with pre-push and ci-test.
+
+set -euo pipefail
+
+oldlist=$(git stash list)
+git stash save -q -u
+newlist=$(git stash list)
+unstash() {
+  if [[ "$oldlist" != "$newlist" ]]; then
+    git stash pop -q --index || true
+  fi
+}
+trap unstash EXIT
+
+passed=0
+total=0
+
+try() {
+    echo "--- $@"
+    if "$@"; then
+        ((++passed))
+    fi
+    ((++total))
+}
+
+try bin/lint
+try cargo fmt -- --check
+
+echo "$passed/$total commands passed"
+if ((passed != total)); then
+    exit 1
+fi
