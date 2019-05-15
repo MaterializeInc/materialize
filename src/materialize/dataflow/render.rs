@@ -336,7 +336,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             // println!("offsets: {:?}", offsets);
 
             let mut join_keys = vec![Vec::new(); plan_order.len()];
-            for (rc1, rc2) in equalities.into_iter() {
+            for (rc1, rc2) in equalities.iter() {
                 if positions[rc1.0] < positions[rc2.0] {
                     join_keys[rc2.0].push((rc1, rc2));
                 } else {
