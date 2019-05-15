@@ -621,8 +621,9 @@ impl AggregateFunc {
             ("count", _) => AggregateFunc::Count,
             other => bail!("Unimplemented function/type combo: {:?}", other),
         };
-        let ftype = match func {
-            AggregateFunc::Count => FType::Int64,
+        let ftype = match name {
+            "count" => FType::Int64,
+            "avg" => FType::Float64,
             _ => ftype.clone(),
         };
         Ok((func, ftype))
