@@ -178,14 +178,27 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
             }
             Ok(Some(Record::HashThreshold { threshold }))
         }
+
+        // we'll follow the postgresql version of all these tests
         "skipif" => {
-            // query starts on the next line
-            parse_record(input)
+            match words.next().unwrap() {
+                "postgresql" => Ok(None),
+                _ => {
+                    // query starts on the next line
+                    parse_record(input)
+                }
+            }
         }
         "onlyif" => {
-            // we probably don't want to support any db-specific query
-            Ok(None)
+            match words.next().unwrap() {
+                "postgresql" => {
+                    // query starts on the next line
+                    parse_record(input)
+                }
+                _ => Ok(None),
+            }
         }
+
         "halt" => Ok(Some(Record::Halt)),
         other => bail!("Unexpected start of record: {}", other),
     }
