@@ -480,15 +480,13 @@ impl State {
 impl Drop for State {
     fn drop(&mut self) {
         for dataflow_command_sender in &self.dataflow_command_senders {
-            dataflow_command_sender
-                .unbounded_send((
-                    DataflowCommand::Shutdown,
-                    CommandMeta {
-                        connection_uuid: Uuid::nil(),
-                        timestamp: None,
-                    },
-                ))
-                .unwrap();
+            drop(dataflow_command_sender.unbounded_send((
+                DataflowCommand::Shutdown,
+                CommandMeta {
+                    connection_uuid: Uuid::nil(),
+                    timestamp: None,
+                },
+            )));
         }
     }
 }
