@@ -326,11 +326,14 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             }
 
             let mut offset = 0;
-            let mut offsets = Vec::new();
+            let mut offsets = vec![0; plan_order.len()];
             for input in plan_order.iter() {
-                offsets.push(offset);
+                offsets[*input] = offset;
                 offset += arities[*input];
             }
+
+            // println!("plan_order: {:?}", plan_order);
+            // println!("offsets: {:?}", offsets);
 
             let mut join_keys = vec![Vec::new(); plan_order.len()];
             for (rc1, rc2) in equalities.into_iter() {
@@ -365,6 +368,9 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                     .collect::<Vec<_>>();
 
                 assert_eq!(l_keys.len(), r_keys.len());
+
+                // println!("l_keys: {:?}", l_keys);
+                // println!("r_keys: {:?}", r_keys);
 
                 let right_plan =
                     build_plan(&plans[index], manager, scope, buttons).map(move |tuple| {

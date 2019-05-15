@@ -815,8 +815,10 @@ impl Planner {
                 multiway_plan::plan_multiple_joins(&tables[..], &joins[..], selection.clone());
 
             if let Ok((plan, selection)) = attempt {
+                // println!("!!!!!!!!");
                 Ok((plan, selection))
             } else {
+                // println!("Bailed: {:?}", attempt);
                 for (index, join) in joins.iter().enumerate() {
                     plan = self.plan_join_operator(
                         &join.join_operator,

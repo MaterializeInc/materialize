@@ -79,39 +79,10 @@ pub fn plan_multiple_joins(
                 }
                 // Equality statements may be digestible.
                 sqlast::SQLOperator::Eq => {
-                    let l: &ASTNode = &*left;
-                    let r: &ASTNode = &*right;
+                    let l_location = resolve_locations(left, &plans[..]);
+                    let r_location = resolve_locations(right, &plans[..]);
 
-                    if let (
-                        ASTNode::SQLCompoundIdentifier(l_names),
-                        ASTNode::SQLCompoundIdentifier(r_names),
-                    ) = (l, r)
-                    {
-                        if l_names.len() != 2 {
-                            bail!("Compound names mandatory");
-                        }
-                        if r_names.len() != 2 {
-                            bail!("Compound names mandatory");
-                        }
-
-                        let l_location = plans
-                            .iter()
-                            .enumerate()
-                            .flat_map(|(i, p)| {
-                                p.resolve_table_column(&l_names[0], &l_names[1])
-                                    .map(|c| (i, c.0))
-                            })
-                            .collect::<Vec<_>>();
-
-                        let r_location = plans
-                            .iter()
-                            .enumerate()
-                            .flat_map(|(i, p)| {
-                                p.resolve_table_column(&r_names[0], &r_names[1])
-                                    .map(|c| (i, c.0))
-                            })
-                            .collect::<Vec<_>>();
-
+                    if let (Ok(l_location), Ok(r_location)) = (l_location, r_location) {
                         if l_location.len() != 1 {
                             bail!("Name not uniquely found");
                         }
@@ -126,7 +97,7 @@ pub fn plan_multiple_joins(
                             predicates.push(constraint);
                         }
                     } else {
-                        bail!("Only compound identifiers are supported");
+                        predicates.push(constraint);
                     }
                 }
                 _ => predicates.push(constraint),
@@ -163,4 +134,33 @@ pub fn plan_multiple_joins(
     });
 
     Ok((plan, predicates))
+}
+
+fn resolve_locations(
+    ast_node: &ASTNode,
+    plans: &[SQLPlan],
+) -> Result<Vec<(usize, usize)>, failure::Error> {
+    match ast_node {
+        ASTNode::SQLIdentifier(column_name) => Ok(plans
+            .iter()
+            .enumerate()
+            .flat_map(|(i, p)| p.resolve_column(column_name).map(|c| (i, c.0)))
+            .collect::<Vec<_>>()),
+        ASTNode::SQLCompoundIdentifier(l_names) => {
+            if l_names.len() != 2 {
+                bail!("Compound names mandatory");
+            }
+            Ok(plans
+                .iter()
+                .enumerate()
+                .flat_map(|(i, p)| {
+                    p.resolve_table_column(&l_names[0], &l_names[1])
+                        .map(|c| (i, c.0))
+                })
+                .collect::<Vec<_>>())
+        }
+        _ => {
+            bail!("Unsupported column description: {:?}", ast_node);
+        }
+    }
 }
