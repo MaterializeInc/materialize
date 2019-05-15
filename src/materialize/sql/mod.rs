@@ -618,8 +618,18 @@ impl Planner {
             let mut aggs = Vec::new();
             for frag in agg_frags {
                 let (expr, typ) = self.plan_expr(ctx, &frag.expr, &plan)?;
-                let func = AggregateFunc::from_name_and_ftype(frag.name.as_ref(), &typ.ftype)?;
-                aggs.push((frag.id, Aggregate { func, expr }, typ));
+                let (func, ftype) =
+                    AggregateFunc::from_name_and_ftype(frag.name.as_ref(), &typ.ftype)?;
+                aggs.push((
+                    frag.id,
+                    Aggregate { func, expr },
+                    Type {
+                        // TODO(jamii) name should be format("{}", expr) eg "count(*)"
+                        name: typ.name,
+                        nullable: func.is_nullable(),
+                        ftype,
+                    },
+                ));
             }
 
             let mut key_exprs = Vec::new();
@@ -1346,7 +1356,7 @@ mod tests {
                     nullable: false,
                     ftype: FType::Tuple(vec![Type {
                         name: None,
-                        nullable: false,
+                        nullable: true,
                         ftype: FType::Int64,
                     }]),
                 }

@@ -600,8 +600,8 @@ impl AggregateFunc {
         }
     }
 
-    pub fn from_name_and_ftype(name: &str, ftype: &FType) -> Result<Self, failure::Error> {
-        Ok(match (name, ftype) {
+    pub fn from_name_and_ftype(name: &str, ftype: &FType) -> Result<(Self, FType), failure::Error> {
+        let func = match (name, ftype) {
             ("avg", FType::Int32) => AggregateFunc::AvgInt32,
             ("avg", FType::Int64) => AggregateFunc::AvgInt64,
             ("avg", FType::Float32) => AggregateFunc::AvgFloat32,
@@ -620,7 +620,12 @@ impl AggregateFunc {
             ("sum", FType::Float64) => AggregateFunc::SumFloat64,
             ("count", _) => AggregateFunc::Count,
             other => bail!("Unimplemented function/type combo: {:?}", other),
-        })
+        };
+        let ftype = match func {
+            AggregateFunc::Count => FType::Int64,
+            _ => ftype.clone(),
+        };
+        Ok((func, ftype))
     }
 
     pub fn func<I>(self) -> fn(I) -> Datum
@@ -645,6 +650,14 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => sum_float32,
             AggregateFunc::SumFloat64 => sum_float64,
             AggregateFunc::Count => count,
+        }
+    }
+
+    pub fn is_nullable(self) -> bool {
+        match self {
+            AggregateFunc::Count => false,
+            // avg/max/min/sum return null on empty sets
+            _ => true,
         }
     }
 }
