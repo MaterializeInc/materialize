@@ -48,19 +48,6 @@ export RUST_BACKTRACE=full
 try bin/lint
 try cargo fmt -- --check
 try cargo test
-# if [[ ! "$fast" ]]; then
-    # NOTE(benesch): the expected outcomes will need to be periodically adjusted
-    # as we make improvements to our SQL layer.
-    #
-    # TODO(benesch): The format of --expect-outcomes is extremely unreadable,
-    # but I was too lazy to do something more descriptive. Feel free to change
-    # it.
-
-    # TODO(jamii) Re-enable this when we fix the various memory leaks
-    # try cargo run --release --bin=sqllogictest -- sqllogictest/test \
-    #     --verbose \
-    #     --expect-outcomes 197383,442602,3116321,0,2184024
-# fi
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840
 try bin/check
