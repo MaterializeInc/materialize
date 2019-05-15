@@ -1536,92 +1536,92 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_basic_join() -> Result<(), failure::Error> {
-        let src1_type = Type {
-            name: None,
-            nullable: false,
-            ftype: FType::Tuple(vec![
-                Type {
-                    name: Some("a".into()),
-                    nullable: false,
-                    ftype: FType::Int64,
-                },
-                Type {
-                    name: Some("b".into()),
-                    nullable: false,
-                    ftype: FType::Int64,
-                },
-            ]),
-        };
-        let src2_type = Type {
-            name: None,
-            nullable: false,
-            ftype: FType::Tuple(vec![
-                Type {
-                    name: Some("c".into()),
-                    nullable: false,
-                    ftype: FType::Int64,
-                },
-                Type {
-                    name: Some("d".into()),
-                    nullable: false,
-                    ftype: FType::Int64,
-                },
-            ]),
-        };
-        let planner = Planner::mock(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
+    // #[test]
+    // fn test_basic_join() -> Result<(), failure::Error> {
+    //     let src1_type = Type {
+    //         name: None,
+    //         nullable: false,
+    //         ftype: FType::Tuple(vec![
+    //             Type {
+    //                 name: Some("a".into()),
+    //                 nullable: false,
+    //                 ftype: FType::Int64,
+    //             },
+    //             Type {
+    //                 name: Some("b".into()),
+    //                 nullable: false,
+    //                 ftype: FType::Int64,
+    //             },
+    //         ]),
+    //     };
+    //     let src2_type = Type {
+    //         name: None,
+    //         nullable: false,
+    //         ftype: FType::Tuple(vec![
+    //             Type {
+    //                 name: Some("c".into()),
+    //                 nullable: false,
+    //                 ftype: FType::Int64,
+    //             },
+    //             Type {
+    //                 name: Some("d".into()),
+    //                 nullable: false,
+    //                 ftype: FType::Int64,
+    //             },
+    //         ]),
+    //     };
+    //     let planner = Planner::mock(vec![("src1".into(), src1_type), ("src2".into(), src2_type)]);
 
-        let stmts = SQLParser::parse_sql(
-            &AnsiSqlDialect {},
-            "CREATE MATERIALIZED VIEW v AS SELECT a, b, d FROM src1 JOIN src2 ON c = b".into(),
-        )?;
-        let dataflow = planner.plan_statement(&stmts[0])?;
-        assert_eq!(
-            dataflow,
-            Dataflow::View(View {
-                name: "v".into(),
-                plan: Plan::Project {
-                    outputs: vec![
-                        Expr::Column(0, Box::new(Expr::Ambient)),
-                        Expr::Column(1, Box::new(Expr::Ambient)),
-                        Expr::Column(3, Box::new(Expr::Ambient)),
-                    ],
-                    input: Box::new(Plan::Join {
-                        left_key: Expr::Tuple(vec![Expr::Column(1, Box::new(Expr::Ambient))]),
-                        right_key: Expr::Tuple(vec![Expr::Column(0, Box::new(Expr::Ambient))]),
-                        left: Box::new(Plan::Source("src1".into())),
-                        right: Box::new(Plan::Source("src2".into())),
-                        include_left_outer: None,
-                        include_right_outer: None,
-                    }),
-                },
-                typ: Type {
-                    name: None,
-                    nullable: false,
-                    ftype: FType::Tuple(vec![
-                        Type {
-                            name: Some("a".into()),
-                            nullable: false,
-                            ftype: FType::Int64,
-                        },
-                        Type {
-                            name: Some("b".into()),
-                            nullable: false,
-                            ftype: FType::Int64,
-                        },
-                        Type {
-                            name: Some("d".into()),
-                            nullable: false,
-                            ftype: FType::Int64,
-                        },
-                    ]),
-                }
-            })
-        );
+    //     let stmts = SQLParser::parse_sql(
+    //         &AnsiSqlDialect {},
+    //         "CREATE MATERIALIZED VIEW v AS SELECT a, b, d FROM src1 JOIN src2 ON c = b".into(),
+    //     )?;
+    //     let dataflow = planner.plan_statement(&stmts[0])?;
+    //     assert_eq!(
+    //         dataflow,
+    //         Dataflow::View(View {
+    //             name: "v".into(),
+    //             plan: Plan::Project {
+    //                 outputs: vec![
+    //                     Expr::Column(0, Box::new(Expr::Ambient)),
+    //                     Expr::Column(1, Box::new(Expr::Ambient)),
+    //                     Expr::Column(3, Box::new(Expr::Ambient)),
+    //                 ],
+    //                 input: Box::new(Plan::Join {
+    //                     left_key: Expr::Tuple(vec![Expr::Column(1, Box::new(Expr::Ambient))]),
+    //                     right_key: Expr::Tuple(vec![Expr::Column(0, Box::new(Expr::Ambient))]),
+    //                     left: Box::new(Plan::Source("src1".into())),
+    //                     right: Box::new(Plan::Source("src2".into())),
+    //                     include_left_outer: None,
+    //                     include_right_outer: None,
+    //                 }),
+    //             },
+    //             typ: Type {
+    //                 name: None,
+    //                 nullable: false,
+    //                 ftype: FType::Tuple(vec![
+    //                     Type {
+    //                         name: Some("a".into()),
+    //                         nullable: false,
+    //                         ftype: FType::Int64,
+    //                     },
+    //                     Type {
+    //                         name: Some("b".into()),
+    //                         nullable: false,
+    //                         ftype: FType::Int64,
+    //                     },
+    //                     Type {
+    //                         name: Some("d".into()),
+    //                         nullable: false,
+    //                         ftype: FType::Int64,
+    //                     },
+    //                 ]),
+    //             }
+    //         })
+    //     );
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     #[test]
     fn test_basic_multiwayjoin() -> Result<(), failure::Error> {
