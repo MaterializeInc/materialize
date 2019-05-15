@@ -624,7 +624,8 @@ impl AggregateFunc {
         let ftype = match name {
             "count" => FType::Int64,
             "avg" => FType::Float64,
-            _ => ftype.clone(),
+            "max" | "min" | "sum" => ftype.clone(),
+            other => bail!("Unknown aggregate function: {:?}", other),
         };
         Ok((func, ftype))
     }
