@@ -95,6 +95,6 @@ fn main() {
         }
     } else {
         // Without --expect-outcomes, we expect all queries to succeed.
-        process::exit(outcomes.failed() as i32);
+        process::exit(if outcomes.any_failed() { 1 } else { 0 });
     }
 }

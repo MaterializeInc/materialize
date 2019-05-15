@@ -43,7 +43,7 @@ pub enum Sort {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output<'a> {
     Values(Vec<&'a str>),
-    Hash(usize, &'a str),
+    Hashed { num_values: usize, md5: &'a str },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,10 +153,10 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                     Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
             }
             let output = match HASH_REGEX.captures(input) {
-                Some(captures) => Output::Hash(
-                    captures.get(1).unwrap().as_str().parse::<usize>()?,
-                    captures.get(2).unwrap().as_str(),
-                ),
+                Some(captures) => Output::Hashed {
+                    num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
+                    md5: captures.get(2).unwrap().as_str(),
+                },
                 None => Output::Values(input.trim().lines().collect()),
             };
             Ok(Some(Record::Query {
@@ -219,28 +219,40 @@ pub fn parse_records(input: &str) -> impl Iterator<Item = Result<Record, failure
         })
 }
 
-#[derive(Debug, Clone)]
-pub enum Outcome {
-    Unsupported = 0,
-    ParseFailure = 1,
-    PlanFailure = 2,
-    InferenceFailure = 3,
-    OutputFailure = 4,
-    Success = 5,
+#[derive(Debug)]
+pub enum Outcome<'a> {
+    ParseFailure {
+        error: sqlparser::sqlparser::ParserError,
+    },
+    PlanFailure {
+        error: failure::Error,
+    },
+    InferenceFailure {
+        expected_types: &'a [Type],
+        inferred_types: Vec<FType>,
+    },
+    OutputFailure {
+        expected_output: &'a Output<'a>,
+        actual_output: Vec<Datum>,
+    },
+    Success,
 }
 
+const NUM_OUTCOMES: usize = 5;
+
+impl<'a> Outcome<'a> {
+    fn code(&self) -> usize {
+        match self {
+            Outcome::ParseFailure { .. } => 0,
+            Outcome::PlanFailure { .. } => 1,
+            Outcome::InferenceFailure { .. } => 2,
+            Outcome::OutputFailure { .. } => 3,
+            Outcome::Success => 4,
+        }
+    }
+}
 #[derive(Default, Debug, Eq, PartialEq)]
-pub struct Outcomes([usize; (Outcome::Success as usize) + 1]);
-
-impl Outcomes {
-    pub fn total(&self) -> usize {
-        self.0.iter().sum()
-    }
-
-    pub fn failed(&self) -> bool {
-        self.0[Outcome::Success as usize] != self.total()
-    }
-}
+pub struct Outcomes([usize; NUM_OUTCOMES]);
 
 impl ops::AddAssign<Outcomes> for Outcomes {
     fn add_assign(&mut self, rhs: Outcomes) {
@@ -255,11 +267,10 @@ impl FromStr for Outcomes {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let pieces: Vec<_> = s.split(',').collect();
-        let len = (Outcome::Success as usize) + 1;
-        if pieces.len() != len {
+        if pieces.len() != NUM_OUTCOMES {
             bail!(
                 "expected-outcomes argument needs {} comma-separated ints",
-                len
+                NUM_OUTCOMES
             );
         }
         Ok(Outcomes([
@@ -268,7 +279,6 @@ impl FromStr for Outcomes {
             pieces[2].parse()?,
             pieces[3].parse()?,
             pieces[4].parse()?,
-            pieces[5].parse()?,
         ]))
     }
 }
@@ -277,16 +287,20 @@ impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "unsupported={} parse-failure={} plan-failure={} \
-             inference-failure={} output-failure={} success={} total={}",
-            self.0[Outcome::Unsupported as usize],
-            self.0[Outcome::ParseFailure as usize],
-            self.0[Outcome::PlanFailure as usize],
-            self.0[Outcome::InferenceFailure as usize],
-            self.0[Outcome::OutputFailure as usize],
-            self.0[Outcome::Success as usize],
-            self.total(),
+            "parse-failure={} plan-failure={} inference-failure={} output-failure={} success={} total={}",
+            self.0[0],
+            self.0[1],
+            self.0[2],
+            self.0[3],
+            self.0[4],
+            self.0.iter().sum::<usize>(),
         )
+    }
+}
+
+impl Outcomes {
+    pub fn any_failed(&self) -> bool {
+        self.0[0] > 0 || self.0[1] > 0 || self.0[2] > 0 || self.0[3] > 0
     }
 }
 
@@ -301,7 +315,7 @@ struct State {
     peek_results_mux: PeekResultsMux,
 }
 
-fn format_datum(datum: Datum, types: &[Type]) -> Vec<String> {
+fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
     match datum {
         Datum::Tuple(datums) => types
             .iter()
@@ -319,7 +333,7 @@ fn format_datum(datum: Datum, types: &[Type]) -> Vec<String> {
                     if string.is_empty() {
                         "(empty)".to_owned()
                     } else {
-                        string
+                        string.to_owned()
                     }
                 }
                 other => panic!("Don't know how to format {:?}", other),
@@ -387,7 +401,7 @@ impl State {
         results
     }
 
-    fn run_record(&mut self, record: &Record) -> Result<Outcome, failure::Error> {
+    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
         match &record {
             Record::Statement { should_run, sql } => {
                 lazy_static! {
@@ -403,9 +417,9 @@ impl State {
                 // we don't support non-materialized views
                 let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
-                if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
+                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
                     if *should_run {
-                        return Ok(Outcome::ParseFailure);
+                        return Ok(Outcome::ParseFailure { error });
                     } else {
                         return Ok(Outcome::Success);
                     }
@@ -413,9 +427,9 @@ impl State {
 
                 let dataflow_command = match self.planner.handle_command(sql.to_string()) {
                     Ok((_, dataflow_command)) => dataflow_command,
-                    Err(_) => {
+                    Err(error) => {
                         if *should_run {
-                            return Ok(Outcome::PlanFailure);
+                            return Ok(Outcome::PlanFailure { error });
                         } else {
                             return Ok(Outcome::Success);
                         }
@@ -432,13 +446,21 @@ impl State {
                 output: expected_output,
                 ..
             } => {
-                if Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()).is_err() {
-                    return Ok(Outcome::ParseFailure);
+                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
+                    return Ok(Outcome::ParseFailure { error });
                 }
 
                 let (typ, dataflow_command) = match self.planner.handle_command(sql.to_string()) {
                     Ok((SqlResponse::Peeking { typ }, dataflow_command)) => (typ, dataflow_command),
-                    _ => return Ok(Outcome::PlanFailure),
+                    Ok(other) => {
+                        return Ok(Outcome::PlanFailure {
+                            error: failure::format_err!(
+                                "Query did not result in Peeking, instead got {:?}",
+                                other
+                            ),
+                        })
+                    }
+                    Err(error) => return Ok(Outcome::PlanFailure { error }),
                 };
 
                 let inferred_types = match &typ.ftype {
@@ -449,18 +471,17 @@ impl State {
                 // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
                 // but at least it will be the correct length
                 if inferred_types.len() != expected_types.len() {
-                    return Ok(Outcome::InferenceFailure);
+                    return Ok(Outcome::InferenceFailure {
+                        expected_types,
+                        inferred_types: inferred_types.into_iter().cloned().collect(),
+                    });
                 }
 
                 let receiver = self.send_dataflow_command(dataflow_command.unwrap());
                 let results = self.receive_peek_results(receiver);
 
-                if let Sort::No = sort {
-                    // TODO(jamii) we don't support ORDER BY yet, so this test is never going to pass
-                    return Ok(Outcome::Unsupported);
-                }
                 let mut rows = results
-                    .into_iter()
+                    .iter()
                     .map(|datum| format_datum(datum, &**expected_types))
                     .collect::<Vec<_>>();
                 if let Sort::Row = sort {
@@ -474,18 +495,27 @@ impl State {
                 match expected_output {
                     Output::Values(expected_values) => {
                         if values != *expected_values {
-                            return Ok(Outcome::OutputFailure);
+                            return Ok(Outcome::OutputFailure {
+                                expected_output,
+                                actual_output: results,
+                            });
                         }
                     }
-                    Output::Hash(expected_len, expected_md5) => {
+                    Output::Hashed {
+                        num_values,
+                        md5: expected_md5,
+                    } => {
                         let mut md5_context = md5::Context::new();
                         for value in &values {
                             md5_context.consume(value);
                             md5_context.consume("\n");
                         }
                         let md5 = format!("{:x}", md5_context.compute());
-                        if values.len() != *expected_len || md5 != *expected_md5 {
-                            return Ok(Outcome::OutputFailure);
+                        if values.len() != *num_values || md5 != *expected_md5 {
+                            return Ok(Outcome::OutputFailure {
+                                expected_output,
+                                actual_output: results,
+                            });
                         }
                     }
                 }
@@ -543,7 +573,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             }
             _ => (),
         }
-        outcomes.0[outcome as usize] += 1;
+        outcomes.0[outcome.code()] += 1;
     }
     outcomes
 }
