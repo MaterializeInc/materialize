@@ -31,11 +31,25 @@ impl Client {
     }
 
     /// Gets the schema with the associated ID.
-    pub fn get_schema(&self, id: i32) -> Result<String, GetError> {
+    pub fn get_schema_by_id(&self, id: i32) -> Result<Schema, GetByIdError> {
         let mut url = self.url.clone();
         url.set_path(&format!("/schemas/ids/{}", id));
-        let res: GetResponse = send_request(self.inner.get(url))?;
-        Ok(res.schema)
+        let res: GetByIdResponse = send_request(self.inner.get(url))?;
+        Ok(Schema {
+            id,
+            raw: res.schema,
+        })
+    }
+
+    /// Gets the latest schema for the specified subject.
+    pub fn get_schema_by_subject(&self, subject: &str) -> Result<Schema, GetBySubjectError> {
+        let mut url = self.url.clone();
+        url.set_path(&format!("/subjects/{}/versions/latest", subject));
+        let res: GetBySubjectResponse = send_request(self.inner.get(url))?;
+        Ok(Schema {
+            id: res.id,
+            raw: res.schema,
+        })
     }
 
     /// Publishes a new schema for the specified subject. The ID of the new
@@ -94,47 +108,99 @@ where
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct Schema {
+    pub id: i32,
+    pub raw: String,
+}
+
 #[derive(Debug, Deserialize)]
-struct GetResponse {
+struct GetByIdResponse {
     schema: String,
 }
 
 #[derive(Debug)]
-pub enum GetError {
+pub enum GetByIdError {
     SchemaNotFound,
     Transport(reqwest::Error),
     Server { code: i32, message: String },
 }
 
-impl From<UnhandledError> for GetError {
-    fn from(err: UnhandledError) -> GetError {
+impl From<UnhandledError> for GetByIdError {
+    fn from(err: UnhandledError) -> GetByIdError {
         match err {
-            UnhandledError::Transport(err) => GetError::Transport(err),
+            UnhandledError::Transport(err) => GetByIdError::Transport(err),
             UnhandledError::Api { code, message } => match code {
-                40403 => GetError::SchemaNotFound,
-                _ => GetError::Server { code, message },
+                40403 => GetByIdError::SchemaNotFound,
+                _ => GetByIdError::Server { code, message },
             },
         }
     }
 }
 
-impl Error for GetError {
+impl Error for GetByIdError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            GetError::SchemaNotFound | GetError::Server { .. } => None,
-            GetError::Transport(err) => Some(err),
+            GetByIdError::SchemaNotFound | GetByIdError::Server { .. } => None,
+            GetByIdError::Transport(err) => Some(err),
         }
     }
 }
 
-impl fmt::Display for GetError {
+impl fmt::Display for GetByIdError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            // The error description for SchemaNotFound is copied from the
-            // schema registry itself.
-            GetError::SchemaNotFound => write!(f, "schema not found"),
-            GetError::Transport(err) => write!(f, "transport: {}", err),
-            GetError::Server { code, message } => write!(f, "server error {}: {}", code, message),
+            GetByIdError::SchemaNotFound => write!(f, "schema not found"),
+            GetByIdError::Transport(err) => write!(f, "transport: {}", err),
+            GetByIdError::Server { code, message } => {
+                write!(f, "server error {}: {}", code, message)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GetBySubjectResponse {
+    id: i32,
+    schema: String,
+}
+
+#[derive(Debug)]
+pub enum GetBySubjectError {
+    SubjectNotFound,
+    Transport(reqwest::Error),
+    Server { code: i32, message: String },
+}
+
+impl From<UnhandledError> for GetBySubjectError {
+    fn from(err: UnhandledError) -> GetBySubjectError {
+        match err {
+            UnhandledError::Transport(err) => GetBySubjectError::Transport(err),
+            UnhandledError::Api { code, message } => match code {
+                40401 => GetBySubjectError::SubjectNotFound,
+                _ => GetBySubjectError::Server { code, message },
+            },
+        }
+    }
+}
+
+impl Error for GetBySubjectError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            GetBySubjectError::SubjectNotFound | GetBySubjectError::Server { .. } => None,
+            GetBySubjectError::Transport(err) => Some(err),
+        }
+    }
+}
+
+impl fmt::Display for GetBySubjectError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            GetBySubjectError::SubjectNotFound => write!(f, "subject not found"),
+            GetBySubjectError::Transport(err) => write!(f, "transport: {}", err),
+            GetBySubjectError::Server { code, message } => {
+                write!(f, "server error {}: {}", code, message)
+            }
         }
     }
 }
@@ -258,8 +324,6 @@ impl Error for DeleteError {
 impl fmt::Display for DeleteError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            // The error description for SubjectNotFound is copied from the
-            // schema registry itself.
             DeleteError::SubjectNotFound => write!(f, "subject not found"),
             DeleteError::Transport(err) => write!(f, "transport: {}", err),
             DeleteError::Server { code, message } => {

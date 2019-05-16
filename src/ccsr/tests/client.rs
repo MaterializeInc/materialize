@@ -15,7 +15,7 @@ use hyper::{Body, Response};
 use lazy_static::lazy_static;
 use tokio::runtime::Runtime;
 
-use ccsr::{Client, DeleteError, GetError, PublishError};
+use ccsr::{Client, DeleteError, GetByIdError, GetBySubjectError, PublishError};
 
 lazy_static! {
     pub static ref SCHEMA_REGISTRY_URL: reqwest::Url = match env::var("SCHEMA_REGISTRY_URL") {
@@ -58,6 +58,12 @@ fn test_client() -> Result<(), failure::Error> {
         res => panic!("expected IncompatibleSchema error, got {:?}", res),
     }
 
+    {
+        let res = client.get_schema_by_subject("ccsr-test-schema")?;
+        assert_eq!(schema_v1_id, res.id);
+        assert_raw_schemas_eq(schema_v1, &res.raw);
+    }
+
     let schema_v2_id = client.publish_schema("ccsr-test-schema", schema_v2)?;
     assert!(schema_v2_id > 0);
     assert!(schema_v2_id > schema_v1_id);
@@ -67,8 +73,20 @@ fn test_client() -> Result<(), failure::Error> {
         client.publish_schema("ccsr-test-schema", schema_v1)?
     );
 
-    assert_schemas_eq(schema_v1, &client.get_schema(schema_v1_id)?);
-    assert_schemas_eq(schema_v2, &client.get_schema(schema_v2_id)?);
+    {
+        let res1 = client.get_schema_by_id(schema_v1_id)?;
+        let res2 = client.get_schema_by_id(schema_v2_id)?;
+        assert_eq!(schema_v1_id, res1.id);
+        assert_eq!(schema_v2_id, res2.id);
+        assert_raw_schemas_eq(schema_v1, &res1.raw);
+        assert_raw_schemas_eq(schema_v2, &res2.raw);
+    }
+
+    {
+        let res = client.get_schema_by_subject("ccsr-test-schema")?;
+        assert_eq!(schema_v2_id, res.id);
+        assert_raw_schemas_eq(schema_v2, &res.raw);
+    }
 
     assert_eq!(count_schemas(&client, "ccsr-test-")?, 1);
 
@@ -82,10 +100,16 @@ fn test_client() -> Result<(), failure::Error> {
 fn test_client_errors() -> Result<(), failure::Error> {
     let client = Client::new(SCHEMA_REGISTRY_URL.clone());
 
-    // Get-specific errors.
-    match client.get_schema(i32::max_value()) {
-        Err(GetError::SchemaNotFound) => (),
+    // Get-by-id-specific errors.
+    match client.get_schema_by_id(i32::max_value()) {
+        Err(GetByIdError::SchemaNotFound) => (),
         res => panic!("expected GetError::SchemaNotFound, got {:?}", res),
+    }
+
+    // Get-by-subject-specific errors.
+    match client.get_schema_by_subject("ccsr-test-noexist") {
+        Err(GetBySubjectError::SubjectNotFound) => (),
+        res => panic!("expected GetBySubjectError::SubjectNotFound, got {:?}", res),
     }
 
     // Publish-specific errors.
@@ -122,12 +146,20 @@ fn test_server_errors() -> Result<(), failure::Error> {
         res => panic!("expected PublishError::Server, got {:?}", res),
     }
 
-    match client_graceful.get_schema(0) {
-        Err(GetError::Server {
+    match client_graceful.get_schema_by_id(0) {
+        Err(GetByIdError::Server {
             code: 50001,
             ref message,
         }) if message == "overloaded; try again later" => (),
-        res => panic!("expected GetError::Server, got {:?}", res),
+        res => panic!("expected GetByIdError::Server, got {:?}", res),
+    }
+
+    match client_graceful.get_schema_by_subject("foo") {
+        Err(GetBySubjectError::Server {
+            code: 50001,
+            ref message,
+        }) if message == "overloaded; try again later" => (),
+        res => panic!("expected GetBySubjectError::Server, got {:?}", res),
     }
 
     match client_graceful.delete_subject("foo") {
@@ -155,8 +187,16 @@ fn test_server_errors() -> Result<(), failure::Error> {
         res => panic!("expected PublishError::Server, got {:?}", res),
     }
 
-    match client_crash.get_schema(0) {
-        Err(GetError::Server {
+    match client_crash.get_schema_by_id(0) {
+        Err(GetByIdError::Server {
+            code: 500,
+            ref message,
+        }) if message == "unable to decode error details" => (),
+        res => panic!("expected GetError::Server, got {:?}", res),
+    }
+
+    match client_crash.get_schema_by_subject("foo") {
+        Err(GetBySubjectError::Server {
             code: 500,
             ref message,
         }) if message == "unable to decode error details" => (),
@@ -198,7 +238,7 @@ lazy_static! {
     static ref RUNTIME: Mutex<Runtime> = Mutex::new(Runtime::new().unwrap());
 }
 
-fn assert_schemas_eq(schema1: &str, schema2: &str) {
+fn assert_raw_schemas_eq(schema1: &str, schema2: &str) {
     let schema1: serde_json::Value = serde_json::from_str(schema1).unwrap();
     let schema2: serde_json::Value = serde_json::from_str(schema2).unwrap();
     assert_eq!(schema1, schema2);

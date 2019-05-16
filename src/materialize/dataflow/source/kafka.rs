@@ -41,7 +41,8 @@ where
         let mut maybe_cap = Some(cap);
         let clock = clock.clone();
 
-        let decoder = avro::Decoder::new(&connector.raw_schema);
+        let mut decoder =
+            avro::Decoder::new(&connector.raw_schema, connector.schema_registry_url.clone());
 
         let mut config = ClientConfig::new();
         config
@@ -85,16 +86,6 @@ where
                             }
                         };
                         let cap = cap.delayed(&ts);
-                        // Chomp five bytes; the first byte is a magic byte (0)
-                        // that indicates the Confluent serialization format
-                        // version, and the next four bytes are a 32-bit schema
-                        // ID. We should deal with the schema registry
-                        // eventually, but for now we require the user to
-                        // hardcode their one true schema in the data source
-                        // definition.
-                        //
-                        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-                        let payload = &payload[5..];
                         match decoder.decode(payload) {
                             Ok(d) => output.session(&cap).give((d, *cap.time(), 1)),
                             Err(err) => error!("avro deserialization error: {}", err),

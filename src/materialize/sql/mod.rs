@@ -17,12 +17,14 @@ use sqlparser::sqlast::{
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
 use std::iter::FromIterator;
+use url::Url;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::dataflow::{
     Aggregate, Connector, Dataflow, Expr, KafkaConnector, LocalConnector, Plan, Source, View,
 };
 use crate::glue::*;
+use crate::interchange::avro;
 use crate::repr::{Datum, FType, Type};
 use ore::vec::VecExt;
 use plan::SQLPlan;
@@ -364,21 +366,30 @@ impl Planner {
                 };
                 let url = url.with_default_port(|_| Ok(9092))?; // we already checked for kafka scheme above, so safe to assume scheme
 
-                let schema = match schema {
-                    DataSourceSchema::Raw(schema) => schema,
-                    DataSourceSchema::Registry(_url) => {
-                        bail!("schema registries are not yet supported")
+                let name = extract_sql_object_name(name)?;
+                let (raw_schema, schema_registry_url) = match schema {
+                    DataSourceSchema::Raw(schema) => (schema.to_owned(), None),
+                    DataSourceSchema::Registry(url) => {
+                        // TODO(benesch): we need to fetch this schema
+                        // asynchronously to avoid blocking the command
+                        // processing thread.
+                        let url: Url = url.parse()?;
+                        let ccsr_client = ccsr::Client::new(url.clone());
+                        let res = ccsr_client.get_schema_by_subject(&format!("{}-value", name))?;
+                        (res.raw, Some(url))
                     }
                 };
+                let typ = avro::parse_schema(&raw_schema)?;
 
                 Ok(Dataflow::Source(Source {
-                    name: extract_sql_object_name(name)?,
+                    name,
                     connector: Connector::Kafka(KafkaConnector {
                         addr: url.to_socket_addrs()?.next().unwrap(),
                         topic,
-                        raw_schema: schema.clone(),
+                        raw_schema,
+                        schema_registry_url,
                     }),
-                    typ: crate::interchange::avro::parse_schema(schema)?,
+                    typ,
                 }))
             }
             SQLStatement::SQLCreateTable {
@@ -1284,6 +1295,7 @@ mod tests {
                     addr: "127.0.0.1:9092".parse()?,
                     topic: "topic".into(),
                     raw_schema: raw_schema.to_owned(),
+                    schema_registry_url: None,
                 }),
                 typ: Type {
                     name: None,
