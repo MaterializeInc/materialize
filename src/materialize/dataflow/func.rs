@@ -127,18 +127,30 @@ pub fn mul_float64(a: Datum, b: Datum) -> Datum {
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
 }
 
+// TODO(jamii) we don't currently have any way of reporting errors from functions, so for now we just adopt sqlite's approach 1/0 = null
+
 pub fn div_int32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_int32() / b.unwrap_int32())
+    let b = b.unwrap_int32();
+    if b == 0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_int32() / b)
+    }
 }
 
 pub fn div_int64(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_int64() / b.unwrap_int64())
+    let b = b.unwrap_int64();
+    if b == 0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_int64() / b)
+    }
 }
 
 pub fn div_float32(a: Datum, b: Datum) -> Datum {

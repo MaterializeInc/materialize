@@ -1112,6 +1112,10 @@ impl Planner {
             }
             other => bail!("Function {:?} is not supported yet", other),
         };
+        let is_integer_div = match &func {
+            BinaryFunc::DivInt32 | BinaryFunc::DivInt64 => true,
+            _ => false,
+        };
         let expr = Expr::CallBinary {
             func,
             expr1: Box::new(lexpr),
@@ -1119,7 +1123,7 @@ impl Planner {
         };
         let typ = Type {
             name: None,
-            nullable: ltype.nullable || rtype.nullable,
+            nullable: ltype.nullable || rtype.nullable || is_integer_div,
             ftype,
         };
         Ok((expr, typ))
