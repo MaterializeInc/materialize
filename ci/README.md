@@ -103,6 +103,22 @@ reproduced here. If you need to recreate the SSH key:
 
 If you need the Docker hub password, it's in the company 1Password.
 
+## Build caching
+
+Rust compilation is slow enough that we use [sccache], a distributed build cache
+from Mozilla, to share a build cache between agents. This dramatically speeds up
+the first build on a new agent.
+
+At the time of writing, the build cache is stored in a memcached instance
+managed by ElastiCache. From a Buildkite agent, the memcached instance is
+available at `buildcache.internal.mtrlz.dev:11211`.
+
+## DNS
+
+The VPC in which agents are launched has a private Route 53 hosted zone,
+`internal.mtrlz.dev`. Records are not accessible outside of instances launched
+into the VPC.
+
 ## Performance testing
 
 We have a dedicated Linux machine in the office that Nikhil intends to use for
