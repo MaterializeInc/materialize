@@ -16,5 +16,5 @@ steps:
           environment:
           - BUILDKITE
           - RUSTC_WRAPPER=sccache
-          - SCCACHE_DIR=/sccache
+          - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
           - CARGO_HOME=/cargo
