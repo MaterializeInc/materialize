@@ -11,12 +11,11 @@ services:
     volumes:
     - $SSH_AUTH_SOCK:/tmp/ssh-agent.sock
     - ../../:/workdir
-    - $HOME/.cache/sccache:/sccache
     - $HOME/.cargo:/cargo
     environment:
     - BUILDKITE
     - SSH_AUTH_SOCK=/tmp/ssh-agent.sock
-    - SCCACHE_DIR=/sccache
+    - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
     - CARGO_HOME=/cargo
     - ZOOKEEPER_URL=zookeeper:2181
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081
