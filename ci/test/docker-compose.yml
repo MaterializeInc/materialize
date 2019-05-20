@@ -17,11 +17,10 @@ services:
     - SSH_AUTH_SOCK=/tmp/ssh-agent.sock
     - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
     - CARGO_HOME=/cargo
-    - ZOOKEEPER_URL=zookeeper:2181
-    - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     - RUSTC_WRAPPER=sccache
-    - KAFKA_HOST=kafka
-    - ZOOKEEPER_HOST=zookeeper
+    - ZOOKEEPER_ADDR=zookeeper:2181
+    - KAFKA_ADDR=kafka:9092
+    - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
     depends_on: [kafka, zookeeper, schema-registry]
   zookeeper:

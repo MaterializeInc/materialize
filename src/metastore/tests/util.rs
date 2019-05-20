@@ -15,8 +15,8 @@ use tokio_zookeeper::ZooKeeper;
 use ore::closure;
 
 lazy_static! {
-    pub static ref ZOOKEEPER_ADDR: SocketAddr = match env::var("ZOOKEEPER_URL") {
-        Ok(addr) => parse_addr(&addr).expect("unable to parse ZOOKEEPER_URL"),
+    pub static ref ZOOKEEPER_ADDR: SocketAddr = match env::var("ZOOKEEPER_ADDR") {
+        Ok(addr) => parse_addr(&addr).expect("unable to parse ZOOKEEPER_ADDR"),
         _ => "127.0.0.1:2181".parse().unwrap(),
     };
 }
