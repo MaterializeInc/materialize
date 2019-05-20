@@ -65,7 +65,7 @@ if [[ ! "$fast" ]]; then
     # TODO(benesch): we need proper synchronization here.
     sleep 0.1
 
-    target/debug/testdrive --kafka "${KAFKA_HOST:-localhost}:9092" test/*
+    target/debug/testdrive --kafka-addr "${KAFKA_HOST:-localhost}:9092" test/*
 fi
 
 cd fuzz

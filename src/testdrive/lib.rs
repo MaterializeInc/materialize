@@ -23,8 +23,14 @@ pub fn run() -> Result<(), Error> {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
-    opts.optopt("", "kafka", "kafka bootstrap URL", "URL");
-    opts.optopt("", "materialized", "materialized connection string", "URL");
+    opts.optopt("", "kafka-addr", "kafka bootstrap address", "HOST:PORT");
+    opts.optopt("", "schema-registry-url", "schema registry URL", "URL");
+    opts.optopt(
+        "",
+        "materialized-url",
+        "materialized connection string",
+        "URL",
+    );
     opts.optflag("h", "help", "show this usage information");
     let usage_details = opts.usage("usage: testdrive [options] FILE");
     let opts = opts
@@ -43,8 +49,9 @@ pub fn run() -> Result<(), Error> {
     }
 
     let config = Config {
-        kafka_url: opts.opt_str("kafka"),
-        materialized_url: opts.opt_str("materialized"),
+        kafka_addr: opts.opt_str("kafka-addr"),
+        schema_registry_url: opts.opt_str("schema-registry-url"),
+        materialized_url: opts.opt_str("materialized-url"),
     };
 
     if opts.free.is_empty() {
@@ -91,7 +98,7 @@ fn run_line_reader(config: &Config, line_reader: &mut LineReader) -> Result<(), 
     // reconnections for every file. For now it's nice to not open any
     // connections until after parsing.
     let mut state = action::create_state(config)?;
-    let actions = action::build(cmds)?;
+    let actions = action::build(cmds, &state)?;
     for a in actions.iter().rev() {
         a.action
             .undo(&mut state)

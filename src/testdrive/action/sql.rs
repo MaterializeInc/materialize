@@ -54,7 +54,7 @@ impl Action for SqlAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let query = substitute_vars(&self.cmd.query, state);
+        let query = &self.cmd.query;
         print_query(&query);
         let max = match self.stmt {
             // TODO(benesch): this is horrible. PEEK needs to learn to wait
@@ -139,7 +139,7 @@ impl Action for FailSqlAction {
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        let query = substitute_vars(&self.0.query, state);
+        let query = &self.0.query;
         print_query(&query);
         match state.pgconn.simple_query(&query) {
             Ok(_) => Err(format!(
@@ -172,10 +172,6 @@ fn print_query(query: &str) {
     } else {
         println!("> {}", &query);
     }
-}
-
-fn substitute_vars(query: &str, state: &mut State) -> String {
-    query.replace("${KAFKA_URL}", &state.kafka_url)
 }
 
 fn try_extract_db_error(err: PostgresError) -> Option<DbError> {

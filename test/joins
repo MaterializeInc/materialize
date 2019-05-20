@@ -3,7 +3,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-$ kafka-ingest format=avro topic=names schema={
+$ set names-schema={
     "type": "record",
     "name": "na",
     "fields": [
@@ -11,39 +11,29 @@ $ kafka-ingest format=avro topic=names schema={
         {"name": "name", "type": "string"}
     ]
   }
+
+$ kafka-ingest format=avro topic=names schema=${names-schema}
 {"num": 1, "name": "one"}
 {"num": 2, "name": "two"}
 {"num": 3, "name": "three"}
 
-> CREATE DATA SOURCE names FROM 'kafka://${KAFKA_URL}/names' USING SCHEMA '{
-    "type": "record",
-    "name": "na",
-    "fields": [
-        {"name": "num", "type": "long"},
-        {"name": "name", "type": "string"}
-    ]
-  }'
+> CREATE DATA SOURCE names FROM 'kafka://${testdrive.kafka-addr}/names' USING SCHEMA '${names-schema}'
 
-$ kafka-ingest format=avro topic=mods schema={
-    "type": "record",
-    "name": "na",
-    "fields": [
-        {"name": "num", "type": "long"},
-        {"name": "name", "type": "string"}
-    ]
-  }
-{"num": 0, "name": "even"}
-{"num": 1, "name": "odd"}
-{"num": 2, "name": "even"}
-
-> CREATE DATA SOURCE mods FROM 'kafka://${KAFKA_URL}/mods' USING SCHEMA '{
+$ set mods-schema={
     "type": "record",
     "name": "na",
     "fields": [
         {"name": "num", "type": "long"},
         {"name": "mod", "type": "string"}
     ]
-  }'
+  }
+
+$ kafka-ingest format=avro topic=mods schema=${mods-schema}
+{"num": 0, "mod": "even"}
+{"num": 1, "mod": "odd"}
+{"num": 2, "mod": "even"}
+
+> CREATE DATA SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/mods' USING SCHEMA '${mods-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names JOIN mods USING (num);

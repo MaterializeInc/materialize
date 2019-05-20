@@ -30,27 +30,41 @@ use ore::vec::VecExt;
 pub struct IngestAction {
     topic: String,
     schema: String,
+    ccsr_subject: Option<String>,
     rows: Vec<String>,
 }
 
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
-    let topic = cmd
-        .args
-        .remove("topic")
-        .ok_or_else(|| String::from("missing topic argument"))?;
-    let schema = cmd
-        .args
-        .remove("schema")
-        .ok_or_else(|| String::from("missing schema argument"))?;
+    let format = cmd.args.string("format")?;
+    let topic = cmd.args.string("topic")?;
+    let schema = cmd.args.string("schema")?;
+    let publish = cmd.args.opt_bool("publish")?;
+    cmd.args.done()?;
+    if format != "avro" {
+        return Err("formats besides avro are not supported".into());
+    }
+    let ccsr_subject = if publish {
+        Some(format!("{}-value", topic))
+    } else {
+        None
+    };
     Ok(IngestAction {
         topic,
         schema,
+        ccsr_subject,
         rows: cmd.input,
     })
 }
 
 impl Action for IngestAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
+        if let Some(subject) = &self.ccsr_subject {
+            println!("Deleting schema for {:?}", self.topic);
+            match state.ccsr_client.delete_subject(subject) {
+                Ok(()) | Err(ccsr::DeleteError::SubjectNotFound) => (),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
         println!("Deleting Kafka topic {:?}", self.topic);
         let res = state
             .kafka_admin
@@ -74,10 +88,22 @@ impl Action for IngestAction {
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
         println!("Ingesting data into Kafka topic {:?}", self.topic);
-        let schema = Schema::parse_str(&self.schema).map_err(|e| e.to_string())?;
+        let schema_id = if let Some(subject) = &self.ccsr_subject {
+            state
+                .ccsr_client
+                .publish_schema(subject, &self.schema)
+                .map_err(|e| e.to_string())?
+        } else {
+            1
+        };
+        let schema =
+            Schema::parse_str(&self.schema).map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut futs = FuturesUnordered::new();
         for row in &self.rows {
-            let val = json_to_avro(serde_json::from_str(row).map_err(|e| e.to_string())?);
+            let val = json_to_avro(
+                serde_json::from_str(row)
+                    .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
+            );
 
             // The first byte is a magic byte (0) that indicates the Confluent
             // serialization format version, and the next four bytes are a
@@ -86,7 +112,7 @@ impl Action for IngestAction {
             // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
             let mut buf = Vec::new();
             buf.write_u8(0).unwrap();
-            buf.write_u32::<NetworkEndian>(1).unwrap();
+            buf.write_i32::<NetworkEndian>(schema_id).unwrap();
             buf.extend(avro_rs::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
 
             let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic).payload(&buf);

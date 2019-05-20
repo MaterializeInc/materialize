@@ -16,14 +16,17 @@ path = "main.rs"
 atty = "0.2"
 avro-rs = "0.6.5"
 byteorder = "1.3"
+ccsr = { path = "../ccsr" }
 failure = "0.1.5"
 futures = "0.1"
 getopts = "0.2"
+lazy_static = "1.3.0"
 ore = { path = "../ore" }
 postgres = "0.16.0-rc.1"  # pre-release for simple_query support
 serde_json = { version = "1.0.39", features = ["preserve_order"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rdkafka = "0.20"
+regex = "1"
 reqwest = "0.9.15"
 termcolor = "1.0.4"
 

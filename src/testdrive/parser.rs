@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::borrow::ToOwned;
+use std::collections::hash_map;
 use std::collections::{BTreeMap, HashMap};
 
 use super::error::{InputError, Positioner};
@@ -24,7 +25,7 @@ pub enum Command {
 #[derive(Debug)]
 pub struct BuiltinCommand {
     pub name: String,
-    pub args: HashMap<String, String>,
+    pub args: ArgMap,
     pub input: Vec<String>,
 }
 
@@ -93,7 +94,7 @@ fn parse_builtin(line_reader: &mut LineReader) -> Result<BuiltinCommand, InputEr
     }
     Ok(BuiltinCommand {
         name,
-        args,
+        args: ArgMap(args),
         input: slurp_all(line_reader),
     })
 }
@@ -106,7 +107,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     let mut expected_rows = Vec::new();
     match (line2, line3) {
         (Some((_, line2)), Some((_, line3))) => {
-            if line3.len() > 3 && line3.chars().all(|c| c == '-') {
+            if line3.len() >= 3 && line3.chars().all(|c| c == '-') {
                 column_names = split_line(&line2);
             } else {
                 expected_rows.push(split_line(&line2));
@@ -332,5 +333,51 @@ impl<'a> Iterator for BuiltinReader<'a> {
         } else {
             Some(Ok((self.pos, token)))
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct ArgMap(HashMap<String, String>);
+
+impl ArgMap {
+    pub fn values_mut(&mut self) -> hash_map::ValuesMut<String, String> {
+        self.0.values_mut()
+    }
+
+    pub fn string(&mut self, name: &str) -> Result<String, String> {
+        self.0
+            .remove(name)
+            .ok_or_else(|| format!("missing {} argument", name))
+    }
+
+    pub fn opt_bool(&mut self, name: &str) -> Result<bool, String> {
+        match self.0.remove(name) {
+            Some(val) => {
+                if val == "true" {
+                    Ok(true)
+                } else if val == "false" {
+                    Ok(false)
+                } else {
+                    Err(format!("bad value for boolean parameter {}: {}", name, val))
+                }
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub fn done(&self) -> Result<(), String> {
+        if let Some(name) = self.0.keys().next() {
+            return Err(format!("unknown parameter {}", name));
+        }
+        Ok(())
+    }
+}
+
+impl IntoIterator for ArgMap {
+    type Item = (String, String);
+    type IntoIter = hash_map::IntoIter<String, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }

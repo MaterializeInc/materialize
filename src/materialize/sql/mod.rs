@@ -375,7 +375,7 @@ impl Planner {
                         // processing thread.
                         let url: Url = url.parse()?;
                         let ccsr_client = ccsr::Client::new(url.clone());
-                        let res = ccsr_client.get_schema_by_subject(&format!("{}-value", name))?;
+                        let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
                         (res.raw, Some(url))
                     }
                 };

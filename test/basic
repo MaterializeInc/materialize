@@ -3,7 +3,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-$ kafka-ingest format=avro topic=data schema={
+$ set schema={
     "type": "record",
     "name": "na",
     "fields": [
@@ -11,19 +11,14 @@ $ kafka-ingest format=avro topic=data schema={
         {"name": "b", "type": "long"}
     ]
   }
+
+$ kafka-ingest format=avro topic=data schema=${schema}
 {"a": 1, "b": 1}
 {"a": 2, "b": 1}
 {"a": 3, "b": 1}
 {"a": 1, "b": 2}
 
-> CREATE DATA SOURCE data FROM 'kafka://${KAFKA_URL}/data' USING SCHEMA '{
-    "type": "record",
-    "name": "na",
-    "fields": [
-        {"name": "a", "type": "long"},
-        {"name": "b", "type": "long"}
-    ]
-  }'
+> CREATE DATA SOURCE data FROM 'kafka://${testdrive.kafka-addr}/data' USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b;
