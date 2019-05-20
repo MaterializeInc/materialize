@@ -65,7 +65,10 @@ if [[ ! "$fast" ]]; then
     # TODO(benesch): we need proper synchronization here.
     sleep 0.1
 
-    target/debug/testdrive --kafka-addr "${KAFKA_HOST:-localhost}:9092" test/*
+    args=()
+    [[ "$KAFKA_ADDR" ]] && args+=("--kafka-addr" "$KAFKA_ADDR")
+    [[ "$SCHEMA_REGISTRY_URL" ]] && args+=("--schema-registry-url" "$SCHEMA_REGISTRY_URL")
+    try target/debug/testdrive "${args[@]}" test/*
 fi
 
 cd fuzz
