@@ -621,7 +621,7 @@ impl Planner {
             agg_visitor.visit_expr(having);
         }
         let agg_frags = agg_visitor.into_result()?;
-        if !agg_frags.is_empty() {
+        if !agg_frags.is_empty() || !s.group_by.is_empty() {
             let ctx = &ExprContext {
                 scope: "GROUP BY clause",
                 allow_aggregates: false,
