@@ -27,8 +27,13 @@ pub fn add_builtin_dataflows<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
 ) {
+    let dual_table_data = if worker.index() == 0 {
+        vec![Datum::String("X".into())]
+    } else {
+        vec![]
+    };
     worker.dataflow(|scope| {
-        let (_, collection) = scope.new_collection_from(vec![Datum::String("X".into())]);
+        let (_, collection) = scope.new_collection_from(dual_table_data);
         let arrangement = collection.arrange_by_self();
         let on_delete = Box::new(|| ());
         manager.set_trace(&Plan::Source("dual".into()), arrangement.trace, on_delete);
