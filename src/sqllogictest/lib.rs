@@ -548,6 +548,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     if verbosity >= 1 {
         println!("==> {}", source);
     }
+    let mut last_record = None;
     for record in parse_records(&input) {
         let record = record.unwrap();
         if verbosity >= 2 {
@@ -557,6 +558,12 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
                 _ => (),
             }
         }
+
+        // TODO(jamii) this is a hack to workaround an issue where the first query after a bout of statements returns no output
+        if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
         let outcome = state
             .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", source, err))
@@ -575,6 +582,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             _ => (),
         }
         outcomes.0[outcome.code()] += 1;
+        last_record = Some(record);
     }
     outcomes
 }
