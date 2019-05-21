@@ -17,6 +17,7 @@ use sqlparser::sqlast::{
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
 use std::iter::FromIterator;
+use std::net::ToSocketAddrs;
 use url::Url;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
@@ -131,6 +132,7 @@ impl Planner {
             name: SQLObjectName(vec![name.clone()]),
             query: Box::new(query),
             materialized: true,
+            with_options: vec![],
         })?;
         let typ = dataflow.typ().clone();
 
@@ -334,7 +336,11 @@ impl Planner {
                 name,
                 query,
                 materialized: true,
+                with_options,
             } => {
+                if !with_options.is_empty() {
+                    bail!("WITH options are not yet supported");
+                }
                 let (plan, typ) = self.plan_view_query(query)?;
                 Ok(Dataflow::View(View {
                     name: extract_sql_object_name(name)?,
@@ -342,8 +348,15 @@ impl Planner {
                     typ,
                 }))
             }
-            SQLStatement::SQLCreateDataSource { name, url, schema } => {
-                use std::net::ToSocketAddrs;
+            SQLStatement::SQLCreateDataSource {
+                name,
+                url,
+                schema,
+                with_options,
+            } => {
+                if !with_options.is_empty() {
+                    bail!("WITH options are not yet supported");
+                }
 
                 let url: url::Url = url.parse()?;
                 if url.scheme() != "kafka" {
@@ -395,12 +408,16 @@ impl Planner {
             SQLStatement::SQLCreateTable {
                 name,
                 columns,
+                with_options,
                 external,
                 file_format,
                 location,
             } => {
                 if *external || file_format.is_some() || location.is_some() {
                     bail!("EXTERNAL tables are not supported");
+                }
+                if !with_options.is_empty() {
+                    bail!("WITH options are not supported");
                 }
                 let types = columns
                     .iter()
@@ -1192,9 +1209,6 @@ impl Planner {
                 true => (Datum::True, FType::Bool),
             },
             Value::Null => (Datum::Null, FType::Null),
-            Value::Date(_) | Value::DateTime(_) | Value::Timestamp(_) | Value::Time(_) => {
-                bail!("date/time types are not yet supported: {}", l.to_string())
-            }
         };
         let nullable = datum == Datum::Null;
         let expr = Expr::Literal(datum);

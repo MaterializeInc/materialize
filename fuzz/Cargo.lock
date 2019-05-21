@@ -1797,9 +1797,8 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.3.2-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#20baefa2bd0e14ad25fa4599da9c3c0007591092"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#9ff69197cadf865c0fa05fbb81ece44e9a8a2869"
 dependencies = [
- "chrono 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
