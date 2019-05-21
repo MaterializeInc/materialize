@@ -17,12 +17,13 @@ use sqlparser::sqlast::{
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
 use std::iter::FromIterator;
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
 use crate::dataflow::{
-    Aggregate, Connector, Dataflow, Expr, KafkaConnector, LocalConnector, Plan, Source, View,
+    Aggregate, Dataflow, Expr, KafkaSinkConnector, KafkaSourceConnector, LocalSourceConnector,
+    Plan, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use crate::glue::*;
 use crate::interchange::avro;
@@ -56,6 +57,7 @@ impl Planner {
             SQLStatement::SQLPeek { name } => self.handle_peek(name),
             SQLStatement::SQLTail { .. } => bail!("TAIL is not implemented yet"),
             SQLStatement::SQLCreateDataSource { .. }
+            | SQLStatement::SQLCreateDataSink { .. }
             | SQLStatement::SQLCreateView { .. }
             | SQLStatement::SQLCreateTable { .. } => self.handle_create_dataflow(stmt),
             SQLStatement::SQLDropDataSource { .. }
@@ -78,6 +80,7 @@ impl Planner {
         let dataflow = self.plan_statement(&stmt)?;
         let sql_response = match stmt {
             SQLStatement::SQLCreateDataSource { .. } => SqlResponse::CreatedDataSource,
+            SQLStatement::SQLCreateDataSink { .. } => SqlResponse::CreatedDataSink,
             SQLStatement::SQLCreateView { .. } => SqlResponse::CreatedView,
             SQLStatement::SQLCreateTable { .. } => SqlResponse::CreatedTable,
             _ => unreachable!(),
@@ -151,7 +154,7 @@ impl Planner {
         let name = name.to_string();
         let typ = match self.dataflows.get(&name)? {
             Dataflow::Source(Source {
-                connector: Connector::Local(_),
+                connector: SourceConnector::Local(_),
                 typ,
                 ..
             }) => typ,
@@ -357,29 +360,8 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-
-                let url: url::Url = url.parse()?;
-                if url.scheme() != "kafka" {
-                    bail!("only kafka:// data sources are supported: {}", url);
-                } else if !url.has_host() {
-                    bail!("data source URL missing hostname: {}", url)
-                }
-                let topic = match url.path_segments() {
-                    None => bail!("data source URL missing topic path: {}"),
-                    Some(segments) => {
-                        let segments: Vec<_> = segments.collect();
-                        if segments.len() != 1 {
-                            bail!(
-                                "data source URL should have exactly one path segment: {}",
-                                url
-                            );
-                        }
-                        segments[0].to_owned()
-                    }
-                };
-                let url = url.with_default_port(|_| Ok(9092))?; // we already checked for kafka scheme above, so safe to assume scheme
-
                 let name = extract_sql_object_name(name)?;
+                let (addr, topic) = parse_kafka_url(url)?;
                 let (raw_schema, schema_registry_url) = match schema {
                     DataSourceSchema::Raw(schema) => (schema.to_owned(), None),
                     DataSourceSchema::Registry(url) => {
@@ -393,16 +375,38 @@ impl Planner {
                     }
                 };
                 let typ = avro::parse_schema(&raw_schema)?;
-
                 Ok(Dataflow::Source(Source {
                     name,
-                    connector: Connector::Kafka(KafkaConnector {
-                        addr: url.to_socket_addrs()?.next().unwrap(),
+                    connector: SourceConnector::Kafka(KafkaSourceConnector {
+                        addr,
                         topic,
                         raw_schema,
                         schema_registry_url,
                     }),
                     typ,
+                }))
+            }
+            SQLStatement::SQLCreateDataSink {
+                name,
+                from,
+                url,
+                with_options,
+            } => {
+                if !with_options.is_empty() {
+                    bail!("WITH options are not yet supported");
+                }
+                let name = extract_sql_object_name(name)?;
+                let from = extract_sql_object_name(from)?;
+                let _ = self.dataflows.get(&from)?;
+                let (addr, topic) = parse_kafka_url(url)?;
+                Ok(Dataflow::Sink(Sink {
+                    name,
+                    from,
+                    connector: SinkConnector::Kafka(KafkaSinkConnector {
+                        addr,
+                        topic,
+                        schema_id: 0,
+                    }),
                 }))
             }
             SQLStatement::SQLCreateTable {
@@ -445,7 +449,7 @@ impl Planner {
                 };
                 Ok(Dataflow::Source(Source {
                     name: extract_sql_object_name(name)?,
-                    connector: Connector::Local(LocalConnector {}),
+                    connector: SourceConnector::Local(LocalSourceConnector {}),
                     typ,
                 }))
             }
@@ -1240,6 +1244,36 @@ fn unnest(expr: &ASTNode) -> &ASTNode {
     }
 }
 
+fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
+    let url: Url = url.parse()?;
+    if url.scheme() != "kafka" {
+        bail!("only kafka:// data sources are supported: {}", url);
+    } else if !url.has_host() {
+        bail!("data source URL missing hostname: {}", url)
+    }
+    let topic = match url.path_segments() {
+        None => bail!("data source URL missing topic path: {}"),
+        Some(segments) => {
+            let segments: Vec<_> = segments.collect();
+            if segments.len() != 1 {
+                bail!(
+                    "data source URL should have exactly one path segment: {}",
+                    url
+                );
+            }
+            segments[0].to_owned()
+        }
+    };
+    // We already checked for kafka scheme above, so it's safe to assume port
+    // 9092.
+    let addr = url
+        .with_default_port(|_| Ok(9092))?
+        .to_socket_addrs()?
+        .next()
+        .unwrap();
+    Ok((addr, topic))
+}
+
 impl Planner {
     pub fn mock<I>(dataflows: I) -> Self
     where
@@ -1251,7 +1285,7 @@ impl Planner {
                 .map(|(name, typ)| {
                     Dataflow::Source(Source {
                         name,
-                        connector: Connector::Local(LocalConnector {}),
+                        connector: SourceConnector::Local(LocalSourceConnector {}),
                         typ,
                     })
                 })
@@ -1344,7 +1378,7 @@ mod tests {
             dataflow,
             Dataflow::Source(Source {
                 name: "s".into(),
-                connector: Connector::Kafka(KafkaConnector {
+                connector: SourceConnector::Kafka(KafkaSourceConnector {
                     addr: "127.0.0.1:9092".parse()?,
                     topic: "topic".into(),
                     raw_schema: raw_schema.to_owned(),

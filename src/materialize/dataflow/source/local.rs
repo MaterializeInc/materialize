@@ -10,7 +10,7 @@ use timely::dataflow::operators::generic::source;
 use timely::dataflow::{Scope, Stream};
 
 use crate::clock::{Clock, Timestamp};
-use crate::dataflow::types::{Diff, LocalConnector};
+use crate::dataflow::types::{Diff, LocalSourceConnector};
 use crate::glue::*;
 use crate::repr::Datum;
 
@@ -19,7 +19,7 @@ pub type InsertMux = Arc<RwLock<Mux<String, Vec<Datum>>>>;
 pub fn local<G>(
     scope: &G,
     name: &str,
-    _connector: &LocalConnector,
+    _connector: &LocalSourceConnector,
     done: Rc<Cell<bool>>,
     clock: &Clock,
     mux: &InsertMux,

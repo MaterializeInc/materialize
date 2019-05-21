@@ -265,6 +265,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
                 match response {
                     SqlResponse::CreatedDataSource => command_complete!("CREATE DATA SOURCE"),
+                    SqlResponse::CreatedDataSink => command_complete!("CREATE DATA SINK"),
                     SqlResponse::CreatedView => command_complete!("CREATE VIEW"),
                     SqlResponse::CreatedTable => command_complete!("CREATE TABLE"),
                     SqlResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),

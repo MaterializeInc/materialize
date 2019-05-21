@@ -17,6 +17,7 @@ use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
+use super::sink;
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
@@ -52,8 +53,10 @@ pub fn build_dataflow<A: Allocate>(
         Dataflow::Source(src) => {
             let done = Rc::new(Cell::new(false));
             let plan = match &src.connector {
-                Connector::Kafka(c) => source::kafka(scope, &src.name, &c, done.clone(), clock),
-                Connector::Local(l) => {
+                SourceConnector::Kafka(c) => {
+                    source::kafka(scope, &src.name, &c, done.clone(), clock)
+                }
+                SourceConnector::Local(l) => {
                     source::local(scope, &src.name, &l, done.clone(), clock, insert_mux)
                 }
             };
@@ -64,6 +67,18 @@ pub fn build_dataflow<A: Allocate>(
                 arrangement.trace,
                 on_delete,
             );
+        }
+        Dataflow::Sink(sink) => {
+            let done = Rc::new(Cell::new(false));
+            let (arrangement, _) = manager
+                .get_trace(&Plan::Source(sink.from.to_owned()))
+                .unwrap_or_else(|| panic!(format!("unable to find dataflow {}", sink.from)))
+                .import_core(scope, &format!("Import({})", sink.from));
+            match &sink.connector {
+                SinkConnector::Kafka(c) => {
+                    sink::kafka(&arrangement.stream, &sink.name, c, done, clock)
+                }
+            }
         }
         Dataflow::View(view) => {
             let mut buttons = Vec::new();

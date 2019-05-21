@@ -8,7 +8,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
-use crate::dataflow::{Connector, Dataflow, LocalConnector, Source};
+use crate::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
 use crate::repr::{FType, Type};
 
 #[derive(Debug)]
@@ -111,7 +111,7 @@ impl Default for DataflowStore {
         // https://en.wikipedia.org/wiki/DUAL_table
         let dual_dataflow = Dataflow::Source(Source {
             name: "dual".into(),
-            connector: Connector::Local(LocalConnector {}),
+            connector: SourceConnector::Local(LocalSourceConnector {}),
             typ: Type {
                 name: None,
                 nullable: false,

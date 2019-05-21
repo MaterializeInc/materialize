@@ -10,6 +10,7 @@
 pub mod func;
 mod render;
 pub mod server;
+mod sink;
 mod source;
 mod trace;
 mod types;

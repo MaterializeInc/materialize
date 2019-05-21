@@ -14,14 +14,14 @@ use timely::dataflow::operators::generic::source;
 use timely::dataflow::{Scope, Stream};
 
 use crate::clock::{Clock, Timestamp};
-use crate::dataflow::types::{Diff, KafkaConnector};
+use crate::dataflow::types::{Diff, KafkaSourceConnector};
 use crate::interchange::avro;
 use crate::repr::Datum;
 
 pub fn kafka<G>(
     scope: &G,
     name: &str,
-    connector: &KafkaConnector,
+    connector: &KafkaSourceConnector,
     done: Rc<Cell<bool>>,
     clock: &Clock,
 ) -> Stream<G, (Datum, Timestamp, Diff)>

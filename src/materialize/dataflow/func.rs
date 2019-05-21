@@ -533,7 +533,7 @@ where
 {
     let mut datums = datums.into_iter().peekable();
     if datums.peek().is_none() {
-        return Datum::Null;
+        Datum::Null
     } else {
         let x: i32 = datums
             .filter(|d| !d.is_null())
@@ -549,7 +549,7 @@ where
 {
     let mut datums = datums.into_iter().peekable();
     if datums.peek().is_none() {
-        return Datum::Null;
+        Datum::Null
     } else {
         let x: i64 = datums
             .filter(|d| !d.is_null())
@@ -565,7 +565,7 @@ where
 {
     let mut datums = datums.into_iter().peekable();
     if datums.peek().is_none() {
-        return Datum::Null;
+        Datum::Null
     } else {
         let x: f32 = datums
             .filter(|d| !d.is_null())
@@ -581,7 +581,7 @@ where
 {
     let mut datums = datums.into_iter().peekable();
     if datums.peek().is_none() {
-        return Datum::Null;
+        Datum::Null
     } else {
         let x: f64 = datums
             .filter(|d| !d.is_null())

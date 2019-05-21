@@ -17,7 +17,7 @@ pub type Diff = isize;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Dataflow {
     Source(Source),
-    /// A view is a named transformation from one dataflow to another.
+    Sink(Sink),
     View(View),
 }
 
@@ -26,6 +26,7 @@ impl Dataflow {
     pub fn name(&self) -> &str {
         match self {
             Dataflow::Source(src) => &src.name,
+            Dataflow::Sink(sink) => &sink.name,
             Dataflow::View(view) => &view.name,
         }
     }
@@ -34,6 +35,8 @@ impl Dataflow {
     pub fn typ(&self) -> &Type {
         match self {
             Dataflow::Source(src) => &src.typ,
+            // TODO(benesch): perhaps this should return FType::Null?
+            Dataflow::Sink(_) => unreachable!(),
             Dataflow::View(view) => &view.typ,
         }
     }
@@ -43,6 +46,7 @@ impl Dataflow {
         let mut out = Vec::new();
         match self {
             Dataflow::Source(_) => (),
+            Dataflow::Sink(sink) => out.push(sink.from.as_str()),
             Dataflow::View(view) => view.plan.uses_inner(&mut out),
         }
         out
@@ -57,18 +61,26 @@ impl metastore::Dataflow for Dataflow {}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     pub name: String,
-    pub connector: Connector,
+    pub connector: SourceConnector,
     pub typ: Type,
 }
 
+#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Connector {
-    Kafka(KafkaConnector),
-    Local(LocalConnector),
+pub struct Sink {
+    pub name: String,
+    pub from: String,
+    pub connector: SinkConnector,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct KafkaConnector {
+pub enum SourceConnector {
+    Kafka(KafkaSourceConnector),
+    Local(LocalSourceConnector),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSourceConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
     pub raw_schema: String,
@@ -77,7 +89,19 @@ pub struct KafkaConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LocalConnector {}
+pub struct LocalSourceConnector {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum SinkConnector {
+    Kafka(KafkaSinkConnector),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KafkaSinkConnector {
+    pub addr: std::net::SocketAddr,
+    pub topic: String,
+    pub schema_id: i32,
+}
 
 /// A view transforms one dataflow into another.
 #[serde(rename_all = "snake_case")]
