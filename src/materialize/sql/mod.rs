@@ -598,6 +598,8 @@ impl Planner {
                 }
             }
         }
+        // if we have a `SELECT *` later, this is what it selects
+        let named_columns = plan.named_columns();
 
         // Step 2. Handle WHERE clause.
         if let Some(selection) = selection {
@@ -628,6 +630,7 @@ impl Planner {
             };
             let mut aggs = Vec::new();
             for frag in agg_frags {
+                // TODO(jamii) handle COUNT(*) here - it's a special case that doesn't compose well
                 let (expr, typ) = self.plan_expr(ctx, &frag.expr, &plan)?;
                 let (func, ftype) =
                     AggregateFunc::from_name_and_ftype(frag.name.as_ref(), &typ.ftype)?;
@@ -636,7 +639,7 @@ impl Planner {
                     Aggregate { func, expr },
                     Type {
                         // TODO(jamii) name should be format("{}", expr) eg "count(*)"
-                        name: typ.name,
+                        name: None,
                         nullable: func.is_nullable(),
                         ftype,
                     },
@@ -644,15 +647,35 @@ impl Planner {
             }
 
             let mut key_exprs = Vec::new();
-            let mut retained_columns = Vec::new();
+            let mut key_columns = Vec::new();
+            // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
+            let mut unique_group_by = vec![];
             for expr in &s.group_by {
+                if !unique_group_by.contains(&expr) {
+                    unique_group_by.push(expr);
+                }
+            }
+            for expr in unique_group_by {
+                // we have to remember the names of GROUP BY exprs so we can SELECT them later
+                let name = match expr {
+                    ASTNode::SQLIdentifier(column_name) => {
+                        let (_, name, _) = plan.resolve_column(column_name)?;
+                        name.clone()
+                    }
+                    ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
+                        let (_, name, _) = plan.resolve_table_column(&names[0], &names[1])?;
+                        name.clone()
+                    }
+                    // TODO(jamii) for complex exprs, we need to remember the expr itself so we can do eg `SELECT (a+1)+1 FROM .. GROUP BY a+1` :(
+                    _ => plan::Name::none(),
+                };
                 let (expr, typ) = self.plan_expr(ctx, &expr, &plan)?;
-                retained_columns.push(typ);
+                key_columns.push((name, typ));
                 key_exprs.push(expr);
             }
             let key_expr = Expr::Tuple(key_exprs);
 
-            plan = plan.aggregate((key_expr, retained_columns), aggs);
+            plan = plan.aggregate(key_expr, key_columns, aggs);
         }
 
         // Step 4. Handle HAVING clause.
@@ -671,7 +694,7 @@ impl Planner {
         // Step 5. Handle projections.
         let mut outputs = Vec::new();
         for p in &s.projection {
-            for (expr, typ) in self.plan_select_item(p, &plan)? {
+            for (expr, typ) in self.plan_select_item(p, &plan, &named_columns)? {
                 outputs.push((expr, typ));
             }
         }
@@ -689,6 +712,7 @@ impl Planner {
         &self,
         s: &'a SQLSelectItem,
         plan: &SQLPlan,
+        named_columns: &[(String, String)],
     ) -> Result<Vec<(Expr, Type)>, failure::Error> {
         let ctx = &ExprContext {
             scope: "SELECT projection",
@@ -701,17 +725,24 @@ impl Planner {
                 typ.name = Some(alias.clone());
                 Ok(vec![(expr, typ)])
             }
-            SQLSelectItem::Wildcard => Ok(plan
-                .get_all_column_types()
-                .into_iter()
-                .enumerate()
-                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ.clone()))
-                .collect()),
-            SQLSelectItem::QualifiedWildcard(name) => Ok(plan
-                .get_table_column_types(&extract_sql_object_name(name)?)
-                .into_iter()
-                .map(|(i, typ)| (Expr::Column(i, Box::new(Expr::Ambient)), typ.clone()))
-                .collect()),
+            SQLSelectItem::Wildcard => named_columns
+                .iter()
+                .map(|(table_name, column_name)| {
+                    let (pos, _, typ) = plan.resolve_table_column(table_name, column_name)?;
+                    Ok((Expr::Column(pos, Box::new(Expr::Ambient)), typ.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>(),
+            SQLSelectItem::QualifiedWildcard(name) => {
+                let name = extract_sql_object_name(name)?;
+                named_columns
+                    .iter()
+                    .filter(|(table_name, _)| *table_name == name)
+                    .map(|(table_name, column_name)| {
+                        let (pos, _, typ) = plan.resolve_table_column(table_name, column_name)?;
+                        Ok((Expr::Column(pos, Box::new(Expr::Ambient)), typ.clone()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            }
         }
     }
 
@@ -792,8 +823,8 @@ impl Planner {
                     right.resolve_column(column_name),
                 ) {
                     (Ok(_), Ok(_)) => bail!("column name {} is ambiguous", column_name),
-                    (Ok((pos, typ)), Err(_)) => Ok((pos, typ.clone(), Side::Left)),
-                    (Err(_), Ok((pos, typ))) => Ok((pos, typ.clone(), Side::Right)),
+                    (Ok((pos, _, typ)), Err(_)) => Ok((pos, typ.clone(), Side::Left)),
+                    (Err(_), Ok((pos, _, typ))) => Ok((pos, typ.clone(), Side::Right)),
                     (Err(left_err), Err(right_err)) => bail!(
                         "{} on left of join, {} on right of join",
                         left_err,
@@ -811,8 +842,8 @@ impl Planner {
                     (Ok(_), Ok(_)) => {
                         bail!("column name {}.{} is ambiguous", table_name, column_name)
                     }
-                    (Ok((pos, typ)), Err(_)) => Ok((pos, typ.clone(), Side::Left)),
-                    (Err(_), Ok((pos, typ))) => Ok((pos, typ.clone(), Side::Right)),
+                    (Ok((pos, _, typ)), Err(_)) => Ok((pos, typ.clone(), Side::Left)),
+                    (Err(_), Ok((pos, _, typ))) => Ok((pos, typ.clone(), Side::Right)),
                     (Err(left_err), Err(right_err)) => bail!(
                         "{} on left of join, {} on right of join",
                         left_err,
@@ -941,12 +972,12 @@ impl Planner {
     ) -> Result<(Expr, Type), failure::Error> {
         match e {
             ASTNode::SQLIdentifier(name) => {
-                let (i, typ) = plan.resolve_column(name)?;
+                let (i, _, typ) = plan.resolve_column(name)?;
                 let expr = Expr::Column(i, Box::new(Expr::Ambient));
                 Ok((expr, typ.clone()))
             }
             ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
-                let (i, typ) = plan.resolve_table_column(&names[0], &names[1])?;
+                let (i, _, typ) = plan.resolve_table_column(&names[0], &names[1])?;
                 let expr = Expr::Column(i, Box::new(Expr::Ambient));
                 Ok((expr, typ.clone()))
             }

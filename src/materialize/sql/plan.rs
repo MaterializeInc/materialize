@@ -21,6 +21,16 @@ pub struct Name {
     func_name: Option<FuncName>,
 }
 
+impl Name {
+    pub fn none() -> Self {
+        Name {
+            table_name: None,
+            column_name: None,
+            func_name: None,
+        }
+    }
+}
+
 /// Wraps a dataflow plan with a sql scope
 #[derive(Debug, Clone)]
 pub struct SQLPlan {
@@ -55,7 +65,10 @@ impl SQLPlan {
         self
     }
 
-    pub fn resolve_column(&self, column_name: &str) -> Result<(usize, &Type), failure::Error> {
+    pub fn resolve_column(
+        &self,
+        column_name: &str,
+    ) -> Result<(usize, &Name, &Type), failure::Error> {
         let mut results = self
             .columns
             .iter()
@@ -63,7 +76,7 @@ impl SQLPlan {
             .filter(|(_, (name, _))| name.column_name.as_deref() == Some(column_name));
         match (results.next(), results.next()) {
             (None, None) => bail!("no column named {} in scope", column_name),
-            (Some((i, (_, typ))), None) => Ok((i, typ)),
+            (Some((i, (name, typ))), None) => Ok((i, name, typ)),
             (Some(_), Some(_)) => bail!("column name {} is ambiguous", column_name),
             _ => unreachable!(),
         }
@@ -73,14 +86,14 @@ impl SQLPlan {
         &self,
         table_name: &str,
         column_name: &str,
-    ) -> Result<(usize, &Type), failure::Error> {
+    ) -> Result<(usize, &Name, &Type), failure::Error> {
         let mut results = self.columns.iter().enumerate().filter(|(_, (name, _))| {
             name.table_name.as_deref() == Some(table_name)
                 && name.column_name.as_deref() == Some(column_name)
         });
         match (results.next(), results.next()) {
             (None, None) => bail!("no column named {}.{} in scope", table_name, column_name),
-            (Some((i, (_, typ))), None) => Ok((i, typ)),
+            (Some((i, (name, typ))), None) => Ok((i, name, typ)),
             (Some(_), Some(_)) => bail!("column name {}.{} is ambiguous", table_name, column_name),
             _ => unreachable!(),
         }
@@ -162,7 +175,7 @@ impl SQLPlan {
         // TODO(jamii) check that we don't join on ambiguous column names
         for (r, (_, r_type)) in right.columns.iter().enumerate() {
             if let Some(name) = &r_type.name {
-                if let Ok((l, _)) = left.resolve_column(name) {
+                if let Ok((l, _, _)) = left.resolve_column(name) {
                     left_key.push(l);
                     right_key.push(r);
                 }
@@ -198,8 +211,8 @@ impl SQLPlan {
         let mut left_key = vec![];
         let mut right_key = vec![];
         for name in names {
-            let (l, _) = left.resolve_column(name)?;
-            let (r, _) = right.resolve_column(name)?;
+            let (l, _, _) = left.resolve_column(name)?;
+            let (r, _, _) = right.resolve_column(name)?;
             left_key.push(l);
             right_key.push(r);
         }
@@ -246,20 +259,11 @@ impl SQLPlan {
 
     pub fn aggregate(
         self,
-        key: (Expr, Vec<Type>),
+        key_expr: Expr,
+        key_columns: Vec<(Name, Type)>,
         aggregates: Vec<(FuncName, Aggregate, Type)>,
     ) -> Self {
         let SQLPlan { plan, .. } = self;
-        let retained_columns = key.1.iter().map(|typ| {
-            (
-                Name {
-                    table_name: None,
-                    column_name: typ.name.clone(),
-                    func_name: None,
-                },
-                typ.clone(),
-            )
-        });
         let agg_columns = aggregates.iter().map(|(func_name, _, typ)| {
             (
                 Name {
@@ -272,11 +276,11 @@ impl SQLPlan {
         });
         SQLPlan {
             plan: Plan::Aggregate {
-                key: key.0,
+                key: key_expr,
                 aggs: aggregates.iter().map(|(_, agg, _)| agg.clone()).collect(),
                 input: Box::new(plan),
             },
-            columns: retained_columns.chain(agg_columns).collect(),
+            columns: key_columns.into_iter().chain(agg_columns).collect(),
         }
     }
 
@@ -308,16 +312,15 @@ impl SQLPlan {
         self
     }
 
-    pub fn get_all_column_types(&self) -> Vec<&Type> {
-        self.columns.iter().map(|(_, t)| t).collect()
-    }
-
-    pub fn get_table_column_types(&self, table_name: &str) -> Vec<(usize, &Type)> {
+    pub fn named_columns(&self) -> Vec<(String, String)> {
         self.columns
             .iter()
-            .enumerate()
-            .filter(|(_, (name, _))| name.table_name.as_deref() == Some(table_name))
-            .map(|(i, (_, t))| (i, t))
+            .filter_map(|(name, _)| match (&name.table_name, &name.column_name) {
+                (Some(table_name), Some(column_name)) => {
+                    Some((table_name.clone(), column_name.clone()))
+                }
+                _ => None,
+            })
             .collect()
     }
 
