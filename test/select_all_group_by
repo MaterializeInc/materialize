@@ -12,16 +12,16 @@
 > insert into bar values (37, 42);
 > insert into bar values (37, 42);
 
-> select *, count(a) from foo group by a;
+> select *, count(*) from foo group by a;
 37 1
 
-> select *, count(a) from foo group by a, a, a+1;
+> select *, count(*) from foo group by a, a, a+1;
 37 1
 
-! select *, count(a) from bar group by a;
+! select *, count(*) from bar group by a;
 no column named bar.b in scope
 
-> select a, count(b) from bar group by a;
+> select a, count(*) from bar group by a;
 37 2
 
 > select * from bar group by a, b;
