@@ -561,7 +561,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
 
         // TODO(jamii) this is a hack to workaround an issue where the first query after a bout of statements returns no output
         if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record) {
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         let outcome = state
