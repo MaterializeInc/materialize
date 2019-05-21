@@ -26,3 +26,19 @@ no column named bar.b in scope
 
 > select * from bar group by a, b;
 37 42
+
+> create table quux(a integer);
+> insert into quux values (1);
+> insert into quux values (null);
+
+> select count(*) from quux;
+2
+
+> select count(a) from quux;
+1
+
+> select count(a) from quux where a < 0;
+0
+
+> select count(*) from quux where a < 0;
+0
