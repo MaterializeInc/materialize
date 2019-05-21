@@ -633,10 +633,7 @@ impl Planner {
                 let (expr, func, ftype) = match (&*frag.name, &frag.expr) {
                     // COUNT(*) is a special case that doesn't compose well
                     ("count", ASTNode::SQLWildcard) => {
-                        // COUNT doesn't care what the inner ftype is
-                        let (func, ftype) =
-                            AggregateFunc::from_name_and_ftype(&frag.name, &FType::Null)?;
-                        (Expr::Ambient, func, ftype)
+                        (Expr::Ambient, AggregateFunc::CountAll, FType::Int64)
                     }
                     _ => {
                         let (expr, typ) = self.plan_expr(ctx, &frag.expr, &plan)?;

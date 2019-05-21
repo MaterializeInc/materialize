@@ -579,6 +579,14 @@ pub fn count<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
+    let x: i64 = datums.into_iter().filter(|d| !d.is_null()).count() as i64;
+    Datum::from(x)
+}
+
+pub fn count_all<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
     let x: i64 = datums.into_iter().count() as i64;
     Datum::from(x)
 }
@@ -602,6 +610,7 @@ pub enum AggregateFunc {
     SumFloat32,
     SumFloat64,
     Count,
+    CountAll, // COUNT(*) counts nulls too
 }
 
 impl AggregateFunc {
@@ -664,6 +673,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => sum_float32,
             AggregateFunc::SumFloat64 => sum_float64,
             AggregateFunc::Count => count,
+            AggregateFunc::CountAll => count_all,
         }
     }
 
