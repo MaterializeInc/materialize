@@ -27,7 +27,7 @@ serde_json = { version = "1.0.39", features = ["preserve_order"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rdkafka = "0.20"
 regex = "1"
-reqwest = "0.9.15"
+reqwest = "0.9.17"
 termcolor = "1.0.4"
 
 [dev-dependencies]
