@@ -493,7 +493,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#3773f17638665744bfbaab0182401b2825c707d8"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#902f97ed67254197ba18050e5138503f605ca126"
 dependencies = [
  "abomonation 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1797,7 +1797,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.3.2-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#6f6768caeffa4c34d2f5e0272ed8671210af17a7"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#e6569e63326d68c0b7d2d394257dcb7a2660c36f"
 dependencies = [
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
