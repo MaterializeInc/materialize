@@ -688,14 +688,7 @@ impl Planner {
 
             let mut key_exprs = Vec::new();
             let mut key_columns = Vec::new();
-            // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
-            let mut unique_group_by = vec![];
             for expr in &s.group_by {
-                if !unique_group_by.contains(&expr) {
-                    unique_group_by.push(expr);
-                }
-            }
-            for expr in unique_group_by {
                 // we have to remember the names of GROUP BY exprs so we can SELECT them later
                 let name = match expr {
                     ASTNode::SQLIdentifier(column_name) => {
@@ -710,8 +703,11 @@ impl Planner {
                     _ => plan::Name::none(),
                 };
                 let (expr, typ) = self.plan_expr(ctx, &expr, &plan)?;
-                key_columns.push((name, typ));
-                key_exprs.push(expr);
+                // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
+                if !key_exprs.contains(&expr) {
+                    key_columns.push((name, typ));
+                    key_exprs.push(expr);
+                }
             }
             let key_expr = Expr::Tuple(key_exprs);
 

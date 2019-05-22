@@ -18,6 +18,9 @@
 > select *, count(*) from foo group by a, a, a+1;
 37 1
 
+> select a from foo group by a, foo.a;
+37
+
 ! select *, count(*) from bar group by a;
 no column named bar.b in scope
 
