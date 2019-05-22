@@ -1169,7 +1169,10 @@ impl Planner {
             | SQLOperator::GtEq
             | SQLOperator::Eq
             | SQLOperator::NotEq => {
-                if ltype.ftype != rtype.ftype {
+                if ltype.ftype != rtype.ftype
+                    && ltype.ftype != FType::Null
+                    && rtype.ftype != FType::Null
+                {
                     bail!("{:?} and {:?} are not comparable", ltype.ftype, rtype.ftype)
                 }
                 let func = match op {
