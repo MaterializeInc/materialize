@@ -221,6 +221,9 @@ pub fn parse_records(input: &str) -> impl Iterator<Item = Result<Record, failure
 
 #[derive(Debug)]
 pub enum Outcome<'a> {
+    Unsupported {
+        error: failure::Error,
+    },
     ParseFailure {
         error: sqlparser::sqlparser::ParserError,
     },
@@ -235,19 +238,24 @@ pub enum Outcome<'a> {
         expected_output: &'a Output<'a>,
         actual_output: Vec<Datum>,
     },
+    Bail {
+        cause: Box<Outcome<'a>>,
+    },
     Success,
 }
 
-const NUM_OUTCOMES: usize = 5;
+const NUM_OUTCOMES: usize = 7;
 
 impl<'a> Outcome<'a> {
     fn code(&self) -> usize {
         match self {
-            Outcome::ParseFailure { .. } => 0,
-            Outcome::PlanFailure { .. } => 1,
-            Outcome::InferenceFailure { .. } => 2,
-            Outcome::OutputFailure { .. } => 3,
-            Outcome::Success => 4,
+            Outcome::Unsupported { .. } => 0,
+            Outcome::ParseFailure { .. } => 1,
+            Outcome::PlanFailure { .. } => 2,
+            Outcome::InferenceFailure { .. } => 3,
+            Outcome::OutputFailure { .. } => 4,
+            Outcome::Bail { .. } => 5,
+            Outcome::Success => 6,
         }
     }
 }
@@ -279,6 +287,8 @@ impl FromStr for Outcomes {
             pieces[2].parse()?,
             pieces[3].parse()?,
             pieces[4].parse()?,
+            pieces[5].parse()?,
+            pieces[6].parse()?,
         ]))
     }
 }
@@ -287,12 +297,14 @@ impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "parse-failure={} plan-failure={} inference-failure={} output-failure={} success={} total={}",
+            "unsupported={} parse-failure={} plan-failure={} inference-failure={} output-failure={} bail={} success={} total={}",
             self.0[0],
             self.0[1],
             self.0[2],
             self.0[3],
             self.0[4],
+            self.0[5],
+            self.0[6],
             self.0.iter().sum::<usize>(),
         )
     }
@@ -300,7 +312,7 @@ impl fmt::Display for Outcomes {
 
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[0] > 0 || self.0[1] > 0 || self.0[2] > 0 || self.0[3] > 0
+        self.0[0] + self.0[6] < self.0.iter().sum::<usize>()
     }
 }
 
@@ -406,12 +418,11 @@ impl State {
         match &record {
             Record::Statement { should_run, sql } => {
                 lazy_static! {
-                    static ref UNSUPPORTED_STATEMENT_REGEX: Regex = Regex::new(
-                        "^(CREATE (UNIQUE )?INDEX|CREATE TRIGGER|DROP INDEX|DROP TRIGGER|REINDEX)"
-                    )
-                    .unwrap();
+                    static ref INDEX_STATEMENT_REGEX: Regex =
+                        Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
                 }
-                if UNSUPPORTED_STATEMENT_REGEX.is_match(sql) {
+                if INDEX_STATEMENT_REGEX.is_match(sql) {
+                    // sure, we totally made you an index...
                     return Ok(Outcome::Success);
                 }
 
@@ -461,7 +472,15 @@ impl State {
                             ),
                         });
                     }
-                    Err(error) => return Ok(Outcome::PlanFailure { error }),
+                    Err(error) => {
+                        let error_string = format!("{}", error);
+                        if error_string.contains("supported") || error_string.contains("overload") {
+                            // this is a failure, but it's caused by lack of support rather than by bugs
+                            return Ok(Outcome::Unsupported { error });
+                        } else {
+                            return Ok(Outcome::PlanFailure { error });
+                        }
+                    }
                 };
 
                 let inferred_types = match &typ.ftype {
@@ -551,37 +570,49 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     let mut last_record = None;
     for record in parse_records(&input) {
         let record = record.unwrap();
-        if verbosity >= 2 {
-            match record {
-                Record::Statement { sql, .. } => println!("{}", sql),
-                Record::Query { sql, .. } => println!("{}", sql),
-                _ => (),
-            }
-        }
 
         // TODO(jamii) this is a hack to workaround an issue where the first query after a bout of statements returns no output
         if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record) {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        let outcome = state
+        let mut outcome = state
             .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", source, err))
             .unwrap();
-        if verbosity >= 2 {
-            println!("{:?}", outcome);
-        }
+
+        // if we failed to execute a statement, running the rest of the tests in this file will probably cause false positives
         match (&record, &outcome) {
             (_, Outcome::Success) => (),
             (Record::Statement { sql, .. }, _) if !sql.contains("CREATE VIEW") => {
-                if verbosity >= 1 {
-                    println!("A statement failed. Bailing on remaining tests.");
-                }
-                break;
+                outcome = Outcome::Bail {
+                    cause: Box::new(outcome),
+                };
             }
             _ => (),
         }
+
+        // print failures in verbose mode
+        match &outcome {
+            Outcome::Success => (),
+            _ => {
+                if verbosity >= 2 {
+                    match &record {
+                        Record::Statement { sql, .. } => println!("{}", sql),
+                        Record::Query { sql, .. } => println!("{}", sql),
+                        _ => (),
+                    }
+                    println!("{:?}", outcome);
+                    println!("In {}", source);
+                }
+            }
+        }
+
         outcomes.0[outcome.code()] += 1;
+
+        if let Outcome::Bail { .. } = outcome {
+            break;
+        }
         last_record = Some(record);
     }
     outcomes
@@ -622,7 +653,7 @@ pub fn fuzz(sqls: &str) {
                                             || (typ.nullable && datum.is_null()),
                                         "{:?} was inferred to have type {:?}",
                                         typ.ftype,
-                                        datum.ftype()
+                                        datum.ftype(),
                                     );
                                 }
                             }

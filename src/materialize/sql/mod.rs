@@ -945,7 +945,10 @@ impl Planner {
                         left_keys.push(left_expr);
                         right_keys.push(right_expr);
                     }
-                    _ => bail!("ON clause contained non-equality operator: {:?}", op),
+                    _ => bail!(
+                        "ON clause contained unsupported non-equality operator: {:?}",
+                        op
+                    ),
                 },
                 _ => bail!(
                     "ON clause contained unsupported complicated expression: {:?}",
