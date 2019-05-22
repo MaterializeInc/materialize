@@ -323,6 +323,10 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor {
         visit::visit_function(self, name, args, over, all, distinct);
         self.within = old_within;
     }
+
+    fn visit_subquery(&mut self, _subquery: &'ast SQLQuery) {
+        // don't go into subqueries
+    }
 }
 
 pub enum Side {
