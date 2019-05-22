@@ -191,6 +191,7 @@ impl Plan {
 pub struct Aggregate {
     pub func: AggregateFunc,
     pub expr: Expr,
+    pub distinct: bool,
 }
 
 #[serde(rename_all = "snake_case")]

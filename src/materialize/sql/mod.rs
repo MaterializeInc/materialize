@@ -259,6 +259,7 @@ struct AggregateFragment {
     name: String,
     id: *const SQLObjectName,
     expr: ASTNode,
+    distinct: bool,
 }
 
 struct AggregateFuncVisitor {
@@ -290,6 +291,8 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor {
         name: &'ast SQLObjectName,
         args: &'ast Vec<ASTNode>,
         over: Option<&'ast SQLWindowSpec>,
+        all: bool,
+        distinct: bool,
     ) {
         if over.is_some() {
             self.err = Some(format_err!("window functions are not yet supported"));
@@ -310,12 +313,13 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor {
                     name: name_str.clone(),
                     id: name as *const _,
                     expr: args[0].clone(),
+                    distinct,
                 });
             }
             _ => (),
         }
         self.within = true;
-        visit::visit_function(self, name, args, over);
+        visit::visit_function(self, name, args, over, all, distinct);
         self.within = false;
     }
 }
@@ -667,7 +671,11 @@ impl Planner {
                 };
                 aggs.push((
                     frag.id,
-                    Aggregate { func, expr },
+                    Aggregate {
+                        func,
+                        expr,
+                        distinct: frag.distinct,
+                    },
                     Type {
                         // TODO(jamii) name should be format("{}", expr) eg "count(*)"
                         name: None,
@@ -1022,9 +1030,13 @@ impl Planner {
                 self.plan_binary_expr(ctx, op, left, right, plan)
             }
             ASTNode::SQLNested(expr) => self.plan_expr(ctx, expr, plan),
-            ASTNode::SQLFunction { name, args, over } => {
-                self.plan_function(ctx, name, args, over, plan)
-            }
+            ASTNode::SQLFunction {
+                name,
+                args,
+                over,
+                all,
+                distinct,
+            } => self.plan_function(ctx, name, args, over, *all, *distinct, plan),
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
@@ -1039,6 +1051,8 @@ impl Planner {
         name: &'a SQLObjectName,
         _args: &'a [ASTNode],
         _over: &'a Option<SQLWindowSpec>,
+        _all: bool,
+        _distinct: bool,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
         let ident = name.to_string().to_lowercase();
@@ -1454,7 +1468,8 @@ mod tests {
                                 func: BinaryFunc::AddInt64,
                                 expr1: Box::new(Expr::Column(0, Box::new(Expr::Ambient))),
                                 expr2: Box::new(Expr::Literal(Datum::Int64(1))),
-                            }
+                            },
+                            distinct: false,
                         }],
                         input: Box::new(Plan::Source("src".into())),
                     }),

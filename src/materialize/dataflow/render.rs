@@ -10,6 +10,7 @@ use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::{AsCollection, Collection};
 use std::cell::Cell;
+use std::collections::HashSet;
 use std::iter;
 use std::rc::Rc;
 use timely::communication::Allocate;
@@ -158,16 +159,26 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                     let res: Vec<_> = aggs
                         .iter()
                         .map(|agg| {
-                            let datums = input
-                                .iter()
-                                .filter_map(|(datum, cnt)| {
-                                    datum.as_ref().map(|datum| {
-                                        let datum = eval_expr(&agg.expr, datum);
-                                        iter::repeat(datum).take(*cnt as usize)
+                            if agg.distinct {
+                                let datums = input
+                                    .iter()
+                                    .filter_map(|(datum, _cnt)| {
+                                        datum.as_ref().map(|datum| eval_expr(&agg.expr, datum))
                                     })
-                                })
-                                .flatten();
-                            (agg.func.func())(datums)
+                                    .collect::<HashSet<_>>();
+                                (agg.func.func())(datums)
+                            } else {
+                                let datums = input
+                                    .iter()
+                                    .filter_map(|(datum, cnt)| {
+                                        datum.as_ref().map(|datum| {
+                                            let datum = eval_expr(&agg.expr, datum);
+                                            iter::repeat(datum).take(*cnt as usize)
+                                        })
+                                    })
+                                    .flatten();
+                                (agg.func.func())(datums)
+                            }
                         })
                         .collect();
                     output.push((res, 1));
