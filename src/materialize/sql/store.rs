@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use failure::bail;
+use failure::{bail, format_err};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::FromIterator;
@@ -31,7 +31,9 @@ impl DataflowStore {
     }
 
     pub fn get_type(&self, name: &str) -> Result<&Type, failure::Error> {
-        Ok(self.get(name)?.typ())
+        self.get(name)?
+            .typ()
+            .ok_or_else(|| format_err!("dataflow {} is a sink and cannot be depended upon", name))
     }
 
     pub fn insert(&mut self, dataflow: Dataflow) -> Result<(), failure::Error> {

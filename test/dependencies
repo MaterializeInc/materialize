@@ -54,8 +54,17 @@ cannot delete test1: still depended upon by dataflow 'test2'
 dataflow test1 does not exist
 
 ! DROP VIEW test2;
-dataflow test1 does not exist
+dataflow test2 does not exist
 
 # Test that DROP VIEW IF EXISTS succeeds even if the view does not exist.
 
 > DROP VIEW IF EXISTS test1;
+
+# Test that data sinks cannot be depended upon.
+
+> CREATE MATERIALIZED VIEW v1 AS SELECT 1;
+
+> CREATE DATA SINK s1 FROM v1 INTO 'kafka://${testdrive.kafka-addr}/v'
+
+! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
+dataflow s1 is a sink and cannot be depended upon

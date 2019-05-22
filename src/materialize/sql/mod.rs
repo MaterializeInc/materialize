@@ -137,7 +137,9 @@ impl Planner {
             materialized: true,
             with_options: vec![],
         })?;
-        let typ = dataflow.typ().clone();
+        // Safe to unwrap dataflow.typ() below, as planning a view always yields
+        // a dataflow with a type.
+        let typ = dataflow.typ().unwrap().clone();
 
         Ok((
             SqlResponse::Peeking { typ },

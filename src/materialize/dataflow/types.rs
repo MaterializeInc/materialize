@@ -31,13 +31,12 @@ impl Dataflow {
         }
     }
 
-    /// Reports the type of this datums produced by this dataflow.
-    pub fn typ(&self) -> &Type {
+    /// Reports the type of the datums produced by this dataflow.
+    pub fn typ(&self) -> Option<&Type> {
         match self {
-            Dataflow::Source(src) => &src.typ,
-            // TODO(benesch): perhaps this should return FType::Null?
-            Dataflow::Sink(_) => unreachable!(),
-            Dataflow::View(view) => &view.typ,
+            Dataflow::Source(src) => Some(&src.typ),
+            Dataflow::Sink(_) => None,
+            Dataflow::View(view) => Some(&view.typ),
         }
     }
 
