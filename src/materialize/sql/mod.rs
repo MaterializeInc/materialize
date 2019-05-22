@@ -299,6 +299,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor {
             return;
         }
         let name_str = name.to_string().to_lowercase();
+        let old_within = self.within;
         match name_str.as_ref() {
             "avg" | "sum" | "min" | "max" | "count" => {
                 if self.within {
@@ -315,12 +316,12 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor {
                     expr: args[0].clone(),
                     distinct,
                 });
+                self.within = true;
             }
             _ => (),
         }
-        self.within = true;
         visit::visit_function(self, name, args, over, all, distinct);
-        self.within = false;
+        self.within = old_within;
     }
 }
 
