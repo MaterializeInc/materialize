@@ -475,7 +475,7 @@ impl Planner {
         if q.limit.is_some() {
             bail!("LIMIT is not supported in a view definition");
         }
-        if q.order_by.is_some() {
+        if !q.order_by.is_empty() {
             bail!("ORDER BY is not supported in a view definition");
         }
         self.plan_set_expr(&q.body)
@@ -568,7 +568,7 @@ impl Planner {
                 args,
                 with_hints,
             }) => {
-                if args.is_some() {
+                if !args.is_empty() {
                     bail!("table arguments are not supported");
                 }
                 if !with_hints.is_empty() {
@@ -604,7 +604,7 @@ impl Planner {
                     args,
                     with_hints,
                 } => {
-                    if args.is_some() {
+                    if !args.is_empty() {
                         bail!("table arguments are not supported");
                     }
                     if !with_hints.is_empty() {
