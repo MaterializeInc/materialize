@@ -795,20 +795,20 @@ impl Planner {
     ) -> Result<SQLPlan, failure::Error> {
         match operator {
             JoinOperator::Inner(constraint) => {
-                self.plan_join_constraint(constraint, left, right, false, false)
+                self.plan_join_constraint(selection, constraint, left, right, false, false)
             }
             JoinOperator::LeftOuter(constraint) => {
-                self.plan_join_constraint(constraint, left, right, true, false)
+                self.plan_join_constraint(selection, constraint, left, right, true, false)
             }
             JoinOperator::RightOuter(constraint) => {
-                self.plan_join_constraint(constraint, left, right, false, true)
+                self.plan_join_constraint(selection, constraint, left, right, false, true)
             }
             JoinOperator::FullOuter(constraint) => {
-                self.plan_join_constraint(constraint, left, right, true, true)
+                self.plan_join_constraint(selection, constraint, left, right, true, true)
             }
             JoinOperator::Implicit => {
                 let (left_key, right_key, new_selection) =
-                    self.plan_implicit_join_expr(selection, &left, &right)?;
+                    self.plan_join_expr(selection.as_ref(), &left, &right)?;
                 *selection = new_selection;
                 Ok(left.join_on(right, left_key, right_key, false, false))
             }
@@ -824,6 +824,7 @@ impl Planner {
 
     fn plan_join_constraint<'a>(
         &self,
+        selection: &mut Option<ASTNode>,
         constraint: &'a JoinConstraint,
         left: SQLPlan,
         right: SQLPlan,
@@ -832,7 +833,19 @@ impl Planner {
     ) -> Result<SQLPlan, failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
-                let (left_key, right_key) = self.plan_join_on_expr(expr, &left, &right)?;
+                let (left_key, right_key, left_over_expr) =
+                    self.plan_join_expr(Some(expr), &left, &right)?;
+                if let Some(left_over_expr) = left_over_expr {
+                    if let Some(existing_selection) = selection.take() {
+                        *selection = Some(ASTNode::SQLBinaryExpr {
+                            left: Box::new(left_over_expr),
+                            op: SQLOperator::And,
+                            right: Box::new(existing_selection),
+                        });
+                    } else {
+                        *selection = Some(left_over_expr);
+                    }
+                }
                 Ok(left.join_on(
                     right,
                     left_key,
@@ -923,52 +936,13 @@ impl Planner {
         ))
     }
 
-    fn plan_join_on_expr(
+    fn plan_join_expr(
         &self,
-        expr: &ASTNode,
-        left_plan: &SQLPlan,
-        right_plan: &SQLPlan,
-    ) -> Result<(Expr, Expr), failure::Error> {
-        let mut exprs = vec![expr];
-        let mut left_keys = Vec::new();
-        let mut right_keys = Vec::new();
-
-        while let Some(expr) = exprs.pop() {
-            match unnest(expr) {
-                ASTNode::SQLBinaryExpr { left, op, right } => match op {
-                    SQLOperator::And => {
-                        exprs.push(left);
-                        exprs.push(right);
-                    }
-                    SQLOperator::Eq => {
-                        let (left_expr, right_expr) =
-                            self.plan_eq_expr(left, right, left_plan, right_plan)?;
-                        left_keys.push(left_expr);
-                        right_keys.push(right_expr);
-                    }
-                    _ => bail!(
-                        "ON clause contained unsupported non-equality operator: {:?}",
-                        op
-                    ),
-                },
-                _ => bail!(
-                    "ON clause contained unsupported complicated expression: {:?}",
-                    expr
-                ),
-            }
-        }
-
-        Ok((Expr::Tuple(left_keys), Expr::Tuple(right_keys)))
-    }
-
-    // This is basically the same as plan_join_on_expr, except that we allow `expr` to contain irrelevant constraints that need to be saved for later
-    fn plan_implicit_join_expr(
-        &self,
-        expr: &Option<ASTNode>,
+        expr: Option<&ASTNode>,
         left_plan: &SQLPlan,
         right_plan: &SQLPlan,
     ) -> Result<(Expr, Expr, Option<ASTNode>), failure::Error> {
-        let mut exprs = expr.iter().collect::<Vec<_>>();
+        let mut exprs = expr.into_iter().collect::<Vec<&ASTNode>>();
         let mut left_keys = Vec::new();
         let mut right_keys = Vec::new();
         let mut left_over = vec![];
