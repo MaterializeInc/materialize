@@ -372,8 +372,8 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                 // println!("l_keys: {:?}", l_keys);
                 // println!("r_keys: {:?}", r_keys);
 
-                let right_plan =
-                    build_plan(&plans[index], manager, worker_index, scope, buttons).map(move |tuple| {
+                let right_plan = build_plan(&plans[index], manager, worker_index, scope, buttons)
+                    .map(move |tuple| {
                         // TODO: Hoist `.asref_tuple()`?
                         (
                             r_keys
