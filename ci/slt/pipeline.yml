@@ -17,6 +17,8 @@ steps:
           - "$HOME/.cargo:/cargo"
           environment:
           - BUILDKITE
+          - BUILDKITE_BRANCH
+          - BUILDKITE_COMMIT
           - RUSTC_WRAPPER=sccache
           - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
           - CARGO_HOME=/cargo
