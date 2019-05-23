@@ -349,6 +349,8 @@ fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
                         string.to_owned()
                     }
                 }
+                (Type::Text, Datum::Int64(i)) => format!("{}", i),
+                (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
                 other => panic!("Don't know how to format {:?}", other),
             })
             .collect(),
