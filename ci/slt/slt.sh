@@ -25,7 +25,7 @@ cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/evidence \
     sqllogictest/test/index \
     sqllogictest/test/random \
-    "$verbosity" "$@"
+    "$verbosity" "$@" || true
 
 if [[ "${BUILDKITE_BRANCH-}" = master && "${BUILDKITE_COMMIT-}" ]]; then
     template="INSERT INTO slt (commit, unsupported, parse_failure, plan_failure, inference_failure, output_failure, bail, success) VALUES ('$BUILDKITE_COMMIT', \\1, \\2, \\3, \\4, \\5, \\6, \\7);"
