@@ -16,12 +16,12 @@ fi
 
 set -x
 
-# TODO(jamii) We can't currently run test/select4.test and test/select5.test
-# because of https://github.com/MaterializeInc/materialize/issues/43.
+# TODO(jamii) We can't run test/select4.test without predicate pushdown - it's too slow
 cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/select1.test \
     sqllogictest/test/select2.test \
     sqllogictest/test/select3.test \
+    sqllogictest/test/select5.test \
     sqllogictest/test/evidence \
     sqllogictest/test/index \
     sqllogictest/test/random \
