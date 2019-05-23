@@ -345,7 +345,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             }
 
             // Step 3: build the sequence of joins.
-            let mut plan = build_plan(&plans[plan_order[0]], manager, scope, buttons);
+            let mut plan = build_plan(&plans[plan_order[0]], manager, worker_index, scope, buttons);
             let mut schema = Vec::new();
             for pos in 0..arities[plan_order[0]] {
                 schema.push((plan_order[0], pos));
@@ -373,7 +373,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                 // println!("r_keys: {:?}", r_keys);
 
                 let right_plan =
-                    build_plan(&plans[index], manager, scope, buttons).map(move |tuple| {
+                    build_plan(&plans[index], manager, worker_index, scope, buttons).map(move |tuple| {
                         // TODO: Hoist `.asref_tuple()`?
                         (
                             r_keys
