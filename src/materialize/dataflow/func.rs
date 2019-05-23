@@ -375,7 +375,7 @@ where
     if len == 0 {
         Datum::Null
     } else {
-        Datum::from(f64::from(sum) / len as f64)
+        Datum::from(sum / (len as i32))
     }
 }
 
@@ -392,8 +392,7 @@ where
     if len == 0 {
         Datum::Null
     } else {
-        // TODO(jamii) check for truncation
-        Datum::from(sum as f64 / len as f64)
+        Datum::from(sum / (len as i64))
     }
 }
 
@@ -410,7 +409,7 @@ where
     if len == 0 {
         Datum::Null
     } else {
-        Datum::from(f64::from(sum) / len as f64)
+        Datum::from(sum / (len as f32))
     }
 }
 
@@ -427,7 +426,7 @@ where
     if len == 0 {
         Datum::Null
     } else {
-        Datum::from(sum as f64 / len as f64)
+        Datum::from(sum / (len as f64))
     }
 }
 
@@ -660,8 +659,7 @@ impl AggregateFunc {
         };
         let ftype = match name {
             "count" => FType::Int64,
-            "avg" => FType::Float64,
-            "max" | "min" | "sum" => ftype.clone(),
+            "avg" | "max" | "min" | "sum" => ftype.clone(),
             other => bail!("Unknown aggregate function: {:?}", other),
         };
         Ok((func, ftype))
