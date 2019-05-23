@@ -141,6 +141,14 @@ pub enum Plan {
         /// Include keys on the right that are not joined (for right/full outer join). The usize value is the number of columns on the left.
         include_right_outer: Option<usize>,
     },
+    MultiwayJoin {
+        /// A list of participating plans.
+        plans: Vec<Plan>,
+        /// A list of the number of columns in the corresponding plan.
+        arities: Vec<usize>,
+        /// A list of (r1,c1) and (r2,c2) required equalities.
+        equalities: Vec<((usize, usize), (usize, usize))>,
+    },
     /// Filter records based on predicate.
     Filter { predicate: Expr, input: Box<Plan> },
     /// Aggregate records that share a key.
@@ -172,6 +180,11 @@ impl Plan {
             } => {
                 left.uses_inner(out);
                 right.uses_inner(out);
+            }
+            Plan::MultiwayJoin { plans, .. } => {
+                for plan in plans {
+                    plan.uses_inner(out);
+                }
             }
             Plan::Filter {
                 predicate: _,

@@ -39,6 +39,10 @@ pub struct SQLPlan {
 }
 
 impl SQLPlan {
+    pub fn from_plan_columns(plan: Plan, columns: Vec<(Name, Type)>) -> Self {
+        Self { plan, columns }
+    }
+
     pub fn from_source(name: &str, types: Vec<Type>) -> Self {
         SQLPlan {
             plan: Plan::Source(name.to_owned()),
@@ -310,6 +314,14 @@ impl SQLPlan {
     pub fn distinct(mut self) -> Self {
         self.plan = Plan::Distinct(Box::new(self.plan));
         self
+    }
+
+    pub fn columns(&self) -> &[(Name, Type)] {
+        &self.columns[..]
+    }
+
+    pub fn plan(&self) -> &Plan {
+        &self.plan
     }
 
     pub fn named_columns(&self) -> Vec<(String, String)> {

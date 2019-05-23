@@ -283,6 +283,154 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             flow
         }
 
+        Plan::MultiwayJoin {
+            plans,
+            arities,
+            equalities,
+        } => {
+            // We are required to produce as output records formatted as if we
+            // cross-joined the plans in order, and then applied the equalties
+            // as a filter.
+            //
+            // Instead, we are likely to re-order plans and the order we perform
+            // joins, but we must still permute the final tuple order to reflect
+            // the order as promised above, as downstream logic relies on it.
+
+            // Step 1: determine a plan order.
+            let mut plan_order = vec![0];
+            while plan_order.len() < plans.len() {
+                let mut candidates = (0..plans.len())
+                    .filter(|i| !plan_order.contains(i))
+                    .map(|i| {
+                        (
+                            equalities
+                                .iter()
+                                .filter(|((r1, _), (r2, _))| {
+                                    (plan_order.contains(r1) && r2 == &i)
+                                        || (plan_order.contains(r2) && r1 == &i)
+                                })
+                                .count(),
+                            i,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                candidates.sort();
+                plan_order.push(candidates.pop().expect("Candidate expected").1);
+            }
+
+            // Step 2: populate information about offsets and keys.
+            let mut positions = vec![0; plan_order.len()];
+            for (index, input) in plan_order.iter().enumerate() {
+                positions[*input] = index;
+            }
+
+            let mut offset = 0;
+            let mut offsets = vec![0; plan_order.len()];
+            for input in plan_order.iter() {
+                offsets[*input] = offset;
+                offset += arities[*input];
+            }
+
+            // println!("plan_order: {:?}", plan_order);
+            // println!("offsets: {:?}", offsets);
+
+            let mut join_keys = vec![Vec::new(); plan_order.len()];
+            for (rc1, rc2) in equalities.iter() {
+                if positions[rc1.0] < positions[rc2.0] {
+                    join_keys[rc2.0].push((rc1, rc2));
+                } else {
+                    join_keys[rc1.0].push((rc2, rc1));
+                }
+            }
+
+            // Step 3: build the sequence of joins.
+            let mut plan = build_plan(&plans[plan_order[0]], manager, worker_index, scope, buttons);
+            let mut schema = Vec::new();
+            for pos in 0..arities[plan_order[0]] {
+                schema.push((plan_order[0], pos));
+            }
+
+            use crate::repr::Datum;
+
+            for &index in plan_order[1..].iter() {
+                for pos in 0..arities[index] {
+                    schema.push((index, pos));
+                }
+
+                let l_keys = join_keys[index]
+                    .iter()
+                    .map(|((rel, col), _)| offsets[*rel] + *col)
+                    .collect::<Vec<_>>();
+                let r_keys = join_keys[index]
+                    .iter()
+                    .map(|(_, (_, col))| *col)
+                    .collect::<Vec<_>>();
+
+                assert_eq!(l_keys.len(), r_keys.len());
+
+                // println!("l_keys: {:?}", l_keys);
+                // println!("r_keys: {:?}", r_keys);
+
+                let right_plan = build_plan(&plans[index], manager, worker_index, scope, buttons)
+                    .map(move |tuple| {
+                        // TODO: Hoist `.asref_tuple()`?
+                        (
+                            r_keys
+                                .iter()
+                                .map(|i| tuple.asref_tuple()[*i].clone())
+                                .collect::<Vec<_>>(),
+                            tuple,
+                        )
+                    });
+
+                //
+                plan = plan
+                    .map(move |tuple| {
+                        // TODO: Hoist `.asref_tuple()`?
+                        (
+                            l_keys
+                                .iter()
+                                .map(|i| tuple.asref_tuple()[*i].clone())
+                                .collect::<Vec<_>>(),
+                            tuple,
+                        )
+                    })
+                    .join_map(&right_plan, |_k, l, r| {
+                        let l = l.asref_tuple();
+                        let r = r.asref_tuple();
+                        Datum::Tuple(
+                            l.iter()
+                                .cloned()
+                                .chain(r.iter().cloned())
+                                .collect::<Vec<_>>(),
+                        )
+                    });
+            }
+
+            // Step 4: de-permute everything
+            let mut look_up = Vec::new();
+            for index in 0..plans.len() {
+                for col in 0..arities[index] {
+                    let position = schema
+                        .iter()
+                        .position(|x| x == &(index, col))
+                        .expect("Reverse look-up failed");
+                    look_up.push(position);
+                }
+            }
+
+            plan.map(move |tuple| {
+                let as_ref = tuple.asref_tuple();
+                Datum::Tuple(
+                    look_up
+                        .iter()
+                        .map(|i| as_ref[*i].clone())
+                        .collect::<Vec<_>>(),
+                )
+            })
+        }
+
         Plan::Distinct(plan) => {
             build_plan(plan, manager, worker_index, scope, buttons).distinct_total()
         }
