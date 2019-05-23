@@ -7,6 +7,15 @@
 #
 # slt.sh — runs sqllogictest in CI.
 
+set -euo pipefail
+
+verbosity=-vv
+if [[ "${BUILDKITE-}" ]]; then
+    verbosity=-v
+fi
+
+set -x
+
 # TODO(jamii) We can't currently run test/select4.test and test/select5.test
 # because of https://github.com/MaterializeInc/materialize/issues/43.
 cargo run --release --bin=sqllogictest -- \
@@ -16,4 +25,4 @@ cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/evidence \
     sqllogictest/test/index \
     sqllogictest/test/random \
-    -vv \
+    "$verbosity" "$@"
