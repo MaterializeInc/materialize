@@ -37,5 +37,7 @@ in pkgs.stdenv.mkDerivation rec {
   shellHook = ''
     export LIBCLANG_PATH=${pkgs.llvmPackages.clang-unwrapped.lib}/lib
     export PATH=$(pwd)/bin/:$PATH
+    ulimit -m $((8*1024*1024))
+    ulimit -v $((8*1024*1024))
    '';
 }
