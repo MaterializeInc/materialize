@@ -1147,6 +1147,28 @@ impl Planner {
         let (lexpr, ltype) = self.plan_expr(ctx, left, plan)?;
         let (rexpr, rtype) = self.plan_expr(ctx, right, plan)?;
         let (func, ftype) = match op {
+            SQLOperator::And | SQLOperator::Or => {
+                if ltype.ftype != FType::Bool && ltype.ftype != FType::Null {
+                    bail!(
+                        "Cannot apply operator {:?} to non-boolean type {:?}",
+                        op,
+                        ltype.ftype
+                    )
+                }
+                if rtype.ftype != FType::Bool && rtype.ftype != FType::Null {
+                    bail!(
+                        "Cannot apply operator {:?} to non-boolean type {:?}",
+                        op,
+                        rtype.ftype
+                    )
+                }
+                let func = match op {
+                    SQLOperator::And => BinaryFunc::And,
+                    SQLOperator::Or => BinaryFunc::Or,
+                    _ => unreachable!(),
+                };
+                (func, FType::Bool)
+            }
             SQLOperator::Plus => match (&ltype.ftype, &rtype.ftype) {
                 (FType::Int32, FType::Int32) => (BinaryFunc::AddInt32, FType::Int32),
                 (FType::Int64, FType::Int64) => (BinaryFunc::AddInt64, FType::Int64),
