@@ -1,0 +1,22 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+steps:
+  - command: ci/slt/slt.sh
+    plugins:
+      - docker#v3.1.0:
+          # TODO(benesch): figure out how to share the image version with
+          # the test job.
+          image: materialize/test:20190501-131213
+          propagate-uid-gid: true
+          mount-ssh-agent: true
+          volumes:
+          - "$HOME/.cache/sccache:/sccache"
+          - "$HOME/.cargo:/cargo"
+          environment:
+          - BUILDKITE
+          - RUSTC_WRAPPER=sccache
+          - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
+          - CARGO_HOME=/cargo
