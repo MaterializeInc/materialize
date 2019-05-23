@@ -7,12 +7,11 @@
 
 set -euo pipefail
 
-# TODO(jamii) We can't currently run test/select5.test because of https://github.com/MaterializeInc/materialize/issues/43
+# TODO(jamii) We can't currently run test/select4.test and test/select5.test because of https://github.com/MaterializeInc/materialize/issues/43
 cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/select1.test \
     sqllogictest/test/select2.test \
     sqllogictest/test/select3.test \
-    sqllogictest/test/select4.test \
     sqllogictest/test/evidence \
     sqllogictest/test/index \
     sqllogictest/test/random \
