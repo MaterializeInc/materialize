@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::action::{Action, State};
 use crate::parser::{FailSqlCommand, SqlCommand};
-use ore::vec::VecExt;
+use ore::collections::CollectionExt;
 
 pub struct SqlAction {
     cmd: SqlCommand,

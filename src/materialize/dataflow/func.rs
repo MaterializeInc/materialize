@@ -223,6 +223,34 @@ pub fn neg_float64(a: Datum) -> Datum {
     Datum::from(-a.unwrap_float64())
 }
 
+pub fn abs_int32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_int32().abs())
+}
+
+pub fn abs_int64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_int64().abs())
+}
+
+pub fn abs_float32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_float32().abs())
+}
+
+pub fn abs_float64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_float64().abs())
+}
+
 pub fn eq(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -344,6 +372,10 @@ pub enum UnaryFunc {
     NegInt64,
     NegFloat32,
     NegFloat64,
+    AbsInt32,
+    AbsInt64,
+    AbsFloat32,
+    AbsFloat64,
 }
 
 impl UnaryFunc {
@@ -355,6 +387,10 @@ impl UnaryFunc {
             UnaryFunc::NegInt64 => neg_int64,
             UnaryFunc::NegFloat32 => neg_float32,
             UnaryFunc::NegFloat64 => neg_float64,
+            UnaryFunc::AbsInt32 => abs_int32,
+            UnaryFunc::AbsInt64 => abs_int64,
+            UnaryFunc::AbsFloat32 => abs_float32,
+            UnaryFunc::AbsFloat64 => abs_float64,
         }
     }
 }

@@ -11,12 +11,12 @@
 
 #![forbid(missing_docs)]
 
+pub mod collections;
 pub mod future;
 pub mod log;
 pub mod netio;
 pub mod option;
 pub mod sync;
-pub mod vec;
 
 /// Logs a message to stderr and crashes the process.
 ///

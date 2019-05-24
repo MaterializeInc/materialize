@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use url::Url;
 
 use crate::repr::{Datum, FType, Type};
-use ore::vec::VecExt;
+use ore::collections::CollectionExt;
 
 /// Converts an Apache Avro schema into a [`repr::Type`].
 pub fn parse_schema(schema: &str) -> Result<Type, Error> {

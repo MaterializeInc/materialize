@@ -30,7 +30,7 @@ use crate::dataflow::{
 use crate::glue::*;
 use crate::interchange::avro;
 use crate::repr::{Datum, FType, Type};
-use ore::vec::VecExt;
+use ore::collections::CollectionExt;
 use plan::SQLPlan;
 use store::{DataflowStore, RemoveMode};
 
@@ -1086,22 +1086,42 @@ impl Planner {
         &self,
         ctx: &ExprContext,
         name: &'a SQLObjectName,
-        _args: &'a [ASTNode],
+        args: &'a [ASTNode],
         _over: &'a Option<SQLWindowSpec>,
         _all: bool,
         _distinct: bool,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
         let ident = name.to_string().to_lowercase();
+
         if AggregateFunc::is_aggregate_func(&ident) {
             if !ctx.allow_aggregates {
                 bail!("aggregate functions are not allowed in {}", ctx.scope);
             }
             let (i, typ) = plan.resolve_func(name);
             let expr = Expr::Column(i, Box::new(Expr::Ambient));
-            Ok((expr, typ.clone()))
-        } else {
-            bail!("Unsupported function: {}", ident)
+            return Ok((expr, typ.clone()))
+        }
+
+        match ident.as_str() {
+            "abs" => {
+                if args.len() != 1 {
+                    bail!("abs expects one argument, got {}", args.len());
+                }
+                let (expr, typ) = self.plan_expr(ctx, args.into_element(), plan)?;
+                let func = match typ.ftype {
+                    FType::Int32 => UnaryFunc::AbsInt32,
+                    FType::Int64 => UnaryFunc::AbsInt64,
+                    FType::Float32 => UnaryFunc::AbsFloat32,
+                    FType::Float64 => UnaryFunc::AbsFloat64,
+                    _ => bail!("abs does not accept arguments of type {:?}", typ),
+                };
+                Ok((Expr::CallUnary {
+                    func,
+                    expr: Box::new(expr),
+                }, typ))
+            }
+            _ => bail!("unsupported function: {}", ident),
         }
     }
 
