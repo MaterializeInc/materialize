@@ -7,7 +7,8 @@
 
 /// Extension methods for collections.
 pub trait CollectionExt<T>
-    where T: IntoIterator
+where
+    T: IntoIterator,
 {
     /// Consumes the collection and returns its first element.
     ///
@@ -21,7 +22,8 @@ pub trait CollectionExt<T>
 }
 
 impl<T> CollectionExt<T> for T
-    where T: IntoIterator
+where
+    T: IntoIterator,
 {
     fn into_element(self) -> T::Item {
         self.into_iter().next().unwrap()

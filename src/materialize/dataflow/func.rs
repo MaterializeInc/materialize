@@ -395,6 +395,26 @@ impl UnaryFunc {
     }
 }
 
+pub fn coalesce(datums: Vec<Datum>) -> Datum {
+    datums
+        .into_iter()
+        .find(|d| !d.is_null())
+        .unwrap_or(Datum::Null)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum VariadicFunc {
+    Coalesce,
+}
+
+impl VariadicFunc {
+    pub fn func(self) -> fn(Vec<Datum>) -> Datum {
+        match self {
+            VariadicFunc::Coalesce => coalesce,
+        }
+    }
+}
+
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 

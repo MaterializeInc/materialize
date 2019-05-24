@@ -24,8 +24,8 @@ use serde_json::Value as JsonValue;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use ore::future::StreamExt;
 use ore::collections::CollectionExt;
+use ore::future::StreamExt;
 
 pub struct IngestAction {
     topic: String,

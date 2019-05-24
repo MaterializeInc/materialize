@@ -22,7 +22,7 @@ use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
 
-use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc};
+use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::dataflow::{
     Aggregate, Dataflow, Expr, KafkaSinkConnector, KafkaSourceConnector, LocalSourceConnector,
     Plan, Sink, SinkConnector, Source, SourceConnector, View,
@@ -1100,7 +1100,7 @@ impl Planner {
             }
             let (i, typ) = plan.resolve_func(name);
             let expr = Expr::Column(i, Box::new(Expr::Ambient));
-            return Ok((expr, typ.clone()))
+            return Ok((expr, typ.clone()));
         }
 
         match ident.as_str() {
@@ -1116,11 +1116,45 @@ impl Planner {
                     FType::Float64 => UnaryFunc::AbsFloat64,
                     _ => bail!("abs does not accept arguments of type {:?}", typ),
                 };
-                Ok((Expr::CallUnary {
+                let expr = Expr::CallUnary {
                     func,
                     expr: Box::new(expr),
-                }, typ))
+                };
+                Ok((expr, typ))
             }
+
+            "coalesce" => {
+                if args.is_empty() {
+                    bail!("coalesce requires at least one argument");
+                }
+                let mut exprs = Vec::new();
+                let mut result_type: Option<Type> = None;
+                for arg in args {
+                    let (expr, typ) = self.plan_expr(ctx, arg, plan)?;
+                    match &result_type {
+                        Some(result_type) => {
+                            if result_type.ftype != typ.ftype {
+                                bail!(
+                                    "COALESCE does not have uniform argument type: {:?} vs {:?}",
+                                    result_type.ftype,
+                                    typ.ftype
+                                )
+                            }
+                        }
+                        None => result_type = Some(typ),
+                    }
+                    exprs.push(expr);
+                }
+                // args is known to be non-empty, and therefore result_type must
+                // be non-None after the loop above.
+                let result_type = result_type.unwrap();
+                let expr = Expr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs,
+                };
+                Ok((expr, result_type))
+            }
+
             _ => bail!("unsupported function: {}", ident),
         }
     }

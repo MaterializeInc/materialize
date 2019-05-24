@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::func::{AggregateFunc, BinaryFunc, UnaryFunc};
+use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::repr::{Datum, Type};
 
 /// System-wide update type.
@@ -231,11 +231,11 @@ pub enum Expr {
         then: Box<Expr>,
         els: Box<Expr>,
     },
-    // /// A function call that takes an arbitrary number of arguments.
-    // CallMany {
-    //     fn: fn(Vec<Datum>) -> Datum,
-    //     exprs: Vec<Expr>,
-    // }
+    /// A function call that takes an arbitrary number of arguments.
+    CallVariadic {
+        func: VariadicFunc,
+        exprs: Vec<Expr>,
+    },
 }
 
 impl Expr {
