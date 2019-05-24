@@ -1059,6 +1059,12 @@ impl Planner {
                 high,
                 negated,
             } => self.plan_between(ctx, expr, low, high, *negated, plan),
+            ASTNode::SQLCase {
+                operand,
+                conditions,
+                results,
+                else_result,
+            } => self.plan_case(ctx, operand, conditions, results, else_result, plan),
             ASTNode::SQLNested(expr) => self.plan_expr(ctx, expr, plan),
             ASTNode::SQLFunction {
                 name,
@@ -1309,6 +1315,72 @@ impl Planner {
             right: Box::new(high),
         };
         self.plan_expr(ctx, &both, plan)
+    }
+
+    fn plan_case<'a>(
+        &self,
+        ctx: &ExprContext,
+        operand: &'a Option<Box<ASTNode>>,
+        conditions: &'a [ASTNode],
+        results: &'a [ASTNode],
+        else_result: &'a Option<Box<ASTNode>>,
+        plan: &SQLPlan,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let mut case_exprs = Vec::new();
+        let mut result_type: Option<Type> = None;
+        for (c, r) in conditions.iter().zip(results) {
+            let c = match operand {
+                Some(operand) => ASTNode::SQLBinaryExpr {
+                    left: operand.clone(),
+                    op: SQLOperator::Eq,
+                    right: Box::new(c.clone()),
+                },
+                None => c.clone(),
+            };
+            let (cexpr, ctype) = self.plan_expr(ctx, &c, plan)?;
+            if ctype.ftype != FType::Bool {
+                bail!("CASE expression has non-boolean type {:?}", ctype.ftype);
+            }
+            let (rexpr, rtype) = self.plan_expr(ctx, r, plan)?;
+            match &result_type {
+                Some(result_type) => {
+                    if result_type.ftype != rtype.ftype {
+                        bail!(
+                            "CASE expression does not have uniform result type: {:?} vs {:?}",
+                            result_type.ftype,
+                            rtype.ftype
+                        );
+                    }
+                }
+                None => result_type = Some(rtype),
+            }
+            case_exprs.push((cexpr, rexpr));
+        }
+        // conditions and results must be non-empty, which implies that
+        // result_type must be non-None.
+        let result_type = result_type.unwrap();
+        let mut expr = match else_result {
+            Some(else_result) => {
+                let (expr, typ) = self.plan_expr(ctx, else_result, plan)?;
+                if typ.ftype != result_type.ftype {
+                    bail!(
+                        "CASE expression does not have uniform result type: {:?} vs {:?}",
+                        result_type.ftype,
+                        typ.ftype
+                    );
+                }
+                expr
+            }
+            None => Expr::Literal(Datum::Null),
+        };
+        for (cexpr, rexpr) in case_exprs.into_iter().rev() {
+            expr = Expr::If {
+                cond: Box::new(cexpr),
+                then: Box::new(rexpr),
+                els: Box::new(expr),
+            }
+        }
+        Ok((expr, result_type))
     }
 
     fn plan_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {

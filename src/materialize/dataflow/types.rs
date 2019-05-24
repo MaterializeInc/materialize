@@ -226,6 +226,11 @@ pub enum Expr {
         expr1: Box<Expr>,
         expr2: Box<Expr>,
     },
+    If {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        els: Box<Expr>,
+    },
     // /// A function call that takes an arbitrary number of arguments.
     // CallMany {
     //     fn: fn(Vec<Datum>) -> Datum,

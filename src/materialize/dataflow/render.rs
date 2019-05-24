@@ -466,5 +466,10 @@ fn eval_expr(expr: &Expr, datum: &Datum) -> Datum {
             let datum2 = eval_expr(expr2, datum);
             (func.func())(datum1, datum2)
         }
+        Expr::If { cond, then, els } => match eval_expr(cond, datum) {
+            Datum::True => eval_expr(then, datum),
+            Datum::False | Datum::Null => eval_expr(els, datum),
+            d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
+        },
     }
 }
