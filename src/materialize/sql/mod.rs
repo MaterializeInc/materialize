@@ -1061,6 +1061,41 @@ impl Planner {
                 all,
                 distinct,
             } => self.plan_function(ctx, name, args, over, *all, *distinct, plan),
+            ASTNode::SQLBetween {
+                expr,
+                low,
+                high,
+                negated,
+            } => {
+                let low = ASTNode::SQLBinaryExpr {
+                    left: expr.clone(),
+                    op: if *negated {
+                        SQLOperator::Lt
+                    } else {
+                        SQLOperator::GtEq
+                    },
+                    right: low.clone(),
+                };
+                let high = ASTNode::SQLBinaryExpr {
+                    left: expr.clone(),
+                    op: if *negated {
+                        SQLOperator::Gt
+                    } else {
+                        SQLOperator::LtEq
+                    },
+                    right: high.clone(),
+                };
+                let both = ASTNode::SQLBinaryExpr {
+                    left: Box::new(low),
+                    op: if *negated {
+                        SQLOperator::Or
+                    } else {
+                        SQLOperator::And
+                    },
+                    right: Box::new(high),
+                };
+                self.plan_expr(ctx, &both, plan)
+            }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
