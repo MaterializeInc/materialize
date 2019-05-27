@@ -616,7 +616,7 @@ impl Planner {
             let mut aggs = Vec::new();
             for agg_func in agg_funcs {
                 let arg = &agg_func.args[0];
-                let name = agg_func.name.to_string();
+                let name = agg_func.name.to_string().to_lowercase();
                 let (expr, func, ftype) = match (&*name, arg) {
                     // COUNT(*) is a special case that doesn't compose well
                     ("count", ASTNode::SQLWildcard) => {

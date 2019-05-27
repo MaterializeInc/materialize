@@ -265,20 +265,30 @@ impl SQLPlan {
         aggregates: Vec<(&SQLFunction, Aggregate, Type)>,
     ) -> Self {
         let SQLPlan { plan, .. } = self;
-        let agg_columns = aggregates.iter().map(|(func, _, typ)| {
-            (
+        // Deduplicate by function hash.
+        let mut aggregates: Vec<_> = aggregates
+            .into_iter()
+            .map(|(func, agg, typ)| (ore::hash::hash(func), agg, typ))
+            .collect();
+        aggregates.sort_by_key(|(func_hash, _agg, _typ)| *func_hash);
+        aggregates.dedup_by_key(|(func_hash, _agg, _typ)| *func_hash);
+        let mut agg_columns = Vec::new();
+        let mut aggs = Vec::new();
+        for (func_hash, agg, typ) in aggregates {
+            agg_columns.push((
                 Name {
                     table_name: None,
                     column_name: None,
-                    func_hash: Some(ore::hash::hash(func)),
+                    func_hash: Some(func_hash),
                 },
-                typ.clone(),
-            )
-        });
+                typ,
+            ));
+            aggs.push(agg);
+        }
         SQLPlan {
             plan: Plan::Aggregate {
                 key: key_expr,
-                aggs: aggregates.iter().map(|(_, agg, _)| agg.clone()).collect(),
+                aggs,
                 input: Box::new(plan),
             },
             columns: key_columns.into_iter().chain(agg_columns).collect(),
