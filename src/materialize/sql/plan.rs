@@ -4,21 +4,17 @@
 // distributed without the express permission of Materialize, Inc.
 
 use failure::bail;
-use sqlparser::sqlast::SQLObjectName;
+use sqlparser::sqlast::SQLFunction;
 
 use crate::dataflow::{Aggregate, Expr, Plan};
 use crate::repr::{FType, Type};
 use ore::option::OptionExt;
 
-/// This a massive hack - we don't have unique ids for ast nodes so we use the
-/// address of the string name in func node.
-pub type FuncName = *const SQLObjectName;
-
 #[derive(Debug, Clone)]
 pub struct Name {
     table_name: Option<String>,
     column_name: Option<String>,
-    func_name: Option<FuncName>,
+    func_hash: Option<u64>,
 }
 
 impl Name {
@@ -26,7 +22,7 @@ impl Name {
         Name {
             table_name: None,
             column_name: None,
-            func_name: None,
+            func_hash: None,
         }
     }
 }
@@ -53,7 +49,7 @@ impl SQLPlan {
                         Name {
                             table_name: Some(name.to_owned()),
                             column_name: typ.name.clone(),
-                            func_name: None,
+                            func_hash: None,
                         },
                         typ,
                     )
@@ -103,16 +99,17 @@ impl SQLPlan {
         }
     }
 
-    pub fn resolve_func(&self, func_name: FuncName) -> (usize, &Type) {
+    pub fn resolve_func<'a, 'b>(&'a self, func: &'b SQLFunction) -> (usize, &'a Type) {
+        let func_hash = ore::hash::hash(func);
         let mut results = self
             .columns
             .iter()
             .enumerate()
-            .filter(|(_, (name, _))| name.func_name == Some(func_name));
+            .filter(|(_, (name, _))| name.func_hash == Some(func_hash));
         match (results.next(), results.next()) {
-            (None, None) => panic!("no func named {:?} in scope", func_name),
+            (None, None) => panic!("no func hash {:?} in scope", func_hash),
             (Some((i, (_, typ))), None) => (i, typ),
-            (Some(_), Some(_)) => panic!("func name {:?} is ambiguous", func_name),
+            (Some(_), Some(_)) => panic!("func hash {:?} is ambiguous", func_hash),
             _ => unreachable!(),
         }
     }
@@ -265,15 +262,15 @@ impl SQLPlan {
         self,
         key_expr: Expr,
         key_columns: Vec<(Name, Type)>,
-        aggregates: Vec<(FuncName, Aggregate, Type)>,
+        aggregates: Vec<(&SQLFunction, Aggregate, Type)>,
     ) -> Self {
         let SQLPlan { plan, .. } = self;
-        let agg_columns = aggregates.iter().map(|(func_name, _, typ)| {
+        let agg_columns = aggregates.iter().map(|(func, _, typ)| {
             (
                 Name {
                     table_name: None,
                     column_name: None,
-                    func_name: Some(*func_name),
+                    func_hash: Some(ore::hash::hash(func)),
                 },
                 typ.clone(),
             )
@@ -302,7 +299,7 @@ impl SQLPlan {
                         Name {
                             table_name: None,
                             column_name: t.name.clone(),
-                            func_name: None,
+                            func_hash: None,
                         },
                         t.clone(),
                     )

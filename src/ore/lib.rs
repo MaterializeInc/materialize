@@ -13,6 +13,7 @@
 
 pub mod collections;
 pub mod future;
+pub mod hash;
 pub mod log;
 pub mod netio;
 pub mod option;

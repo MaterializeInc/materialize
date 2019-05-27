@@ -316,9 +316,13 @@ impl Outcomes {
     }
 }
 
+trait RecordRunner {
+    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error>;
+}
+
 const NUM_TIMELY_WORKERS: usize = 3;
 
-struct State {
+struct FullState {
     clock: Clock,
     planner: Planner,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
@@ -358,7 +362,7 @@ fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
     }
 }
 
-impl State {
+impl FullState {
     fn start() -> Self {
         let clock = Clock::new();
         let planner = Planner::default();
@@ -372,7 +376,7 @@ impl State {
             NUM_TIMELY_WORKERS,
         )
         .unwrap();
-        State {
+        FullState {
             clock,
             planner,
             dataflow_command_senders,
@@ -415,7 +419,9 @@ impl State {
         }
         results
     }
+}
 
+impl RecordRunner for FullState {
     fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
         match &record {
             Record::Statement { should_run, sql } => {
@@ -549,7 +555,7 @@ impl State {
     }
 }
 
-impl Drop for State {
+impl Drop for FullState {
     fn drop(&mut self) {
         for dataflow_command_sender in &self.dataflow_command_senders {
             drop(dataflow_command_sender.unbounded_send((
@@ -563,9 +569,57 @@ impl Drop for State {
     }
 }
 
-pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
+struct OnlyParseState;
+
+impl OnlyParseState {
+    fn start() -> Self {
+        OnlyParseState
+    }
+}
+
+impl RecordRunner for OnlyParseState {
+    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
+        match &record {
+            Record::Statement { should_run, sql } => {
+                lazy_static! {
+                    static ref INDEX_STATEMENT_REGEX: Regex =
+                        Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
+                }
+                if INDEX_STATEMENT_REGEX.is_match(sql) {
+                    // sure, we totally made you an index...
+                    return Ok(Outcome::Success);
+                }
+
+                // we don't support non-materialized views
+                let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
+
+                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
+                    if *should_run {
+                        return Ok(Outcome::ParseFailure { error });
+                    } else {
+                        return Ok(Outcome::Success);
+                    }
+                }
+                Ok(Outcome::Success)
+            }
+            Record::Query { sql, .. } => {
+                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
+                    return Ok(Outcome::ParseFailure { error });
+                }
+                Ok(Outcome::Success)
+            }
+            _ => Ok(Outcome::Success),
+        }
+    }
+}
+
+pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool) -> Outcomes {
     let mut outcomes = Outcomes::default();
-    let mut state = State::start();
+    let mut state: Box<RecordRunner> = if only_parse {
+        Box::new(OnlyParseState::start())
+    } else {
+        Box::new(FullState::start())
+    };
     if verbosity >= 1 {
         println!("==> {}", source);
     }
@@ -576,6 +630,14 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
         // TODO(jamii) this is a hack to workaround an issue where the first query after a bout of statements returns no output
         if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record) {
             std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        if verbosity >= 3 {
+            match &record {
+                Record::Statement { sql, .. } => println!("{}", sql),
+                Record::Query { sql, .. } => println!("{}", sql),
+                _ => (),
+            }
         }
 
         let mut outcome = state
@@ -599,10 +661,12 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             Outcome::Success => (),
             _ => {
                 if verbosity >= 2 {
-                    match &record {
-                        Record::Statement { sql, .. } => println!("{}", sql),
-                        Record::Query { sql, .. } => println!("{}", sql),
-                        _ => (),
+                    if verbosity < 3 {
+                        match &record {
+                            Record::Statement { sql, .. } => println!("{}", sql),
+                            Record::Query { sql, .. } => println!("{}", sql),
+                            _ => (),
+                        }
                     }
                     println!("{:?}", outcome);
                     println!("In {}", source);
@@ -620,23 +684,28 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     outcomes
 }
 
-pub fn run_file(filename: &Path, verbosity: usize) -> Outcomes {
+pub fn run_file(filename: &Path, verbosity: usize, only_parse: bool) -> Outcomes {
     let mut input = String::new();
     File::open(filename)
         .unwrap()
         .read_to_string(&mut input)
         .unwrap();
-    run_string(&format!("{}", filename.display()), &input, verbosity)
+    run_string(
+        &format!("{}", filename.display()),
+        &input,
+        verbosity,
+        only_parse,
+    )
 }
 
-pub fn run_stdin(verbosity: usize) -> Outcomes {
+pub fn run_stdin(verbosity: usize, only_parse: bool) -> Outcomes {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input).unwrap();
-    run_string("<stdin>", &input, verbosity)
+    run_string("<stdin>", &input, verbosity, only_parse)
 }
 
 pub fn fuzz(sqls: &str) {
-    let mut state = State::start();
+    let mut state = FullState::start();
     for sql in sqls.split(';') {
         if let Ok((sql_response, dataflow_command)) = state.planner.handle_command(sql.to_owned()) {
             if let Some(dataflow_command) = dataflow_command {

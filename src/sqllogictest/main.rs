@@ -21,6 +21,7 @@ fn main() {
     let mut opts = Options::new();
     opts.optflagmulti("v", "verbose", "verbosity");
     opts.optflag("h", "help", "show this usage information");
+    opts.optflag("", "only-parse", "only attempt to parse queries");
     opts.optopt(
         "",
         "expect-outcomes",
@@ -53,17 +54,18 @@ fn main() {
     };
 
     let verbosity = popts.opt_count("v");
+    let only_parse = popts.opt_present("only-parse");
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
     for path in popts.free {
         if path == "-" {
-            outcomes += sqllogictest::run_stdin(verbosity);
+            outcomes += sqllogictest::run_stdin(verbosity, only_parse);
         } else {
             for entry in WalkDir::new(path) {
                 match entry {
                     Ok(entry) => {
                         if entry.file_type().is_file() {
-                            outcomes += sqllogictest::run_file(entry.path(), verbosity);
+                            outcomes += sqllogictest::run_file(entry.path(), verbosity, only_parse);
                         } else {
                             continue;
                         }

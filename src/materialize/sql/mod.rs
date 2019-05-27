@@ -11,9 +11,9 @@ use sqlparser::sqlast;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
-    ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLIdent, SQLObjectName, SQLOperator,
-    SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement, SQLType,
-    SQLWindowSpec, TableFactor, Value,
+    ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLFunction, SQLIdent, SQLObjectName,
+    SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement,
+    SQLType, TableFactor, Value,
 };
 
 use sqlparser::sqlparser::Parser as SQLParser;
@@ -237,7 +237,7 @@ impl Datum {
                     }
                 }
                 (Value::Long(l), FType::Int64) => Datum::Int64(l),
-                (Value::Double(f), FType::Float64) => Datum::Float64(f.into()),
+                (Value::Double(f), FType::Float64) => Datum::Float64(f),
                 (Value::SingleQuotedString(s), FType::String)
                 | (Value::NationalStringLiteral(s), FType::String) => Datum::String(s),
                 (Value::Boolean(b), FType::Bool) => {
@@ -258,21 +258,14 @@ impl Datum {
     }
 }
 
-struct AggregateFragment {
-    name: String,
-    id: *const SQLObjectName,
-    expr: ASTNode,
-    distinct: bool,
-}
-
-struct AggregateFuncVisitor {
-    aggs: Vec<AggregateFragment>,
+struct AggregateFuncVisitor<'ast> {
+    aggs: Vec<&'ast SQLFunction>,
     within: bool,
     err: Option<failure::Error>,
 }
 
-impl AggregateFuncVisitor {
-    fn new() -> AggregateFuncVisitor {
+impl<'ast> AggregateFuncVisitor<'ast> {
+    fn new() -> AggregateFuncVisitor<'ast> {
         AggregateFuncVisitor {
             aggs: Vec::new(),
             within: false,
@@ -280,7 +273,7 @@ impl AggregateFuncVisitor {
         }
     }
 
-    fn into_result(self) -> Result<Vec<AggregateFragment>, failure::Error> {
+    fn into_result(self) -> Result<Vec<&'ast SQLFunction>, failure::Error> {
         match self.err {
             Some(err) => Err(err),
             None => Ok(self.aggs),
@@ -288,20 +281,13 @@ impl AggregateFuncVisitor {
     }
 }
 
-impl<'ast> Visit<'ast> for AggregateFuncVisitor {
-    fn visit_function(
-        &mut self,
-        name: &'ast SQLObjectName,
-        args: &'ast Vec<ASTNode>,
-        over: Option<&'ast SQLWindowSpec>,
-        all: bool,
-        distinct: bool,
-    ) {
-        if over.is_some() {
+impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
+    fn visit_function(&mut self, func: &'ast SQLFunction) {
+        if func.over.is_some() {
             self.err = Some(format_err!("window functions are not yet supported"));
             return;
         }
-        let name_str = name.to_string().to_lowercase();
+        let name_str = func.name.to_string().to_lowercase();
         let old_within = self.within;
         match name_str.as_ref() {
             "avg" | "sum" | "min" | "max" | "count" => {
@@ -309,21 +295,16 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor {
                     self.err = Some(format_err!("nested aggregate functions are not allowed"));
                     return;
                 }
-                if args.len() != 1 {
+                if func.args.len() != 1 {
                     self.err = Some(format_err!("{} function only takes one argument", name_str));
                     return;
                 }
-                self.aggs.push(AggregateFragment {
-                    name: name_str.clone(),
-                    id: name as *const _,
-                    expr: args[0].clone(),
-                    distinct,
-                });
+                self.aggs.push(func);
                 self.within = true;
             }
             _ => (),
         }
-        visit::visit_function(self, name, args, over, all, distinct);
+        visit::visit_function(self, func);
         self.within = old_within;
     }
 
@@ -626,32 +607,33 @@ impl Planner {
         if let Some(having) = &s.having {
             agg_visitor.visit_expr(having);
         }
-        let agg_frags = agg_visitor.into_result()?;
-        if !agg_frags.is_empty() || !s.group_by.is_empty() {
+        let agg_funcs = agg_visitor.into_result()?;
+        if !agg_funcs.is_empty() || !s.group_by.is_empty() {
             let ctx = &ExprContext {
                 scope: "GROUP BY clause",
                 allow_aggregates: false,
             };
             let mut aggs = Vec::new();
-            for frag in agg_frags {
-                let (expr, func, ftype) = match (&*frag.name, &frag.expr) {
+            for agg_func in agg_funcs {
+                let arg = &agg_func.args[0];
+                let name = agg_func.name.to_string();
+                let (expr, func, ftype) = match (&*name, arg) {
                     // COUNT(*) is a special case that doesn't compose well
                     ("count", ASTNode::SQLWildcard) => {
                         (Expr::Ambient, AggregateFunc::CountAll, FType::Int64)
                     }
                     _ => {
-                        let (expr, typ) = self.plan_expr(ctx, &frag.expr, &plan)?;
-                        let (func, ftype) =
-                            AggregateFunc::from_name_and_ftype(&frag.name, &typ.ftype)?;
+                        let (expr, typ) = self.plan_expr(ctx, arg, &plan)?;
+                        let (func, ftype) = AggregateFunc::from_name_and_ftype(&name, &typ.ftype)?;
                         (expr, func, ftype)
                     }
                 };
                 aggs.push((
-                    frag.id,
+                    agg_func,
                     Aggregate {
                         func,
                         expr,
-                        distinct: frag.distinct,
+                        distinct: agg_func.distinct,
                     },
                     Type {
                         // TODO(jamii) name should be format("{}", expr) eg "count(*)"
@@ -1066,13 +1048,7 @@ impl Planner {
                 else_result,
             } => self.plan_case(ctx, operand, conditions, results, else_result, plan),
             ASTNode::SQLNested(expr) => self.plan_expr(ctx, expr, plan),
-            ASTNode::SQLFunction {
-                name,
-                args,
-                over,
-                all,
-                distinct,
-            } => self.plan_function(ctx, name, args, over, *all, *distinct, plan),
+            ASTNode::SQLFunction(func) => self.plan_function(ctx, func, plan),
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
@@ -1085,30 +1061,26 @@ impl Planner {
     fn plan_function<'a>(
         &self,
         ctx: &ExprContext,
-        name: &'a SQLObjectName,
-        args: &'a [ASTNode],
-        _over: &'a Option<SQLWindowSpec>,
-        _all: bool,
-        _distinct: bool,
+        func: &'a SQLFunction,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let ident = name.to_string().to_lowercase();
+        let ident = func.name.to_string().to_lowercase();
 
         if AggregateFunc::is_aggregate_func(&ident) {
             if !ctx.allow_aggregates {
                 bail!("aggregate functions are not allowed in {}", ctx.scope);
             }
-            let (i, typ) = plan.resolve_func(name);
+            let (i, typ) = plan.resolve_func(func);
             let expr = Expr::Column(i, Box::new(Expr::Ambient));
             return Ok((expr, typ.clone()));
         }
 
         match ident.as_str() {
             "abs" => {
-                if args.len() != 1 {
-                    bail!("abs expects one argument, got {}", args.len());
+                if func.args.len() != 1 {
+                    bail!("abs expects one argument, got {}", func.args.len());
                 }
-                let (expr, typ) = self.plan_expr(ctx, args.into_element(), plan)?;
+                let (expr, typ) = self.plan_expr(ctx, &func.args[0], plan)?;
                 let func = match typ.ftype {
                     FType::Int32 => UnaryFunc::AbsInt32,
                     FType::Int64 => UnaryFunc::AbsInt64,
@@ -1124,12 +1096,12 @@ impl Planner {
             }
 
             "coalesce" => {
-                if args.is_empty() {
+                if func.args.is_empty() {
                     bail!("coalesce requires at least one argument");
                 }
                 let mut exprs = Vec::new();
                 let mut result_type: Option<Type> = None;
-                for arg in args {
+                for arg in &func.args {
                     let (expr, typ) = self.plan_expr(ctx, arg, plan)?;
                     match &result_type {
                         Some(result_type) => {
@@ -1440,7 +1412,7 @@ impl Planner {
     fn plan_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {
         let (datum, ftype) = match l {
             Value::Long(i) => (Datum::Int64(*i), FType::Int64),
-            Value::Double(f) => (Datum::Float64((*f).into()), FType::Float64),
+            Value::Double(f) => (Datum::Float64(*f), FType::Float64),
             Value::SingleQuotedString(s) => (Datum::String(s.clone()), FType::String),
             Value::NationalStringLiteral(_) => {
                 bail!("n'' string literals are not supported: {}", l.to_string())
