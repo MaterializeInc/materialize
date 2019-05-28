@@ -18,6 +18,7 @@ use sqlparser::sqlast::{
 
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
+use std::fmt;
 use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
@@ -1152,13 +1153,10 @@ impl Planner {
                     bail!("coalesce requires at least one argument");
                 }
                 let mut exprs = Vec::new();
-                let mut types = Vec::new();
                 for arg in &func.args {
-                    let (expr, typ) = self.plan_expr(ctx, arg, plan)?;
-                    exprs.push(expr);
-                    types.push(typ);
+                    exprs.push(self.plan_expr(ctx, arg, plan)?);
                 }
-                let typ = try_coalesce_types(types, "coalesce")?;
+                let (exprs, typ) = try_coalesce_types(exprs, "coalesce")?;
                 let expr = Expr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs,
@@ -1279,36 +1277,13 @@ impl Planner {
             || op == &SQLOperator::Eq
             || op == &SQLOperator::NotEq
         {
-            // Arithmetic and comparison operators obey some poorly-documented
-            // type promotion rules. For now, just promote integers into floats,
-            // and small floats into bigger floats.
-            let (lfunc, rfunc) = match (&ltype.ftype, &rtype.ftype) {
-                (FType::Int32, FType::Float32) => (Some(UnaryFunc::CastInt32ToFloat32), None),
-                (FType::Int32, FType::Float64) => (Some(UnaryFunc::CastInt32ToFloat64), None),
-                (FType::Int64, FType::Float32) => (Some(UnaryFunc::CastInt64ToFloat32), None),
-                (FType::Int64, FType::Float64) => (Some(UnaryFunc::CastInt64ToFloat64), None),
-                (FType::Float32, FType::Float64) => (Some(UnaryFunc::CastFloat32ToFloat64), None),
-                (FType::Float32, FType::Int32) => (None, Some(UnaryFunc::CastInt32ToFloat32)),
-                (FType::Float64, FType::Int32) => (None, Some(UnaryFunc::CastInt32ToFloat64)),
-                (FType::Float32, FType::Int64) => (None, Some(UnaryFunc::CastInt64ToFloat32)),
-                (FType::Float64, FType::Int64) => (None, Some(UnaryFunc::CastInt64ToFloat64)),
-                (FType::Float64, FType::Float32) => (None, Some(UnaryFunc::CastFloat32ToFloat64)),
-                _ => (None, None),
-            };
-            if let Some(lfunc) = lfunc {
-                lexpr = Expr::CallUnary {
-                    func: lfunc,
-                    expr: Box::new(lexpr),
-                };
-                ltype = rtype.clone();
-            }
-            if let Some(rfunc) = rfunc {
-                rexpr = Expr::CallUnary {
-                    func: rfunc,
-                    expr: Box::new(rexpr),
-                };
-                rtype = ltype.clone();
-            }
+            let ctx = op.to_string();
+            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], ctx)?;
+            assert_eq!(exprs.len(), 2);
+            rexpr = exprs.pop().unwrap();
+            lexpr = exprs.pop().unwrap();
+            rtype = typ.clone();
+            ltype = typ;
         }
 
         let (func, ftype) = match op {
@@ -1459,8 +1434,8 @@ impl Planner {
         else_result: &'a Option<Box<ASTNode>>,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let mut case_exprs = Vec::new();
-        let mut types = Vec::new();
+        let mut cond_exprs = Vec::new();
+        let mut result_exprs = Vec::new();
         for (c, r) in conditions.iter().zip(results) {
             let c = match operand {
                 Some(operand) => ASTNode::SQLBinaryExpr {
@@ -1474,9 +1449,9 @@ impl Planner {
             if ctype.ftype != FType::Bool {
                 bail!("CASE expression has non-boolean type {:?}", ctype.ftype);
             }
+            cond_exprs.push(cexpr);
             let (rexpr, rtype) = self.plan_expr(ctx, r, plan)?;
-            case_exprs.push((cexpr, rexpr));
-            types.push(rtype);
+            result_exprs.push((rexpr, rtype));
         }
         let (else_expr, else_type) = match else_result {
             Some(else_result) => self.plan_expr(ctx, else_result, plan)?,
@@ -1490,10 +1465,11 @@ impl Planner {
                 (expr, typ)
             }
         };
-        types.push(else_type);
-        let typ = try_coalesce_types(types, "CASE")?;
-        let mut expr = else_expr;
-        for (cexpr, rexpr) in case_exprs.into_iter().rev() {
+        result_exprs.push((else_expr, else_type));
+        let (mut result_exprs, typ) = try_coalesce_types(result_exprs, "CASE")?;
+        let mut expr = result_exprs.pop().unwrap();
+        assert_eq!(cond_exprs.len(), result_exprs.len());
+        for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
             expr = Expr::If {
                 cond: Box::new(cexpr),
                 then: Box::new(rexpr),
@@ -1547,28 +1523,64 @@ fn unnest(expr: &ASTNode) -> &ASTNode {
     }
 }
 
-fn try_coalesce_types(types: Vec<Type>, context: &'static str) -> Result<Type, failure::Error> {
-    assert!(!types.is_empty());
-    let mut ftype = FType::Null;
-    let mut nullable = false;
-    for typ in types {
-        if ftype != FType::Null && typ.ftype != FType::Null && typ.ftype != ftype {
-            bail!(
+// When types don't match exactly, SQL has some poorly-documented type promotion
+// rules. For now, just promote integers into floats, and small floats into
+// bigger floats.
+fn try_coalesce_types<C>(
+    exprs: Vec<(Expr, Type)>,
+    context: C,
+) -> Result<(Vec<Expr>, Type), failure::Error>
+where
+    C: fmt::Display,
+{
+    assert!(!exprs.is_empty());
+
+    let ftype_prec = |ftype: &FType| match ftype {
+        FType::Null => 0,
+        FType::Int32 => 1,
+        FType::Int64 => 2,
+        FType::Float32 => 3,
+        FType::Float64 => 4,
+        _ => 5,
+    };
+    let max_ftype = exprs
+        .iter()
+        .map(|(_expr, typ)| &typ.ftype)
+        .max_by_key(|ftype| ftype_prec(ftype))
+        .unwrap()
+        .clone();
+    let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
+    let mut out = Vec::new();
+    for (mut expr, typ) in exprs {
+        let func = match (&typ.ftype, &max_ftype) {
+            (FType::Int32, FType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
+            (FType::Int32, FType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
+            (FType::Int64, FType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
+            (FType::Int64, FType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
+            (FType::Float32, FType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
+            (FType::Null, _) => None,
+            (from, to) if from == to => None,
+            (from, to) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
                 context,
-                ftype,
-                typ.ftype
-            );
-        } else if ftype == FType::Null {
-            ftype = typ.ftype;
+                from,
+                to,
+            ),
+        };
+        if let Some(func) = func {
+            expr = Expr::CallUnary {
+                func,
+                expr: Box::new(expr),
+            }
         }
-        nullable = nullable || typ.nullable;
+        out.push(expr);
     }
-    Ok(Type {
+    let typ = Type {
         name: None,
         nullable,
-        ftype,
-    })
+        ftype: max_ftype,
+    };
+    Ok((out, typ))
 }
 
 fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
