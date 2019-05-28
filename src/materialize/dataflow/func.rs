@@ -425,8 +425,10 @@ where
     let mut sum: i32 = 0;
     let mut len: usize = 0;
     for d in datums.into_iter() {
-        sum += d.unwrap_int32();
-        len += 1;
+        if !d.is_null() {
+            sum += d.unwrap_int32();
+            len += 1;
+        }
     }
     if len == 0 {
         Datum::Null
@@ -442,8 +444,10 @@ where
     let mut sum: i64 = 0;
     let mut len: usize = 0;
     for d in datums.into_iter() {
-        sum += d.unwrap_int64();
-        len += 1;
+        if !d.is_null() {
+            sum += d.unwrap_int64();
+            len += 1;
+        }
     }
     if len == 0 {
         Datum::Null
@@ -459,8 +463,10 @@ where
     let mut sum: f32 = 0.0;
     let mut len: usize = 0;
     for d in datums.into_iter() {
-        sum += d.unwrap_float32();
-        len += 1;
+        if !d.is_null() {
+            sum += d.unwrap_float32();
+            len += 1;
+        }
     }
     if len == 0 {
         Datum::Null
@@ -476,8 +482,10 @@ where
     let mut sum: f64 = 0.0;
     let mut len: usize = 0;
     for d in datums.into_iter() {
-        sum += d.unwrap_float64();
-        len += 1;
+        if !d.is_null() {
+            sum += d.unwrap_float64();
+            len += 1;
+        }
     }
     if len == 0 {
         Datum::Null
