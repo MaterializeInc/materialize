@@ -1048,12 +1048,66 @@ impl Planner {
                 else_result,
             } => self.plan_case(ctx, operand, conditions, results, else_result, plan),
             ASTNode::SQLNested(expr) => self.plan_expr(ctx, expr, plan),
+            ASTNode::SQLCast { expr, data_type } => self.plan_cast(ctx, expr, data_type, plan),
             ASTNode::SQLFunction(func) => self.plan_function(ctx, func, plan),
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
             ),
         }
+    }
+
+    fn plan_cast<'a>(
+        &self,
+        ctx: &ExprContext,
+        expr: &'a ASTNode,
+        data_type: &'a SQLType,
+        plan: &SQLPlan,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let to_ftype = match data_type {
+            SQLType::Varchar(_) => FType::String,
+            SQLType::Text => FType::String,
+            SQLType::Bytea => FType::Bytes,
+            SQLType::Float(_) => FType::Float32,
+            SQLType::Real => FType::Float32,
+            SQLType::Double => FType::Float64,
+            SQLType::SmallInt => FType::Int32,
+            SQLType::Int => FType::Int64,
+            SQLType::BigInt => FType::Int64,
+            SQLType::Boolean => FType::Bool,
+            _ => bail!("CAST ... AS {} is not yet supported", data_type.to_string()),
+        };
+        let (expr, from_type) = self.plan_expr(ctx, expr, plan)?;
+        let func = match (&from_type.ftype, &to_ftype) {
+            (FType::Int32, FType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
+            (FType::Int32, FType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
+            (FType::Int64, FType::Int32) => Some(UnaryFunc::CastInt64ToInt32),
+            (FType::Int64, FType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
+            (FType::Int64, FType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
+            (FType::Float32, FType::Int64) => Some(UnaryFunc::CastFloat32ToInt64),
+            (FType::Float32, FType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
+            (FType::Float64, FType::Int64) => Some(UnaryFunc::CastFloat64ToInt64),
+            (FType::Null, _) => None,
+            (from, to) => {
+                if from != to {
+                    bail!("CAST does not support casting from {:?} to {:?}", from, to);
+                }
+                None
+            }
+        };
+        let expr = match func {
+            Some(func) => Expr::CallUnary {
+                func,
+                expr: Box::new(expr),
+            },
+            None => expr,
+        };
+        let to_type = Type {
+            name: None,
+            nullable: from_type.nullable,
+            ftype: to_ftype,
+        };
+        Ok((expr, to_type))
     }
 
     fn plan_function<'a>(
@@ -1189,8 +1243,52 @@ impl Planner {
         right: &'a ASTNode,
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
-        let (lexpr, ltype) = self.plan_expr(ctx, left, plan)?;
-        let (rexpr, rtype) = self.plan_expr(ctx, right, plan)?;
+        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left, plan)?;
+        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right, plan)?;
+
+        if op == &SQLOperator::Plus
+            || op == &SQLOperator::Minus
+            || op == &SQLOperator::Multiply
+            || op == &SQLOperator::Divide
+            || op == &SQLOperator::Lt
+            || op == &SQLOperator::LtEq
+            || op == &SQLOperator::Gt
+            || op == &SQLOperator::GtEq
+            || op == &SQLOperator::Eq
+            || op == &SQLOperator::NotEq
+        {
+            // Arithmetic and comparison operators obey some poorly-documented
+            // type promotion rules. For now, just promote integers into floats,
+            // and small floats into bigger floats.
+            let (lfunc, rfunc) = match (&ltype.ftype, &rtype.ftype) {
+                (FType::Int32, FType::Float32) => (Some(UnaryFunc::CastInt32ToFloat32), None),
+                (FType::Int32, FType::Float64) => (Some(UnaryFunc::CastInt32ToFloat64), None),
+                (FType::Int64, FType::Float32) => (Some(UnaryFunc::CastInt64ToFloat32), None),
+                (FType::Int64, FType::Float64) => (Some(UnaryFunc::CastInt64ToFloat64), None),
+                (FType::Float32, FType::Float64) => (Some(UnaryFunc::CastFloat32ToFloat64), None),
+                (FType::Float32, FType::Int32) => (None, Some(UnaryFunc::CastInt32ToFloat32)),
+                (FType::Float64, FType::Int32) => (None, Some(UnaryFunc::CastInt32ToFloat64)),
+                (FType::Float32, FType::Int64) => (None, Some(UnaryFunc::CastInt64ToFloat32)),
+                (FType::Float64, FType::Int64) => (None, Some(UnaryFunc::CastInt64ToFloat64)),
+                (FType::Float64, FType::Float32) => (None, Some(UnaryFunc::CastFloat32ToFloat64)),
+                _ => (None, None),
+            };
+            if let Some(lfunc) = lfunc {
+                lexpr = Expr::CallUnary {
+                    func: lfunc,
+                    expr: Box::new(lexpr),
+                };
+                ltype = rtype.clone();
+            }
+            if let Some(rfunc) = rfunc {
+                rexpr = Expr::CallUnary {
+                    func: rfunc,
+                    expr: Box::new(rexpr),
+                };
+                rtype = ltype.clone();
+            }
+        }
+
         let (func, ftype) = match op {
             SQLOperator::And | SQLOperator::Or => {
                 if ltype.ftype != FType::Bool && ltype.ftype != FType::Null {

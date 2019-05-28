@@ -3,11 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// use std::hash::Hash;
-
 use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
 
 use crate::repr::Datum;
 use crate::repr::FType;
@@ -41,6 +40,103 @@ pub fn not(a: Datum) -> Datum {
         Datum::Null => Datum::Null,
         _ => panic!("Cannot compute NOT {:?}", a),
     }
+}
+
+pub fn abs_int32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_int32().abs())
+}
+
+pub fn abs_int64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_int64().abs())
+}
+
+pub fn abs_float32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_float32().abs())
+}
+
+pub fn abs_float64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_float64().abs())
+}
+
+pub fn cast_int32_to_float32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): is this cast valid?
+    Datum::from(a.unwrap_int32() as f32)
+}
+
+pub fn cast_int32_to_float64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): is this cast valid?
+    Datum::from(a.unwrap_int32() as f64)
+}
+
+pub fn cast_int64_to_int32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): we need to do something better than panicking if the
+    // datum doesn't fit in an int32, but what? Poison the whole dataflow?
+    // The SQL standard says this an error, but runtime errors are complicated
+    // in a streaming setting.
+    Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
+}
+
+pub fn cast_int64_to_float32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): is this cast valid?
+    Datum::from(a.unwrap_int64() as f32)
+}
+
+pub fn cast_int64_to_float64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): is this cast valid?
+    Datum::from(a.unwrap_int64() as f64)
+}
+
+pub fn cast_float32_to_int64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
+    // i64 (https://github.com/rust-lang/rust/issues/10184).
+    Datum::from(a.unwrap_float32() as i64)
+}
+
+pub fn cast_float32_to_float64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): is this cast valid?
+    Datum::from(a.unwrap_float32() as f64)
+}
+
+pub fn cast_float64_to_int64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
+    // i64 (https://github.com/rust-lang/rust/issues/10184).
+    Datum::from(a.unwrap_float64() as i64)
 }
 
 pub fn add_int32(a: Datum, b: Datum) -> Datum {
@@ -223,34 +319,6 @@ pub fn neg_float64(a: Datum) -> Datum {
     Datum::from(-a.unwrap_float64())
 }
 
-pub fn abs_int32(a: Datum) -> Datum {
-    if a.is_null() {
-        return Datum::Null;
-    }
-    Datum::from(a.unwrap_int32().abs())
-}
-
-pub fn abs_int64(a: Datum) -> Datum {
-    if a.is_null() {
-        return Datum::Null;
-    }
-    Datum::from(a.unwrap_int64().abs())
-}
-
-pub fn abs_float32(a: Datum) -> Datum {
-    if a.is_null() {
-        return Datum::Null;
-    }
-    Datum::from(a.unwrap_float32().abs())
-}
-
-pub fn abs_float64(a: Datum) -> Datum {
-    if a.is_null() {
-        return Datum::Null;
-    }
-    Datum::from(a.unwrap_float64().abs())
-}
-
 pub fn eq(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -376,6 +444,14 @@ pub enum UnaryFunc {
     AbsInt64,
     AbsFloat32,
     AbsFloat64,
+    CastInt32ToFloat32,
+    CastInt32ToFloat64,
+    CastInt64ToInt32,
+    CastInt64ToFloat32,
+    CastInt64ToFloat64,
+    CastFloat32ToInt64,
+    CastFloat32ToFloat64,
+    CastFloat64ToInt64,
 }
 
 impl UnaryFunc {
@@ -391,6 +467,14 @@ impl UnaryFunc {
             UnaryFunc::AbsInt64 => abs_int64,
             UnaryFunc::AbsFloat32 => abs_float32,
             UnaryFunc::AbsFloat64 => abs_float64,
+            UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32,
+            UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64,
+            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
+            UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32,
+            UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64,
+            UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64,
+            UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64,
+            UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64,
         }
     }
 }
