@@ -83,7 +83,7 @@ pub fn cast_int32_to_float64(a: Datum) -> Datum {
         return Datum::Null;
     }
     // TODO(benesch): is this cast valid?
-    Datum::from(a.unwrap_int32() as f64)
+    Datum::from(f64::from(a.unwrap_int32()))
 }
 
 pub fn cast_int64_to_int32(a: Datum) -> Datum {
@@ -127,7 +127,7 @@ pub fn cast_float32_to_float64(a: Datum) -> Datum {
         return Datum::Null;
     }
     // TODO(benesch): is this cast valid?
-    Datum::from(a.unwrap_float32() as f64)
+    Datum::from(f64::from(a.unwrap_float32()))
 }
 
 pub fn cast_float64_to_int64(a: Datum) -> Datum {
