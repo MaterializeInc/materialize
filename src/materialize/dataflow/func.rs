@@ -594,14 +594,11 @@ pub fn sum_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let mut datums = datums.into_iter().peekable();
+    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: i32 = datums
-            .filter(|d| !d.is_null())
-            .map(|d| d.unwrap_int32())
-            .sum();
+        let x: i32 = datums.map(|d| d.unwrap_int32()).sum();
         Datum::from(x)
     }
 }
@@ -610,14 +607,11 @@ pub fn sum_int64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let mut datums = datums.into_iter().peekable();
+    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: i64 = datums
-            .filter(|d| !d.is_null())
-            .map(|d| d.unwrap_int64())
-            .sum();
+        let x: i64 = datums.map(|d| d.unwrap_int64()).sum();
         Datum::from(x)
     }
 }
@@ -626,14 +620,11 @@ pub fn sum_float32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let mut datums = datums.into_iter().peekable();
+    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: f32 = datums
-            .filter(|d| !d.is_null())
-            .map(|d| d.unwrap_float32())
-            .sum();
+        let x: f32 = datums.map(|d| d.unwrap_float32()).sum();
         Datum::from(x)
     }
 }
@@ -642,14 +633,11 @@ pub fn sum_float64<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
 {
-    let mut datums = datums.into_iter().peekable();
+    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
         Datum::Null
     } else {
-        let x: f64 = datums
-            .filter(|d| !d.is_null())
-            .map(|d| d.unwrap_float64())
-            .sum();
+        let x: f64 = datums.map(|d| d.unwrap_float64()).sum();
         Datum::from(x)
     }
 }
