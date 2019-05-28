@@ -1166,6 +1166,30 @@ impl Planner {
                 Ok((expr, typ))
             }
 
+            "nullif" => {
+                if func.args.len() != 2 {
+                    bail!("nullif requires exactly two arguments");
+                }
+                let cond = ASTNode::SQLBinaryExpr {
+                    left: Box::new(func.args[0].clone()),
+                    op: SQLOperator::Eq,
+                    right: Box::new(func.args[1].clone()),
+                };
+                let (cond_expr, _) = self.plan_expr(ctx, &cond, plan)?;
+                let (else_expr, else_type) = self.plan_expr(ctx, &func.args[0], plan)?;
+                let expr = Expr::If {
+                    cond: Box::new(cond_expr),
+                    then: Box::new(Expr::Literal(Datum::Null)),
+                    els: Box::new(else_expr),
+                };
+                let typ = Type {
+                    name: None,
+                    nullable: true,
+                    ftype: else_type.ftype,
+                };
+                Ok((expr, typ))
+            }
+
             _ => bail!("unsupported function: {}", ident),
         }
     }
