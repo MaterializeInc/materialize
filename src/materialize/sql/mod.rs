@@ -1100,26 +1100,15 @@ impl Planner {
                     bail!("coalesce requires at least one argument");
                 }
                 let mut exprs = Vec::new();
-                let mut result_type: Option<Type> = None;
+                let mut types = Vec::new();
                 for arg in &func.args {
                     let (expr, typ) = self.plan_expr(ctx, arg, plan)?;
-                    match &result_type {
-                        Some(result_type) => {
-                            if result_type.ftype != typ.ftype {
-                                bail!(
-                                    "COALESCE does not have uniform argument type: {:?} vs {:?}",
-                                    result_type.ftype,
-                                    typ.ftype
-                                )
-                            }
-                        }
-                        None => result_type = Some(typ),
-                    }
                     exprs.push(expr);
+                    types.push(typ);
                 }
                 // args is known to be non-empty, and therefore result_type must
                 // be non-None after the loop above.
-                let result_type = result_type.unwrap();
+                let result_type = try_coalesce_types(types, "coalesce")?;
                 let expr = Expr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs,
@@ -1353,7 +1342,7 @@ impl Planner {
         plan: &SQLPlan,
     ) -> Result<(Expr, Type), failure::Error> {
         let mut case_exprs = Vec::new();
-        let mut result_type: Option<Type> = None;
+        let mut types = Vec::new();
         for (c, r) in conditions.iter().zip(results) {
             let c = match operand {
                 Some(operand) => ASTNode::SQLBinaryExpr {
@@ -1368,37 +1357,24 @@ impl Planner {
                 bail!("CASE expression has non-boolean type {:?}", ctype.ftype);
             }
             let (rexpr, rtype) = self.plan_expr(ctx, r, plan)?;
-            match &result_type {
-                Some(result_type) => {
-                    if result_type.ftype != rtype.ftype {
-                        bail!(
-                            "CASE expression does not have uniform result type: {:?} vs {:?}",
-                            result_type.ftype,
-                            rtype.ftype
-                        );
-                    }
-                }
-                None => result_type = Some(rtype),
-            }
             case_exprs.push((cexpr, rexpr));
+            types.push(rtype);
         }
-        // conditions and results must be non-empty, which implies that
-        // result_type must be non-None.
-        let result_type = result_type.unwrap();
-        let mut expr = match else_result {
-            Some(else_result) => {
-                let (expr, typ) = self.plan_expr(ctx, else_result, plan)?;
-                if typ.ftype != result_type.ftype {
-                    bail!(
-                        "CASE expression does not have uniform result type: {:?} vs {:?}",
-                        result_type.ftype,
-                        typ.ftype
-                    );
-                }
-                expr
+        let (else_expr, else_type) = match else_result {
+            Some(else_result) => self.plan_expr(ctx, else_result, plan)?,
+            None => {
+                let expr = Expr::Literal(Datum::Null);
+                let typ = Type {
+                    name: None,
+                    nullable: false,
+                    ftype: FType::Null,
+                };
+                (expr, typ)
             }
-            None => Expr::Literal(Datum::Null),
         };
+        types.push(else_type);
+        let typ = try_coalesce_types(types, "CASE")?;
+        let mut expr = else_expr;
         for (cexpr, rexpr) in case_exprs.into_iter().rev() {
             expr = Expr::If {
                 cond: Box::new(cexpr),
@@ -1406,7 +1382,7 @@ impl Planner {
                 els: Box::new(expr),
             }
         }
-        Ok((expr, result_type))
+        Ok((expr, typ))
     }
 
     fn plan_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {
@@ -1451,6 +1427,30 @@ fn unnest(expr: &ASTNode) -> &ASTNode {
         ASTNode::SQLNested(expr) => unnest(expr),
         _ => expr,
     }
+}
+
+fn try_coalesce_types(types: Vec<Type>, context: &'static str) -> Result<Type, failure::Error> {
+    assert!(!types.is_empty());
+    let mut ftype = FType::Null;
+    let mut nullable = false;
+    for typ in types {
+        if ftype != FType::Null && typ.ftype != FType::Null && typ.ftype != ftype {
+            bail!(
+                "{} does not have uniform type: {:?} vs {:?}",
+                context,
+                ftype,
+                typ.ftype
+            );
+        } else if ftype == FType::Null {
+            ftype = typ.ftype;
+        }
+        nullable = nullable || typ.nullable;
+    }
+    Ok(Type {
+        name: None,
+        nullable,
+        ftype,
+    })
 }
 
 fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
