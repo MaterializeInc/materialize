@@ -68,7 +68,7 @@ if [[ ! "$fast" ]]; then
     args=()
     [[ "$KAFKA_ADDR" ]] && args+=("--kafka-addr" "$KAFKA_ADDR")
     [[ "$SCHEMA_REGISTRY_URL" ]] && args+=("--schema-registry-url" "$SCHEMA_REGISTRY_URL")
-    try target/debug/testdrive "${args[@]}" test/*
+    try target/debug/testdrive "${args[@]}" test/*.td
 fi
 
 cd fuzz
