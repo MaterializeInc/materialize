@@ -17,6 +17,8 @@ Runs one or more sqllogictest files. Directories will be searched
 recursively for sqllogictest files."#;
 
 fn main() {
+    ore::panic::set_abort_on_panic();
+
     let args: Vec<_> = env::args().collect();
     let mut opts = Options::new();
     opts.optflagmulti("v", "verbose", "verbosity");

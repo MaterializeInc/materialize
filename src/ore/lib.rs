@@ -17,6 +17,7 @@ pub mod hash;
 pub mod log;
 pub mod netio;
 pub mod option;
+pub mod panic;
 pub mod sync;
 
 /// Logs a message to stderr and crashes the process.
