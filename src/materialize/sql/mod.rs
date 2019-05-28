@@ -1056,8 +1056,6 @@ impl Planner {
         }
     }
 
-    #[allow(clippy::ptr_arg)]
-    #[allow(clippy::too_many_arguments)]
     fn plan_function<'a>(
         &self,
         ctx: &ExprContext,
