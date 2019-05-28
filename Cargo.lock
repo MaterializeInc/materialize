@@ -539,7 +539,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "differential-dataflow"
 version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#f7c202d968b117c1f6b6015c411b7f8cd0673d33"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#b315d0d6e077104f77122a3cbaa2392a124c6211"
 dependencies = [
  "abomonation 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
