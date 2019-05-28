@@ -35,6 +35,7 @@ cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/evidence \
     sqllogictest/test/index \
     sqllogictest/test/random \
+    test/*.slt \
     "$verbosity" "$@" | tee target/slt.out || true
 
 if [[ "${BUILDKITE_BRANCH-}" = master && "${BUILDKITE_COMMIT-}" ]]; then
