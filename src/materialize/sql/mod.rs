@@ -1158,14 +1158,12 @@ impl Planner {
                     exprs.push(expr);
                     types.push(typ);
                 }
-                // args is known to be non-empty, and therefore result_type must
-                // be non-None after the loop above.
-                let result_type = try_coalesce_types(types, "coalesce")?;
+                let typ = try_coalesce_types(types, "coalesce")?;
                 let expr = Expr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs,
                 };
-                Ok((expr, result_type))
+                Ok((expr, typ))
             }
 
             _ => bail!("unsupported function: {}", ident),
