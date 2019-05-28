@@ -343,6 +343,8 @@ fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
                 (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
                 // sqllogictest does some weird type coercions in practice
                 (Type::Integer, Datum::String(_)) => "0".to_owned(),
+                (Type::Integer, Datum::False) => "0".to_owned(),
+                (Type::Integer, Datum::True) => "1".to_owned(),
 
                 (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
 

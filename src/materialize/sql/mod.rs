@@ -1042,6 +1042,11 @@ impl Planner {
                 high,
                 negated,
             } => self.plan_between(ctx, expr, low, high, *negated, plan),
+            ASTNode::SQLInList {
+                expr,
+                list,
+                negated,
+            } => self.plan_in_list(ctx, expr, list, *negated, plan),
             ASTNode::SQLCase {
                 operand,
                 conditions,
@@ -1423,6 +1428,35 @@ impl Planner {
             right: Box::new(high),
         };
         self.plan_expr(ctx, &both, plan)
+    }
+
+    fn plan_in_list<'a>(
+        &self,
+        ctx: &ExprContext,
+        expr: &'a ASTNode,
+        list: &'a [ASTNode],
+        negated: bool,
+        plan: &SQLPlan,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let mut cond = ASTNode::SQLValue(Value::Boolean(false));
+        for l in list {
+            cond = ASTNode::SQLBinaryExpr {
+                left: Box::new(cond),
+                op: SQLOperator::Or,
+                right: Box::new(ASTNode::SQLBinaryExpr {
+                    left: Box::new(expr.clone()),
+                    op: SQLOperator::Eq,
+                    right: Box::new(l.clone()),
+                }),
+            }
+        }
+        if negated {
+            cond = ASTNode::SQLUnary {
+                operator: SQLOperator::Not,
+                expr: Box::new(cond),
+            }
+        }
+        self.plan_expr(ctx, &cond, plan)
     }
 
     fn plan_case<'a>(
