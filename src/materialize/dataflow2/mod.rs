@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-mod types;
 mod render;
+mod types;
 
 pub use types::*;

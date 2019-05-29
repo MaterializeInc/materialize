@@ -50,6 +50,33 @@ pub enum ScalarExpr {
     },
 }
 
+impl ScalarExpr {
+    pub fn eval_on(&self, data: &[Datum]) -> Datum {
+        match self {
+            ScalarExpr::Column(index) => data[*index].clone(),
+            ScalarExpr::Literal(datum) => datum.clone(),
+            ScalarExpr::CallUnary { func, expr } => {
+                let eval = expr.eval_on(data);
+                (func.func())(eval)
+            }
+            ScalarExpr::CallBinary { func, expr1, expr2 } => {
+                let eval1 = expr1.eval_on(data);
+                let eval2 = expr2.eval_on(data);
+                (func.func())(eval1, eval2)
+            }
+            ScalarExpr::CallVariadic { func, exprs } => {
+                let evals = exprs.into_iter().map(|e| e.eval_on(data)).collect();
+                (func.func())(evals)
+            }
+            ScalarExpr::If { cond, then, els } => match cond.eval_on(data) {
+                Datum::True => then.eval_on(data),
+                Datum::False => els.eval_on(data),
+                d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AggregateExpr {
     pub func: old_dataflow::func::AggregateFunc,
