@@ -54,8 +54,11 @@ where
                 _ => unreachable!(),
             })
         }
-        RelationExpr::Join { inputs, arities, variables } => {
-
+        RelationExpr::Join {
+            inputs,
+            arities,
+            variables,
+        } => {
             use differential_dataflow::operators::join::Join;
 
             // For the moment, assert that each relation participates at most
@@ -64,7 +67,7 @@ where
             // more filter logic in this operator which doesn't exist yet.
             assert!(variables.iter().all(|h| {
                 let len = h.len();
-                let mut list = h.iter().map(|(i,_)| i).collect::<Vec<_>>();
+                let mut list = h.iter().map(|(i, _)| i).collect::<Vec<_>>();
                 list.sort();
                 list.dedup();
                 len == list.len()
@@ -73,20 +76,15 @@ where
             // The plan is to implement join as a `fold` over `inputs`.
             let mut input_iter = inputs.into_iter().enumerate();
             if let Some((index, input)) = input_iter.next() {
-
                 let mut joined = render(input, scope, context);
 
                 // Maintain sources of each in-progress column.
-                let mut columns =
-                (0 .. arities[index])
-                    .map(|c| (index, c))
-                    .collect::<Vec<_>>();
+                let mut columns = (0..arities[index]).map(|c| (index, c)).collect::<Vec<_>>();
 
                 // The intent is to maintain `joined` as the full cross
                 // product of all input relations so far, subject to all
                 // of the equality constraints in `variables`. This means
                 for (index, input) in input_iter {
-
                     let input = render(input, scope, context);
 
                     // Determine keys. there is at most one key for each
@@ -100,7 +98,7 @@ where
                     let mut new_keys = Vec::new();
 
                     for sets in variables.iter() {
-                        let new_pos = sets.iter().position(|(i,_)| i == &index);
+                        let new_pos = sets.iter().position(|(i, _)| i == &index);
                         let old_pos = columns.iter().position(|i| sets.contains(i));
 
                         // If we have both a new and an old column in the constraint ...
@@ -110,28 +108,34 @@ where
                         }
                     }
 
-                    let old_keyed = joined.map(move |tuple|
+                    let old_keyed = joined.map(move |tuple| {
                         (
-                            old_keys.iter().map(|i| tuple[*i].clone()).collect::<Vec<_>>(),
+                            old_keys
+                                .iter()
+                                .map(|i| tuple[*i].clone())
+                                .collect::<Vec<_>>(),
                             tuple,
-                        ));
-                    let new_keyed = input.map(move |tuple|
+                        )
+                    });
+                    let new_keyed = input.map(move |tuple| {
                         (
-                            new_keys.iter().map(|i| tuple[*i].clone()).collect::<Vec<_>>(),
+                            new_keys
+                                .iter()
+                                .map(|i| tuple[*i].clone())
+                                .collect::<Vec<_>>(),
                             tuple,
-                        ));
+                        )
+                    });
 
-                    joined =
-                    old_keyed.join_map(&new_keyed, |_keys,old,new|
+                    joined = old_keyed.join_map(&new_keyed, |_keys, old, new| {
                         old.iter().chain(new).cloned().collect::<Vec<_>>()
-                    );
+                    });
 
-                    columns.extend((0 .. arities[index]).map(|c| (index, c)));
+                    columns.extend((0..arities[index]).map(|c| (index, c)));
                 }
 
                 joined
-            }
-            else {
+            } else {
                 panic!("Empty join; why?");
             }
         }
@@ -156,23 +160,22 @@ where
                     let mut result = Vec::with_capacity(aggregates.len());
                     for (idx, (agg, typ)) in aggregates.iter().enumerate() {
                         if agg.distinct {
-                            let iter =
-                            source
+                            let iter = source
                                 .iter()
-                                .flat_map(|(v,w)|
-                                    if *w > 0 { Some(agg.expr.eval_on(v)) } else { None }
-                                )
+                                .flat_map(|(v, w)| {
+                                    if *w > 0 {
+                                        Some(agg.expr.eval_on(v))
+                                    } else {
+                                        None
+                                    }
+                                })
                                 .collect::<HashSet<_>>();
                             result.push((agg.func.func())(iter));
-                        }
-                        else {
-                            let iter =
-                            source
-                                .iter()
-                                .flat_map(|(v,w)| {
-                                    let eval = agg.expr.eval_on(v);
-                                    std::iter::repeat(eval).take(std::cmp::max(*w, 0) as usize)
-                                });
+                        } else {
+                            let iter = source.iter().flat_map(|(v, w)| {
+                                let eval = agg.expr.eval_on(v);
+                                std::iter::repeat(eval).take(std::cmp::max(*w, 0) as usize)
+                            });
                             result.push((agg.func.func())(iter));
                         }
                     }
@@ -218,22 +221,28 @@ where
 }
 
 /// Re-order relations in a join to process them in an order that makes sense.
-fn optimize_join_order(relation: RelationExpr, metadata: RelationType) -> (RelationExpr, RelationType) {
-
-    if let RelationExpr::Join { inputs, arities, variables } = relation {
-
+fn optimize_join_order(
+    relation: RelationExpr,
+    metadata: RelationType,
+) -> (RelationExpr, RelationType) {
+    if let RelationExpr::Join {
+        inputs,
+        arities,
+        variables,
+    } = relation
+    {
         // Step 1: determine a plan order starting from `inputs[0]`.
         let mut plan_order = vec![0];
         while plan_order.len() < inputs.len() {
-            let mut candidates = (0 .. inputs.len())
+            let mut candidates = (0..inputs.len())
                 .filter(|i| !plan_order.contains(i))
                 .map(|i| {
                     (
                         variables
                             .iter()
                             .filter(|vars| {
-                                vars.iter().any(|(idx,_)| &i == idx) &&
-                                vars.iter().any(|(idx,_)| plan_order.contains(idx))
+                                vars.iter().any(|(idx, _)| &i == idx)
+                                    && vars.iter().any(|(idx, _)| plan_order.contains(idx))
                             })
                             .count(),
                         i,
@@ -254,7 +263,7 @@ fn optimize_join_order(relation: RelationExpr, metadata: RelationType) -> (Relat
         let mut new_variables = Vec::new();
         for variable in variables.iter() {
             let mut new_set = HashSet::new();
-            for (rel,col) in variable.iter() {
+            for (rel, col) in variable.iter() {
                 new_set.insert((positions[*rel], *col));
             }
             new_variables.push(new_set);
@@ -271,10 +280,9 @@ fn optimize_join_order(relation: RelationExpr, metadata: RelationType) -> (Relat
             offset += arities[*input];
         }
 
-
         let mut projection = Vec::new();
-        for rel in 0 .. inputs.len() {
-            for col in 0 .. arities[rel] {
+        for rel in 0..inputs.len() {
+            for col in 0..arities[rel] {
                 let position = offsets[rel] + col;
                 projection.push(position);
             }
@@ -301,9 +309,7 @@ fn optimize_join_order(relation: RelationExpr, metadata: RelationType) -> (Relat
         };
 
         (output, metadata)
-    }
-    else {
+    } else {
         (relation, metadata)
     }
 }
-
