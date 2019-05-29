@@ -343,6 +343,8 @@ fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
                 (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
                 // sqllogictest does some weird type coercions in practice
                 (Type::Integer, Datum::String(_)) => "0".to_owned(),
+                (Type::Integer, Datum::False) => "0".to_owned(),
+                (Type::Integer, Datum::True) => "1".to_owned(),
 
                 (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
 
@@ -628,8 +630,11 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
         let record = record.unwrap();
 
         // TODO(jamii) this is a hack to workaround an issue where the first query after a bout of statements returns no output
-        if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        if !only_parse {
+            if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
 
         if verbosity >= 3 {

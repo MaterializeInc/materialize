@@ -19,6 +19,70 @@ run() {
     "$@"
 }
 
+# Add lints to this list freely, but please add a comment with justification
+# along with the lint. The goal is to ever-so-slightly increase the barrier to
+# turning off a lint.
+disabled_lints=(
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#let_and_return
+    #
+    # clippy::let_and_return protects against creating a let binding that is
+    # returned from a block without otherwise being used, like so:
+    #     {
+    #       let x = String::new();
+    #       // TODO(frank): figure out why sorting here is broken.
+    #       // x.sort()
+    #       x
+    #     }
+    #
+    # This situation can arise naturally when commenting out intermediate code,
+    # like in the example above, and working around the lint requires corrupting
+    # the original intent of the code.
+    clippy::let_and_return
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#match_bool
+    #
+    # clippy::match_bool prohibits matching in bools, like so
+    #
+    #     match cond {
+    #       true => (),
+    #       false => (),
+    #     }
+    #
+    # and instead mandates use of an if/else statement. This is needlessly
+    # nitpicky. For one, matching on bools uses one fewer lines than using an
+    # if/else statement; for another, the author may be maintaining a consistent
+    # style with similar blocks of nearby code.
+    clippy::match_bool
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#needless_range_loop
+    #
+    # clippy::needless_range_loop encourages use of `for item in collection`
+    # instead of `for i in 0..collection.len()`. The lint is overly aggressive,
+    # however, and often forces the creation of complicated stacks of iterators
+    # when the for loop is clearer.
+    clippy::needless_range_loop
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#redundant_closure
+    #
+    # clippy::redundant_closure prohibits using closures when the closure
+    # delegates to a function that could be called directly. For example, it
+    # would require that
+    #
+    #     collection.iter().map(|item| item.to_string())
+    #
+    # be rewritten as:
+    #
+    #     collection.iter().map(ToString::to_string)
+    #
+    # This lint is needlessly nitpicky. The author may be maintaining a
+    # consistent style with the surrounding code by introducing the closure,
+    # especially when closures of various arities are in close proximity,
+    # as only closures of zero or one arguments can be rewritten to delegate
+    # to the inner function directly. Besides, the needless closure will be
+    # trivially optimized away by LLVM.
+    clippy::redundant_closure
+)
+
 pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,-p \1,p' Cargo.toml)
 run cargo clean $pkgspec
-run cargo clippy -- -D warnings -A clippy::match_bool -A clippy::let_and_return -A clippy::needless-range-loop
+run cargo clippy -- -D warnings $(printf -- "-A %s " "${disabled_lints[@]}")

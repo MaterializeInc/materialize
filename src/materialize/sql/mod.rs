@@ -6,6 +6,7 @@
 //! SQL-dataflow translation.
 
 use failure::{bail, format_err};
+use itertools::Itertools;
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast;
 use sqlparser::sqlast::visit;
@@ -13,9 +14,8 @@ use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLFunction, SQLIdent, SQLObjectName,
     SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement,
-    SQLType, TableFactor, Value,
+    SQLType, SQLValues, TableFactor, Value,
 };
-
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
 use std::fmt;
@@ -73,8 +73,8 @@ impl Planner {
             SQLStatement::SQLInsert {
                 table_name,
                 columns,
-                values,
-            } => self.handle_insert(table_name, columns, values),
+                source,
+            } => self.handle_insert(table_name, columns, *source),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
@@ -155,7 +155,7 @@ impl Planner {
         &mut self,
         name: SQLObjectName,
         columns: Vec<SQLIdent>,
-        values: Vec<Vec<ASTNode>>,
+        source: SQLQuery,
     ) -> PlannerResult {
         let name = name.to_string();
         let typ = match self.dataflows.get(&name)? {
@@ -207,17 +207,38 @@ impl Planner {
                 .map(|name| columns.iter().position(|name2| name == name2).unwrap())
                 .collect::<Vec<_>>()
         };
-        let datums = values
-            .into_iter()
-            .map(|asts| {
-                let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
-                let datums = permuted_asts
-                    .zip(types.iter())
-                    .map(|(ast, typ)| Datum::from_sql(ast, typ))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Datum::Tuple(datums))
-            })
-            .collect::<Result<Vec<_>, failure::Error>>()?;
+
+        if !source.ctes.is_empty() || !source.order_by.is_empty() || source.limit.is_some() {
+            bail!("complicated INSERTs are not supported");
+        }
+
+        let datums = match source.body {
+            SQLSetExpr::Values(SQLValues(values)) => {
+                assert!(!values.is_empty());
+                if !values.iter().map(|row| row.len()).all_equal() {
+                    bail!("VALUES lists must all be the same length");
+                }
+                if values[0].len() != permutation.len() {
+                    bail!(
+                        "INSERT has {} expression(s) but {} target column(s)",
+                        values[0].len(),
+                        permutation.len()
+                    );
+                }
+                values
+                    .into_iter()
+                    .map(|asts| {
+                        let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
+                        let datums = permuted_asts
+                            .zip(types.iter())
+                            .map(|(ast, typ)| Datum::from_sql(ast, typ))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(Datum::Tuple(datums))
+                    })
+                    .collect::<Result<Vec<_>, failure::Error>>()?
+            }
+            _ => bail!("complicated INSERTs are not supported"),
+        };
 
         Ok((
             SqlResponse::Inserted(datums.len()),
@@ -432,6 +453,12 @@ impl Planner {
                                 SQLType::Float(_) | SQLType::Real | SQLType::Double => {
                                     FType::Float64
                                 }
+                                SQLType::Decimal(scale, precision) => {
+                                    FType::Decimal(scale.unwrap_or(0), precision.unwrap_or(0))
+                                }
+                                SQLType::Date => FType::Date,
+                                SQLType::Timestamp => FType::Timestamp,
+                                SQLType::Time => FType::Time,
                                 other => bail!("Unexpected SQL type: {:?}", other),
                             },
                             nullable: column.allow_null,
@@ -1042,6 +1069,11 @@ impl Planner {
                 high,
                 negated,
             } => self.plan_between(ctx, expr, low, high, *negated, plan),
+            ASTNode::SQLInList {
+                expr,
+                list,
+                negated,
+            } => self.plan_in_list(ctx, expr, list, *negated, plan),
             ASTNode::SQLCase {
                 operand,
                 conditions,
@@ -1423,6 +1455,35 @@ impl Planner {
             right: Box::new(high),
         };
         self.plan_expr(ctx, &both, plan)
+    }
+
+    fn plan_in_list<'a>(
+        &self,
+        ctx: &ExprContext,
+        expr: &'a ASTNode,
+        list: &'a [ASTNode],
+        negated: bool,
+        plan: &SQLPlan,
+    ) -> Result<(Expr, Type), failure::Error> {
+        let mut cond = ASTNode::SQLValue(Value::Boolean(false));
+        for l in list {
+            cond = ASTNode::SQLBinaryExpr {
+                left: Box::new(cond),
+                op: SQLOperator::Or,
+                right: Box::new(ASTNode::SQLBinaryExpr {
+                    left: Box::new(expr.clone()),
+                    op: SQLOperator::Eq,
+                    right: Box::new(l.clone()),
+                }),
+            }
+        }
+        if negated {
+            cond = ASTNode::SQLUnary {
+                operator: SQLOperator::Not,
+                expr: Box::new(cond),
+            }
+        }
+        self.plan_expr(ctx, &cond, plan)
     }
 
     fn plan_case<'a>(

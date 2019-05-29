@@ -5,10 +5,7 @@
 
 > CREATE TABLE t (a int, b int);
 
-> INSERT INTO t (a, b) VALUES (1, 1);
-> INSERT INTO t (a, b) VALUES (1, 2);
-> INSERT INTO t (a, b) VALUES (2, 3);
-> INSERT INTO t (a, b) VALUES (3, 1);
+> INSERT INTO t (a, b) VALUES (1, 1), (1, 2), (2, 3), (3, 1);
 
 ! SELECT a FROM t WHERE sum(b) = 3 GROUP BY a;
 aggregate functions are not allowed in WHERE clause
