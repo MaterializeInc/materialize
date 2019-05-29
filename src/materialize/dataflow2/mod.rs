@@ -4,5 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 mod types;
+mod render;
 
 pub use types::*;
