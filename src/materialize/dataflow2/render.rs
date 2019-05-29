@@ -59,11 +59,7 @@ where
                     })
             })
         }
-        RelationExpr::Join {
-            inputs,
-            arities,
-            variables,
-        } => {
+        RelationExpr::Join { inputs, variables } => {
             use differential_dataflow::operators::join::Join;
 
             // For the moment, assert that each relation participates at most
@@ -77,6 +73,8 @@ where
                 list.dedup();
                 len == list.len()
             }));
+
+            let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
             // The plan is to implement join as a `fold` over `inputs`.
             let mut input_iter = inputs.into_iter().enumerate();
@@ -238,7 +236,6 @@ where
 /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
 /// let join = RelationExpr::Join {
 ///     inputs: vec![input1, input2, input3],
-///     arities: vec![1, 1, 1],
 ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
 /// };
 /// let typ = vec![
@@ -256,12 +253,9 @@ pub fn optimize_join_order(
     relation: RelationExpr,
     metadata: RelationType,
 ) -> (RelationExpr, RelationType) {
-    if let RelationExpr::Join {
-        inputs,
-        arities,
-        variables,
-    } = relation
-    {
+    if let RelationExpr::Join { inputs, variables } = relation {
+        let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+
         // Step 1: determine a plan order starting from `inputs[0]`.
         let mut plan_order = vec![0];
         while plan_order.len() < inputs.len() {
@@ -321,15 +315,12 @@ pub fn optimize_join_order(
 
         // Step 4: prepare output
         let mut new_inputs = Vec::new();
-        let mut new_arities = Vec::new();
         for rel in plan_order.into_iter() {
             new_inputs.push(inputs[rel].clone()); // TODO: Extract from `inputs`.
-            new_arities.push(arities[rel]);
         }
 
         let join = RelationExpr::Join {
             inputs: new_inputs,
-            arities: new_arities,
             variables: new_variables,
         };
 
