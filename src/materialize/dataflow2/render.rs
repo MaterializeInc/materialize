@@ -22,6 +22,7 @@ where
     G::Timestamp: differential_dataflow::lattice::Lattice,
 {
     match plan {
+        RelationExpr::Constant { .. } => unimplemented!(),
         RelationExpr::Get { name, typ } => {
             context.get(&name).expect("failed to find source").clone()
         }
@@ -46,12 +47,16 @@ where
                 tuple
             })
         }
-        RelationExpr::Filter { input, predicate } => {
+        RelationExpr::Filter { input, predicates } => {
             let input = render(*input, scope, context);
-            input.filter(move |x| match predicate.eval_on(x) {
-                Datum::True => true,
-                Datum::False => false,
-                _ => unreachable!(),
+            input.filter(move |x| {
+                predicates
+                    .iter()
+                    .all(|predicate| match predicate.eval_on(x) {
+                        Datum::True => true,
+                        Datum::False => false,
+                        _ => unreachable!(),
+                    })
             })
         }
         RelationExpr::Join { inputs, variables } => {
