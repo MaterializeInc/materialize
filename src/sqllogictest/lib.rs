@@ -630,8 +630,11 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
         let record = record.unwrap();
 
         // TODO(jamii) this is a hack to workaround an issue where the first query after a bout of statements returns no output
-        if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record) {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        if !only_parse {
+            if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record)
+            {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
         }
 
         if verbosity >= 3 {
