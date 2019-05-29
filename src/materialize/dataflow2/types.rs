@@ -79,6 +79,7 @@ impl ScalarExpr {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AggregateExpr {
+    pub distinct: bool,
     pub func: old_dataflow::func::AggregateFunc,
     pub expr: ScalarExpr,
 }
@@ -112,6 +113,8 @@ pub enum RelationExpr {
     /// Join several dataflows together at once
     Join {
         inputs: Vec<RelationExpr>,
+        // number of columns in the corresponding input.
+        arities: Vec<usize>,
         // each HashSet is an equivalence class of (input_index, column_index)
         variables: Vec<HashSet<(usize, usize)>>,
     },
