@@ -86,6 +86,11 @@ pub struct AggregateExpr {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum RelationExpr {
+    /// Always return the same value
+    Constant {
+        rows: Vec<Vec<Datum>>,
+        typ: RelationType,
+    },
     /// Get an existing dataflow
     Get { name: String, typ: RelationType },
     /// Introduce a temporary dataflow
@@ -103,12 +108,12 @@ pub enum RelationExpr {
     Map {
         input: Box<RelationExpr>,
         // these are appended to output in addition to all the columns of input
-        scalars: Vec<(ScalarExpr, DatumType)>,
+        scalars: Vec<(ScalarExpr, ColumnType)>,
     },
-    /// Filter rows from a dataflow based on a boolean predicate
+    /// Keep rows from a dataflow where all the predicates are true
     Filter {
         input: Box<RelationExpr>,
-        predicate: ScalarExpr,
+        predicates: Vec<ScalarExpr>,
     },
     /// Join several dataflows together at once
     Join {
@@ -123,7 +128,7 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
         group_key: Vec<usize>,
         // these are appended to output in addition to all the columns of input that are in group_key
-        aggregates: Vec<(AggregateExpr, DatumType)>,
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
     },
     /// If the input is empty, return a default row
     // Used only for some SQL aggregate edge cases
@@ -141,4 +146,96 @@ pub enum RelationExpr {
         right: Box<RelationExpr>,
     },
     // TODO Lookup/Arrange
+}
+
+impl repr::Datum {
+    fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
+        self.ftype().is_instance_of(column_typ)
+    }
+}
+
+impl DatumType {
+    fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
+        self == &column_typ.typ || (self == &repr::FType::Null && column_typ.is_nullable)
+    }
+}
+
+impl ColumnType {
+    fn union(&self, other: &Self) -> Self {
+        assert_eq!(self.typ, other.typ);
+        ColumnType {
+            typ: self.typ.clone(),
+            is_nullable: self.is_nullable || other.is_nullable,
+        }
+    }
+}
+
+impl RelationExpr {
+    fn typ(&self) -> Vec<ColumnType> {
+        match self {
+            RelationExpr::Constant { rows, typ } => {
+                for row in rows {
+                    for (datum, column_typ) in row.iter().zip(typ.iter()) {
+                        assert!(datum.is_instance_of(column_typ));
+                    }
+                }
+                typ.clone()
+            }
+            RelationExpr::Get { typ, .. } => typ.clone(),
+            RelationExpr::Let { body, .. } => body.typ(),
+            RelationExpr::Project { input, outputs } => {
+                let input_typ = input.typ();
+                outputs.iter().map(|&i| input_typ[i].clone()).collect()
+            }
+            RelationExpr::Map { input, scalars } => {
+                let mut typ = input.typ();
+                for (_, column_typ) in scalars {
+                    typ.push(column_typ.clone());
+                }
+                typ
+            }
+            RelationExpr::Filter { input, .. } => input.typ(),
+            RelationExpr::Join { inputs, .. } => {
+                let mut typ = vec![];
+                for input in inputs {
+                    typ.append(&mut input.typ());
+                }
+                typ
+            }
+            RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => {
+                let input_typ = input.typ();
+                let mut typ = group_key
+                    .iter()
+                    .map(|&i| input_typ[i].clone())
+                    .collect::<Vec<_>>();
+                for (_, column_typ) in aggregates {
+                    typ.push(column_typ.clone());
+                }
+                typ
+            }
+            RelationExpr::OrDefault { input, default } => {
+                let typ = input.typ();
+                for (column_typ, datum) in typ.iter().zip(default.iter()) {
+                    assert!(datum.ftype().is_instance_of(column_typ));
+                }
+                typ
+            }
+            RelationExpr::Negate { input } => input.typ(),
+            RelationExpr::Distinct { input } => input.typ(),
+            RelationExpr::Union { left, right } => {
+                let left_typ = left.typ();
+                let right_typ = right.typ();
+                assert_eq!(left_typ.len(), right_typ.len());
+                left_typ
+                    .iter()
+                    .zip(right_typ.iter())
+                    .map(|(l, r)| l.union(r))
+                    .collect()
+            }
+        }
+    }
 }
