@@ -13,9 +13,9 @@ CREATE TABLE nation (
 
 statement ok
 CREATE TABLE region  (
-    R_REGIONKEY  integer NOT NULL,
-    R_NAME       char(25) NOT NULL,
-    R_COMMENT    varchar(152)
+    r_regionkey  integer NOT NULL,
+    r_name       char(25) NOT NULL,
+    r_comment    varchar(152)
 )
 
 statement ok
