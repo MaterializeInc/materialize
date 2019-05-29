@@ -453,6 +453,12 @@ impl Planner {
                                 SQLType::Float(_) | SQLType::Real | SQLType::Double => {
                                     FType::Float64
                                 }
+                                SQLType::Decimal(scale, precision) => {
+                                    FType::Decimal(scale.unwrap_or(0), precision.unwrap_or(0))
+                                }
+                                SQLType::Date => FType::Date,
+                                SQLType::Timestamp => FType::Timestamp,
+                                SQLType::Time => FType::Time,
                                 other => bail!("Unexpected SQL type: {:?}", other),
                             },
                             nullable: column.allow_null,
