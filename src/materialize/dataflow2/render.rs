@@ -226,7 +226,33 @@ where
 }
 
 /// Re-order relations in a join to process them in an order that makes sense.
-fn optimize_join_order(
+///
+/// ```rust
+/// use materialize::dataflow2::RelationExpr;
+/// use materialize::dataflow2::ColumnType;
+/// use materialize::dataflow2::optimize_join_order;
+/// use materialize::repr::FType;
+///
+/// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
+/// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
+/// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
+/// let join = RelationExpr::Join {
+///     inputs: vec![input1, input2, input3],
+///     arities: vec![1, 1, 1],
+///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
+/// };
+/// let typ = vec![
+///     ColumnType { typ: FType::Bool, is_nullable: false },
+///     ColumnType { typ: FType::Bool, is_nullable: false },
+///     ColumnType { typ: FType::Bool, is_nullable: false },
+/// ];
+/// let (opt_rel, opt_typ) = optimize_join_order(join, typ);
+///
+/// if let RelationExpr::Project { input, outputs } = opt_rel {
+///     assert_eq!(outputs, vec![0, 2, 1]);
+/// }
+/// ```
+pub fn optimize_join_order(
     relation: RelationExpr,
     metadata: RelationType,
 ) -> (RelationExpr, RelationType) {
