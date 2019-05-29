@@ -38,15 +38,15 @@ pub enum ScalarExpr {
         expr1: Box<ScalarExpr>,
         expr2: Box<ScalarExpr>,
     },
-    If {
-        cond: Box<ScalarExpr>,
-        then: Box<ScalarExpr>,
-        els: Box<ScalarExpr>,
-    },
     /// A function call that takes an arbitrary number of arguments.
     CallVariadic {
         func: old_dataflow::func::VariadicFunc,
         exprs: Vec<ScalarExpr>,
+    },
+    If {
+        cond: Box<ScalarExpr>,
+        then: Box<ScalarExpr>,
+        els: Box<ScalarExpr>,
     },
 }
 
@@ -171,7 +171,7 @@ impl ColumnType {
 }
 
 impl RelationExpr {
-    fn typ(&self) -> Vec<ColumnType> {
+    pub fn typ(&self) -> Vec<ColumnType> {
         match self {
             RelationExpr::Constant { rows, typ } => {
                 for row in rows {
@@ -237,5 +237,9 @@ impl RelationExpr {
                     .collect()
             }
         }
+    }
+
+    pub fn arity(&self) -> usize {
+        self.typ().len()
     }
 }

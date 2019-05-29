@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+mod optimize;
 mod render;
 mod types;
 
