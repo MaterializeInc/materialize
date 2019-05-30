@@ -32,7 +32,7 @@ impl ScalarExpr {
         }
     }
 
-    fn visit<F>(&mut self, f: &mut F)
+    pub fn visit<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
