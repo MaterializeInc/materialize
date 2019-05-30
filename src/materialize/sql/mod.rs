@@ -364,19 +364,21 @@ impl Planner {
                     bail!("WITH options are not yet supported");
                 }
                 let (plan, mut typ) = self.plan_view_query(query)?;
-                let types = match &mut typ.ftype {
-                    FType::Tuple(types) => types,
-                    _ => unreachable!(),
-                };
-                if columns.len() != types.len() {
-                    bail!(
-                        "VIEW definition has {} columns, but query has {} columns",
-                        columns.len(),
-                        types.len()
-                    )
-                }
-                for (typ, name) in types.iter_mut().zip(columns) {
-                    typ.name = Some(name.clone());
+                if !columns.is_empty() {
+                    let types = match &mut typ.ftype {
+                        FType::Tuple(types) => types,
+                        _ => unreachable!(),
+                    };
+                    if columns.len() != types.len() {
+                        bail!(
+                            "VIEW definition has {} columns, but query has {} columns",
+                            columns.len(),
+                            types.len()
+                        )
+                    }
+                    for (typ, name) in types.iter_mut().zip(columns) {
+                        typ.name = Some(name.clone());
+                    }
                 }
                 Ok(Dataflow::View(View {
                     name: extract_sql_object_name(name)?,
