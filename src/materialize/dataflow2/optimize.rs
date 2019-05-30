@@ -57,6 +57,62 @@ impl ScalarExpr {
         });
         support
     }
+
+    fn is_literal(&self) -> bool {
+        if let ScalarExpr::Literal(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reduces a complex expression where possible.
+    ///
+    /// ```rust
+    /// use materialize::dataflow2::{ScalarExpr};
+    /// use materialize::repr::Datum;
+    ///
+    /// let expr_0 = ScalarExpr::column(0);
+    /// let expr_t = ScalarExpr::literal(Datum::True);
+    /// let expr_f = ScalarExpr::literal(Datum::False);
+    ///
+    /// let mut test =
+    /// expr_t
+    ///     .clone()
+    ///     .call_binary(expr_f.clone(), materialize::dataflow::func::BinaryFunc::And)
+    ///     .if_then_else(expr_0, expr_t.clone());
+    ///
+    /// test.reduce();
+    /// assert_eq!(test, expr_t);
+    /// ```
+    pub fn reduce(&mut self) {
+        self.visit(&mut |e| {
+            let should_eval = match e {
+                ScalarExpr::CallUnary { expr, .. } => expr.is_literal(),
+                ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                    expr1.is_literal() && expr2.is_literal()
+                }
+                ScalarExpr::CallVariadic { exprs, .. } => exprs.iter().all(|e| e.is_literal()),
+                ScalarExpr::If { cond, then, els } => {
+                    if cond.is_literal() {
+                        let eval = cond.eval_on(&[]);
+                        if eval == Datum::True {
+                            then.is_literal()
+                        } else {
+                            els.is_literal()
+                        }
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+
+            if should_eval {
+                *e = ScalarExpr::Literal(e.eval_on(&[]));
+            }
+        });
+    }
 }
 
 impl RelationExpr {

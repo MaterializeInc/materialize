@@ -51,6 +51,35 @@ pub enum ScalarExpr {
 }
 
 impl ScalarExpr {
+    pub fn column(column: usize) -> Self {
+        ScalarExpr::Column(column)
+    }
+    pub fn literal(datum: Datum) -> Self {
+        ScalarExpr::Literal(datum)
+    }
+    pub fn call_unary(self, func: old_dataflow::func::UnaryFunc) -> Self {
+        ScalarExpr::CallUnary {
+            func,
+            expr: Box::new(self),
+        }
+    }
+    pub fn call_binary(self, other: Self, func: old_dataflow::func::BinaryFunc) -> Self {
+        ScalarExpr::CallBinary {
+            func,
+            expr1: Box::new(self),
+            expr2: Box::new(other),
+        }
+    }
+    pub fn if_then_else(self, t: Self, f: Self) -> Self {
+        ScalarExpr::If {
+            cond: Box::new(self),
+            then: Box::new(t),
+            els: Box::new(f),
+        }
+    }
+}
+
+impl ScalarExpr {
     pub fn eval_on(&self, data: &[Datum]) -> Datum {
         match self {
             ScalarExpr::Column(index) => data[*index].clone(),

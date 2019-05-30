@@ -4,11 +4,7 @@ pub trait Transform {
     /// Transform a relation into a functionally equivalent relation.
     ///
     /// Arguably the metadata *shouldn't* change, but we're new here.
-    fn transform(
-        &self,
-        relation: RelationExpr,
-        metadata: RelationType,
-    ) -> (RelationExpr, RelationType);
+    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType);
 }
 
 pub use join_order::JoinOrder;
@@ -28,7 +24,7 @@ pub mod join_order {
     /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
     /// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
     /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
-    /// let join = RelationExpr::Join {
+    /// let mut expr = RelationExpr::Join {
     ///     inputs: vec![input1, input2, input3],
     ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
     /// };
@@ -39,30 +35,22 @@ pub mod join_order {
     /// ];
     ///
     /// let join_order = materialize::dataflow2::transform::JoinOrder;
-    /// let (opt_rel, opt_typ) = join_order.transform(join, typ);
+    /// join_order.transform(&mut expr, &typ);
     ///
-    /// if let RelationExpr::Project { input, outputs } = opt_rel {
+    /// if let RelationExpr::Project { input, outputs } = expr {
     ///     assert_eq!(outputs, vec![0, 2, 1]);
     /// }
     /// ```
     pub struct JoinOrder;
 
     impl super::Transform for JoinOrder {
-        fn transform(
-            &self,
-            relation: RelationExpr,
-            metadata: RelationType,
-        ) -> (RelationExpr, RelationType) {
+        fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
             self.transform(relation, metadata)
         }
     }
 
     impl JoinOrder {
-        pub fn transform(
-            &self,
-            relation: RelationExpr,
-            metadata: RelationType,
-        ) -> (RelationExpr, RelationType) {
+        pub fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
             if let RelationExpr::Join { inputs, variables } = relation {
                 let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
@@ -135,11 +123,12 @@ pub mod join_order {
                 };
 
                 // Output projection
-                let output = join.project(projection);
-                (output, metadata)
-            } else {
-                (relation, metadata)
+                *relation = join.project(projection);
+                // (output, metadata)
             }
+            // else {
+            //     (relation, metadata)
+            // }
         }
     }
 }
@@ -170,7 +159,7 @@ pub mod predicate_pushdown {
     /// };
     /// let predicate012 = ScalarExpr::Literal(Datum::False);
     ///
-    /// let filter = join.filter(
+    /// let mut expr = join.filter(
     ///    vec![
     ///        predicate0.clone(),
     ///        predicate1.clone(),
@@ -185,7 +174,7 @@ pub mod predicate_pushdown {
     /// ];
     ///
     /// let pushdown = materialize::dataflow2::transform::PredicatePushdown;
-    /// let (opt_rel, opt_typ) = pushdown.transform(filter, typ);
+    /// pushdown.transform(&mut expr, &typ);
     ///
     /// let join = RelationExpr::Join {
     ///     inputs: vec![
@@ -196,24 +185,17 @@ pub mod predicate_pushdown {
     ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
     /// };
     ///
-    /// assert_eq!(opt_rel, join.filter(vec![predicate01]));
+    /// assert_eq!(expr, join.filter(vec![predicate01]));
     /// ```
     use crate::dataflow2::types::{RelationExpr, RelationType, ScalarExpr};
 
     pub struct PredicatePushdown;
 
     impl PredicatePushdown {
-        pub fn transform(
-            &self,
-            relation: RelationExpr,
-            metadata: RelationType,
-        ) -> (RelationExpr, RelationType) {
+        pub fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
             if let RelationExpr::Filter { input, predicates } = relation {
-                match *input {
-                    RelationExpr::Join {
-                        mut inputs,
-                        variables,
-                    } => {
+                match &mut **input {
+                    RelationExpr::Join { inputs, variables } => {
                         // We want to scan `predicates` for any that can apply
                         // to individual elements of `inputs`.
 
@@ -236,7 +218,7 @@ pub mod predicate_pushdown {
                         let mut push_downs = vec![Vec::new(); inputs.len()];
                         let mut retain = Vec::new();
 
-                        for mut predicate in predicates.into_iter() {
+                        for mut predicate in predicates.drain(..) {
                             // Determine the relation support of each predicate.
                             let mut support = Vec::new();
                             predicate.visit(&mut |e| {
@@ -270,8 +252,8 @@ pub mod predicate_pushdown {
                             }
                         }
 
-                        let inputs = inputs
-                            .into_iter()
+                        let new_inputs = inputs
+                            .drain(..)
                             .zip(push_downs)
                             .enumerate()
                             .map(|(index, (input, push_down))| {
@@ -283,21 +265,88 @@ pub mod predicate_pushdown {
                             })
                             .collect();
 
-                        let mut result = RelationExpr::Join { inputs, variables };
-
-                        if !retain.is_empty() {
-                            result = result.filter(retain);
-                        }
-
-                        (result, metadata)
+                        *inputs = new_inputs;
+                        *predicates = retain;
                     }
-                    // fail out to reforming the filter
-                    input => (input.filter(predicates), metadata),
+                    _ => {}
                 }
-            } else {
-                (relation, metadata)
             }
         }
     }
+}
 
+pub mod fusion {
+
+    pub mod filter {
+
+        /// Re-order relations in a join to process them in an order that makes sense.
+        ///
+        /// ```rust
+        /// use materialize::dataflow2::{RelationExpr, ScalarExpr};
+        /// use materialize::dataflow2::ColumnType;
+        /// use materialize::repr::{Datum, FType};
+        ///
+        /// let input = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
+        ///
+        /// let predicate0 = ScalarExpr::Column(0);
+        /// let predicate1 = ScalarExpr::Column(0);
+        /// let predicate2 = ScalarExpr::Column(0);
+        ///
+        /// let mut expr =
+        /// input
+        ///     .clone()
+        ///     .filter(vec![predicate0.clone()])
+        ///     .filter(vec![predicate1.clone()])
+        ///     .filter(vec![predicate2.clone()]);
+        ///
+        /// let typ = vec![
+        ///     ColumnType { typ: FType::Bool, is_nullable: false },
+        /// ];
+        ///
+        /// let fusion = materialize::dataflow2::transform::fusion::filter::Filter;
+        /// fusion.transform(&mut expr, &typ);
+        ///
+        /// let correct = input.filter(vec![predicate0, predicate1, predicate2]);
+        ///
+        /// assert_eq!(expr, correct);
+        /// ```
+        use crate::dataflow2::types::{RelationExpr, RelationType};
+
+        pub struct Filter;
+
+        impl crate::dataflow2::transform::Transform for Filter {
+            fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+                self.transform(relation, metadata)
+            }
+        }
+
+        impl Filter {
+            pub fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+                if let RelationExpr::Filter { input, predicates } = relation {
+                    // consolidate nested filters.
+                    while let RelationExpr::Filter {
+                        input: inner,
+                        predicates: p2,
+                    } = &mut **input
+                    {
+                        predicates.extend(p2.drain(..));
+                        let empty = Box::new(RelationExpr::Constant {
+                            rows: vec![],
+                            typ: metadata.clone(),
+                        });
+                        *input = std::mem::replace(inner, empty);
+                    }
+
+                    // remove the Filter stage if empty.
+                    if predicates.is_empty() {
+                        let empty = RelationExpr::Constant {
+                            rows: vec![],
+                            typ: metadata.clone(),
+                        };
+                        *relation = std::mem::replace(input, empty);
+                    }
+                }
+            }
+        }
+    }
 }
