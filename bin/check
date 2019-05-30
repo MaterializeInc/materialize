@@ -81,6 +81,17 @@ disabled_lints=(
     # to the inner function directly. Besides, the needless closure will be
     # trivially optimized away by LLVM.
     clippy::redundant_closure
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#unneeded_field_pattern
+    #
+    # clippy::unneeded_field_patterns disallows wildcard struct patterns, like
+    # `obj { field1, field2: _ }`, in favor of using `obj { field1, .. }`. This
+    # lint is actively harmful. Explicitly matching on every extant field
+    # ensures that when a new field is added to the struct in the future,
+    # whoever adds the field will be forced to inspect the match site. Using
+    # `..`, while sometimes convenient, can cause match sites that need to be
+    # updated for the new field to be overlooked.
+    clippy::unneeded_field_pattern
 )
 
 pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,-p \1,p' Cargo.toml)

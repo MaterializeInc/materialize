@@ -14,7 +14,7 @@ use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLFunction, SQLIdent, SQLObjectName,
     SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement,
-    SQLTableConstraint, SQLType, SQLValues, TableFactor, Value,
+    SQLTableConstraint, SQLType, SQLValues, TableAlias, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
@@ -137,6 +137,7 @@ impl Planner {
         let name = format!("<temp_{}>", id);
         let dataflow = self.plan_statement(&SQLStatement::SQLCreateView {
             name: SQLObjectName(vec![name.clone()]),
+            columns: vec![],
             query: Box::new(query),
             materialized: true,
             with_options: vec![],
@@ -354,14 +355,29 @@ impl Planner {
         match stmt {
             SQLStatement::SQLCreateView {
                 name,
+                columns,
                 query,
-                materialized: true,
+                materialized: _,
                 with_options,
             } => {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (plan, typ) = self.plan_view_query(query)?;
+                let (plan, mut typ) = self.plan_view_query(query)?;
+                let types = match &mut typ.ftype {
+                    FType::Tuple(types) => types,
+                    _ => unreachable!(),
+                };
+                if columns.len() != types.len() {
+                    bail!(
+                        "VIEW definition has {} columns, but query has {} columns",
+                        columns.len(),
+                        types.len()
+                    )
+                }
+                for (typ, name) in types.iter_mut().zip(columns) {
+                    typ.name = Some(name.clone());
+                }
                 Ok(Dataflow::View(View {
                     name: extract_sql_object_name(name)?,
                     plan,
@@ -612,8 +628,11 @@ impl Planner {
                 typ => panic!("table {} has non-tuple type {:?}", from_name, typ),
             };
             let mut plan = SQLPlan::from_source(&from_name, types);
-            if let Some(alias) = from_alias {
-                plan = plan.alias_table(alias);
+            if let Some(TableAlias { name, columns }) = from_alias {
+                if !columns.is_empty() {
+                    bail!("aliasing columns is not yet supported");
+                }
+                plan = plan.alias_table(name);
             }
             plan
         };
@@ -814,8 +833,11 @@ impl Planner {
                             typ => panic!("Table {} has non-tuple type {:?}", name, typ),
                         };
                         let mut right = SQLPlan::from_source(&name, types);
-                        if let Some(alias) = alias {
-                            right = right.alias_table(alias);
+                        if let Some(TableAlias { name, columns }) = alias {
+                            if !columns.is_empty() {
+                                bail!("aliasing columns is not yet supported");
+                            }
+                            right = right.alias_table(name);
                         }
                         tables.push(right);
                     }

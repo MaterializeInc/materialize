@@ -163,7 +163,6 @@ impl Plan {
     /// Collects the names of the dataflows that this plan depends upon.
     // Intentionally match on all field names to force changes to the AST to
     // be reflected in this function.
-    #[allow(clippy::unneeded_field_pattern)]
     fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
         match self {
             Plan::Source(name) => out.push(&name),
