@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::repr::*;
 
@@ -47,132 +47,143 @@ impl ScalarExpr {
             }
         });
     }
+
+    fn support(&mut self) -> HashSet<usize> {
+        let mut support = HashSet::new();
+        self.visit(&mut |e| {
+            if let ScalarExpr::Column(i) = e {
+                support.insert(*i);
+            }
+        });
+        support
+    }
 }
 
 impl RelationExpr {
-    fn identity_permutation(&self) -> HashMap<usize, usize> {
-        (0..self.arity()).map(|i| (i, i)).collect()
-    }
-
-    fn visit1<F>(&mut self, f: &mut F) -> HashMap<usize, usize>
+    fn visit1<F>(&mut self, f: &mut F)
     where
-        F: FnMut(&mut Self) -> HashMap<usize, usize>,
+        F: FnMut(&mut Self),
     {
         match self {
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => self.identity_permutation(),
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
             RelationExpr::Let { value, body, .. } => {
-                let old_value_arity = value.arity();
-                let value_permutation = f(value);
-                // value might be used in multiple places, so let's not allow rewrites to change it's output
-                for old_i in 0..old_value_arity {
-                    assert_eq!(old_i, value_permutation[&old_i]);
-                }
-                let body_permutation = f(body);
-                body_permutation
+                f(value);
+                f(body);
             }
-            RelationExpr::Project { input, outputs } => {
-                let input_permutation = f(input);
-                for old_i in outputs {
-                    *old_i = input_permutation[old_i]
-                }
-                self.identity_permutation()
+            RelationExpr::Project { input, .. } => {
+                f(input);
             }
-            RelationExpr::Map { input, scalars } => {
-                let old_arity = input.arity();
-                let input_permutation = f(input);
-                let new_arity = input.arity();
-                for (scalar, _) in scalars.iter_mut() {
-                    scalar.permute(&input_permutation);
-                }
-                let mut permutation = input_permutation;
-                for i in 0..scalars.len() {
-                    permutation.insert(old_arity + i, new_arity + i);
-                }
-                permutation
+            RelationExpr::Map { input, .. } => {
+                f(input);
             }
-            RelationExpr::Filter { input, predicates } => {
-                let input_permutation = f(input);
-                for predicate in predicates {
-                    predicate.permute(&input_permutation);
-                }
-                input_permutation
+            RelationExpr::Filter { input, .. } => {
+                f(input);
             }
-            RelationExpr::Join { inputs, variables } => {
-                let old_arities = inputs.iter().map(|input| input.arity()).collect::<Vec<_>>();
-                let inputs_permutation =
-                    inputs.iter_mut().map(|input| f(input)).collect::<Vec<_>>();
-                for variable in variables {
-                    *variable = variable
-                        .iter()
-                        .map(|(input_ix, column_ix)| {
-                            (*input_ix, inputs_permutation[*input_ix][column_ix])
-                        })
-                        .collect()
+            RelationExpr::Join { inputs, .. } => {
+                for input in inputs {
+                    f(input);
                 }
-                let mut total_old_arity = 0;
-                let mut total_new_arity = 0;
-                let mut permutation = HashMap::new();
-                for ((input, input_permutation), old_arity) in inputs
-                    .iter()
-                    .zip(inputs_permutation.iter())
-                    .zip(old_arities)
-                {
-                    for old_i in 0..old_arity {
-                        let new_i = input_permutation[&old_i];
-                        permutation.insert(total_old_arity + old_i, total_new_arity + new_i);
-                    }
-                    total_old_arity += old_arity;
-                    total_new_arity += input.arity();
-                }
-                permutation
             }
-            RelationExpr::Reduce {
-                input, group_key, ..
-            } => {
-                let input_permutation = f(input);
-                for old_i in group_key {
-                    *old_i = input_permutation[&old_i];
-                }
-                self.identity_permutation()
+            RelationExpr::Reduce { input, .. } => {
+                f(input);
             }
-            RelationExpr::OrDefault { input, default } => {
-                let old_arity = input.arity();
-                let input_permutation = f(input);
-                let mut new_default = (0..input.arity()).map(|_| Datum::Null).collect::<Vec<_>>();
-                for old_i in 0..old_arity {
-                    let new_i = input_permutation[&old_i];
-                    new_default[new_i] = default[old_i].clone();
-                }
-                *default = new_default;
-                input_permutation
+            RelationExpr::OrDefault { input, .. } => {
+                f(input);
             }
             RelationExpr::Negate { input } => f(input),
             RelationExpr::Distinct { input } => f(input),
             RelationExpr::Union { left, right } => {
-                let old_left_arity = left.arity();
-                let left_permutation = f(left);
-                let right_permutation = f(right);
-                let new_left_arity = left.arity();
-                let mut permutation = left_permutation;
-                for (old_i, new_i) in right_permutation {
-                    permutation.insert(old_left_arity + old_i, new_left_arity + new_i);
-                }
-                permutation
+                f(left);
+                f(right);
             }
         }
     }
 
-    fn visit<F>(&mut self, f: &mut F) -> HashMap<usize, usize>
+    fn visit<F>(&mut self, f: &mut F)
     where
-        F: FnMut(&mut Self) -> HashMap<usize, usize>,
+        F: FnMut(&mut Self),
     {
-        let old_arity = self.arity();
-        let permutation1 = self.visit1(f);
-        let permutation2 = f(self);
-        let mut permutation = HashMap::new();
-        for old_i in 0..old_arity {
-            permutation.insert(old_i, permutation2[&permutation1[&old_i]]);
+        self.visit1(&mut |e| e.visit(f));
+        f(self)
+    }
+
+    fn push_down_projects_with(self, outputs: &[usize]) -> Self {
+        match self {
+            RelationExpr::Constant { mut rows, typ } => {
+                for row in rows.iter_mut() {
+                    *row = outputs.iter().map(|&i| row[i].clone()).collect();
+                }
+                let typ = outputs.iter().map(|&i| typ[i].clone()).collect();
+                RelationExpr::Constant { rows, typ }
+            }
+            get @ RelationExpr::Get { .. } => {
+                let input = Box::new(get.push_down_projects());
+                RelationExpr::Project {
+                    input,
+                    outputs: outputs.to_vec(),
+                }
+            }
+            RelationExpr::Let { name, value, body } => {
+                let value = Box::new(value.push_down_projects());
+                let body = Box::new(body.push_down_projects_with(outputs));
+                RelationExpr::Let { name, value, body }
+            }
+            RelationExpr::Project {
+                input,
+                outputs: inner_outputs,
+            } => {
+                let outputs = outputs
+                    .iter()
+                    .map(|&i| inner_outputs[i])
+                    .collect::<Vec<_>>();
+                input.push_down_projects_with(&outputs)
+            }
+            RelationExpr::Map { input, scalars } => {
+                // TODO check for support of scalars - have to keep columns they need and wrap in a new Project
+                let arity = input.arity();
+                let inner_outputs = outputs
+                    .iter()
+                    .cloned()
+                    .filter(|&i| i < arity)
+                    .collect::<Vec<_>>();
+                let input = Box::new(input.push_down_projects_with(&inner_outputs));
+                let permutation = inner_outputs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(new_i, old_i)| (old_i, new_i))
+                    .collect::<HashMap<_, _>>();
+                let scalars = outputs
+                    .iter()
+                    .filter(|&&i| i >= arity)
+                    .map(|&i| {
+                        let (mut scalar, typ) = scalars[i - arity].clone();
+                        scalar.permute(&permutation);
+                        (scalar, typ)
+                    })
+                    .collect();
+                RelationExpr::Map { input, scalars }
+            }
+            _ => unimplemented!(),
         }
-        permutation
+    }
+
+    fn push_down_projects(self) -> Self {
+        match self {
+            RelationExpr::Project { input, outputs } => input.push_down_projects_with(&outputs),
+            mut other => {
+                other.visit1(&mut |e| {
+                    let owned = std::mem::replace(
+                        e,
+                        // dummy value
+                        RelationExpr::Constant {
+                            rows: vec![],
+                            typ: vec![],
+                        },
+                    );
+                    *e = owned.push_down_projects()
+                });
+                other
+            }
+        }
     }
 }
