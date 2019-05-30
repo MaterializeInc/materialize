@@ -1565,6 +1565,12 @@ impl Planner {
                 false => (Datum::False, FType::Bool),
                 true => (Datum::True, FType::Bool),
             },
+            Value::Date(_) => bail!("DATE literals are not supported: {}", l.to_string()),
+            Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
+            Value::Timestamp(_) => bail!("TIMESTAMP literals are not supported: {}", l.to_string()),
+            Value::Interval { .. } => {
+                bail!("INTERVAL literals are not supported: {}", l.to_string())
+            }
             Value::Null => (Datum::Null, FType::Null),
         };
         let nullable = datum == Datum::Null;
