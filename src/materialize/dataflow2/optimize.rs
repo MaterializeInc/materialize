@@ -61,8 +61,12 @@ impl RelationExpr {
         match self {
             RelationExpr::Constant { .. } | RelationExpr::Get { .. } => self.identity_permutation(),
             RelationExpr::Let { value, body, .. } => {
-                // TODO(jamii) what do we do with value_permutation? do we have to track down the corresponding `Get`s and start again there?
-                let _value_permutation = f(value);
+                let old_value_arity = value.arity();
+                let value_permutation = f(value);
+                // value might be used in multiple places, so let's not allow rewrites to change it's output
+                for old_i in 0..old_value_arity {
+                    assert_eq!(old_i, value_permutation[&old_i]);
+                }
                 let body_permutation = f(body);
                 body_permutation
             }
