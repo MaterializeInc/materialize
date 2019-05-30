@@ -14,7 +14,7 @@ use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLFunction, SQLIdent, SQLObjectName,
     SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement,
-    SQLType, SQLValues, TableFactor, Value,
+    SQLTableConstraint, SQLType, SQLValues, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
@@ -429,6 +429,7 @@ impl Planner {
             SQLStatement::SQLCreateTable {
                 name,
                 columns,
+                constraints,
                 with_options,
                 external,
                 file_format,
@@ -439,6 +440,15 @@ impl Planner {
                 }
                 if !with_options.is_empty() {
                     bail!("WITH options are not supported");
+                }
+                for constraint in constraints {
+                    match constraint {
+                        SQLTableConstraint::Check { .. } => {
+                            bail!("CHECK constraints are not supported")
+                        }
+                        SQLTableConstraint::PrimaryKey { .. }
+                        | SQLTableConstraint::Unique { .. } => (),
+                    }
                 }
                 let types = columns
                     .iter()
@@ -461,7 +471,7 @@ impl Planner {
                                 SQLType::Time => FType::Time,
                                 other => bail!("Unexpected SQL type: {:?}", other),
                             },
-                            nullable: column.allow_null,
+                            nullable: true,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1547,6 +1557,9 @@ impl Planner {
             Value::SingleQuotedString(s) => (Datum::String(s.clone()), FType::String),
             Value::NationalStringLiteral(_) => {
                 bail!("n'' string literals are not supported: {}", l.to_string())
+            }
+            Value::HexStringLiteral(_) => {
+                bail!("x'' string literals are not supported: {}", l.to_string())
             }
             Value::Boolean(b) => match b {
                 false => (Datum::False, FType::Bool),

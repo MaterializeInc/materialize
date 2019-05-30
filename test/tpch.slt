@@ -5,7 +5,7 @@
 
 statement ok
 CREATE TABLE nation (
-    n_nationkey  integer NOT NULL,
+    n_nationkey  integer PRIMARY KEY,
     n_name       char(25) NOT NULL,
     n_regionkey  integer NOT NULL,
     n_comment    varchar(152)
@@ -13,14 +13,14 @@ CREATE TABLE nation (
 
 statement ok
 CREATE TABLE region  (
-    r_regionkey  integer NOT NULL,
+    r_regionkey  integer PRIMARY KEY,
     r_name       char(25) NOT NULL,
     r_comment    varchar(152)
 )
 
 statement ok
 CREATE TABLE part (
-    p_partkey     integer NOT NULL,
+    p_partkey     integer PRIMARY KEY,
     p_name        varchar(55) NOT NULL,
     p_mfgr        char(25) NOT NULL,
     p_brand       char(10) NOT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE part (
 
 statement ok
 CREATE TABLE supplier (
-    s_suppkey     integer NOT NULL,
+    s_suppkey     integer PRIMARY KEY,
     s_name        char(25) NOT NULL,
     s_address     varchar(40) NOT NULL,
     s_nationkey   integer NOT NULL,
@@ -48,12 +48,13 @@ CREATE TABLE partsupp (
     ps_suppkey     integer NOT NULL,
     ps_availqty    integer NOT NULL,
     ps_supplycost  decimal(15,2) NOT NULL,
-    ps_comment     varchar(199) NOT NULL
+    ps_comment     varchar(199) NOT NULL,
+    PRIMARY KEY (ps_partkey, ps_suppkey)
 )
 
 statement ok
 CREATE TABLE customer (
-    c_custkey     integer NOT NULL,
+    c_custkey     integer PRIMARY KEY,
     c_name        varchar(25) NOT NULL,
     c_address     varchar(40) NOT NULL,
     c_nationkey   integer NOT NULL,
@@ -65,7 +66,7 @@ CREATE TABLE customer (
 
 statement ok
 CREATE TABLE orders (
-    o_orderkey       integer NOT NULL,
+    o_orderkey       integer PRIMARY KEY,
     o_custkey        integer NOT NULL,
     o_orderstatus    char(1) NOT NULL,
     o_totalprice     decimal(15,2) NOT NULL,
@@ -93,7 +94,8 @@ CREATE TABLE lineitem (
     l_receiptdate    date NOT NULL,
     l_shipinstruct   char(25) NOT NULL,
     l_shipmode       char(10) NOT NULL,
-    l_comment        varchar(44) NOT NULL
+    l_comment        varchar(44) NOT NULL,
+    PRIMARY KEY (l_orderkey, l_linenumber)
 )
 
 query TTT valuesort
@@ -539,13 +541,13 @@ where
         select
             max(total_revenue)
         from
-            revenue:s
+            revenue
     )
 -- order by
 --     s_suppkey;
 
 query TTT valuesort
-drop view revenue:s;
+drop view revenue;
 
 
 query TTT valuesort
@@ -811,5 +813,3 @@ GROUP BY
     cntrycode
 -- ORDER BY
 --     cntrycode;
-
-

@@ -1949,7 +1949,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.3.2-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#db15b68f177392333b19d467d5bea0dd7d62f81f"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#2f10708f14d57646a99d5432724823659c68b5d8"
 dependencies = [
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "ordered-float 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
