@@ -5,6 +5,7 @@
 
 mod optimize;
 mod render;
+pub mod transform;
 mod types;
 
 pub use render::*;

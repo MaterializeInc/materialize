@@ -241,3 +241,57 @@ impl RelationExpr {
         self.typ().len()
     }
 }
+
+impl RelationExpr {
+    pub fn project(self, outputs: Vec<usize>) -> Self {
+        RelationExpr::Project {
+            input: Box::new(self),
+            outputs,
+        }
+    }
+    pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
+        RelationExpr::Map {
+            input: Box::new(self),
+            scalars,
+        }
+    }
+    pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
+        RelationExpr::Filter {
+            input: Box::new(self),
+            predicates,
+        }
+    }
+    pub fn reduce(
+        self,
+        group_key: Vec<usize>,
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
+    ) -> Self {
+        RelationExpr::Reduce {
+            input: Box::new(self),
+            group_key,
+            aggregates,
+        }
+    }
+    pub fn or_default(self, default: Vec<Datum>) -> Self {
+        RelationExpr::OrDefault {
+            input: Box::new(self),
+            default,
+        }
+    }
+    pub fn negate(self) -> Self {
+        RelationExpr::Negate {
+            input: Box::new(self),
+        }
+    }
+    pub fn distinct(self) -> Self {
+        RelationExpr::Distinct {
+            input: Box::new(self),
+        }
+    }
+    pub fn union(self, other: Self) -> Self {
+        RelationExpr::Union {
+            left: Box::new(self),
+            right: Box::new(other),
+        }
+    }
+}
