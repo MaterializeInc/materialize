@@ -619,6 +619,9 @@ impl Planner {
             Some(TableFactor::Derived { .. }) => {
                 bail!("subqueries are not yet supported");
             }
+            Some(TableFactor::NestedJoin { .. }) => {
+                bail!("nested joins are not yet supported");
+            }
             None => ("dual".into(), &none),
         };
         let plan = {
@@ -845,6 +848,9 @@ impl Planner {
                     }
                     TableFactor::Derived { .. } => {
                         bail!("subqueries are not yet supported");
+                    }
+                    TableFactor::NestedJoin { .. } => {
+                        bail!("nested joins are not yet supported");
                     }
                 }
             }
