@@ -1,3 +1,8 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::repr::*;
@@ -40,6 +45,7 @@ impl ScalarExpr {
         f(self);
     }
 
+    #[allow(dead_code)]
     fn permute(&mut self, permutation: &HashMap<usize, usize>) {
         self.visit(&mut |e| {
             if let ScalarExpr::Column(old_i) = e {
@@ -48,6 +54,7 @@ impl ScalarExpr {
         });
     }
 
+    #[allow(dead_code)]
     fn support(&mut self) -> HashSet<usize> {
         let mut support = HashSet::new();
         self.visit(&mut |e| {
@@ -155,6 +162,7 @@ impl RelationExpr {
         }
     }
 
+    #[allow(dead_code)]
     fn visit<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
@@ -163,6 +171,7 @@ impl RelationExpr {
         f(self)
     }
 
+    #[allow(dead_code)]
     fn push_down_projects_with(self, outputs: &[usize]) -> Self {
         match self {
             RelationExpr::Constant { mut rows, typ } => {

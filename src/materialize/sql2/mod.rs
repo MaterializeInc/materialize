@@ -5,11 +5,13 @@
 
 use crate::dataflow2::*;
 
-struct ColumnName {
-    table_name: Option<String>,
-    column_name: Option<String>,
+pub struct ColumnName {
+    pub table_name: Option<String>,
+    pub column_name: Option<String>,
 }
 
-fn plan(ast: sqlparser::sqlast::ASTNode) -> (RelationExpr, RelationType, Vec<ColumnName>) {
+pub fn plan(
+    _ast: sqlparser::sqlast::ASTNode,
+) -> (RelationExpr, OwnedRelationType, Vec<ColumnName>) {
     unimplemented!();
 }

@@ -1,3 +1,8 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
 use crate::dataflow2::types::{RelationExpr, RelationType};
 
 pub trait Transform {
@@ -50,7 +55,7 @@ pub mod join_order {
     }
 
     impl JoinOrder {
-        pub fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+        pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
             if let RelationExpr::Join { inputs, variables } = relation {
                 let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
@@ -192,83 +197,84 @@ pub mod predicate_pushdown {
     pub struct PredicatePushdown;
 
     impl PredicatePushdown {
-        pub fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+        pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
             if let RelationExpr::Filter { input, predicates } = relation {
-                match &mut **input {
-                    RelationExpr::Join { inputs, variables } => {
-                        // We want to scan `predicates` for any that can apply
-                        // to individual elements of `inputs`.
+                if let RelationExpr::Join {
+                    inputs,
+                    variables: _,
+                } = &mut **input
+                {
+                    // We want to scan `predicates` for any that can apply
+                    // to individual elements of `inputs`.
 
-                        let input_arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+                    let input_arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
-                        let mut offset = 0;
-                        let mut prior_arities = Vec::new();
-                        for input in 0..inputs.len() {
-                            prior_arities.push(offset);
-                            offset += input_arities[input];
-                        }
+                    let mut offset = 0;
+                    let mut prior_arities = Vec::new();
+                    for input in 0..inputs.len() {
+                        prior_arities.push(offset);
+                        offset += input_arities[input];
+                    }
 
-                        let input_relation = input_arities
-                            .iter()
-                            .enumerate()
-                            .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                            .collect::<Vec<_>>();
+                    let input_relation = input_arities
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                        .collect::<Vec<_>>();
 
-                        // Predicates to push at each input, and to retain.
-                        let mut push_downs = vec![Vec::new(); inputs.len()];
-                        let mut retain = Vec::new();
+                    // Predicates to push at each input, and to retain.
+                    let mut push_downs = vec![Vec::new(); inputs.len()];
+                    let mut retain = Vec::new();
 
-                        for mut predicate in predicates.drain(..) {
-                            // Determine the relation support of each predicate.
-                            let mut support = Vec::new();
-                            predicate.visit(&mut |e| {
-                                if let ScalarExpr::Column(i) = e {
-                                    support.push(input_relation[*i]);
-                                }
-                            });
-                            support.sort();
-                            support.dedup();
+                    for mut predicate in predicates.drain(..) {
+                        // Determine the relation support of each predicate.
+                        let mut support = Vec::new();
+                        predicate.visit(&mut |e| {
+                            if let ScalarExpr::Column(i) = e {
+                                support.push(input_relation[*i]);
+                            }
+                        });
+                        support.sort();
+                        support.dedup();
 
-                            match support.len() {
-                                0 => {
-                                    for push_down in push_downs.iter_mut() {
-                                        // no support, so nothing to rewrite.
-                                        push_down.push(predicate.clone());
-                                    }
-                                }
-                                1 => {
-                                    let relation = support[0];
-                                    predicate.visit(&mut |e| {
-                                        // subtract
-                                        if let ScalarExpr::Column(i) = e {
-                                            *i -= prior_arities[relation];
-                                        }
-                                    });
-                                    push_downs[relation].push(predicate);
-                                }
-                                _ => {
-                                    retain.push(predicate);
+                        match support.len() {
+                            0 => {
+                                for push_down in push_downs.iter_mut() {
+                                    // no support, so nothing to rewrite.
+                                    push_down.push(predicate.clone());
                                 }
                             }
+                            1 => {
+                                let relation = support[0];
+                                predicate.visit(&mut |e| {
+                                    // subtract
+                                    if let ScalarExpr::Column(i) = e {
+                                        *i -= prior_arities[relation];
+                                    }
+                                });
+                                push_downs[relation].push(predicate);
+                            }
+                            _ => {
+                                retain.push(predicate);
+                            }
                         }
-
-                        let new_inputs = inputs
-                            .drain(..)
-                            .zip(push_downs)
-                            .enumerate()
-                            .map(|(index, (input, push_down))| {
-                                if !push_down.is_empty() {
-                                    input.filter(push_down)
-                                } else {
-                                    input
-                                }
-                            })
-                            .collect();
-
-                        *inputs = new_inputs;
-                        *predicates = retain;
                     }
-                    _ => {}
+
+                    let new_inputs = inputs
+                        .drain(..)
+                        .zip(push_downs)
+                        .enumerate()
+                        .map(|(_index, (input, push_down))| {
+                            if !push_down.is_empty() {
+                                input.filter(push_down)
+                            } else {
+                                input
+                            }
+                        })
+                        .collect();
+
+                    *inputs = new_inputs;
+                    *predicates = retain;
                 }
             }
         }
@@ -332,7 +338,7 @@ pub mod fusion {
                         predicates.extend(p2.drain(..));
                         let empty = Box::new(RelationExpr::Constant {
                             rows: vec![],
-                            typ: metadata.clone(),
+                            typ: metadata.to_owned(),
                         });
                         *input = std::mem::replace(inner, empty);
                     }
@@ -341,7 +347,7 @@ pub mod fusion {
                     if predicates.is_empty() {
                         let empty = RelationExpr::Constant {
                             rows: vec![],
-                            typ: metadata.clone(),
+                            typ: metadata.to_owned(),
                         };
                         *relation = std::mem::replace(input, empty);
                     }

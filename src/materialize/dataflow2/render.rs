@@ -4,26 +4,27 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
 use crate::dataflow2::types::RelationExpr;
-use crate::repr;
 use crate::repr::Datum;
 
-pub fn render<G>(
+pub fn render<G, S>(
     plan: RelationExpr,
     scope: &mut G,
-    context: &HashMap<String, Collection<G, Vec<Datum>, isize>>,
+    context: &HashMap<String, Collection<G, Vec<Datum>, isize>, S>,
 ) -> Collection<G, Vec<Datum>, isize>
 where
     G: Scope,
     G::Timestamp: differential_dataflow::lattice::Lattice,
+    S: BuildHasher + Clone,
 {
     match plan {
         RelationExpr::Constant { .. } => unimplemented!(),
-        RelationExpr::Get { name, typ } => {
+        RelationExpr::Get { name, typ: _ } => {
             context.get(&name).expect("failed to find source").clone()
         }
         RelationExpr::Let { name, value, body } => {
@@ -161,7 +162,7 @@ where
                 })
                 .reduce(move |_key, source, target| {
                     let mut result = Vec::with_capacity(aggregates.len());
-                    for (idx, (agg, typ)) in aggregates.iter().enumerate() {
+                    for (_idx, (agg, _typ)) in aggregates.iter().enumerate() {
                         if agg.distinct {
                             let iter = source
                                 .iter()
@@ -193,7 +194,7 @@ where
         RelationExpr::OrDefault { input, default } => {
             use differential_dataflow::collection::AsCollection;
             use differential_dataflow::operators::reduce::Threshold;
-            use differential_dataflow::operators::{Join, Reduce};
+            use differential_dataflow::operators::Join;
             use timely::dataflow::operators::to_stream::ToStream;
 
             let input = render(*input, scope, context);

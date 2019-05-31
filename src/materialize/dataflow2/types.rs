@@ -19,7 +19,10 @@ pub struct ColumnType {
     pub is_nullable: bool,
 }
 
-pub type RelationType = Vec<ColumnType>;
+// TODO(benesch): see if there's a way to avoid having two typedefs for
+// relation types. Clippy really hates refs to vectors.
+pub type RelationType = [ColumnType];
+pub type OwnedRelationType = Vec<ColumnType>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ScalarExpr {
@@ -94,7 +97,7 @@ impl ScalarExpr {
                 (func.func())(eval1, eval2)
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                let evals = exprs.into_iter().map(|e| e.eval_on(data)).collect();
+                let evals = exprs.iter().map(|e| e.eval_on(data)).collect();
                 (func.func())(evals)
             }
             ScalarExpr::If { cond, then, els } => match cond.eval_on(data) {
@@ -118,10 +121,13 @@ pub enum RelationExpr {
     /// Always return the same value
     Constant {
         rows: Vec<Vec<Datum>>,
-        typ: RelationType,
+        typ: OwnedRelationType,
     },
     /// Get an existing dataflow
-    Get { name: String, typ: RelationType },
+    Get {
+        name: String,
+        typ: OwnedRelationType,
+    },
     /// Introduce a temporary dataflow
     Let {
         name: String,
