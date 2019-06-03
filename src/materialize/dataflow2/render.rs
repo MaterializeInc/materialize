@@ -27,7 +27,7 @@ where
     G::Timestamp: Lattice + Refines<crate::clock::Timestamp>,
     // S: BuildHasher + Clone,
 {
-    if context.collections.get(&plan).is_none() {
+    if context.collection(&plan).is_none() {
         let collection = match plan.clone() {
             RelationExpr::Constant { rows, .. } => {
                 use differential_dataflow::collection::AsCollection;
@@ -78,7 +78,6 @@ where
                 })
             }
             RelationExpr::Join { inputs, variables } => {
-
                 // For the moment, assert that each relation participates at most
                 // once in each equivalence class. If not, we should be able to
                 // push a filter upwards, and if we can't do that it means a bit
@@ -265,8 +264,7 @@ where
     }
 
     context
-        .collections
-        .get(&plan)
+        .collection(&plan)
         .expect("Collection surprisingly absent")
         .clone()
 }

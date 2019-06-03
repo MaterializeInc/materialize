@@ -46,6 +46,30 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    pub fn collection(&self, plan: &P) -> Option<Collection<S, Vec<V>, Diff>> {
+        if let Some(collection) = self.collections.get(plan) {
+            Some(collection.clone())
+        } else if let Some(local) = self.local.get(plan) {
+            Some(
+                local
+                    .values()
+                    .next()
+                    .expect("Empty arrangement")
+                    .as_collection(|_k, v| v.clone()),
+            )
+        } else if let Some(trace) = self.trace.get(plan) {
+            Some(
+                trace
+                    .values()
+                    .next()
+                    .expect("Empty arrangement")
+                    .as_collection(|_k, v| v.clone()),
+            )
+        } else {
+            None
+        }
+    }
+
     /// Reports if we have an arrangement available.
     pub fn arrangement(&self, plan: &P, keys: &[usize]) -> Option<ArrangementFlavor<S, V, T>> {
         if let Some(local) = self.local.get(plan).and_then(|x| x.get(keys)) {
@@ -90,11 +114,14 @@ where
     }
 }
 
+/// Describes flavor of arrangement: local or imported trace.
 pub enum ArrangementFlavor<S: Scope, V: Data, T: Lattice>
 where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    /// A dataflow-local arrangement.
     Local(Arrangement<S, V>),
+    /// An imported trace from outside the dataflow.
     Trace(ArrangementImport<S, V, T>),
 }
