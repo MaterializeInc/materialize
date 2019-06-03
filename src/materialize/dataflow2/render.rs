@@ -11,9 +11,9 @@ use timely::progress::timestamp::Refines;
 
 use differential_dataflow::{lattice::Lattice, Collection};
 
+use crate::dataflow2::context::Context;
 use crate::dataflow2::types::RelationExpr;
 use crate::repr::Datum;
-use crate::dataflow2::context::Context;
 
 pub fn render<G>(
     plan: RelationExpr,
@@ -22,12 +22,11 @@ pub fn render<G>(
 ) -> Collection<G, Vec<Datum>, isize>
 where
     G: Scope,
-    G::Timestamp: Lattice+Refines<crate::clock::Timestamp>,
+    G::Timestamp: Lattice + Refines<crate::clock::Timestamp>,
     // S: BuildHasher + Clone,
 {
     if context.collections.get(&plan).is_none() {
-        let collection =
-        match plan.clone() {
+        let collection = match plan.clone() {
             RelationExpr::Constant { rows, .. } => {
                 use differential_dataflow::collection::AsCollection;
                 use timely::dataflow::operators::{Map, ToStream};
@@ -101,8 +100,7 @@ where
                     let mut joined = render(input, scope, context);
 
                     // Maintain sources of each in-progress column.
-                    let mut columns =
-                        (0..arities[index]).map(|c| (index, c)).collect::<Vec<_>>();
+                    let mut columns = (0..arities[index]).map(|c| (index, c)).collect::<Vec<_>>();
 
                     // The intent is to maintain `joined` as the full cross
                     // product of all input relations so far, subject to all

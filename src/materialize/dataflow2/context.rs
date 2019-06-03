@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 
 use timely::dataflow::{Scope, ScopeParent};
-use timely::progress::{Timestamp, timestamp::Refines};
+use timely::progress::{timestamp::Refines, Timestamp};
 
-use differential_dataflow::Data;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
+use differential_dataflow::Data;
 use differential_dataflow::{lattice::Lattice, Collection};
-
 
 /// A trace handle for key-only data.
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
@@ -20,15 +19,13 @@ type Diff = isize;
 // Local type definition to avoid the horror in signatures.
 type Arrangement<S, V> =
     Arranged<S, TraceValHandle<Vec<V>, Vec<V>, <S as ScopeParent>::Timestamp, Diff>>;
-type ArrangementImport<S, V, T> = Arranged<
-    S,
-    TraceEnter<TraceValHandle<Vec<V>, Vec<V>, T, Diff>, <S as ScopeParent>::Timestamp>,
->;
+type ArrangementImport<S, V, T> =
+    Arranged<S, TraceEnter<TraceValHandle<Vec<V>, Vec<V>, T, Diff>, <S as ScopeParent>::Timestamp>>;
 
 /// Dataflow-local collections and arrangements.
-pub struct Context<S: Scope, P: Eq+std::hash::Hash, V: Data, T>
+pub struct Context<S: Scope, P: Eq + std::hash::Hash, V: Data, T>
 where
-    T: Timestamp+Lattice,
+    T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Dataflow local collections.
@@ -39,10 +36,10 @@ where
     pub trace: HashMap<P, HashMap<Vec<usize>, ArrangementImport<S, V, T>>>,
 }
 
-impl<S: Scope, P: Eq+std::hash::Hash, V: Data, T> Context<S, P, V, T>
+impl<S: Scope, P: Eq + std::hash::Hash, V: Data, T> Context<S, P, V, T>
 where
-    T: Timestamp+Lattice,
-    S::Timestamp: Lattice+Refines<T>,
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
 {
     /// Retrieves an arrangement from a plan and keys.
     pub fn get_local(&self, plan: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
