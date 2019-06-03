@@ -23,7 +23,13 @@ where
     S: BuildHasher + Clone,
 {
     match plan {
-        RelationExpr::Constant { .. } => unimplemented!(),
+        RelationExpr::Constant { rows, .. } => {
+            use differential_dataflow::collection::AsCollection;
+            use timely::dataflow::operators::{Map, ToStream};
+            rows.to_stream(scope)
+                .map(|x| (x, Default::default(), 1))
+                .as_collection()
+        }
         RelationExpr::Get { name, typ: _ } => {
             context.get(&name).expect("failed to find source").clone()
         }
