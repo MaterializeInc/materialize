@@ -184,9 +184,14 @@ where
                 group_key,
                 aggregates,
             } => {
-                use differential_dataflow::operators::Reduce;
+                use differential_dataflow::operators::reduce::ReduceCore;
+                use differential_dataflow::trace::implementations::ord::OrdValSpine;
+
+                let self_clone = plan.clone();
+                let keys_clone = group_key.clone();
                 let input = render(*input, scope, context);
-                input
+
+                let arrangement = input
                     .map(move |tuple| {
                         (
                             group_key
@@ -196,8 +201,10 @@ where
                             tuple,
                         )
                     })
-                    .reduce(move |_key, source, target| {
-                        let mut result = Vec::with_capacity(aggregates.len());
+                    // .reduce_abelian::<>(move |_key, source, target| {
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |key, source, target| {
+                        let mut result = Vec::with_capacity(key.len() + aggregates.len());
+                        result.extend(key.iter().cloned());
                         for (_idx, (agg, _typ)) in aggregates.iter().enumerate() {
                             if agg.distinct {
                                 let iter =
@@ -221,11 +228,10 @@ where
                             }
                         }
                         target.push((result, 1));
-                    })
-                    .map(|(mut key, agg)| {
-                        key.extend(agg.into_iter());
-                        key
-                    })
+                    });
+
+                context.set_local(self_clone, &keys_clone[..], arrangement.clone());
+                arrangement.as_collection(|_key, tuple| tuple.clone())
             }
 
             RelationExpr::OrDefault { input, default } => {
