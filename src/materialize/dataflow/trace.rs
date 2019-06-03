@@ -12,7 +12,7 @@ use std::collections::HashMap;
 // use timely::dataflow::operators::probe::Probe;
 // use timely::dataflow::Scope;
 
-use super::types::{Diff, Expr, Plan};
+use super::types::{Diff, Plan, ScalarExpr};
 use crate::clock::Timestamp;
 use crate::repr::Datum;
 
@@ -31,7 +31,13 @@ pub type DeleteCallback = Box<FnMut()>;
 /// of the collection the plan computes. These arrangements can either be unkeyed,
 /// or keyed by some expression.
 pub struct TraceManager {
-    traces: HashMap<Plan, (Option<TraceInfoUnkeyed>, HashMap<Expr, TraceInfoKeyed>)>,
+    traces: HashMap<
+        Plan,
+        (
+            Option<TraceInfoUnkeyed>,
+            HashMap<ScalarExpr, TraceInfoKeyed>,
+        ),
+    >,
 }
 
 struct TraceInfoKeyed {
@@ -77,7 +83,7 @@ impl TraceManager {
             .and_then(|x| x.0.as_ref().map(|ti| ti.trace.clone()))
     }
 
-    pub fn get_keyed_trace(&self, plan: &Plan, key: &Expr) -> Option<KeysValsHandle> {
+    pub fn get_keyed_trace(&self, plan: &Plan, key: &ScalarExpr) -> Option<KeysValsHandle> {
         self.traces
             .get(plan)
             .and_then(|x| x.1.get(key).map(|ti| ti.trace.clone()))
@@ -101,7 +107,7 @@ impl TraceManager {
     pub fn set_keyed_trace(
         &mut self,
         plan: &Plan,
-        key: &Expr,
+        key: &ScalarExpr,
         trace: KeysValsHandle,
         delete_callback: DeleteCallback,
     ) {

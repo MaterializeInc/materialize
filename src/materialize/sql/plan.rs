@@ -6,7 +6,7 @@
 use failure::bail;
 use sqlparser::sqlast::SQLFunction;
 
-use crate::dataflow::{Aggregate, Expr, Plan};
+use crate::dataflow::{Aggregate, Plan, ScalarExpr};
 use crate::repr::{FType, Type};
 use ore::option::OptionExt;
 
@@ -117,8 +117,8 @@ impl SQLPlan {
     pub fn join_on(
         self,
         right: Self,
-        left_key: Expr,
-        right_key: Expr,
+        left_key: ScalarExpr,
+        right_key: ScalarExpr,
         include_left_outer: bool,
         include_right_outer: bool,
     ) -> Self {
@@ -193,8 +193,8 @@ impl SQLPlan {
             .collect::<Vec<_>>();
         left.join_on(
             right,
-            Expr::columns(&left_key, &Expr::Ambient),
-            Expr::columns(&right_key, &Expr::Ambient),
+            ScalarExpr::columns(&left_key),
+            ScalarExpr::columns(&right_key),
             include_left_outer,
             include_right_outer,
         )
@@ -228,8 +228,8 @@ impl SQLPlan {
         Ok(left
             .join_on(
                 right,
-                Expr::columns(&left_key, &Expr::Ambient),
-                Expr::columns(&right_key, &Expr::Ambient),
+                ScalarExpr::columns(&left_key),
+                ScalarExpr::columns(&right_key),
                 include_left_outer,
                 include_right_outer,
             )
@@ -240,17 +240,14 @@ impl SQLPlan {
         let SQLPlan { plan, columns } = self;
         SQLPlan {
             plan: Plan::Project {
-                outputs: project_key
-                    .iter()
-                    .map(|i| Expr::Column(*i, Box::new(Expr::Ambient)))
-                    .collect(),
+                outputs: project_key.iter().map(|&i| ScalarExpr::Column(i)).collect(),
                 input: Box::new(plan),
             },
             columns: project_key.iter().map(|i| columns[*i].clone()).collect(),
         }
     }
 
-    pub fn filter(mut self, predicate: Expr) -> Self {
+    pub fn filter(mut self, predicate: ScalarExpr) -> Self {
         self.plan = Plan::Filter {
             predicate,
             input: Box::new(self.plan),
@@ -260,7 +257,7 @@ impl SQLPlan {
 
     pub fn aggregate(
         self,
-        key_expr: Expr,
+        key_expr: ScalarExpr,
         key_columns: Vec<(Name, Type)>,
         aggregates: Vec<(&SQLFunction, Aggregate, Type)>,
     ) -> Self {
@@ -295,7 +292,7 @@ impl SQLPlan {
         }
     }
 
-    pub fn project(self, outputs: Vec<(Expr, Type)>) -> Self {
+    pub fn project(self, outputs: Vec<(ScalarExpr, Type)>) -> Self {
         let SQLPlan { plan, .. } = self;
         SQLPlan {
             plan: Plan::Project {

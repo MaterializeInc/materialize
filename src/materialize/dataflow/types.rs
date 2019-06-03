@@ -118,7 +118,7 @@ pub enum Plan {
     Source(String),
     /// Project or permute the columns in a dataflow.
     Project {
-        outputs: Vec<Expr>,
+        outputs: Vec<ScalarExpr>,
         /// Plan for the input.
         input: Box<Plan>,
     },
@@ -129,9 +129,9 @@ pub enum Plan {
     /// Join two dataflows.
     Join {
         /// Expression to compute the key from the left input.
-        left_key: Expr,
+        left_key: ScalarExpr,
         /// Expression to compute the key from the right input.
-        right_key: Expr,
+        right_key: ScalarExpr,
         /// Plan for the left input.
         left: Box<Plan>,
         /// Plan for the right input.
@@ -150,10 +150,13 @@ pub enum Plan {
         equalities: Vec<((usize, usize), (usize, usize))>,
     },
     /// Filter records based on predicate.
-    Filter { predicate: Expr, input: Box<Plan> },
+    Filter {
+        predicate: ScalarExpr,
+        input: Box<Plan>,
+    },
     /// Aggregate records that share a key.
     Aggregate {
-        key: Expr,
+        key: ScalarExpr,
         aggs: Vec<Aggregate>,
         input: Box<Plan>,
     },
@@ -203,48 +206,45 @@ impl Plan {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct Aggregate {
     pub func: AggregateFunc,
-    pub expr: Expr,
+    pub expr: ScalarExpr,
     pub distinct: bool,
 }
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum Expr {
-    /// The ambient value.
-    Ambient,
-    /// Tuple element selector.
-    Column(usize, Box<Expr>),
-    /// Tuple constructor.
-    Tuple(Vec<Expr>),
+pub enum ScalarExpr {
+    /// A column of the input row
+    Column(usize),
     /// A literal value.
     Literal(Datum),
     /// A function call that takes one expression as an argument.
-    CallUnary { func: UnaryFunc, expr: Box<Expr> },
+    CallUnary {
+        func: UnaryFunc,
+        expr: Box<ScalarExpr>,
+    },
     /// A function call that takes two expressions as arguments.
     CallBinary {
         func: BinaryFunc,
-        expr1: Box<Expr>,
-        expr2: Box<Expr>,
-    },
-    If {
-        cond: Box<Expr>,
-        then: Box<Expr>,
-        els: Box<Expr>,
+        expr1: Box<ScalarExpr>,
+        expr2: Box<ScalarExpr>,
     },
     /// A function call that takes an arbitrary number of arguments.
     CallVariadic {
         func: VariadicFunc,
-        exprs: Vec<Expr>,
+        exprs: Vec<ScalarExpr>,
     },
+    If {
+        cond: Box<ScalarExpr>,
+        then: Box<ScalarExpr>,
+        els: Box<ScalarExpr>,
+    },
+    // TODO(jamii) remove
+    Tuple(Vec<ScalarExpr>),
 }
 
-impl Expr {
-    pub fn columns(is: &[usize], input: &Expr) -> Self {
-        Expr::Tuple(
-            is.iter()
-                .map(|i| Expr::Column(*i, Box::new(input.clone())))
-                .collect(),
-        )
+impl ScalarExpr {
+    pub fn columns(is: &[usize]) -> Self {
+        ScalarExpr::Tuple(is.iter().map(|i| ScalarExpr::Column(*i)).collect())
     }
 }
 
@@ -262,13 +262,10 @@ mod tests {
         let dataflow = Dataflow::View(View {
             name: "report".into(),
             plan: Plan::Project {
-                outputs: vec![
-                    Expr::Column(1, Box::new(Expr::Ambient)),
-                    Expr::Column(2, Box::new(Expr::Ambient)),
-                ],
+                outputs: vec![ScalarExpr::Column(1), ScalarExpr::Column(2)],
                 input: Box::new(Plan::Join {
-                    left_key: Expr::Column(0, Box::new(Expr::Ambient)),
-                    right_key: Expr::Column(0, Box::new(Expr::Ambient)),
+                    left_key: ScalarExpr::Column(0),
+                    right_key: ScalarExpr::Column(0),
                     left: Box::new(Plan::Source("orders".into())),
                     right: Box::new(Plan::Distinct(Box::new(Plan::UnionAll(vec![
                         Plan::Source("customers2018".into()),

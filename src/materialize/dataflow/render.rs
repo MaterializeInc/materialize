@@ -143,7 +143,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             };
             match &key {
                 // empty GROUP BY, add a sentinel value so that reduce produces output even on empty inputs
-                Expr::Tuple(exprs) if exprs.is_empty() => {
+                ScalarExpr::Tuple(exprs) if exprs.is_empty() => {
                     let sentinel = if worker_index == 0 {
                         vec![(Datum::Tuple(vec![]), None)]
                     } else {
@@ -445,32 +445,31 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
     }
 }
 
-fn eval_expr(expr: &Expr, datum: &Datum) -> Datum {
+fn eval_expr(expr: &ScalarExpr, datum: &Datum) -> Datum {
     match expr {
-        Expr::Ambient => datum.clone(),
-        Expr::Column(index, expr) => match eval_expr(expr, datum) {
+        ScalarExpr::Column(index) => match datum {
             Datum::Tuple(tuple) => tuple[*index].clone(),
             _ => unreachable!(),
         },
-        Expr::Tuple(exprs) => {
+        ScalarExpr::Tuple(exprs) => {
             let exprs = exprs.iter().map(|e| eval_expr(e, datum)).collect();
             Datum::Tuple(exprs)
         }
-        Expr::Literal(datum) => datum.clone(),
-        Expr::CallUnary { func, expr } => {
+        ScalarExpr::Literal(datum) => datum.clone(),
+        ScalarExpr::CallUnary { func, expr } => {
             let datum = eval_expr(expr, datum);
             (func.func())(datum)
         }
-        Expr::CallBinary { func, expr1, expr2 } => {
+        ScalarExpr::CallBinary { func, expr1, expr2 } => {
             let datum1 = eval_expr(expr1, datum);
             let datum2 = eval_expr(expr2, datum);
             (func.func())(datum1, datum2)
         }
-        Expr::CallVariadic { func, exprs } => {
+        ScalarExpr::CallVariadic { func, exprs } => {
             let datums = exprs.iter().map(|e| eval_expr(e, datum)).collect();
             (func.func())(datums)
         }
-        Expr::If { cond, then, els } => match eval_expr(cond, datum) {
+        ScalarExpr::If { cond, then, els } => match eval_expr(cond, datum) {
             Datum::True => eval_expr(then, datum),
             Datum::False | Datum::Null => eval_expr(els, datum),
             d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
