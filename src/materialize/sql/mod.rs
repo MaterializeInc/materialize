@@ -232,7 +232,7 @@ impl Planner {
                             .zip(types.iter())
                             .map(|(ast, typ)| Datum::from_sql(ast, typ))
                             .collect::<Result<Vec<_>, _>>()?;
-                        Ok(Datum::Tuple(datums))
+                        Ok(datums)
                     })
                     .collect::<Result<Vec<_>, failure::Error>>()?
             }

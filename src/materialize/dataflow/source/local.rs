@@ -14,7 +14,7 @@ use crate::dataflow::types::{Diff, LocalSourceConnector};
 use crate::glue::*;
 use crate::repr::Datum;
 
-pub type InsertMux = Arc<RwLock<Mux<String, Vec<Datum>>>>;
+pub type InsertMux = Arc<RwLock<Mux<String, Vec<Vec<Datum>>>>>;
 
 pub fn local<G>(
     scope: &G,
@@ -23,7 +23,7 @@ pub fn local<G>(
     done: Rc<Cell<bool>>,
     clock: &Clock,
     mux: &InsertMux,
-) -> Stream<G, (Datum, Timestamp, Diff)>
+) -> Stream<G, (Vec<Datum>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -54,11 +54,11 @@ where
             let ts = clock.now();
 
             // Consume all data waiting in the queue
-            while let Ok(Some(datums)) = receiver.try_next() {
+            while let Ok(Some(rows)) = receiver.try_next() {
                 let cap = cap.delayed(&ts);
                 let mut session = output.session(&cap);
-                for datum in datums {
-                    session.give((datum, *cap.time(), 1));
+                for row in rows {
+                    session.give((row, *cap.time(), 1));
                 }
             }
 

@@ -81,26 +81,26 @@ impl ScalarExpr {
 }
 
 impl ScalarExpr {
-    pub fn eval_on(&self, data: &[Datum]) -> Datum {
+    pub fn eval(&self, data: &[Datum]) -> Datum {
         match self {
             ScalarExpr::Column(index) => data[*index].clone(),
             ScalarExpr::Literal(datum) => datum.clone(),
             ScalarExpr::CallUnary { func, expr } => {
-                let eval = expr.eval_on(data);
+                let eval = expr.eval(data);
                 (func.func())(eval)
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let eval1 = expr1.eval_on(data);
-                let eval2 = expr2.eval_on(data);
+                let eval1 = expr1.eval(data);
+                let eval2 = expr2.eval(data);
                 (func.func())(eval1, eval2)
             }
             ScalarExpr::CallVariadic { func, exprs } => {
-                let evals = exprs.iter().map(|e| e.eval_on(data)).collect();
+                let evals = exprs.iter().map(|e| e.eval(data)).collect();
                 (func.func())(evals)
             }
-            ScalarExpr::If { cond, then, els } => match cond.eval_on(data) {
-                Datum::True => then.eval_on(data),
-                Datum::False => els.eval_on(data),
+            ScalarExpr::If { cond, then, els } => match cond.eval(data) {
+                Datum::True => then.eval(data),
+                Datum::False => els.eval(data),
                 d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
             },
         }

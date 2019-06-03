@@ -249,8 +249,8 @@ mod tests {
             plan: Plan::Project {
                 outputs: vec![ScalarExpr::Column(1), ScalarExpr::Column(2)],
                 input: Box::new(Plan::Join {
-                    left_key: ScalarExpr::Column(0),
-                    right_key: ScalarExpr::Column(0),
+                    left_key: vec![ScalarExpr::Column(0)],
+                    right_key: vec![ScalarExpr::Column(0)],
                     left: Box::new(Plan::Source("orders".into())),
                     right: Box::new(Plan::Distinct(Box::new(Plan::UnionAll(vec![
                         Plan::Source("customers2018".into()),

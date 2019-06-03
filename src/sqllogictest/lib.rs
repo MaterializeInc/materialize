@@ -236,7 +236,7 @@ pub enum Outcome<'a> {
     },
     OutputFailure {
         expected_output: &'a Output<'a>,
-        actual_output: Vec<Datum>,
+        actual_output: Vec<Vec<Datum>>,
     },
     Bail {
         cause: Box<Outcome<'a>>,
@@ -331,37 +331,34 @@ struct FullState {
     peek_results_mux: PeekResultsMux,
 }
 
-fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
-    match datum {
-        Datum::Tuple(datums) => types
-            .iter()
-            .zip(datums.iter())
-            .map(|(typ, datum)| match (typ, datum) {
-                (_, Datum::Null) => "NULL".to_owned(),
+fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
+    types
+        .iter()
+        .zip(row.iter())
+        .map(|(typ, datum)| match (typ, datum) {
+            (_, Datum::Null) => "NULL".to_owned(),
 
-                (Type::Integer, Datum::Int64(i)) => format!("{}", i),
-                (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
-                // sqllogictest does some weird type coercions in practice
-                (Type::Integer, Datum::String(_)) => "0".to_owned(),
-                (Type::Integer, Datum::False) => "0".to_owned(),
-                (Type::Integer, Datum::True) => "1".to_owned(),
+            (Type::Integer, Datum::Int64(i)) => format!("{}", i),
+            (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
+            // sqllogictest does some weird type coercions in practice
+            (Type::Integer, Datum::String(_)) => "0".to_owned(),
+            (Type::Integer, Datum::False) => "0".to_owned(),
+            (Type::Integer, Datum::True) => "1".to_owned(),
 
-                (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
+            (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
 
-                (Type::Text, Datum::String(string)) => {
-                    if string.is_empty() {
-                        "(empty)".to_owned()
-                    } else {
-                        string.to_owned()
-                    }
+            (Type::Text, Datum::String(string)) => {
+                if string.is_empty() {
+                    "(empty)".to_owned()
+                } else {
+                    string.to_owned()
                 }
-                (Type::Text, Datum::Int64(i)) => format!("{}", i),
-                (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
-                other => panic!("Don't know how to format {:?}", other),
-            })
-            .collect(),
-        _ => panic!("Non-datum tuple in select output: {:?}", datum),
-    }
+            }
+            (Type::Text, Datum::Int64(i)) => format!("{}", i),
+            (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
+            other => panic!("Don't know how to format {:?}", other),
+        })
+        .collect()
 }
 
 impl FullState {
@@ -413,7 +410,7 @@ impl FullState {
         receiver
     }
 
-    fn receive_peek_results(&self, receiver: UnboundedReceiver<PeekResults>) -> Vec<Datum> {
+    fn receive_peek_results(&self, receiver: UnboundedReceiver<PeekResults>) -> Vec<Vec<Datum>> {
         let mut results = vec![];
         let mut receiver = receiver.wait();
         for _ in 0..NUM_TIMELY_WORKERS {
@@ -512,7 +509,7 @@ impl RecordRunner for FullState {
 
                 let mut rows = results
                     .iter()
-                    .map(|datum| format_datum(datum, &**expected_types))
+                    .map(|row| format_row(row, &**expected_types))
                     .collect::<Vec<_>>();
                 if let Sort::Row = sort {
                     rows.sort();
@@ -720,20 +717,14 @@ pub fn fuzz(sqls: &str) {
                         FType::Tuple(types) => types,
                         _ => panic!(),
                     };
-                    for datum in state.receive_peek_results(receiver) {
-                        match datum {
-                            Datum::Tuple(datums) => {
-                                for (typ, datum) in types.iter().zip(datums.into_iter()) {
-                                    assert!(
-                                        (typ.ftype == datum.ftype())
-                                            || (typ.nullable && datum.is_null()),
-                                        "{:?} was inferred to have type {:?}",
-                                        typ.ftype,
-                                        datum.ftype(),
-                                    );
-                                }
-                            }
-                            _ => panic!(),
+                    for row in state.receive_peek_results(receiver) {
+                        for (typ, datum) in types.iter().zip(row.into_iter()) {
+                            assert!(
+                                (typ.ftype == datum.ftype()) || (typ.nullable && datum.is_null()),
+                                "{:?} was inferred to have type {:?}",
+                                typ.ftype,
+                                datum.ftype(),
+                            );
                         }
                     }
                 }

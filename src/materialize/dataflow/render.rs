@@ -30,7 +30,7 @@ pub fn add_builtin_dataflows<A: Allocate>(
     worker: &mut TimelyWorker<A>,
 ) {
     let dual_table_data = if worker.index() == 0 {
-        vec![Datum::String("X".into())]
+        vec![vec![Datum::String("X".into())]]
     } else {
         vec![]
     };
@@ -105,7 +105,7 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
     worker_index: usize,
     scope: &mut S,
     buttons: &mut Vec<ShutdownButton<CapabilitySet<Timestamp>>>,
-) -> Collection<S, Datum, Diff> {
+) -> Collection<S, Vec<Datum>, Diff> {
     match plan {
         Plan::Source(name) => {
             let (arrangement, button) = manager
@@ -118,15 +118,14 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
 
         Plan::Project { outputs, input } => {
             let outputs = outputs.clone();
-            build_plan(&input, manager, worker_index, scope, buttons).map(move |datum| {
-                Datum::Tuple(outputs.iter().map(|expr| eval_expr(expr, &datum)).collect())
-            })
+            build_plan(&input, manager, worker_index, scope, buttons)
+                .map(move |data| outputs.iter().map(|expr| expr.eval(&data)).collect())
         }
 
         Plan::Filter { predicate, input } => {
             let predicate = predicate.clone();
-            build_plan(&input, manager, worker_index, scope, buttons).filter(move |datum| {
-                match eval_expr(&predicate, &datum) {
+            build_plan(&input, manager, worker_index, scope, buttons).filter(move |data| {
+                match predicate.eval(&data) {
                     Datum::False | Datum::Null => false,
                     Datum::True => true,
                     _ => unreachable!(),
@@ -138,17 +137,17 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
         Plan::Aggregate { key, aggs, input } => {
             let mut plan = {
                 let key = key.clone();
-                build_plan(&input, manager, worker_index, scope, buttons).map(move |datum| {
+                build_plan(&input, manager, worker_index, scope, buttons).map(move |data| {
                     (
-                        Datum::Tuple(key.iter().map(|expr| eval_expr(&expr, &datum)).collect()),
-                        Some(datum),
+                        key.iter().map(|expr| expr.eval(&data)).collect(),
+                        Some(data),
                     )
                 })
             };
             if key.is_empty() {
                 // empty GROUP BY, add a sentinel value so that reduce produces output even on empty inputs
                 let sentinel = if worker_index == 0 {
-                    vec![(Datum::Tuple(vec![]), None)]
+                    vec![(vec![], None)]
                 } else {
                     vec![]
                 };
@@ -163,17 +162,17 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                             if agg.distinct {
                                 let datums = input
                                     .iter()
-                                    .filter_map(|(datum, _cnt)| {
-                                        datum.as_ref().map(|datum| eval_expr(&agg.expr, datum))
+                                    .filter_map(|(data, _cnt)| {
+                                        data.as_ref().map(|data| agg.expr.eval(&data))
                                     })
                                     .collect::<HashSet<_>>();
                                 (agg.func.func())(datums)
                             } else {
                                 let datums = input
                                     .iter()
-                                    .filter_map(|(datum, cnt)| {
-                                        datum.as_ref().map(|datum| {
-                                            let datum = eval_expr(&agg.expr, datum);
+                                    .filter_map(|(data, cnt)| {
+                                        data.as_ref().map(|data| {
+                                            let datum = agg.expr.eval(&data);
                                             iter::repeat(datum).take(*cnt as usize)
                                         })
                                     })
@@ -184,10 +183,9 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                         .collect();
                     output.push((res, 1));
                 })
-                .map(|(key, values)| {
-                    let mut tuple = key.unwrap_tuple();
-                    tuple.extend(values);
-                    Datum::Tuple(tuple)
+                .map(|(mut key, values)| {
+                    key.extend(values);
+                    key
                 });
             plan
         }
@@ -213,15 +211,10 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             } else {
                 let left_key2 = left_key.clone();
                 let left_trace = build_plan(&left_plan, manager, worker_index, scope, buttons)
-                    .map(move |datum| {
+                    .map(move |data| {
                         (
-                            Datum::Tuple(
-                                left_key2
-                                    .iter()
-                                    .map(|expr| eval_expr(&expr, &datum))
-                                    .collect(),
-                            ),
-                            datum,
+                            left_key2.iter().map(|expr| expr.eval(&data)).collect(),
+                            data,
                         )
                     })
                     .arrange_by_key();
@@ -243,15 +236,10 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             } else {
                 let right_key2 = right_key.clone();
                 let right_trace = build_plan(&right_plan, manager, worker_index, scope, buttons)
-                    .map(move |datum| {
+                    .map(move |data| {
                         (
-                            Datum::Tuple(
-                                right_key2
-                                    .iter()
-                                    .map(|expr| eval_expr(&expr, &datum))
-                                    .collect(),
-                            ),
-                            datum,
+                            right_key2.iter().map(|expr| expr.eval(&data)).collect(),
+                            data,
                         )
                     })
                     .arrange_by_key();
@@ -266,9 +254,9 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             };
 
             let mut flow = left_arranged.join_core(&right_arranged, |_key, left, right| {
-                let mut tuple = left.clone().unwrap_tuple();
-                tuple.extend(right.clone().unwrap_tuple());
-                Some(Datum::Tuple(tuple))
+                let mut left = left.clone();
+                left.extend(right.clone());
+                Some(left)
             });
 
             if let Some(num_cols) = include_left_outer {
@@ -278,10 +266,9 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
 
                 flow = left_arranged
                     .antijoin(&right_keys)
-                    .map(move |(_key, left)| {
-                        let mut tuple = left.unwrap_tuple();
-                        tuple.extend((0..num_cols).map(|_| Datum::Null));
-                        Datum::Tuple(tuple)
+                    .map(move |(_key, mut left)| {
+                        left.extend((0..num_cols).map(|_| Datum::Null));
+                        left
                     })
                     .concat(&flow);
             }
@@ -295,8 +282,8 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
                     .antijoin(&left_keys)
                     .map(move |(_key, right)| {
                         let mut tuple = (0..num_cols).map(|_| Datum::Null).collect::<Vec<_>>();
-                        tuple.extend(right.unwrap_tuple());
-                        Datum::Tuple(tuple)
+                        tuple.extend(right);
+                        tuple
                     })
                     .concat(&flow);
             }
@@ -317,30 +304,29 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
     }
 }
 
-fn eval_expr(expr: &ScalarExpr, datum: &Datum) -> Datum {
-    match expr {
-        ScalarExpr::Column(index) => match datum {
-            Datum::Tuple(tuple) => tuple[*index].clone(),
-            _ => unreachable!(),
-        },
-        ScalarExpr::Literal(datum) => datum.clone(),
-        ScalarExpr::CallUnary { func, expr } => {
-            let datum = eval_expr(expr, datum);
-            (func.func())(datum)
+impl ScalarExpr {
+    fn eval(&self, data: &[Datum]) -> Datum {
+        match self {
+            ScalarExpr::Column(index) => data[*index].clone(),
+            ScalarExpr::Literal(datum) => datum.clone(),
+            ScalarExpr::CallUnary { func, expr } => {
+                let eval = expr.eval(data);
+                (func.func())(eval)
+            }
+            ScalarExpr::CallBinary { func, expr1, expr2 } => {
+                let eval1 = expr1.eval(data);
+                let eval2 = expr2.eval(data);
+                (func.func())(eval1, eval2)
+            }
+            ScalarExpr::CallVariadic { func, exprs } => {
+                let evals = exprs.iter().map(|e| e.eval(data)).collect();
+                (func.func())(evals)
+            }
+            ScalarExpr::If { cond, then, els } => match cond.eval(data) {
+                Datum::True => then.eval(data),
+                Datum::False => els.eval(data),
+                d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
+            },
         }
-        ScalarExpr::CallBinary { func, expr1, expr2 } => {
-            let datum1 = eval_expr(expr1, datum);
-            let datum2 = eval_expr(expr2, datum);
-            (func.func())(datum1, datum2)
-        }
-        ScalarExpr::CallVariadic { func, exprs } => {
-            let datums = exprs.iter().map(|e| eval_expr(e, datum)).collect();
-            (func.func())(datums)
-        }
-        ScalarExpr::If { cond, then, els } => match eval_expr(cond, datum) {
-            Datum::True => eval_expr(then, datum),
-            Datum::False | Datum::Null => eval_expr(els, datum),
-            d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
-        },
     }
 }

@@ -48,8 +48,6 @@ pub enum Datum {
     Bytes(Vec<u8>),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(String),
-    /// A [`Tuple`].
-    Tuple(Tuple),
 }
 
 impl Datum {
@@ -110,20 +108,6 @@ impl Datum {
         }
     }
 
-    pub fn unwrap_tuple(self) -> Tuple {
-        match self {
-            Datum::Tuple(tuple) => tuple,
-            _ => panic!("Datum::unwrap_tuple called on {:?}", self),
-        }
-    }
-
-    pub fn asref_tuple(&self) -> &Tuple {
-        match self {
-            Datum::Tuple(tuple) => &tuple,
-            _ => panic!("Datum::unwrap_tuple called on {:?}", self),
-        }
-    }
-
     pub fn ftype(&self) -> FType {
         match self {
             Datum::Null => FType::Null,
@@ -135,16 +119,6 @@ impl Datum {
             Datum::Float64(_) => FType::Float64,
             Datum::Bytes(_) => FType::Bytes,
             Datum::String(_) => FType::String,
-            Datum::Tuple(datums) => FType::Tuple(
-                datums
-                    .iter()
-                    .map(|datum| Type {
-                        name: None,
-                        nullable: true,
-                        ftype: datum.ftype(),
-                    })
-                    .collect(),
-            ),
         }
     }
 }

@@ -61,7 +61,7 @@ where
                 input.map(move |mut tuple| {
                     let len = tuple.len();
                     for s in scalars.iter() {
-                        let to_push = s.0.eval_on(&tuple[..len]);
+                        let to_push = s.0.eval(&tuple[..len]);
                         tuple.push(to_push);
                     }
                     tuple
@@ -70,13 +70,11 @@ where
             RelationExpr::Filter { input, predicates } => {
                 let input = render(*input, scope, context);
                 input.filter(move |x| {
-                    predicates
-                        .iter()
-                        .all(|predicate| match predicate.eval_on(x) {
-                            Datum::True => true,
-                            Datum::False => false,
-                            _ => unreachable!(),
-                        })
+                    predicates.iter().all(|predicate| match predicate.eval(x) {
+                        Datum::True => true,
+                        Datum::False => false,
+                        _ => unreachable!(),
+                    })
                 })
             }
             RelationExpr::Join { inputs, variables } => {
@@ -203,20 +201,21 @@ where
                         let mut result = Vec::with_capacity(aggregates.len());
                         for (_idx, (agg, _typ)) in aggregates.iter().enumerate() {
                             if agg.distinct {
-                                let iter = source
-                                    .iter()
-                                    .flat_map(|(v, w)| {
-                                        if *w > 0 {
-                                            Some(agg.expr.eval_on(v))
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect::<HashSet<_>>();
+                                let iter =
+                                    source
+                                        .iter()
+                                        .flat_map(|(v, w)| {
+                                            if *w > 0 {
+                                                Some(agg.expr.eval(v))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect::<HashSet<_>>();
                                 result.push((agg.func.func())(iter));
                             } else {
                                 let iter = source.iter().flat_map(|(v, w)| {
-                                    let eval = agg.expr.eval_on(v);
+                                    let eval = agg.expr.eval(v);
                                     std::iter::repeat(eval).take(std::cmp::max(*w, 0) as usize)
                                 });
                                 result.push((agg.func.func())(iter));

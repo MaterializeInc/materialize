@@ -18,8 +18,8 @@ use crate::repr::Datum;
 
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-pub type KeysOnlyHandle = TraceKeyHandle<Datum, Timestamp, Diff>;
-pub type KeysValsHandle = TraceValHandle<Datum, Datum, Timestamp, Diff>;
+pub type KeysOnlyHandle = TraceKeyHandle<Vec<Datum>, Timestamp, Diff>;
+pub type KeysValsHandle = TraceValHandle<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
 
 // This should be Box<FnOnce>, but requires Rust 1.35 (maybe):
 // https://github.com/rust-lang/rust/issues/28796

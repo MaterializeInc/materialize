@@ -59,11 +59,11 @@ pub enum DataflowCommand {
     PeekExisting(String),
     PeekTransient(Dataflow),
     Tail(String),
-    Insert(String, Vec<Datum>),
+    Insert(String, Vec<Vec<Datum>>),
     Shutdown,
 }
 
-pub type PeekResults = Vec<Datum>;
+pub type PeekResults = Vec<Vec<Datum>>;
 pub type PeekResultsMux = Arc<RwLock<Mux<Uuid, PeekResults>>>;
 
 /// A multiple-sender, multiple-receiver channel where receivers are keyed by K

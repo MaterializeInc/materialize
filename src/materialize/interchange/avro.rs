@@ -132,7 +132,7 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `Datum`.
-    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<Datum, failure::Error> {
+    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<Vec<Datum>, failure::Error> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a big
         // endian 32-bit schema ID.
@@ -188,7 +188,7 @@ impl Decoder {
             }
             _ => bail!("unsupported avro value: {:?}", val),
         }
-        Ok(Datum::Tuple(row))
+        Ok(row)
     }
 }
 

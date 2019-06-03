@@ -102,7 +102,7 @@ impl ScalarExpr {
                 ScalarExpr::CallVariadic { exprs, .. } => exprs.iter().all(|e| e.is_literal()),
                 ScalarExpr::If { cond, then, els } => {
                     if cond.is_literal() {
-                        let eval = cond.eval_on(&[]);
+                        let eval = cond.eval(&[]);
                         if eval == Datum::True {
                             then.is_literal()
                         } else {
@@ -116,7 +116,7 @@ impl ScalarExpr {
             };
 
             if should_eval {
-                *e = ScalarExpr::Literal(e.eval_on(&[]));
+                *e = ScalarExpr::Literal(e.eval(&[]));
             }
         });
     }

@@ -24,7 +24,7 @@ pub fn kafka<G>(
     connector: &KafkaSourceConnector,
     done: Rc<Cell<bool>>,
     clock: &Clock,
-) -> Stream<G, (Datum, Timestamp, Diff)>
+) -> Stream<G, (Vec<Datum>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -87,7 +87,7 @@ where
                         };
                         let cap = cap.delayed(&ts);
                         match decoder.decode(payload) {
-                            Ok(d) => output.session(&cap).give((d, *cap.time(), 1)),
+                            Ok(data) => output.session(&cap).give((data, *cap.time(), 1)),
                             Err(err) => error!("avro deserialization error: {}", err),
                         }
                     }
