@@ -46,6 +46,15 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    /// Assembles a collection if available.
+    ///
+    /// This method consults all available data assets to create the appropriate
+    /// collection. This can be either a collection itself, or if absent we may
+    /// also be able to find a stashed arrangement for the same plan, which we
+    /// flatten down to a collection.
+    ///
+    /// If insufficient data assets exist to create the collection the method
+    /// will return `None`.
     pub fn collection(&self, plan: &P) -> Option<Collection<S, Vec<V>, Diff>> {
         if let Some(collection) = self.collections.get(plan) {
             Some(collection.clone())
@@ -70,7 +79,10 @@ where
         }
     }
 
-    /// Reports if we have an arrangement available.
+    /// Produces an arrangement if available.
+    ///
+    /// A context store multiple types of arrangements, and prioritizes
+    /// dataflow-local arrangements in its return values.
     pub fn arrangement(&self, plan: &P, keys: &[usize]) -> Option<ArrangementFlavor<S, V, T>> {
         if let Some(local) = self.local.get(plan).and_then(|x| x.get(keys)) {
             Some(ArrangementFlavor::Local(local.clone()))
