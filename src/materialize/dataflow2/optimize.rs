@@ -150,6 +150,9 @@ impl RelationExpr {
             RelationExpr::Reduce { input, .. } => {
                 f(input);
             }
+            RelationExpr::TopK { input, .. } => {
+                f(input);
+            }
             RelationExpr::OrDefault { input, .. } => {
                 f(input);
             }

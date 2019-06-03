@@ -234,6 +234,57 @@ where
                 arrangement.as_collection(|_key, tuple| tuple.clone())
             }
 
+            RelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+            } => {
+                use differential_dataflow::operators::reduce::ReduceCore;
+                use differential_dataflow::trace::implementations::ord::OrdValSpine;
+
+                let self_clone = plan.clone();
+                let group_clone = group_key.clone();
+                let order_clone = order_key.clone();
+                let input = render(*input, scope, context);
+
+                let arrangement = input
+                    .map(move |tuple| {
+                        (
+                            group_clone
+                                .iter()
+                                .map(|i| tuple[*i].clone())
+                                .collect::<Vec<_>>(),
+                            (
+                                order_clone
+                                    .iter()
+                                    .map(|i| tuple[*i].clone())
+                                    .collect::<Vec<_>>(),
+                                tuple,
+                            ),
+                        )
+                    })
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_key, source, target| {
+                        let mut output = 0;
+                        let mut cursor = 0;
+                        while output < limit {
+                            if cursor < source.len() {
+                                let current = &(source[cursor].0).0;
+                                while cursor < source.len() && &(source[cursor].0).0 == current {
+                                    if source[0].1 > 0 {
+                                        target.push(((source[0].0).1.clone(), source[0].1));
+                                        output += source[0].1 as usize;
+                                    }
+                                }
+                                cursor += 1;
+                            }
+                        }
+                    });
+
+                context.set_local(self_clone, &group_key[..], arrangement.clone());
+                arrangement.as_collection(|_key, tuple| tuple.clone())
+            }
+
             RelationExpr::OrDefault { input, default } => {
                 use differential_dataflow::collection::AsCollection;
                 use differential_dataflow::operators::reduce::Threshold;

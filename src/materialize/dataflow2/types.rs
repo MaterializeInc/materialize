@@ -161,6 +161,13 @@ pub enum RelationExpr {
         // these are appended to output in addition to all the columns of input that are in group_key
         aggregates: Vec<(AggregateExpr, ColumnType)>,
     },
+    /// Groups and orders within each group, limiting output.
+    TopK {
+        input: Box<RelationExpr>,
+        group_key: Vec<usize>,
+        order_key: Vec<usize>,
+        limit: usize,
+    },
     /// If the input is empty, return a default row
     // Used only for some SQL aggregate edge cases
     OrDefault {
@@ -248,6 +255,7 @@ impl RelationExpr {
                 }
                 typ
             }
+            RelationExpr::TopK { input, .. } => input.typ(),
             RelationExpr::OrDefault { input, default } => {
                 let typ = input.typ();
                 for (column_typ, datum) in typ.iter().zip(default.iter()) {
