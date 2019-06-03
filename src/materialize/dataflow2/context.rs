@@ -41,6 +41,17 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    /// Reports if we have an arrangement available.
+    pub fn arrangement(&self, plan: &P, keys: &[usize]) -> Option<ArrangementFlavor<S, V, T>> {
+        if let Some(local) = self.local.get(plan).and_then(|x| x.get(keys)) {
+            Some(ArrangementFlavor::Local(local.clone()))
+        } else if let Some(trace) = self.trace.get(plan).and_then(|x| x.get(keys)) {
+            Some(ArrangementFlavor::Trace(trace.clone()))
+        } else {
+            None
+        }
+    }
+
     /// Retrieves an arrangement from a plan and keys.
     pub fn get_local(&self, plan: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
         self.local.get(plan).and_then(|x| x.get(keys))
@@ -72,4 +83,13 @@ where
             trace: HashMap::new(),
         }
     }
+}
+
+pub enum ArrangementFlavor<S: Scope, V: Data, T: Lattice>
+where
+    T: Timestamp + Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    Local(Arrangement<S, V>),
+    Trace(ArrangementImport<S, V, T>),
 }

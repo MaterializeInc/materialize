@@ -9,9 +9,11 @@ use std::collections::HashSet;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 
+use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::{lattice::Lattice, Collection};
 
-use crate::dataflow2::context::Context;
+use crate::dataflow2::context::{ArrangementFlavor, Context};
 use crate::dataflow2::types::RelationExpr;
 use crate::repr::Datum;
 
@@ -78,7 +80,6 @@ where
                 })
             }
             RelationExpr::Join { inputs, variables } => {
-                use differential_dataflow::operators::join::Join;
 
                 // For the moment, assert that each relation participates at most
                 // once in each equivalence class. If not, we should be able to
@@ -106,8 +107,6 @@ where
                     // product of all input relations so far, subject to all
                     // of the equality constraints in `variables`. This means
                     for (index, input) in input_iter {
-                        let input = render(input, scope, context);
-
                         // Determine keys. there is at most one key for each
                         // equivalence class, and an equivalence class is only
                         // engaged if it contains both a new and an old column.
@@ -129,28 +128,51 @@ where
                             }
                         }
 
-                        let old_keyed = joined.map(move |tuple| {
-                            (
-                                old_keys
-                                    .iter()
-                                    .map(|i| tuple[*i].clone())
-                                    .collect::<Vec<_>>(),
-                                tuple,
-                            )
-                        });
-                        let new_keyed = input.map(move |tuple| {
-                            (
-                                new_keys
-                                    .iter()
-                                    .map(|i| tuple[*i].clone())
-                                    .collect::<Vec<_>>(),
-                                tuple,
-                            )
-                        });
+                        let old_keyed = joined
+                            .map(move |tuple| {
+                                (
+                                    old_keys
+                                        .iter()
+                                        .map(|i| tuple[*i].clone())
+                                        .collect::<Vec<_>>(),
+                                    tuple,
+                                )
+                            })
+                            .arrange_by_key();
 
-                        joined = old_keyed.join_map(&new_keyed, |_keys, old, new| {
-                            old.iter().chain(new).cloned().collect::<Vec<_>>()
-                        });
+                        // TODO: easier idioms for detecting, re-using, and stashing.
+                        if !context.arrangement(&input, &new_keys[..]).is_none() {
+                            let rendered = render(input.clone(), scope, context);
+                            let new_keys2 = new_keys.clone();
+                            let new_keyed = rendered
+                                .map(move |tuple| {
+                                    (
+                                        new_keys2
+                                            .iter()
+                                            .map(|i| tuple[*i].clone())
+                                            .collect::<Vec<_>>(),
+                                        tuple,
+                                    )
+                                })
+                                .arrange_by_key();
+                            context.set_local(input.clone(), &new_keys[..], new_keyed);
+                        }
+
+                        joined = match context.arrangement(&input, &new_keys[..]) {
+                            Some(ArrangementFlavor::Local(local)) => {
+                                old_keyed.join_core(&local, |_keys, old, new| {
+                                    Some(old.iter().chain(new).cloned().collect::<Vec<_>>())
+                                })
+                            }
+                            Some(ArrangementFlavor::Trace(trace)) => {
+                                old_keyed.join_core(&trace, |_keys, old, new| {
+                                    Some(old.iter().chain(new).cloned().collect::<Vec<_>>())
+                                })
+                            }
+                            None => {
+                                panic!("Arrangement alarmingly absent!");
+                            }
+                        };
 
                         columns.extend((0..arities[index]).map(|c| (index, c)));
                     }
