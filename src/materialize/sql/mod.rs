@@ -25,8 +25,8 @@ use url::Url;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::dataflow::{
-    Aggregate, Dataflow, Expr, KafkaSinkConnector, KafkaSourceConnector, LocalSourceConnector,
-    Plan, Sink, SinkConnector, Source, SourceConnector, View,
+    Aggregate, Dataflow, KafkaSinkConnector, KafkaSourceConnector, LocalSourceConnector, Plan,
+    ScalarExpr, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use crate::glue::*;
 use crate::interchange::avro;
@@ -35,7 +35,6 @@ use ore::collections::CollectionExt;
 use plan::SQLPlan;
 use store::{DataflowStore, RemoveMode};
 
-mod multiway_plan;
 mod plan;
 mod store;
 
@@ -647,9 +646,11 @@ impl Planner {
                 let name = agg_func.name.to_string().to_lowercase();
                 let (expr, func, ftype) = match (&*name, arg) {
                     // COUNT(*) is a special case that doesn't compose well
-                    ("count", ASTNode::SQLWildcard) => {
-                        (Expr::Ambient, AggregateFunc::CountAll, FType::Int64)
-                    }
+                    ("count", ASTNode::SQLWildcard) => (
+                        ScalarExpr::Literal(Datum::Null),
+                        AggregateFunc::CountAll,
+                        FType::Int64,
+                    ),
                     _ => {
                         let (expr, typ) = self.plan_expr(ctx, arg, &plan)?;
                         let (func, ftype) = AggregateFunc::from_name_and_ftype(&name, &typ.ftype)?;
@@ -695,9 +696,8 @@ impl Planner {
                     key_exprs.push(expr);
                 }
             }
-            let key_expr = Expr::Tuple(key_exprs);
 
-            plan = plan.aggregate(key_expr, key_columns, aggs);
+            plan = plan.aggregate(key_exprs, key_columns, aggs);
         }
 
         // Step 4. Handle HAVING clause.
@@ -735,7 +735,7 @@ impl Planner {
         s: &'a SQLSelectItem,
         plan: &SQLPlan,
         named_columns: &[(String, String)],
-    ) -> Result<Vec<(Expr, Type)>, failure::Error> {
+    ) -> Result<Vec<(ScalarExpr, Type)>, failure::Error> {
         let ctx = &ExprContext {
             scope: "SELECT projection",
             allow_aggregates: true,
@@ -751,7 +751,7 @@ impl Planner {
                 .iter()
                 .map(|(table_name, column_name)| {
                     let (pos, _, typ) = plan.resolve_table_column(table_name, column_name)?;
-                    Ok((Expr::Column(pos, Box::new(Expr::Ambient)), typ.clone()))
+                    Ok((ScalarExpr::Column(pos), typ.clone()))
                 })
                 .collect::<Result<Vec<_>, _>>(),
             SQLSelectItem::QualifiedWildcard(name) => {
@@ -761,7 +761,7 @@ impl Planner {
                     .filter(|(table_name, _)| *table_name == name)
                     .map(|(table_name, column_name)| {
                         let (pos, _, typ) = plan.resolve_table_column(table_name, column_name)?;
-                        Ok((Expr::Column(pos, Box::new(Expr::Ambient)), typ.clone()))
+                        Ok((ScalarExpr::Column(pos), typ.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>()
             }
@@ -820,25 +820,15 @@ impl Planner {
             assert!(tables.len() == joins.len() + 1);
 
             // Extract all ASTNode join constraints
-
-            let attempt =
-                multiway_plan::plan_multiple_joins(&tables[..], &joins[..], selection.clone());
-
-            if let Ok((plan, selection)) = attempt {
-                // println!("!!!!!!!!");
-                Ok((plan, selection))
-            } else {
-                // println!("Bailed: {:?}", attempt);
-                for (index, join) in joins.iter().enumerate() {
-                    plan = self.plan_join_operator(
-                        &join.join_operator,
-                        &mut selection,
-                        plan,
-                        tables[index + 1].clone(),
-                    )?;
-                }
-                Ok((plan, selection))
+            for (index, join) in joins.iter().enumerate() {
+                plan = self.plan_join_operator(
+                    &join.join_operator,
+                    &mut selection,
+                    plan,
+                    tables[index + 1].clone(),
+                )?;
             }
+            Ok((plan, selection))
         }
     }
 
@@ -868,13 +858,7 @@ impl Planner {
                 *selection = new_selection;
                 Ok(left.join_on(right, left_key, right_key, false, false))
             }
-            JoinOperator::Cross => Ok(left.join_on(
-                right,
-                Expr::Tuple(vec![]),
-                Expr::Tuple(vec![]),
-                false,
-                false,
-            )),
+            JoinOperator::Cross => Ok(left.join_on(right, vec![], vec![], false, false)),
         }
     }
 
@@ -973,7 +957,7 @@ impl Planner {
         right: &ASTNode,
         left_plan: &SQLPlan,
         right_plan: &SQLPlan,
-    ) -> Result<(Expr, Expr), failure::Error> {
+    ) -> Result<(ScalarExpr, ScalarExpr), failure::Error> {
         let (lpos, ltype, lside) = self.resolve_name(left, left_plan, right_plan)?;
         let (rpos, rtype, rside) = self.resolve_name(right, left_plan, right_plan)?;
         let (lpos, ltype, rpos, rtype) = match (lside, rside) {
@@ -986,10 +970,7 @@ impl Planner {
         if ltype.ftype != rtype.ftype {
             bail!("cannot compare {:?} and {:?}", ltype.ftype, rtype.ftype);
         }
-        Ok((
-            Expr::Column(lpos, Box::new(Expr::Ambient)),
-            Expr::Column(rpos, Box::new(Expr::Ambient)),
-        ))
+        Ok((ScalarExpr::Column(lpos), ScalarExpr::Column(rpos)))
     }
 
     fn plan_join_expr(
@@ -997,7 +978,7 @@ impl Planner {
         expr: Option<&ASTNode>,
         left_plan: &SQLPlan,
         right_plan: &SQLPlan,
-    ) -> Result<(Expr, Expr, Option<ASTNode>), failure::Error> {
+    ) -> Result<(Vec<ScalarExpr>, Vec<ScalarExpr>, Option<ASTNode>), failure::Error> {
         let mut exprs = expr.into_iter().collect::<Vec<&ASTNode>>();
         let mut left_keys = Vec::new();
         let mut right_keys = Vec::new();
@@ -1034,7 +1015,7 @@ impl Planner {
             })
         });
 
-        Ok((Expr::Tuple(left_keys), Expr::Tuple(right_keys), left_over))
+        Ok((left_keys, right_keys, left_over))
     }
 
     fn plan_expr<'a>(
@@ -1042,16 +1023,16 @@ impl Planner {
         ctx: &ExprContext,
         e: &'a ASTNode,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         match e {
             ASTNode::SQLIdentifier(name) => {
                 let (i, _, typ) = plan.resolve_column(name)?;
-                let expr = Expr::Column(i, Box::new(Expr::Ambient));
+                let expr = ScalarExpr::Column(i);
                 Ok((expr, typ.clone()))
             }
             ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
                 let (i, _, typ) = plan.resolve_table_column(&names[0], &names[1])?;
-                let expr = Expr::Column(i, Box::new(Expr::Ambient));
+                let expr = ScalarExpr::Column(i);
                 Ok((expr, typ.clone()))
             }
             ASTNode::SQLValue(val) => self.plan_literal(val),
@@ -1096,7 +1077,7 @@ impl Planner {
         expr: &'a ASTNode,
         data_type: &'a SQLType,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let to_ftype = match data_type {
             SQLType::Varchar(_) => FType::String,
             SQLType::Text => FType::String,
@@ -1129,7 +1110,7 @@ impl Planner {
             }
         };
         let expr = match func {
-            Some(func) => Expr::CallUnary {
+            Some(func) => ScalarExpr::CallUnary {
                 func,
                 expr: Box::new(expr),
             },
@@ -1148,7 +1129,7 @@ impl Planner {
         ctx: &ExprContext,
         func: &'a SQLFunction,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let ident = func.name.to_string().to_lowercase();
 
         if AggregateFunc::is_aggregate_func(&ident) {
@@ -1156,7 +1137,7 @@ impl Planner {
                 bail!("aggregate functions are not allowed in {}", ctx.scope);
             }
             let (i, typ) = plan.resolve_func(func);
-            let expr = Expr::Column(i, Box::new(Expr::Ambient));
+            let expr = ScalarExpr::Column(i);
             return Ok((expr, typ.clone()));
         }
 
@@ -1173,7 +1154,7 @@ impl Planner {
                     FType::Float64 => UnaryFunc::AbsFloat64,
                     _ => bail!("abs does not accept arguments of type {:?}", typ),
                 };
-                let expr = Expr::CallUnary {
+                let expr = ScalarExpr::CallUnary {
                     func,
                     expr: Box::new(expr),
                 };
@@ -1189,7 +1170,7 @@ impl Planner {
                     exprs.push(self.plan_expr(ctx, arg, plan)?);
                 }
                 let (exprs, typ) = try_coalesce_types(exprs, "coalesce")?;
-                let expr = Expr::CallVariadic {
+                let expr = ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs,
                 };
@@ -1207,9 +1188,9 @@ impl Planner {
                 };
                 let (cond_expr, _) = self.plan_expr(ctx, &cond, plan)?;
                 let (else_expr, else_type) = self.plan_expr(ctx, &func.args[0], plan)?;
-                let expr = Expr::If {
+                let expr = ScalarExpr::If {
                     cond: Box::new(cond_expr),
-                    then: Box::new(Expr::Literal(Datum::Null)),
+                    then: Box::new(ScalarExpr::Literal(Datum::Null)),
                     els: Box::new(else_expr),
                 };
                 let typ = Type {
@@ -1230,14 +1211,14 @@ impl Planner {
         inner: &'a ASTNode,
         not: bool,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let (expr, _) = self.plan_expr(ctx, inner, plan)?;
-        let mut expr = Expr::CallUnary {
+        let mut expr = ScalarExpr::CallUnary {
             func: UnaryFunc::IsNull,
             expr: Box::new(expr),
         };
         if not {
-            expr = Expr::CallUnary {
+            expr = ScalarExpr::CallUnary {
                 func: UnaryFunc::Not,
                 expr: Box::new(expr),
             }
@@ -1256,7 +1237,7 @@ impl Planner {
         op: &'a SQLOperator,
         expr: &'a ASTNode,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let (expr, typ) = self.plan_expr(ctx, expr, plan)?;
         let (func, ftype) = match op {
             SQLOperator::Not => (UnaryFunc::Not, FType::Bool),
@@ -1275,7 +1256,7 @@ impl Planner {
             // exhaustiveness.
             _ => unreachable!(),
         };
-        let expr = Expr::CallUnary {
+        let expr = ScalarExpr::CallUnary {
             func,
             expr: Box::new(expr),
         };
@@ -1294,7 +1275,7 @@ impl Planner {
         left: &'a ASTNode,
         right: &'a ASTNode,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let (mut lexpr, mut ltype) = self.plan_expr(ctx, left, plan)?;
         let (mut rexpr, mut rtype) = self.plan_expr(ctx, right, plan)?;
 
@@ -1405,7 +1386,7 @@ impl Planner {
             BinaryFunc::DivInt32 | BinaryFunc::DivInt64 => true,
             _ => false,
         };
-        let expr = Expr::CallBinary {
+        let expr = ScalarExpr::CallBinary {
             func,
             expr1: Box::new(lexpr),
             expr2: Box::new(rexpr),
@@ -1426,7 +1407,7 @@ impl Planner {
         high: &'a ASTNode,
         negated: bool,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let low = ASTNode::SQLBinaryExpr {
             left: Box::new(expr.clone()),
             op: if negated {
@@ -1464,7 +1445,7 @@ impl Planner {
         list: &'a [ASTNode],
         negated: bool,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let mut cond = ASTNode::SQLValue(Value::Boolean(false));
         for l in list {
             cond = ASTNode::SQLBinaryExpr {
@@ -1494,7 +1475,7 @@ impl Planner {
         results: &'a [ASTNode],
         else_result: &'a Option<Box<ASTNode>>,
         plan: &SQLPlan,
-    ) -> Result<(Expr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, Type), failure::Error> {
         let mut cond_exprs = Vec::new();
         let mut result_exprs = Vec::new();
         for (c, r) in conditions.iter().zip(results) {
@@ -1517,7 +1498,7 @@ impl Planner {
         let (else_expr, else_type) = match else_result {
             Some(else_result) => self.plan_expr(ctx, else_result, plan)?,
             None => {
-                let expr = Expr::Literal(Datum::Null);
+                let expr = ScalarExpr::Literal(Datum::Null);
                 let typ = Type {
                     name: None,
                     nullable: false,
@@ -1531,7 +1512,7 @@ impl Planner {
         let mut expr = result_exprs.pop().unwrap();
         assert_eq!(cond_exprs.len(), result_exprs.len());
         for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
-            expr = Expr::If {
+            expr = ScalarExpr::If {
                 cond: Box::new(cexpr),
                 then: Box::new(rexpr),
                 els: Box::new(expr),
@@ -1540,7 +1521,7 @@ impl Planner {
         Ok((expr, typ))
     }
 
-    fn plan_literal<'a>(&self, l: &'a Value) -> Result<(Expr, Type), failure::Error> {
+    fn plan_literal<'a>(&self, l: &'a Value) -> Result<(ScalarExpr, Type), failure::Error> {
         let (datum, ftype) = match l {
             Value::Long(i) => (Datum::Int64(*i), FType::Int64),
             Value::Double(f) => (Datum::Float64(*f), FType::Float64),
@@ -1555,7 +1536,7 @@ impl Planner {
             Value::Null => (Datum::Null, FType::Null),
         };
         let nullable = datum == Datum::Null;
-        let expr = Expr::Literal(datum);
+        let expr = ScalarExpr::Literal(datum);
         let typ = Type {
             name: None,
             nullable,
@@ -1588,9 +1569,9 @@ fn unnest(expr: &ASTNode) -> &ASTNode {
 // rules. For now, just promote integers into floats, and small floats into
 // bigger floats.
 fn try_coalesce_types<C>(
-    exprs: Vec<(Expr, Type)>,
+    exprs: Vec<(ScalarExpr, Type)>,
     context: C,
-) -> Result<(Vec<Expr>, Type), failure::Error>
+) -> Result<(Vec<ScalarExpr>, Type), failure::Error>
 where
     C: fmt::Display,
 {
@@ -1629,7 +1610,7 @@ where
             ),
         };
         if let Some(func) = func {
-            expr = Expr::CallUnary {
+            expr = ScalarExpr::CallUnary {
                 func,
                 expr: Box::new(expr),
             }

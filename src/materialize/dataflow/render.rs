@@ -138,20 +138,21 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
         Plan::Aggregate { key, aggs, input } => {
             let mut plan = {
                 let key = key.clone();
-                build_plan(&input, manager, worker_index, scope, buttons)
-                    .map(move |datum| (eval_expr(&key, &datum), Some(datum)))
+                build_plan(&input, manager, worker_index, scope, buttons).map(move |datum| {
+                    (
+                        Datum::Tuple(key.iter().map(|expr| eval_expr(&expr, &datum)).collect()),
+                        Some(datum),
+                    )
+                })
             };
-            match &key {
+            if key.is_empty() {
                 // empty GROUP BY, add a sentinel value so that reduce produces output even on empty inputs
-                Expr::Tuple(exprs) if exprs.is_empty() => {
-                    let sentinel = if worker_index == 0 {
-                        vec![(Datum::Tuple(vec![]), None)]
-                    } else {
-                        vec![]
-                    };
-                    plan = plan.concat(&scope.new_collection_from(sentinel).1);
-                }
-                _ => (),
+                let sentinel = if worker_index == 0 {
+                    vec![(Datum::Tuple(vec![]), None)]
+                } else {
+                    vec![]
+                };
+                plan = plan.concat(&scope.new_collection_from(sentinel).1);
             }
             let aggs = aggs.clone();
             let plan = plan
@@ -212,7 +213,17 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             } else {
                 let left_key2 = left_key.clone();
                 let left_trace = build_plan(&left_plan, manager, worker_index, scope, buttons)
-                    .map(move |datum| (eval_expr(&left_key2, &datum), datum))
+                    .map(move |datum| {
+                        (
+                            Datum::Tuple(
+                                left_key2
+                                    .iter()
+                                    .map(|expr| eval_expr(&expr, &datum))
+                                    .collect(),
+                            ),
+                            datum,
+                        )
+                    })
                     .arrange_by_key();
 
                 // manager.set_keyed_trace(
@@ -232,7 +243,17 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
             } else {
                 let right_key2 = right_key.clone();
                 let right_trace = build_plan(&right_plan, manager, worker_index, scope, buttons)
-                    .map(move |datum| (eval_expr(&right_key2, &datum), datum))
+                    .map(move |datum| {
+                        (
+                            Datum::Tuple(
+                                right_key2
+                                    .iter()
+                                    .map(|expr| eval_expr(&expr, &datum))
+                                    .collect(),
+                            ),
+                            datum,
+                        )
+                    })
                     .arrange_by_key();
 
                 // manager.set_keyed_trace(
@@ -282,155 +303,6 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
 
             flow
         }
-
-        Plan::MultiwayJoin {
-            plans,
-            arities,
-            equalities,
-        } => {
-            // We are required to produce as output records formatted as if we
-            // cross-joined the plans in order, and then applied the equalties
-            // as a filter.
-            //
-            // Instead, we are likely to re-order plans and the order we perform
-            // joins, but we must still permute the final tuple order to reflect
-            // the order as promised above, as downstream logic relies on it.
-
-            // Step 1: determine a plan order.
-            let mut plan_order = vec![0];
-            while plan_order.len() < plans.len() {
-                let mut candidates = (0..plans.len())
-                    .filter(|i| !plan_order.contains(i))
-                    .map(|i| {
-                        (
-                            equalities
-                                .iter()
-                                .filter(|((r1, _), (r2, _))| {
-                                    (plan_order.contains(r1) && r2 == &i)
-                                        || (plan_order.contains(r2) && r1 == &i)
-                                })
-                                .count(),
-                            i,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-
-                candidates.sort();
-                plan_order.push(candidates.pop().expect("Candidate expected").1);
-            }
-
-            // Step 2: populate information about offsets and keys.
-            let mut positions = vec![0; plan_order.len()];
-            for (index, input) in plan_order.iter().enumerate() {
-                positions[*input] = index;
-            }
-
-            let mut offset = 0;
-            let mut offsets = vec![0; plan_order.len()];
-            for input in plan_order.iter() {
-                offsets[*input] = offset;
-                offset += arities[*input];
-            }
-
-            // println!("plan_order: {:?}", plan_order);
-            // println!("offsets: {:?}", offsets);
-
-            let mut join_keys = vec![Vec::new(); plan_order.len()];
-            for (rc1, rc2) in equalities.iter() {
-                if positions[rc1.0] < positions[rc2.0] {
-                    join_keys[rc2.0].push((rc1, rc2));
-                } else {
-                    join_keys[rc1.0].push((rc2, rc1));
-                }
-            }
-
-            // Step 3: build the sequence of joins.
-            let mut plan = build_plan(&plans[plan_order[0]], manager, worker_index, scope, buttons);
-            let mut schema = Vec::new();
-            for pos in 0..arities[plan_order[0]] {
-                schema.push((plan_order[0], pos));
-            }
-
-            use crate::repr::Datum;
-
-            for &index in plan_order[1..].iter() {
-                for pos in 0..arities[index] {
-                    schema.push((index, pos));
-                }
-
-                let l_keys = join_keys[index]
-                    .iter()
-                    .map(|((rel, col), _)| offsets[*rel] + *col)
-                    .collect::<Vec<_>>();
-                let r_keys = join_keys[index]
-                    .iter()
-                    .map(|(_, (_, col))| *col)
-                    .collect::<Vec<_>>();
-
-                assert_eq!(l_keys.len(), r_keys.len());
-
-                // println!("l_keys: {:?}", l_keys);
-                // println!("r_keys: {:?}", r_keys);
-
-                let right_plan = build_plan(&plans[index], manager, worker_index, scope, buttons)
-                    .map(move |tuple| {
-                        // TODO: Hoist `.asref_tuple()`?
-                        (
-                            r_keys
-                                .iter()
-                                .map(|i| tuple.asref_tuple()[*i].clone())
-                                .collect::<Vec<_>>(),
-                            tuple,
-                        )
-                    });
-
-                //
-                plan = plan
-                    .map(move |tuple| {
-                        // TODO: Hoist `.asref_tuple()`?
-                        (
-                            l_keys
-                                .iter()
-                                .map(|i| tuple.asref_tuple()[*i].clone())
-                                .collect::<Vec<_>>(),
-                            tuple,
-                        )
-                    })
-                    .join_map(&right_plan, |_k, l, r| {
-                        let l = l.asref_tuple();
-                        let r = r.asref_tuple();
-                        Datum::Tuple(
-                            l.iter()
-                                .cloned()
-                                .chain(r.iter().cloned())
-                                .collect::<Vec<_>>(),
-                        )
-                    });
-            }
-
-            // Step 4: de-permute everything
-            let mut look_up = Vec::new();
-            for index in 0..plans.len() {
-                for col in 0..arities[index] {
-                    let position = schema
-                        .iter()
-                        .position(|x| x == &(index, col))
-                        .expect("Reverse look-up failed");
-                    look_up.push(position);
-                }
-            }
-
-            plan.map(move |tuple| {
-                let as_ref = tuple.asref_tuple();
-                Datum::Tuple(
-                    look_up
-                        .iter()
-                        .map(|i| as_ref[*i].clone())
-                        .collect::<Vec<_>>(),
-                )
-            })
-        }
-
         Plan::Distinct(plan) => {
             build_plan(plan, manager, worker_index, scope, buttons).distinct_total()
         }
@@ -445,32 +317,27 @@ fn build_plan<S: Scope<Timestamp = Timestamp>>(
     }
 }
 
-fn eval_expr(expr: &Expr, datum: &Datum) -> Datum {
+fn eval_expr(expr: &ScalarExpr, datum: &Datum) -> Datum {
     match expr {
-        Expr::Ambient => datum.clone(),
-        Expr::Column(index, expr) => match eval_expr(expr, datum) {
+        ScalarExpr::Column(index) => match datum {
             Datum::Tuple(tuple) => tuple[*index].clone(),
             _ => unreachable!(),
         },
-        Expr::Tuple(exprs) => {
-            let exprs = exprs.iter().map(|e| eval_expr(e, datum)).collect();
-            Datum::Tuple(exprs)
-        }
-        Expr::Literal(datum) => datum.clone(),
-        Expr::CallUnary { func, expr } => {
+        ScalarExpr::Literal(datum) => datum.clone(),
+        ScalarExpr::CallUnary { func, expr } => {
             let datum = eval_expr(expr, datum);
             (func.func())(datum)
         }
-        Expr::CallBinary { func, expr1, expr2 } => {
+        ScalarExpr::CallBinary { func, expr1, expr2 } => {
             let datum1 = eval_expr(expr1, datum);
             let datum2 = eval_expr(expr2, datum);
             (func.func())(datum1, datum2)
         }
-        Expr::CallVariadic { func, exprs } => {
+        ScalarExpr::CallVariadic { func, exprs } => {
             let datums = exprs.iter().map(|e| eval_expr(e, datum)).collect();
             (func.func())(datums)
         }
-        Expr::If { cond, then, els } => match eval_expr(cond, datum) {
+        ScalarExpr::If { cond, then, els } => match eval_expr(cond, datum) {
             Datum::True => eval_expr(then, datum),
             Datum::False | Datum::Null => eval_expr(els, datum),
             d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
