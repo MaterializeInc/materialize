@@ -7,7 +7,7 @@
 //!
 //! Note that constants in this module follow PostgreSQL's naming convention,
 //! which does not map exactly to Materialize's type names. See the
-//! implementation of [`From<FType>`] for the mapping.
+//! implementation of [`From<ScalarType>`] for the mapping.
 //!
 //! The source of truth for PostgreSQL OID mappings is the [pg_type.dat file] in
 //! the PostgreSQL repository.
@@ -15,7 +15,7 @@
 //! [pg_type.dat file]:
 //! https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
 
-use crate::repr::FType;
+use crate::repr::ScalarType;
 
 /// PostgreSQL type metadata.
 pub struct PgType {
@@ -68,24 +68,21 @@ pub const ANY: PgType = PgType {
     typlen: 4,
 };
 
-impl From<&FType> for PgType {
-    fn from(typ: &FType) -> PgType {
+impl From<&ScalarType> for PgType {
+    fn from(typ: &ScalarType) -> PgType {
         match typ {
-            FType::Null => BOOL,
-            FType::Bool => BOOL,
-            FType::Int32 => INT4,
-            FType::Int64 => INT8,
-            FType::Float32 => FLOAT4,
-            FType::Float64 => FLOAT8,
-            FType::Decimal(_, _) => unimplemented!(),
-            FType::Date => unimplemented!(),
-            FType::Timestamp => unimplemented!(),
-            FType::Time => unimplemented!(),
-            FType::Bytes => BYTEA,
-            FType::String => TEXT,
-            FType::Tuple(_) => RECORD,
-            FType::Array(_) => unimplemented!(),
-            FType::OneOf(_) => ANY,
+            ScalarType::Null => BOOL,
+            ScalarType::Bool => BOOL,
+            ScalarType::Int32 => INT4,
+            ScalarType::Int64 => INT8,
+            ScalarType::Float32 => FLOAT4,
+            ScalarType::Float64 => FLOAT8,
+            ScalarType::Decimal(_, _) => unimplemented!(),
+            ScalarType::Date => unimplemented!(),
+            ScalarType::Timestamp => unimplemented!(),
+            ScalarType::Time => unimplemented!(),
+            ScalarType::Bytes => BYTEA,
+            ScalarType::String => TEXT,
         }
     }
 }

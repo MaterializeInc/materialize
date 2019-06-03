@@ -7,7 +7,7 @@ use failure::bail;
 use sqlparser::sqlast::SQLFunction;
 
 use crate::dataflow::{Aggregate, Plan, ScalarExpr};
-use crate::repr::{FType, Type};
+use crate::repr::{ColumnType, RelationType, ScalarType};
 use ore::option::OptionExt;
 
 #[derive(Debug, Clone)]
@@ -31,15 +31,15 @@ impl Name {
 #[derive(Debug, Clone)]
 pub struct SQLPlan {
     plan: Plan,
-    columns: Vec<(Name, Type)>,
+    columns: Vec<(Name, ColumnType)>,
 }
 
 impl SQLPlan {
-    pub fn from_plan_columns(plan: Plan, columns: Vec<(Name, Type)>) -> Self {
+    pub fn from_plan_columns(plan: Plan, columns: Vec<(Name, ColumnType)>) -> Self {
         Self { plan, columns }
     }
 
-    pub fn from_source(name: &str, types: Vec<Type>) -> Self {
+    pub fn from_source(name: &str, types: Vec<ColumnType>) -> Self {
         SQLPlan {
             plan: Plan::Source(name.to_owned()),
             columns: types
@@ -68,7 +68,7 @@ impl SQLPlan {
     pub fn resolve_column(
         &self,
         column_name: &str,
-    ) -> Result<(usize, &Name, &Type), failure::Error> {
+    ) -> Result<(usize, &Name, &ColumnType), failure::Error> {
         let mut results = self
             .columns
             .iter()
@@ -86,7 +86,7 @@ impl SQLPlan {
         &self,
         table_name: &str,
         column_name: &str,
-    ) -> Result<(usize, &Name, &Type), failure::Error> {
+    ) -> Result<(usize, &Name, &ColumnType), failure::Error> {
         let mut results = self.columns.iter().enumerate().filter(|(_, (name, _))| {
             name.table_name.as_deref() == Some(table_name)
                 && name.column_name.as_deref() == Some(column_name)
@@ -99,7 +99,7 @@ impl SQLPlan {
         }
     }
 
-    pub fn resolve_func<'a, 'b>(&'a self, func: &'b SQLFunction) -> (usize, &'a Type) {
+    pub fn resolve_func<'a, 'b>(&'a self, func: &'b SQLFunction) -> (usize, &'a ColumnType) {
         let func_hash = ore::hash::hash(func);
         let mut results = self
             .columns
@@ -258,8 +258,8 @@ impl SQLPlan {
     pub fn aggregate(
         self,
         key_expr: Vec<ScalarExpr>,
-        key_columns: Vec<(Name, Type)>,
-        aggregates: Vec<(&SQLFunction, Aggregate, Type)>,
+        key_columns: Vec<(Name, ColumnType)>,
+        aggregates: Vec<(&SQLFunction, Aggregate, ColumnType)>,
     ) -> Self {
         let SQLPlan { plan, .. } = self;
         // Deduplicate by function hash.
@@ -292,7 +292,7 @@ impl SQLPlan {
         }
     }
 
-    pub fn project(self, outputs: Vec<(ScalarExpr, Type)>) -> Self {
+    pub fn project(self, outputs: Vec<(ScalarExpr, ColumnType)>) -> Self {
         let SQLPlan { plan, .. } = self;
         SQLPlan {
             plan: Plan::Project {
@@ -320,7 +320,7 @@ impl SQLPlan {
         self
     }
 
-    pub fn columns(&self) -> &[(Name, Type)] {
+    pub fn columns(&self) -> &[(Name, ColumnType)] {
         &self.columns[..]
     }
 
@@ -340,14 +340,12 @@ impl SQLPlan {
             .collect()
     }
 
-    pub fn finish(self) -> (Plan, Type) {
+    pub fn finish(self) -> (Plan, RelationType) {
         let SQLPlan { plan, columns } = self;
         (
             plan,
-            Type {
-                name: None,
-                nullable: false,
-                ftype: FType::Tuple(columns.into_iter().map(|(_, typ)| typ).collect()),
+            RelationType {
+                column_types: columns.into_iter().map(|(_, typ)| typ).collect(),
             },
         )
     }

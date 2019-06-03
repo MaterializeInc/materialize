@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::iter::FromIterator;
 
 use crate::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
-use crate::repr::{FType, Type};
+use crate::repr::{ColumnType, RelationType, ScalarType};
 
 #[derive(Debug)]
 pub struct DataflowStore {
@@ -30,7 +30,7 @@ impl DataflowStore {
         }
     }
 
-    pub fn get_type(&self, name: &str) -> Result<&Type, failure::Error> {
+    pub fn get_type(&self, name: &str) -> Result<&RelationType, failure::Error> {
         self.get(name)?
             .typ()
             .ok_or_else(|| format_err!("dataflow {} is a sink and cannot be depended upon", name))
@@ -114,14 +114,12 @@ impl Default for DataflowStore {
         let dual_dataflow = Dataflow::Source(Source {
             name: "dual".into(),
             connector: SourceConnector::Local(LocalSourceConnector {}),
-            typ: Type {
-                name: None,
-                nullable: false,
-                ftype: FType::Tuple(vec![Type {
+            typ: RelationType {
+                column_types: vec![ColumnType {
                     name: Some("x".into()),
                     nullable: false,
-                    ftype: FType::String,
-                }]),
+                    scalar_type: ScalarType::String,
+                }],
             },
         });
         store.insert(dual_dataflow).unwrap();

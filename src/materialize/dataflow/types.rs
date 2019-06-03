@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::repr::{Datum, Type};
+use crate::repr::{ColumnType, Datum, RelationType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -32,7 +32,7 @@ impl Dataflow {
     }
 
     /// Reports the type of the datums produced by this dataflow.
-    pub fn typ(&self) -> Option<&Type> {
+    pub fn typ(&self) -> Option<&RelationType> {
         match self {
             Dataflow::Source(src) => Some(&src.typ),
             Dataflow::Sink(_) => None,
@@ -61,7 +61,7 @@ impl metastore::Dataflow for Dataflow {}
 pub struct Source {
     pub name: String,
     pub connector: SourceConnector,
-    pub typ: Type,
+    pub typ: RelationType,
 }
 
 #[serde(rename_all = "snake_case")]
@@ -108,7 +108,7 @@ pub struct KafkaSinkConnector {
 pub struct View {
     pub name: String,
     pub plan: Plan,
-    pub typ: Type,
+    pub typ: RelationType,
 }
 
 #[serde(rename_all = "snake_case")]
@@ -239,7 +239,7 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use crate::repr::{FType, Type};
+    use crate::repr::{ColumnType, ScalarType};
 
     /// Verify that a basic plan serializes and deserializes to JSON sensibly.
     #[test]
@@ -260,21 +260,19 @@ mod tests {
                     include_right_outer: None,
                 }),
             },
-            typ: Type {
-                name: None,
-                nullable: false,
-                ftype: FType::Tuple(vec![
-                    Type {
+            typ: RelationType {
+                column_types: vec![
+                    ColumnType {
                         name: Some("name".into()),
                         nullable: false,
-                        ftype: FType::String,
+                        scalar_type: ScalarType::String,
                     },
-                    Type {
+                    ColumnType {
                         name: Some("quantity".into()),
                         nullable: false,
-                        ftype: FType::Int32,
+                        scalar_type: ScalarType::Int32,
                     },
-                ]),
+                ],
             },
         });
 

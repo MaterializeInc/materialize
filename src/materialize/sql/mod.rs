@@ -30,7 +30,7 @@ use crate::dataflow::{
 };
 use crate::glue::*;
 use crate::interchange::avro;
-use crate::repr::{Datum, FType, Type};
+use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
 use plan::SQLPlan;
 use store::{DataflowStore, RemoveMode};
@@ -165,21 +165,9 @@ impl Planner {
             }) => typ,
             other => bail!("Can only insert into tables - {} is a {:?}", name, other),
         };
-        let types = match &typ {
-            Type {
-                ftype: FType::Tuple(types),
-                ..
-            } => types,
-            _ => bail!(
-                "Can only insert into tables of tuple type - {} has type {:?}",
-                name,
-                typ
-            ),
-        };
-
         let permutation = if columns.is_empty() {
             // if not specified, just insert in natural order
-            (0..types.len()).collect::<Vec<_>>()
+            (0..typ.column_types.len()).collect::<Vec<_>>()
         } else {
             // otherwise, check that we have a sensible list of columns
             if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
@@ -188,7 +176,8 @@ impl Planner {
                     columns.join(", ")
                 );
             }
-            let expected_columns = types
+            let expected_columns = typ
+                .column_types
                 .iter()
                 .map(|typ| typ.name.clone().expect("Table columns should all be named"))
                 .collect::<Vec<_>>();
@@ -229,7 +218,7 @@ impl Planner {
                     .map(|asts| {
                         let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
                         let datums = permuted_asts
-                            .zip(types.iter())
+                            .zip(typ.column_types.iter())
                             .map(|(ast, typ)| Datum::from_sql(ast, typ))
                             .collect::<Result<Vec<_>, _>>()?;
                         Ok(datums)
@@ -247,9 +236,9 @@ impl Planner {
 }
 
 impl Datum {
-    pub fn from_sql(ast: ASTNode, typ: &Type) -> Result<Self, failure::Error> {
+    pub fn from_sql(ast: ASTNode, typ: &ColumnType) -> Result<Self, failure::Error> {
         Ok(match ast {
-            ASTNode::SQLValue(value) => match (value, &typ.ftype) {
+            ASTNode::SQLValue(value) => match (value, &typ.scalar_type) {
                 (Value::Null, _) => {
                     if typ.nullable {
                         Datum::Null
@@ -257,21 +246,21 @@ impl Datum {
                         bail!("Tried to insert null into non-nullable column")
                     }
                 }
-                (Value::Long(l), FType::Int64) => Datum::Int64(l),
-                (Value::Double(f), FType::Float64) => Datum::Float64(f),
-                (Value::SingleQuotedString(s), FType::String)
-                | (Value::NationalStringLiteral(s), FType::String) => Datum::String(s),
-                (Value::Boolean(b), FType::Bool) => {
+                (Value::Long(l), ScalarType::Int64) => Datum::Int64(l),
+                (Value::Double(f), ScalarType::Float64) => Datum::Float64(f),
+                (Value::SingleQuotedString(s), ScalarType::String)
+                | (Value::NationalStringLiteral(s), ScalarType::String) => Datum::String(s),
+                (Value::Boolean(b), ScalarType::Bool) => {
                     if b {
                         Datum::True
                     } else {
                         Datum::False
                     }
                 }
-                (value, ftype) => bail!(
+                (value, scalar_type) => bail!(
                     "Don't know how to insert value {:?} into column of type {:?}",
                     value,
-                    ftype
+                    scalar_type
                 ),
             },
             other => bail!("Can only insert plain values, not {:?}", other),
@@ -442,44 +431,43 @@ impl Planner {
                 let types = columns
                     .iter()
                     .map(|column| {
-                        Ok(Type {
+                        Ok(ColumnType {
                             name: Some(column.name.clone()),
-                            ftype: match &column.data_type {
+                            scalar_type: match &column.data_type {
                                 SQLType::Char(_) | SQLType::Varchar(_) | SQLType::Text => {
-                                    FType::String
+                                    ScalarType::String
                                 }
-                                SQLType::SmallInt | SQLType::Int | SQLType::BigInt => FType::Int64,
+                                SQLType::SmallInt | SQLType::Int | SQLType::BigInt => {
+                                    ScalarType::Int64
+                                }
                                 SQLType::Float(_) | SQLType::Real | SQLType::Double => {
-                                    FType::Float64
+                                    ScalarType::Float64
                                 }
                                 SQLType::Decimal(scale, precision) => {
-                                    FType::Decimal(scale.unwrap_or(0), precision.unwrap_or(0))
+                                    ScalarType::Decimal(scale.unwrap_or(0), precision.unwrap_or(0))
                                 }
-                                SQLType::Date => FType::Date,
-                                SQLType::Timestamp => FType::Timestamp,
-                                SQLType::Time => FType::Time,
+                                SQLType::Date => ScalarType::Date,
+                                SQLType::Timestamp => ScalarType::Timestamp,
+                                SQLType::Time => ScalarType::Time,
                                 other => bail!("Unexpected SQL type: {:?}", other),
                             },
                             nullable: column.allow_null,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let typ = Type {
-                    name: None,
-                    ftype: FType::Tuple(types),
-                    nullable: false,
-                };
                 Ok(Dataflow::Source(Source {
                     name: extract_sql_object_name(name)?,
                     connector: SourceConnector::Local(LocalSourceConnector {}),
-                    typ,
+                    typ: RelationType {
+                        column_types: types,
+                    },
                 }))
             }
             other => bail!("Unsupported statement: {:?}", other),
         }
     }
 
-    pub fn plan_view_query(&self, q: &SQLQuery) -> Result<(Plan, Type), failure::Error> {
+    pub fn plan_view_query(&self, q: &SQLQuery) -> Result<(Plan, RelationType), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -492,7 +480,7 @@ impl Planner {
         self.plan_set_expr(&q.body)
     }
 
-    fn plan_set_expr(&self, q: &SQLSetExpr) -> Result<(Plan, Type), failure::Error> {
+    fn plan_set_expr(&self, q: &SQLSetExpr) -> Result<(Plan, RelationType), failure::Error> {
         match q {
             SQLSetExpr::Select(select) => self.plan_view_select(select),
             SQLSetExpr::SetOperation {
@@ -513,55 +501,48 @@ impl Planner {
 
                 // left and right must have the same number of columns and the same column types
                 // column names are taken from left, as in postgres
-                let ftype = match (left_type.ftype, right_type.ftype) {
-                    (FType::Tuple(left_types), FType::Tuple(right_types)) => {
-                        if left_types.len() != right_types.len() {
-                            bail!("Each UNION should have the same number of columns: {:?} UNION {:?}", left, right);
-                        }
-                        for (left_col_type, right_col_type) in
-                            left_types.iter().zip(right_types.iter())
-                        {
-                            if left_col_type.ftype != right_col_type.ftype {
-                                bail!(
-                                    "Each UNION should have the same column types: {:?} UNION {:?}",
-                                    left,
-                                    right
-                                );
-                            }
-                        }
-                        let types = left_types
-                            .iter()
-                            .zip(right_types.iter())
-                            .map(|(left_col_type, right_col_type)| {
-                                if left_col_type.ftype != right_col_type.ftype {
-                                    bail!(
-                                        "Each UNION should have the same column types: {:?} UNION {:?}",
-                                        left,
-                                        right
-                                    );
-                                } else {
-                                    Ok(Type {
-                                        name: left_col_type.name.clone(),
-                                        nullable: left_col_type.nullable || right_col_type.nullable,
-                                        ftype: left_col_type.ftype.clone(),
-                                    })
-                                }
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        FType::Tuple(types)
+                let left_types = &left_type.column_types;
+                let right_types = &right_type.column_types;
+                if left_types.len() != right_types.len() {
+                    bail!(
+                        "Each UNION should have the same number of columns: {:?} UNION {:?}",
+                        left,
+                        right
+                    );
+                }
+                for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
+                    if left_col_type.scalar_type != right_col_type.scalar_type {
+                        bail!(
+                            "Each UNION should have the same column types: {:?} UNION {:?}",
+                            left,
+                            right
+                        );
                     }
-                    (_, _) => panic!(
-                        "Union on non-tuple types shouldn't be possible - {:?} UNION {:?}",
-                        left, right
-                    ),
-                };
+                }
+                let types = left_types
+                    .iter()
+                    .zip(right_types.iter())
+                    .map(|(left_col_type, right_col_type)| {
+                        if left_col_type.scalar_type != right_col_type.scalar_type {
+                            bail!(
+                                "Each UNION should have the same column types: {:?} UNION {:?}",
+                                left,
+                                right
+                            );
+                        } else {
+                            Ok(ColumnType {
+                                name: left_col_type.name.clone(),
+                                nullable: left_col_type.nullable || right_col_type.nullable,
+                                scalar_type: left_col_type.scalar_type.clone(),
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 Ok((
                     plan,
-                    Type {
-                        name: None,
-                        nullable: false,
-                        ftype,
+                    RelationType {
+                        column_types: types,
                     },
                 ))
             }
@@ -569,7 +550,7 @@ impl Planner {
         }
     }
 
-    fn plan_view_select(&self, s: &SQLSelect) -> Result<(Plan, Type), failure::Error> {
+    fn plan_view_select(&self, s: &SQLSelect) -> Result<(Plan, RelationType), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
         let none = None;
         let (from_name, from_alias) = match &s.relation {
@@ -593,14 +574,8 @@ impl Planner {
             None => ("dual".into(), &none),
         };
         let plan = {
-            let types = match self.dataflows.get_type(&from_name)? {
-                Type {
-                    ftype: FType::Tuple(types),
-                    ..
-                } => types.clone(),
-                typ => panic!("table {} has non-tuple type {:?}", from_name, typ),
-            };
-            let mut plan = SQLPlan::from_source(&from_name, types);
+            let typ = self.dataflows.get_type(&from_name)?;
+            let mut plan = SQLPlan::from_source(&from_name, typ.column_types.clone());
             if let Some(alias) = from_alias {
                 plan = plan.alias_table(alias);
             }
@@ -620,8 +595,11 @@ impl Planner {
                 allow_aggregates: false,
             };
             let (expr, typ) = self.plan_expr(ctx, &selection, &plan)?;
-            if typ.ftype != FType::Bool {
-                bail!("WHERE clause must have boolean type, not {:?}", typ.ftype);
+            if typ.scalar_type != ScalarType::Bool {
+                bail!(
+                    "WHERE clause must have boolean type, not {:?}",
+                    typ.scalar_type
+                );
             }
             plan = plan.filter(expr);
         }
@@ -644,17 +622,18 @@ impl Planner {
             for agg_func in agg_funcs {
                 let arg = &agg_func.args[0];
                 let name = agg_func.name.to_string().to_lowercase();
-                let (expr, func, ftype) = match (&*name, arg) {
+                let (expr, func, scalar_type) = match (&*name, arg) {
                     // COUNT(*) is a special case that doesn't compose well
                     ("count", ASTNode::SQLWildcard) => (
                         ScalarExpr::Literal(Datum::Null),
                         AggregateFunc::CountAll,
-                        FType::Int64,
+                        ScalarType::Int64,
                     ),
                     _ => {
                         let (expr, typ) = self.plan_expr(ctx, arg, &plan)?;
-                        let (func, ftype) = AggregateFunc::from_name_and_ftype(&name, &typ.ftype)?;
-                        (expr, func, ftype)
+                        let (func, scalar_type) =
+                            AggregateFunc::from_name_and_scalar_type(&name, &typ.scalar_type)?;
+                        (expr, func, scalar_type)
                     }
                 };
                 aggs.push((
@@ -664,11 +643,11 @@ impl Planner {
                         expr,
                         distinct: agg_func.distinct,
                     },
-                    Type {
+                    ColumnType {
                         // TODO(jamii) name should be format("{}", expr) eg "count(*)"
                         name: None,
                         nullable: func.is_nullable(),
-                        ftype,
+                        scalar_type,
                     },
                 ));
             }
@@ -707,8 +686,11 @@ impl Planner {
                 allow_aggregates: true,
             };
             let (expr, typ) = self.plan_expr(ctx, having, &plan)?;
-            if typ.ftype != FType::Bool {
-                bail!("HAVING clause must have boolean type, not {:?}", typ.ftype);
+            if typ.scalar_type != ScalarType::Bool {
+                bail!(
+                    "HAVING clause must have boolean type, not {:?}",
+                    typ.scalar_type
+                );
             }
             plan = plan.filter(expr);
         }
@@ -735,7 +717,7 @@ impl Planner {
         s: &'a SQLSelectItem,
         plan: &SQLPlan,
         named_columns: &[(String, String)],
-    ) -> Result<Vec<(ScalarExpr, Type)>, failure::Error> {
+    ) -> Result<Vec<(ScalarExpr, ColumnType)>, failure::Error> {
         let ctx = &ExprContext {
             scope: "SELECT projection",
             allow_aggregates: true,
@@ -796,14 +778,8 @@ impl Planner {
                             bail!("WITH hints are not supported");
                         }
                         let name = extract_sql_object_name(&name)?;
-                        let types = match self.dataflows.get_type(&name)? {
-                            Type {
-                                ftype: FType::Tuple(types),
-                                ..
-                            } => types.clone(),
-                            typ => panic!("Table {} has non-tuple type {:?}", name, typ),
-                        };
-                        let mut right = SQLPlan::from_source(&name, types);
+                        let typ = self.dataflows.get_type(&name)?;
+                        let mut right = SQLPlan::from_source(&name, typ.column_types.clone());
                         if let Some(alias) = alias {
                             right = right.alias_table(alias);
                         }
@@ -908,7 +884,7 @@ impl Planner {
         name: &ASTNode,
         left: &SQLPlan,
         right: &SQLPlan,
-    ) -> Result<(usize, Type, Side), failure::Error> {
+    ) -> Result<(usize, ColumnType, Side), failure::Error> {
         match name {
             ASTNode::SQLIdentifier(column_name) => {
                 match (
@@ -967,8 +943,12 @@ impl Planner {
             (Side::Left, Side::Right) => (lpos, ltype, rpos, rtype),
             (Side::Right, Side::Left) => (rpos, rtype, lpos, ltype),
         };
-        if ltype.ftype != rtype.ftype {
-            bail!("cannot compare {:?} and {:?}", ltype.ftype, rtype.ftype);
+        if ltype.scalar_type != rtype.scalar_type {
+            bail!(
+                "cannot compare {:?} and {:?}",
+                ltype.scalar_type,
+                rtype.scalar_type
+            );
         }
         Ok((ScalarExpr::Column(lpos), ScalarExpr::Column(rpos)))
     }
@@ -1023,7 +1003,7 @@ impl Planner {
         ctx: &ExprContext,
         e: &'a ASTNode,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         match e {
             ASTNode::SQLIdentifier(name) => {
                 let (i, _, typ) = plan.resolve_column(name)?;
@@ -1077,31 +1057,31 @@ impl Planner {
         expr: &'a ASTNode,
         data_type: &'a SQLType,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
-        let to_ftype = match data_type {
-            SQLType::Varchar(_) => FType::String,
-            SQLType::Text => FType::String,
-            SQLType::Bytea => FType::Bytes,
-            SQLType::Float(_) => FType::Float64,
-            SQLType::Real => FType::Float64,
-            SQLType::Double => FType::Float64,
-            SQLType::SmallInt => FType::Int32,
-            SQLType::Int => FType::Int64,
-            SQLType::BigInt => FType::Int64,
-            SQLType::Boolean => FType::Bool,
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        let to_scalar_type = match data_type {
+            SQLType::Varchar(_) => ScalarType::String,
+            SQLType::Text => ScalarType::String,
+            SQLType::Bytea => ScalarType::Bytes,
+            SQLType::Float(_) => ScalarType::Float64,
+            SQLType::Real => ScalarType::Float64,
+            SQLType::Double => ScalarType::Float64,
+            SQLType::SmallInt => ScalarType::Int32,
+            SQLType::Int => ScalarType::Int64,
+            SQLType::BigInt => ScalarType::Int64,
+            SQLType::Boolean => ScalarType::Bool,
             _ => bail!("CAST ... AS {} is not yet supported", data_type.to_string()),
         };
         let (expr, from_type) = self.plan_expr(ctx, expr, plan)?;
-        let func = match (&from_type.ftype, &to_ftype) {
-            (FType::Int32, FType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
-            (FType::Int32, FType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
-            (FType::Int64, FType::Int32) => Some(UnaryFunc::CastInt64ToInt32),
-            (FType::Int64, FType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
-            (FType::Int64, FType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
-            (FType::Float32, FType::Int64) => Some(UnaryFunc::CastFloat32ToInt64),
-            (FType::Float32, FType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
-            (FType::Float64, FType::Int64) => Some(UnaryFunc::CastFloat64ToInt64),
-            (FType::Null, _) => None,
+        let func = match (&from_type.scalar_type, &to_scalar_type) {
+            (ScalarType::Int32, ScalarType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
+            (ScalarType::Int32, ScalarType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
+            (ScalarType::Int64, ScalarType::Int32) => Some(UnaryFunc::CastInt64ToInt32),
+            (ScalarType::Int64, ScalarType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
+            (ScalarType::Int64, ScalarType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
+            (ScalarType::Float32, ScalarType::Int64) => Some(UnaryFunc::CastFloat32ToInt64),
+            (ScalarType::Float32, ScalarType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
+            (ScalarType::Float64, ScalarType::Int64) => Some(UnaryFunc::CastFloat64ToInt64),
+            (ScalarType::Null, _) => None,
             (from, to) => {
                 if from != to {
                     bail!("CAST does not support casting from {:?} to {:?}", from, to);
@@ -1116,10 +1096,10 @@ impl Planner {
             },
             None => expr,
         };
-        let to_type = Type {
+        let to_type = ColumnType {
             name: None,
             nullable: from_type.nullable,
-            ftype: to_ftype,
+            scalar_type: to_scalar_type,
         };
         Ok((expr, to_type))
     }
@@ -1129,7 +1109,7 @@ impl Planner {
         ctx: &ExprContext,
         func: &'a SQLFunction,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let ident = func.name.to_string().to_lowercase();
 
         if AggregateFunc::is_aggregate_func(&ident) {
@@ -1147,11 +1127,11 @@ impl Planner {
                     bail!("abs expects one argument, got {}", func.args.len());
                 }
                 let (expr, typ) = self.plan_expr(ctx, &func.args[0], plan)?;
-                let func = match typ.ftype {
-                    FType::Int32 => UnaryFunc::AbsInt32,
-                    FType::Int64 => UnaryFunc::AbsInt64,
-                    FType::Float32 => UnaryFunc::AbsFloat32,
-                    FType::Float64 => UnaryFunc::AbsFloat64,
+                let func = match typ.scalar_type {
+                    ScalarType::Int32 => UnaryFunc::AbsInt32,
+                    ScalarType::Int64 => UnaryFunc::AbsInt64,
+                    ScalarType::Float32 => UnaryFunc::AbsFloat32,
+                    ScalarType::Float64 => UnaryFunc::AbsFloat64,
                     _ => bail!("abs does not accept arguments of type {:?}", typ),
                 };
                 let expr = ScalarExpr::CallUnary {
@@ -1193,10 +1173,10 @@ impl Planner {
                     then: Box::new(ScalarExpr::Literal(Datum::Null)),
                     els: Box::new(else_expr),
                 };
-                let typ = Type {
+                let typ = ColumnType {
                     name: None,
                     nullable: true,
-                    ftype: else_type.ftype,
+                    scalar_type: else_type.scalar_type,
                 };
                 Ok((expr, typ))
             }
@@ -1211,7 +1191,7 @@ impl Planner {
         inner: &'a ASTNode,
         not: bool,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (expr, _) = self.plan_expr(ctx, inner, plan)?;
         let mut expr = ScalarExpr::CallUnary {
             func: UnaryFunc::IsNull,
@@ -1223,10 +1203,10 @@ impl Planner {
                 expr: Box::new(expr),
             }
         }
-        let typ = Type {
+        let typ = ColumnType {
             name: None,
             nullable: false,
-            ftype: FType::Bool,
+            scalar_type: ScalarType::Bool,
         };
         Ok((expr, typ))
     }
@@ -1237,17 +1217,17 @@ impl Planner {
         op: &'a SQLOperator,
         expr: &'a ASTNode,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (expr, typ) = self.plan_expr(ctx, expr, plan)?;
-        let (func, ftype) = match op {
-            SQLOperator::Not => (UnaryFunc::Not, FType::Bool),
+        let (func, scalar_type) = match op {
+            SQLOperator::Not => (UnaryFunc::Not, ScalarType::Bool),
             SQLOperator::Plus => return Ok((expr, typ)), // no-op
-            SQLOperator::Minus => match typ.ftype {
-                FType::Int32 => (UnaryFunc::NegInt32, FType::Int32),
-                FType::Int64 => (UnaryFunc::NegInt64, FType::Int64),
-                FType::Float32 => (UnaryFunc::NegFloat32, FType::Float32),
-                FType::Float64 => (UnaryFunc::NegFloat64, FType::Float64),
-                _ => bail!("cannot negate {:?}", typ.ftype),
+            SQLOperator::Minus => match typ.scalar_type {
+                ScalarType::Int32 => (UnaryFunc::NegInt32, ScalarType::Int32),
+                ScalarType::Int64 => (UnaryFunc::NegInt64, ScalarType::Int64),
+                ScalarType::Float32 => (UnaryFunc::NegFloat32, ScalarType::Float32),
+                ScalarType::Float64 => (UnaryFunc::NegFloat64, ScalarType::Float64),
+                _ => bail!("cannot negate {:?}", typ.scalar_type),
             },
             // These are the only unary operators.
             //
@@ -1260,10 +1240,10 @@ impl Planner {
             func,
             expr: Box::new(expr),
         };
-        let typ = Type {
+        let typ = ColumnType {
             name: None,
             nullable: typ.nullable,
-            ftype,
+            scalar_type,
         };
         Ok((expr, typ))
     }
@@ -1275,7 +1255,7 @@ impl Planner {
         left: &'a ASTNode,
         right: &'a ASTNode,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (mut lexpr, mut ltype) = self.plan_expr(ctx, left, plan)?;
         let (mut rexpr, mut rtype) = self.plan_expr(ctx, right, plan)?;
 
@@ -1299,20 +1279,20 @@ impl Planner {
             ltype = typ;
         }
 
-        let (func, ftype) = match op {
+        let (func, scalar_type) = match op {
             SQLOperator::And | SQLOperator::Or => {
-                if ltype.ftype != FType::Bool && ltype.ftype != FType::Null {
+                if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Null {
                     bail!(
                         "Cannot apply operator {:?} to non-boolean type {:?}",
                         op,
-                        ltype.ftype
+                        ltype.scalar_type
                     )
                 }
-                if rtype.ftype != FType::Bool && rtype.ftype != FType::Null {
+                if rtype.scalar_type != ScalarType::Bool && rtype.scalar_type != ScalarType::Null {
                     bail!(
                         "Cannot apply operator {:?} to non-boolean type {:?}",
                         op,
-                        rtype.ftype
+                        rtype.scalar_type
                     )
                 }
                 let func = match op {
@@ -1320,42 +1300,82 @@ impl Planner {
                     SQLOperator::Or => BinaryFunc::Or,
                     _ => unreachable!(),
                 };
-                (func, FType::Bool)
+                (func, ScalarType::Bool)
             }
-            SQLOperator::Plus => match (&ltype.ftype, &rtype.ftype) {
-                (FType::Int32, FType::Int32) => (BinaryFunc::AddInt32, FType::Int32),
-                (FType::Int64, FType::Int64) => (BinaryFunc::AddInt64, FType::Int64),
-                (FType::Float32, FType::Float32) => (BinaryFunc::AddFloat32, FType::Float32),
-                (FType::Float64, FType::Float64) => (BinaryFunc::AddFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} + {:?}", ltype.ftype, rtype.ftype),
+            SQLOperator::Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::AddInt32, ScalarType::Int32),
+                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::AddInt64, ScalarType::Int64),
+                (ScalarType::Float32, ScalarType::Float32) => {
+                    (BinaryFunc::AddFloat32, ScalarType::Float32)
+                }
+                (ScalarType::Float64, ScalarType::Float64) => {
+                    (BinaryFunc::AddFloat64, ScalarType::Float64)
+                }
+                _ => bail!(
+                    "no overload for {:?} + {:?}",
+                    ltype.scalar_type,
+                    rtype.scalar_type
+                ),
             },
-            SQLOperator::Minus => match (&ltype.ftype, &rtype.ftype) {
-                (FType::Int32, FType::Int32) => (BinaryFunc::SubInt32, FType::Int32),
-                (FType::Int64, FType::Int64) => (BinaryFunc::SubInt64, FType::Int64),
-                (FType::Float32, FType::Float32) => (BinaryFunc::SubFloat32, FType::Float32),
-                (FType::Float64, FType::Float64) => (BinaryFunc::SubFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} - {:?}", ltype.ftype, rtype.ftype),
+            SQLOperator::Minus => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::SubInt32, ScalarType::Int32),
+                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::SubInt64, ScalarType::Int64),
+                (ScalarType::Float32, ScalarType::Float32) => {
+                    (BinaryFunc::SubFloat32, ScalarType::Float32)
+                }
+                (ScalarType::Float64, ScalarType::Float64) => {
+                    (BinaryFunc::SubFloat64, ScalarType::Float64)
+                }
+                _ => bail!(
+                    "no overload for {:?} - {:?}",
+                    ltype.scalar_type,
+                    rtype.scalar_type
+                ),
             },
-            SQLOperator::Multiply => match (&ltype.ftype, &rtype.ftype) {
-                (FType::Int32, FType::Int32) => (BinaryFunc::MulInt32, FType::Int32),
-                (FType::Int64, FType::Int64) => (BinaryFunc::MulInt64, FType::Int64),
-                (FType::Float32, FType::Float32) => (BinaryFunc::MulFloat32, FType::Float32),
-                (FType::Float64, FType::Float64) => (BinaryFunc::MulFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} * {:?}", ltype.ftype, rtype.ftype),
+            SQLOperator::Multiply => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::MulInt32, ScalarType::Int32),
+                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::MulInt64, ScalarType::Int64),
+                (ScalarType::Float32, ScalarType::Float32) => {
+                    (BinaryFunc::MulFloat32, ScalarType::Float32)
+                }
+                (ScalarType::Float64, ScalarType::Float64) => {
+                    (BinaryFunc::MulFloat64, ScalarType::Float64)
+                }
+                _ => bail!(
+                    "no overload for {:?} * {:?}",
+                    ltype.scalar_type,
+                    rtype.scalar_type
+                ),
             },
-            SQLOperator::Divide => match (&ltype.ftype, &rtype.ftype) {
-                (FType::Int32, FType::Int32) => (BinaryFunc::DivInt32, FType::Int32),
-                (FType::Int64, FType::Int64) => (BinaryFunc::DivInt64, FType::Int64),
-                (FType::Float32, FType::Float32) => (BinaryFunc::DivFloat32, FType::Float32),
-                (FType::Float64, FType::Float64) => (BinaryFunc::DivFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} / {:?}", ltype.ftype, rtype.ftype),
+            SQLOperator::Divide => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::DivInt32, ScalarType::Int32),
+                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::DivInt64, ScalarType::Int64),
+                (ScalarType::Float32, ScalarType::Float32) => {
+                    (BinaryFunc::DivFloat32, ScalarType::Float32)
+                }
+                (ScalarType::Float64, ScalarType::Float64) => {
+                    (BinaryFunc::DivFloat64, ScalarType::Float64)
+                }
+                _ => bail!(
+                    "no overload for {:?} / {:?}",
+                    ltype.scalar_type,
+                    rtype.scalar_type
+                ),
             },
-            SQLOperator::Modulus => match (&ltype.ftype, &rtype.ftype) {
-                (FType::Int32, FType::Int32) => (BinaryFunc::ModInt32, FType::Int32),
-                (FType::Int64, FType::Int64) => (BinaryFunc::ModInt64, FType::Int64),
-                (FType::Float32, FType::Float32) => (BinaryFunc::ModFloat32, FType::Float32),
-                (FType::Float64, FType::Float64) => (BinaryFunc::ModFloat64, FType::Float64),
-                _ => bail!("no overload for {:?} % {:?}", ltype.ftype, rtype.ftype),
+            SQLOperator::Modulus => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::ModInt32, ScalarType::Int32),
+                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::ModInt64, ScalarType::Int64),
+                (ScalarType::Float32, ScalarType::Float32) => {
+                    (BinaryFunc::ModFloat32, ScalarType::Float32)
+                }
+                (ScalarType::Float64, ScalarType::Float64) => {
+                    (BinaryFunc::ModFloat64, ScalarType::Float64)
+                }
+                _ => bail!(
+                    "no overload for {:?} % {:?}",
+                    ltype.scalar_type,
+                    rtype.scalar_type
+                ),
             },
             SQLOperator::Lt
             | SQLOperator::LtEq
@@ -1363,11 +1383,15 @@ impl Planner {
             | SQLOperator::GtEq
             | SQLOperator::Eq
             | SQLOperator::NotEq => {
-                if ltype.ftype != rtype.ftype
-                    && ltype.ftype != FType::Null
-                    && rtype.ftype != FType::Null
+                if ltype.scalar_type != rtype.scalar_type
+                    && ltype.scalar_type != ScalarType::Null
+                    && rtype.scalar_type != ScalarType::Null
                 {
-                    bail!("{:?} and {:?} are not comparable", ltype.ftype, rtype.ftype)
+                    bail!(
+                        "{:?} and {:?} are not comparable",
+                        ltype.scalar_type,
+                        rtype.scalar_type
+                    )
                 }
                 let func = match op {
                     SQLOperator::Lt => BinaryFunc::Lt,
@@ -1378,7 +1402,7 @@ impl Planner {
                     SQLOperator::NotEq => BinaryFunc::NotEq,
                     _ => unreachable!(),
                 };
-                (func, FType::Bool)
+                (func, ScalarType::Bool)
             }
             other => bail!("Function {:?} is not supported yet", other),
         };
@@ -1391,10 +1415,10 @@ impl Planner {
             expr1: Box::new(lexpr),
             expr2: Box::new(rexpr),
         };
-        let typ = Type {
+        let typ = ColumnType {
             name: None,
             nullable: ltype.nullable || rtype.nullable || is_integer_div,
-            ftype,
+            scalar_type,
         };
         Ok((expr, typ))
     }
@@ -1407,7 +1431,7 @@ impl Planner {
         high: &'a ASTNode,
         negated: bool,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let low = ASTNode::SQLBinaryExpr {
             left: Box::new(expr.clone()),
             op: if negated {
@@ -1445,7 +1469,7 @@ impl Planner {
         list: &'a [ASTNode],
         negated: bool,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let mut cond = ASTNode::SQLValue(Value::Boolean(false));
         for l in list {
             cond = ASTNode::SQLBinaryExpr {
@@ -1475,7 +1499,7 @@ impl Planner {
         results: &'a [ASTNode],
         else_result: &'a Option<Box<ASTNode>>,
         plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, Type), failure::Error> {
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let mut cond_exprs = Vec::new();
         let mut result_exprs = Vec::new();
         for (c, r) in conditions.iter().zip(results) {
@@ -1488,8 +1512,11 @@ impl Planner {
                 None => c.clone(),
             };
             let (cexpr, ctype) = self.plan_expr(ctx, &c, plan)?;
-            if ctype.ftype != FType::Bool {
-                bail!("CASE expression has non-boolean type {:?}", ctype.ftype);
+            if ctype.scalar_type != ScalarType::Bool {
+                bail!(
+                    "CASE expression has non-boolean type {:?}",
+                    ctype.scalar_type
+                );
             }
             cond_exprs.push(cexpr);
             let (rexpr, rtype) = self.plan_expr(ctx, r, plan)?;
@@ -1499,10 +1526,10 @@ impl Planner {
             Some(else_result) => self.plan_expr(ctx, else_result, plan)?,
             None => {
                 let expr = ScalarExpr::Literal(Datum::Null);
-                let typ = Type {
+                let typ = ColumnType {
                     name: None,
                     nullable: false,
-                    ftype: FType::Null,
+                    scalar_type: ScalarType::Null,
                 };
                 (expr, typ)
             }
@@ -1521,26 +1548,26 @@ impl Planner {
         Ok((expr, typ))
     }
 
-    fn plan_literal<'a>(&self, l: &'a Value) -> Result<(ScalarExpr, Type), failure::Error> {
-        let (datum, ftype) = match l {
-            Value::Long(i) => (Datum::Int64(*i), FType::Int64),
-            Value::Double(f) => (Datum::Float64(*f), FType::Float64),
-            Value::SingleQuotedString(s) => (Datum::String(s.clone()), FType::String),
+    fn plan_literal<'a>(&self, l: &'a Value) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        let (datum, scalar_type) = match l {
+            Value::Long(i) => (Datum::Int64(*i), ScalarType::Int64),
+            Value::Double(f) => (Datum::Float64(*f), ScalarType::Float64),
+            Value::SingleQuotedString(s) => (Datum::String(s.clone()), ScalarType::String),
             Value::NationalStringLiteral(_) => {
                 bail!("n'' string literals are not supported: {}", l.to_string())
             }
             Value::Boolean(b) => match b {
-                false => (Datum::False, FType::Bool),
-                true => (Datum::True, FType::Bool),
+                false => (Datum::False, ScalarType::Bool),
+                true => (Datum::True, ScalarType::Bool),
             },
-            Value::Null => (Datum::Null, FType::Null),
+            Value::Null => (Datum::Null, ScalarType::Null),
         };
         let nullable = datum == Datum::Null;
         let expr = ScalarExpr::Literal(datum);
-        let typ = Type {
+        let typ = ColumnType {
             name: None,
             nullable,
-            ftype,
+            scalar_type,
         };
         Ok((expr, typ))
     }
@@ -1569,38 +1596,38 @@ fn unnest(expr: &ASTNode) -> &ASTNode {
 // rules. For now, just promote integers into floats, and small floats into
 // bigger floats.
 fn try_coalesce_types<C>(
-    exprs: Vec<(ScalarExpr, Type)>,
+    exprs: Vec<(ScalarExpr, ColumnType)>,
     context: C,
-) -> Result<(Vec<ScalarExpr>, Type), failure::Error>
+) -> Result<(Vec<ScalarExpr>, ColumnType), failure::Error>
 where
     C: fmt::Display,
 {
     assert!(!exprs.is_empty());
 
-    let ftype_prec = |ftype: &FType| match ftype {
-        FType::Null => 0,
-        FType::Int32 => 1,
-        FType::Int64 => 2,
-        FType::Float32 => 3,
-        FType::Float64 => 4,
+    let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
+        ScalarType::Null => 0,
+        ScalarType::Int32 => 1,
+        ScalarType::Int64 => 2,
+        ScalarType::Float32 => 3,
+        ScalarType::Float64 => 4,
         _ => 5,
     };
-    let max_ftype = exprs
+    let max_scalar_type = exprs
         .iter()
-        .map(|(_expr, typ)| &typ.ftype)
-        .max_by_key(|ftype| ftype_prec(ftype))
+        .map(|(_expr, typ)| &typ.scalar_type)
+        .max_by_key(|scalar_type| scalar_type_prec(scalar_type))
         .unwrap()
         .clone();
     let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
     let mut out = Vec::new();
     for (mut expr, typ) in exprs {
-        let func = match (&typ.ftype, &max_ftype) {
-            (FType::Int32, FType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
-            (FType::Int32, FType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
-            (FType::Int64, FType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
-            (FType::Int64, FType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
-            (FType::Float32, FType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
-            (FType::Null, _) => None,
+        let func = match (&typ.scalar_type, &max_scalar_type) {
+            (ScalarType::Int32, ScalarType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
+            (ScalarType::Int32, ScalarType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
+            (ScalarType::Int64, ScalarType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
+            (ScalarType::Int64, ScalarType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
+            (ScalarType::Float32, ScalarType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
+            (ScalarType::Null, _) => None,
             (from, to) if from == to => None,
             (from, to) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
@@ -1617,10 +1644,10 @@ where
         }
         out.push(expr);
     }
-    let typ = Type {
+    let typ = ColumnType {
         name: None,
         nullable,
-        ftype: max_ftype,
+        scalar_type: max_scalar_type,
     };
     Ok((out, typ))
 }
@@ -1658,7 +1685,7 @@ fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
 impl Planner {
     pub fn mock<I>(dataflows: I) -> Self
     where
-        I: IntoIterator<Item = (String, Type)>,
+        I: IntoIterator<Item = (String, RelationType)>,
     {
         Planner {
             dataflows: dataflows

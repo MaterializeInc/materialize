@@ -7,7 +7,7 @@
 
 use crate::clock::Timestamp;
 use crate::dataflow::Dataflow;
-use crate::repr::{Datum, Type};
+use crate::repr::{ColumnType, Datum, RelationType};
 use failure::{ensure, format_err};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ pub enum SqlResponse {
     DroppedTable,
     EmptyQuery,
     Inserted(usize),
-    Peeking { typ: Type },
+    Peeking { typ: RelationType },
 }
 
 pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Error>>>>;

@@ -21,7 +21,7 @@ use uuid::Uuid;
 use materialize::clock::Clock;
 use materialize::dataflow;
 use materialize::glue::*;
-use materialize::repr::{Datum, FType};
+use materialize::repr::{ColumnType, Datum, ScalarType};
 use materialize::sql::Planner;
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlparser::Parser;
@@ -232,7 +232,7 @@ pub enum Outcome<'a> {
     },
     InferenceFailure {
         expected_types: &'a [Type],
-        inferred_types: Vec<FType>,
+        inferred_types: Vec<ColumnType>,
     },
     OutputFailure {
         expected_output: &'a Output<'a>,
@@ -490,10 +490,7 @@ impl RecordRunner for FullState {
                     }
                 };
 
-                let inferred_types = match &typ.ftype {
-                    FType::Tuple(types) => types.iter().map(|typ| &typ.ftype).collect::<Vec<_>>(),
-                    other => panic!("Query with non-tuple type: {:?}", other),
-                };
+                let inferred_types = &typ.column_types;
 
                 // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
                 // but at least it will be the correct length
@@ -713,17 +710,14 @@ pub fn fuzz(sqls: &str) {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);
                 if let SqlResponse::Peeking { typ } = sql_response {
-                    let types = match typ.ftype {
-                        FType::Tuple(types) => types,
-                        _ => panic!(),
-                    };
                     for row in state.receive_peek_results(receiver) {
-                        for (typ, datum) in types.iter().zip(row.into_iter()) {
+                        for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
                             assert!(
-                                (typ.ftype == datum.ftype()) || (typ.nullable && datum.is_null()),
+                                (typ.scalar_type == datum.scalar_type())
+                                    || (typ.nullable && datum.is_null()),
                                 "{:?} was inferred to have type {:?}",
-                                typ.ftype,
-                                datum.ftype(),
+                                typ.scalar_type,
+                                datum.scalar_type(),
                             );
                         }
                     }

@@ -24,19 +24,19 @@ pub mod join_order {
     /// ```rust
     /// use materialize::dataflow2::RelationExpr;
     /// use materialize::dataflow2::ColumnType;
-    /// use materialize::repr::FType;
+    /// use materialize::repr::ScalarType;
     ///
-    /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
-    /// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
-    /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
+    /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
+    /// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
+    /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
     /// let mut expr = RelationExpr::Join {
     ///     inputs: vec![input1, input2, input3],
     ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
     /// };
     /// let typ = vec![
-    ///     ColumnType { typ: FType::Bool, is_nullable: false },
-    ///     ColumnType { typ: FType::Bool, is_nullable: false },
-    ///     ColumnType { typ: FType::Bool, is_nullable: false },
+    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
+    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
+    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
     /// ];
     ///
     /// let join_order = materialize::dataflow2::transform::JoinOrder;
@@ -145,11 +145,11 @@ pub mod predicate_pushdown {
     /// ```rust
     /// use materialize::dataflow2::{RelationExpr, ScalarExpr};
     /// use materialize::dataflow2::ColumnType;
-    /// use materialize::repr::{Datum, FType};
+    /// use materialize::repr::{Datum, ScalarType};
     ///
-    /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
-    /// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
-    /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
+    /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
+    /// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
+    /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
     /// let join = RelationExpr::Join {
     ///     inputs: vec![input1.clone(), input2.clone(), input3.clone()],
     ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
@@ -173,9 +173,9 @@ pub mod predicate_pushdown {
     ///    ]);
     ///
     /// let typ = vec![
-    ///     ColumnType { typ: FType::Bool, is_nullable: false },
-    ///     ColumnType { typ: FType::Bool, is_nullable: false },
-    ///     ColumnType { typ: FType::Bool, is_nullable: false },
+    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
+    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
+    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
     /// ];
     ///
     /// let pushdown = materialize::dataflow2::transform::PredicatePushdown;
@@ -290,9 +290,9 @@ pub mod fusion {
         /// ```rust
         /// use materialize::dataflow2::{RelationExpr, ScalarExpr};
         /// use materialize::dataflow2::ColumnType;
-        /// use materialize::repr::{Datum, FType};
+        /// use materialize::repr::{Datum, ScalarType};
         ///
-        /// let input = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: FType::Bool, is_nullable: false }] };
+        /// let input = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
         ///
         /// let predicate0 = ScalarExpr::Column(0);
         /// let predicate1 = ScalarExpr::Column(0);
@@ -306,7 +306,7 @@ pub mod fusion {
         ///     .filter(vec![predicate2.clone()]);
         ///
         /// let typ = vec![
-        ///     ColumnType { typ: FType::Bool, is_nullable: false },
+        ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
         /// ];
         ///
         /// let fusion = materialize::dataflow2::transform::fusion::filter::Filter;

@@ -9,7 +9,7 @@ use crate::dataflow as old_dataflow;
 use crate::repr;
 use crate::repr::Datum;
 
-pub type DatumType = repr::FType;
+pub type DatumType = repr::ScalarType;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ColumnType {
@@ -181,13 +181,13 @@ pub enum RelationExpr {
 
 impl repr::Datum {
     fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
-        self.ftype().is_instance_of(column_typ)
+        self.scalar_type().is_instance_of(column_typ)
     }
 }
 
 impl DatumType {
     fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
-        self == &column_typ.typ || (self == &repr::FType::Null && column_typ.is_nullable)
+        self == &column_typ.typ || (self == &repr::ScalarType::Null && column_typ.is_nullable)
     }
 }
 
@@ -251,7 +251,7 @@ impl RelationExpr {
             RelationExpr::OrDefault { input, default } => {
                 let typ = input.typ();
                 for (column_typ, datum) in typ.iter().zip(default.iter()) {
-                    assert!(datum.ftype().is_instance_of(column_typ));
+                    assert!(datum.scalar_type().is_instance_of(column_typ));
                 }
                 typ
             }
