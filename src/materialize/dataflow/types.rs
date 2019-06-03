@@ -129,9 +129,9 @@ pub enum Plan {
     /// Join two dataflows.
     Join {
         /// Expression to compute the key from the left input.
-        left_key: ScalarExpr,
+        left_key: Vec<ScalarExpr>,
         /// Expression to compute the key from the right input.
-        right_key: ScalarExpr,
+        right_key: Vec<ScalarExpr>,
         /// Plan for the left input.
         left: Box<Plan>,
         /// Plan for the right input.
@@ -141,14 +141,6 @@ pub enum Plan {
         /// Include keys on the right that are not joined (for right/full outer join). The usize value is the number of columns on the left.
         include_right_outer: Option<usize>,
     },
-    MultiwayJoin {
-        /// A list of participating plans.
-        plans: Vec<Plan>,
-        /// A list of the number of columns in the corresponding plan.
-        arities: Vec<usize>,
-        /// A list of (r1,c1) and (r2,c2) required equalities.
-        equalities: Vec<((usize, usize), (usize, usize))>,
-    },
     /// Filter records based on predicate.
     Filter {
         predicate: ScalarExpr,
@@ -156,7 +148,7 @@ pub enum Plan {
     },
     /// Aggregate records that share a key.
     Aggregate {
-        key: ScalarExpr,
+        key: Vec<ScalarExpr>,
         aggs: Vec<Aggregate>,
         input: Box<Plan>,
     },
@@ -183,11 +175,6 @@ impl Plan {
             } => {
                 left.uses_inner(out);
                 right.uses_inner(out);
-            }
-            Plan::MultiwayJoin { plans, .. } => {
-                for plan in plans {
-                    plan.uses_inner(out);
-                }
             }
             Plan::Filter {
                 predicate: _,
@@ -238,13 +225,11 @@ pub enum ScalarExpr {
         then: Box<ScalarExpr>,
         els: Box<ScalarExpr>,
     },
-    // TODO(jamii) remove
-    Tuple(Vec<ScalarExpr>),
 }
 
 impl ScalarExpr {
-    pub fn columns(is: &[usize]) -> Self {
-        ScalarExpr::Tuple(is.iter().map(|i| ScalarExpr::Column(*i)).collect())
+    pub fn columns(is: &[usize]) -> Vec<ScalarExpr> {
+        is.iter().map(|i| ScalarExpr::Column(*i)).collect()
     }
 }
 

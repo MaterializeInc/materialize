@@ -35,7 +35,6 @@ use ore::collections::CollectionExt;
 use plan::SQLPlan;
 use store::{DataflowStore, RemoveMode};
 
-mod multiway_plan;
 mod plan;
 mod store;
 
@@ -697,9 +696,8 @@ impl Planner {
                     key_exprs.push(expr);
                 }
             }
-            let key_expr = ScalarExpr::Tuple(key_exprs);
 
-            plan = plan.aggregate(key_expr, key_columns, aggs);
+            plan = plan.aggregate(key_exprs, key_columns, aggs);
         }
 
         // Step 4. Handle HAVING clause.
@@ -822,25 +820,15 @@ impl Planner {
             assert!(tables.len() == joins.len() + 1);
 
             // Extract all ASTNode join constraints
-
-            let attempt =
-                multiway_plan::plan_multiple_joins(&tables[..], &joins[..], selection.clone());
-
-            if let Ok((plan, selection)) = attempt {
-                // println!("!!!!!!!!");
-                Ok((plan, selection))
-            } else {
-                // println!("Bailed: {:?}", attempt);
-                for (index, join) in joins.iter().enumerate() {
-                    plan = self.plan_join_operator(
-                        &join.join_operator,
-                        &mut selection,
-                        plan,
-                        tables[index + 1].clone(),
-                    )?;
-                }
-                Ok((plan, selection))
+            for (index, join) in joins.iter().enumerate() {
+                plan = self.plan_join_operator(
+                    &join.join_operator,
+                    &mut selection,
+                    plan,
+                    tables[index + 1].clone(),
+                )?;
             }
+            Ok((plan, selection))
         }
     }
 
@@ -870,13 +858,7 @@ impl Planner {
                 *selection = new_selection;
                 Ok(left.join_on(right, left_key, right_key, false, false))
             }
-            JoinOperator::Cross => Ok(left.join_on(
-                right,
-                ScalarExpr::Tuple(vec![]),
-                ScalarExpr::Tuple(vec![]),
-                false,
-                false,
-            )),
+            JoinOperator::Cross => Ok(left.join_on(right, vec![], vec![], false, false)),
         }
     }
 
@@ -996,7 +978,7 @@ impl Planner {
         expr: Option<&ASTNode>,
         left_plan: &SQLPlan,
         right_plan: &SQLPlan,
-    ) -> Result<(ScalarExpr, ScalarExpr, Option<ASTNode>), failure::Error> {
+    ) -> Result<(Vec<ScalarExpr>, Vec<ScalarExpr>, Option<ASTNode>), failure::Error> {
         let mut exprs = expr.into_iter().collect::<Vec<&ASTNode>>();
         let mut left_keys = Vec::new();
         let mut right_keys = Vec::new();
@@ -1033,11 +1015,7 @@ impl Planner {
             })
         });
 
-        Ok((
-            ScalarExpr::Tuple(left_keys),
-            ScalarExpr::Tuple(right_keys),
-            left_over,
-        ))
+        Ok((left_keys, right_keys, left_over))
     }
 
     fn plan_expr<'a>(

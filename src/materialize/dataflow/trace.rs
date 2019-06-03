@@ -35,7 +35,7 @@ pub struct TraceManager {
         Plan,
         (
             Option<TraceInfoUnkeyed>,
-            HashMap<ScalarExpr, TraceInfoKeyed>,
+            HashMap<Vec<ScalarExpr>, TraceInfoKeyed>,
         ),
     >,
 }
@@ -83,7 +83,7 @@ impl TraceManager {
             .and_then(|x| x.0.as_ref().map(|ti| ti.trace.clone()))
     }
 
-    pub fn get_keyed_trace(&self, plan: &Plan, key: &ScalarExpr) -> Option<KeysValsHandle> {
+    pub fn get_keyed_trace(&self, plan: &Plan, key: &Vec<ScalarExpr>) -> Option<KeysValsHandle> {
         self.traces
             .get(plan)
             .and_then(|x| x.1.get(key).map(|ti| ti.trace.clone()))
@@ -107,7 +107,7 @@ impl TraceManager {
     pub fn set_keyed_trace(
         &mut self,
         plan: &Plan,
-        key: &ScalarExpr,
+        key: &Vec<ScalarExpr>,
         trace: KeysValsHandle,
         delete_callback: DeleteCallback,
     ) {

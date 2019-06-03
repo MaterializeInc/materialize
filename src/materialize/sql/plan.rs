@@ -117,8 +117,8 @@ impl SQLPlan {
     pub fn join_on(
         self,
         right: Self,
-        left_key: ScalarExpr,
-        right_key: ScalarExpr,
+        left_key: Vec<ScalarExpr>,
+        right_key: Vec<ScalarExpr>,
         include_left_outer: bool,
         include_right_outer: bool,
     ) -> Self {
@@ -257,7 +257,7 @@ impl SQLPlan {
 
     pub fn aggregate(
         self,
-        key_expr: ScalarExpr,
+        key_expr: Vec<ScalarExpr>,
         key_columns: Vec<(Name, Type)>,
         aggregates: Vec<(&SQLFunction, Aggregate, Type)>,
     ) -> Self {
