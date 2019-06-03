@@ -7,7 +7,7 @@
 
 use crate::clock::Timestamp;
 use crate::dataflow::Dataflow;
-use crate::repr::{ColumnType, Datum, RelationType};
+use crate::repr::{Datum, RelationType};
 use failure::{ensure, format_err};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -30,9 +30,7 @@ pub fn parse_schema(schema: &str) -> Result<RelationType, Error> {
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
 
-            Ok(RelationType {
-                column_types: column_types,
-            })
+            Ok(RelationType { column_types })
         }
         _ => bail!("Top-level schemas must be records, got: {:?}", schema),
     }

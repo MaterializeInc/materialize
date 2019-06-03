@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::repr::{ColumnType, Datum, RelationType};
+use crate::repr::{Datum, RelationType};
 
 /// System-wide update type.
 pub type Diff = isize;

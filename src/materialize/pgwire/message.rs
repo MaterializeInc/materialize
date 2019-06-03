@@ -6,7 +6,7 @@
 use bytes::Bytes;
 
 use super::types::PgType;
-use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
+use crate::repr::{Datum, RelationType};
 
 #[allow(dead_code)]
 #[derive(Debug)]

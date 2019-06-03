@@ -21,7 +21,7 @@ use uuid::Uuid;
 use materialize::clock::Clock;
 use materialize::dataflow;
 use materialize::glue::*;
-use materialize::repr::{ColumnType, Datum, ScalarType};
+use materialize::repr::{ColumnType, Datum};
 use materialize::sql::Planner;
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlparser::Parser;
