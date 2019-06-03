@@ -90,9 +90,9 @@ pub mod join_order {
 
                 let mut new_variables = Vec::new();
                 for variable in variables.iter() {
-                    let mut new_set = std::collections::HashSet::new();
+                    let mut new_set = Vec::new();
                     for (rel, col) in variable.iter() {
-                        new_set.insert((positions[*rel], *col));
+                        new_set.push((positions[*rel], *col));
                     }
                     new_variables.push(new_set);
                 }

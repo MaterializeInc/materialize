@@ -3,8 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 
 use crate::dataflow as old_dataflow;
@@ -13,7 +11,7 @@ use crate::repr::Datum;
 
 pub type DatumType = repr::FType;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ColumnType {
     pub typ: DatumType,
     pub is_nullable: bool,
@@ -24,7 +22,7 @@ pub struct ColumnType {
 pub type RelationType = [ColumnType];
 pub type OwnedRelationType = Vec<ColumnType>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum ScalarExpr {
     /// A column of the input row
     Column(usize),
@@ -109,14 +107,14 @@ impl ScalarExpr {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct AggregateExpr {
     pub distinct: bool,
     pub func: old_dataflow::func::AggregateFunc,
     pub expr: ScalarExpr,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum RelationExpr {
     /// Always return the same value
     Constant {
@@ -154,7 +152,7 @@ pub enum RelationExpr {
     Join {
         inputs: Vec<RelationExpr>,
         // each HashSet is an equivalence class of (input_index, column_index)
-        variables: Vec<HashSet<(usize, usize)>>,
+        variables: Vec<Vec<(usize, usize)>>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {

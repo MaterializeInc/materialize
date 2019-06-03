@@ -7,6 +7,7 @@ mod optimize;
 mod render;
 pub mod transform;
 mod types;
+pub mod context;
 
 pub use render::*;
 pub use types::*;

@@ -221,7 +221,7 @@ pub type Tuple = Vec<Datum>;
 /// impossible to determine anything but the type's `ftype`. Consider: a naked
 /// `Datum` provides no information about its name, default value, or
 /// nullability.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct Type {
     /// The name of this datum. Perhaps surprisingly, expressions in SQL can
     /// have names, as in `SELECT 1 AS blah`.
@@ -239,7 +239,7 @@ pub struct Type {
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum FType {
     /// The type of a datum that can only be null.
     ///

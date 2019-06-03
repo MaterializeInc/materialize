@@ -1,0 +1,78 @@
+use std::collections::HashMap;
+
+use timely::dataflow::{Scope, ScopeParent};
+use timely::progress::{Timestamp, timestamp::Refines};
+
+use differential_dataflow::Data;
+use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+use differential_dataflow::trace::wrappers::enter::TraceEnter;
+use differential_dataflow::{lattice::Lattice, Collection};
+
+
+/// A trace handle for key-only data.
+pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
+/// A trace handle for key-value data.
+pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
+
+type Diff = isize;
+
+// Local type definition to avoid the horror in signatures.
+type Arrangement<S, V> =
+    Arranged<S, TraceValHandle<Vec<V>, Vec<V>, <S as ScopeParent>::Timestamp, Diff>>;
+type ArrangementImport<S, V, T> = Arranged<
+    S,
+    TraceEnter<TraceValHandle<Vec<V>, Vec<V>, T, Diff>, <S as ScopeParent>::Timestamp>,
+>;
+
+/// Dataflow-local collections and arrangements.
+pub struct Context<S: Scope, P: Eq+std::hash::Hash, V: Data, T>
+where
+    T: Timestamp+Lattice,
+    S::Timestamp: Lattice + Refines<T>,
+{
+    /// Dataflow local collections.
+    pub collections: HashMap<P, Collection<S, Vec<V>, Diff>>,
+    /// Dataflow local arrangements.
+    pub local: HashMap<P, HashMap<Vec<usize>, Arrangement<S, V>>>,
+    /// Imported arrangements.
+    pub trace: HashMap<P, HashMap<Vec<usize>, ArrangementImport<S, V, T>>>,
+}
+
+impl<S: Scope, P: Eq+std::hash::Hash, V: Data, T> Context<S, P, V, T>
+where
+    T: Timestamp+Lattice,
+    S::Timestamp: Lattice+Refines<T>,
+{
+    /// Retrieves an arrangement from a plan and keys.
+    pub fn get_local(&self, plan: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
+        self.local.get(plan).and_then(|x| x.get(keys))
+    }
+    /// Binds a plan and keys to an arrangement.
+    pub fn set_local(&mut self, plan: P, keys: &[usize], arranged: Arrangement<S, V>) {
+        self.local
+            .entry(plan)
+            .or_insert_with(|| HashMap::new())
+            .insert(keys.to_vec(), arranged);
+    }
+    /// Retrieves an arrangement from a plan and keys.
+    pub fn get_trace(&self, plan: &P, keys: &[usize]) -> Option<&ArrangementImport<S, V, T>> {
+        self.trace.get(plan).and_then(|x| x.get(keys))
+    }
+    /// Binds a plan and keys to an arrangement.
+    pub fn set_trace(&mut self, plan: P, keys: &[usize], arranged: ArrangementImport<S, V, T>) {
+        self.trace
+            .entry(plan)
+            .or_insert_with(|| HashMap::new())
+            .insert(keys.to_vec(), arranged);
+    }
+
+    /// Creates a new empty Context.
+    pub fn new() -> Self {
+        Self {
+            collections: HashMap::new(),
+            local: HashMap::new(),
+            trace: HashMap::new(),
+        }
+    }
+}
