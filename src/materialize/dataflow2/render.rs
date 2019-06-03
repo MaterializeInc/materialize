@@ -43,14 +43,14 @@ where
             }
             RelationExpr::Let { name, value, body } => {
                 let typ = value.typ();
-                let value = render(*value, scope, context);
                 let bind = RelationExpr::Get { name, typ };
-                let prior = context.collections.insert(bind.clone(), value);
-                let result = render(*body, scope, context);
-                if let Some(prior) = prior {
-                    context.collections.insert(bind, prior);
+                if context.collection(&bind).is_some() {
+                    panic!("Inappropriate to re-bind name: {:?}", bind);
+                } else {
+                    let value = render(*value, scope, context);
+                    context.collections.insert(bind.clone(), value);
+                    render(*body, scope, context)
                 }
-                result
             }
             RelationExpr::Project { input, outputs } => {
                 let input = render(*input, scope, context);
