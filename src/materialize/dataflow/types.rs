@@ -388,19 +388,45 @@ mod tests {
         let dataflow = Dataflow::View(View {
             name: "report".into(),
             relation_expr: RelationExpr::Project {
-                outputs: vec![ScalarExpr::Column(1), ScalarExpr::Column(2)],
+                outputs: vec![1, 2],
                 input: Box::new(RelationExpr::Join {
-                    left_key: vec![ScalarExpr::Column(0)],
-                    right_key: vec![ScalarExpr::Column(0)],
-                    left: Box::new(RelationExpr::Source("orders".into())),
-                    right: Box::new(RelationExpr::Distinct(Box::new(RelationExpr::UnionAll(
-                        vec![
-                            RelationExpr::Source("customers2018".into()),
-                            RelationExpr::Source("customers2019".into()),
-                        ],
-                    )))),
-                    include_left_outer: None,
-                    include_right_outer: None,
+                    inputs: vec![
+                        RelationExpr::Get {
+                            name: "orders".into(),
+                            typ: RelationType {
+                                column_types: vec![ColumnType {
+                                    name: Some("id".into()),
+                                    nullable: false,
+                                    scalar_type: ScalarType::Int64,
+                                }],
+                            },
+                        },
+                        RelationExpr::Distinct {
+                            input: Box::new(RelationExpr::Union {
+                                left: Box::new(RelationExpr::Get {
+                                    name: "customers2018".into(),
+                                    typ: RelationType {
+                                        column_types: vec![ColumnType {
+                                            name: Some("id".into()),
+                                            nullable: false,
+                                            scalar_type: ScalarType::Int64,
+                                        }],
+                                    },
+                                }),
+                                right: Box::new(RelationExpr::Get {
+                                    name: "customers2019".into(),
+                                    typ: RelationType {
+                                        column_types: vec![ColumnType {
+                                            name: Some("id".into()),
+                                            nullable: false,
+                                            scalar_type: ScalarType::Int64,
+                                        }],
+                                    },
+                                }),
+                            }),
+                        },
+                    ],
+                    variables: vec![vec![(0, 0), (1, 0)]],
                 }),
             },
             typ: RelationType {
