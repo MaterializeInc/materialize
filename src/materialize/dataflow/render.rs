@@ -140,7 +140,21 @@ fn build_relation_expr<S: Scope<Timestamp = Timestamp>>(
         RelationExpr::Project { outputs, input } => {
             let outputs = outputs.clone();
             build_relation_expr(&input, manager, worker_index, scope, buttons)
-                .map(move |data| outputs.iter().map(|expr| expr.eval(&data)).collect())
+                .map(move |data| outputs.iter().map(|&i| data[i].clone()).collect())
+        }
+
+        RelationExpr::Map { scalars, input } => {
+            let scalars = scalars.clone();
+            build_relation_expr(&input, manager, worker_index, scope, buttons).map(
+                move |mut data| {
+                    let new_data = scalars
+                        .iter()
+                        .map(|(e, _)| e.eval(&data))
+                        .collect::<Vec<_>>();
+                    data.extend(new_data);
+                    data
+                },
+            )
         }
 
         RelationExpr::Filter { predicate, input } => {

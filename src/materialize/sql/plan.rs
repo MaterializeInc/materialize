@@ -239,7 +239,7 @@ impl SQLRelationExpr {
         } = self;
         SQLRelationExpr {
             relation_expr: RelationExpr::Project {
-                outputs: project_key.iter().map(|&i| ScalarExpr::Column(i)).collect(),
+                outputs: project_key.to_vec(),
                 input: Box::new(relation_expr),
             },
             columns: project_key.iter().map(|i| columns[*i].clone()).collect(),
@@ -292,25 +292,36 @@ impl SQLRelationExpr {
     }
 
     pub fn project(self, outputs: Vec<(ScalarExpr, ColumnType)>) -> Self {
+        let input_arity = self.columns.len();
         let SQLRelationExpr { relation_expr, .. } = self;
+        let mut map_scalars = vec![];
+        let mut project_outputs = vec![];
+        let mut columns = vec![];
+        for (expr, typ) in outputs {
+            if let ScalarExpr::Column(i) = expr {
+                project_outputs.push(i);
+            } else {
+                project_outputs.push(input_arity + map_scalars.len());
+                map_scalars.push((expr, typ.clone()));
+            }
+            columns.push((
+                Name {
+                    table_name: None,
+                    column_name: typ.name.clone(),
+                    func_hash: None,
+                },
+                typ.clone(),
+            ));
+        }
         SQLRelationExpr {
             relation_expr: RelationExpr::Project {
-                outputs: outputs.iter().map(|(e, _)| e.clone()).collect(),
-                input: Box::new(relation_expr),
+                outputs: project_outputs,
+                input: Box::new(RelationExpr::Map {
+                    scalars: map_scalars,
+                    input: Box::new(relation_expr),
+                }),
             },
-            columns: outputs
-                .iter()
-                .map(|(_, t)| {
-                    (
-                        Name {
-                            table_name: None,
-                            column_name: t.name.clone(),
-                            func_hash: None,
-                        },
-                        t.clone(),
-                    )
-                })
-                .collect(),
+            columns,
         }
     }
 

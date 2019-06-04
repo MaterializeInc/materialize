@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::repr::{Datum, RelationType};
+use crate::repr::{ColumnType, Datum, RelationType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -118,9 +118,14 @@ pub enum RelationExpr {
     Source(String),
     /// Project or permute the columns in a dataflow.
     Project {
-        outputs: Vec<ScalarExpr>,
-        /// RelationExpr for the input.
         input: Box<RelationExpr>,
+        outputs: Vec<usize>,
+    },
+    /// Append new columns to a dataflow
+    Map {
+        input: Box<RelationExpr>,
+        // these are appended to output in addition to all the columns of input
+        scalars: Vec<(ScalarExpr, ColumnType)>,
     },
     /// Suppress duplicate tuples.
     Distinct(Box<RelationExpr>),
@@ -163,6 +168,7 @@ impl RelationExpr {
         match self {
             RelationExpr::Source(name) => out.push(&name),
             RelationExpr::Project { outputs: _, input } => input.uses_inner(out),
+            RelationExpr::Map { scalars: _, input } => input.uses_inner(out),
             RelationExpr::Distinct(p) => p.uses_inner(out),
             RelationExpr::UnionAll(ps) => ps.iter().for_each(|p| p.uses_inner(out)),
             RelationExpr::Join {
