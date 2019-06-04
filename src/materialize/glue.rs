@@ -59,7 +59,7 @@ pub enum DataflowCommand {
     PeekExisting(String),
     PeekTransient(Dataflow),
     Tail(String),
-    Insert(String, Vec<Vec<Datum>>),
+    Insert(String, Vec<(Vec<Datum>, Timestamp, isize)>),
     Shutdown,
 }
 

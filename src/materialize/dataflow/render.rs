@@ -10,11 +10,12 @@ use differential_dataflow::operators::reduce::Reduce;
 use differential_dataflow::operators::threshold::ThresholdTotal;
 use differential_dataflow::{AsCollection, Collection};
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::rc::Rc;
 use timely::communication::Allocate;
 use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::InputHandle;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 
@@ -47,7 +48,8 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     clock: &Clock,
-    insert_mux: &source::InsertMux,
+    // insert_mux: &source::InsertMux,
+    inputs: &mut HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
 ) {
     let worker_index = worker.index();
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
@@ -58,7 +60,14 @@ pub fn build_dataflow<A: Allocate>(
                     source::kafka(scope, &src.name, &c, done.clone(), clock)
                 }
                 SourceConnector::Local(l) => {
-                    source::local(scope, &src.name, &l, done.clone(), clock, insert_mux)
+                    use timely::dataflow::operators::input::Input;
+                    let (handle, stream) = scope.new_input();
+                    if worker_index == 0 {
+                        // drop the handle if not worker zero.
+                        inputs.insert(src.name.clone(), handle);
+                    }
+                    stream
+                    // source::local(scope, &src.name, &l, done.clone(), clock, insert_mux)
                 }
             };
             let arrangement = plan.as_collection().arrange_by_self();

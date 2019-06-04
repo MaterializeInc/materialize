@@ -627,7 +627,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
         if !only_parse {
             if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record)
             {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
 

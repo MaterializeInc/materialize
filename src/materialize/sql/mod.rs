@@ -230,7 +230,13 @@ impl Planner {
 
         Ok((
             SqlResponse::Inserted(datums.len()),
-            Some(DataflowCommand::Insert(name, datums)),
+            Some(DataflowCommand::Insert(
+                name,
+                datums
+                    .into_iter()
+                    .map(|d| (d, Default::default(), 1))
+                    .collect(),
+            )),
         ))
     }
 }

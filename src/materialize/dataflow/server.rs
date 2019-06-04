@@ -11,8 +11,10 @@ use differential_dataflow::trace::TraceReader;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 // use timely::dataflow::operators::probe::Handle as ProbeHandle;
+use timely::dataflow::InputHandle;
 use timely::worker::Worker as TimelyWorker;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use super::render;
@@ -21,6 +23,7 @@ use super::types;
 use crate::clock::{Clock, Timestamp};
 use crate::dataflow::source;
 use crate::glue::*;
+use crate::repr::Datum;
 
 pub fn serve(
     dataflow_command_receivers: Vec<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
@@ -36,7 +39,7 @@ pub fn serve(
             .map(Some)
             .collect::<Vec<_>>(),
     ));
-    let insert_mux = source::InsertMux::default();
+    // let insert_mux = source::InsertMux::default();
     timely::execute(timely::Configuration::Process(num_workers), move |worker| {
         let dataflow_command_receivers = dataflow_command_receivers.clone();
         let dataflow_command_receiver = {
@@ -49,7 +52,7 @@ pub fn serve(
             dataflow_command_receiver,
             peek_results_handler.clone(),
             clock.clone(),
-            insert_mux.clone(),
+            // insert_mux.clone(),
         )
         .run()
     })
@@ -82,7 +85,8 @@ where
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
-    insert_mux: source::InsertMux,
+    inputs: HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
+    // insert_mux: source::InsertMux,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -94,7 +98,7 @@ where
         dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
         peek_results_handler: PeekResultsHandler,
         clock: Clock,
-        insert_mux: source::InsertMux,
+        // insert_mux: source::InsertMux,
     ) -> Worker<'w, A> {
         let mut traces = TraceManager::new();
         render::add_builtin_dataflows(&mut traces, w);
@@ -106,7 +110,8 @@ where
             pending_peeks: Vec::new(),
             traces,
             rpc_client: reqwest::Client::new(),
-            insert_mux,
+            inputs: HashMap::new(),
+            // insert_mux,
         }
     }
 
@@ -227,21 +232,23 @@ where
                     &mut self.traces,
                     self.inner,
                     &self.clock,
-                    &self.insert_mux,
+                    &mut self.inputs,
                 );
             }
             DataflowCommand::DropDataflows(names) => {
-                let mut insert_mux = self.insert_mux.write().unwrap();
                 for name in names {
-                    // Only the first worker deals with inserts, otherwise we get terrible races
-                    if self.inner.index() == 0 {
-                        insert_mux.close(&name);
-                    }
+                    self.inputs.remove(&name);
                     let plan = types::Plan::Source(name.to_string());
                     self.traces.del_trace(&plan);
                 }
             }
             DataflowCommand::PeekExisting(ref name) => {
+                if let Some(time) = cmd_meta.timestamp {
+                    for handle in self.inputs.values_mut() {
+                        handle.advance_to(time + 1);
+                    }
+                }
+
                 let plan = types::Plan::Source(name.to_string());
                 if let Some(trace) = self.traces.get_trace(&plan) {
                     self.pending_peeks.push(PendingPeek {
@@ -255,13 +262,19 @@ where
                 }
             }
             DataflowCommand::PeekTransient(dataflow) => {
+                if let Some(time) = cmd_meta.timestamp {
+                    for handle in self.inputs.values_mut() {
+                        handle.advance_to(time + 1);
+                    }
+                }
+
                 let name = dataflow.name().to_string();
                 render::build_dataflow(
                     &dataflow,
                     &mut self.traces,
                     self.inner,
                     &self.clock,
-                    &self.insert_mux,
+                    &mut self.inputs,
                 );
                 let plan = types::Plan::Source(name.to_string());
                 if let Some(trace) = self.traces.get_trace(&plan) {
@@ -275,21 +288,26 @@ where
                     panic!(format!("Failed to find arrangement for Peek({})", name));
                 }
             }
-            DataflowCommand::Insert(name, datums) => {
+            DataflowCommand::Insert(name, mut datums) => {
                 // Only the first worker actually broadcasts the insert to the sources, otherwise we would get multiple copies
                 if self.inner.index() == 0 {
-                    self.insert_mux
-                        .read()
-                        .unwrap()
-                        .sender(&name)
-                        .unwrap()
-                        .unbounded_send(datums)
-                        .unwrap();
+                    let handle = self.inputs.get_mut(&name).expect("Failed to find input");
+
+                    let now = handle.time();
+                    for (_, time, _) in datums.iter_mut() {
+                        if *time < *now {
+                            *time = *now;
+                            println!("Forced to fast-forward input timestamps");
+                        }
+                    }
+
+                    handle.send_batch(&mut datums);
                 }
             }
             DataflowCommand::Tail(_) => unimplemented!(),
             DataflowCommand::Shutdown => {
                 // this should lead timely to wind down eventually
+                self.inputs.clear();
                 self.traces.del_all_traces();
             }
         }
