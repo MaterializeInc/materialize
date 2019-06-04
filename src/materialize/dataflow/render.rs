@@ -119,7 +119,7 @@ pub fn build_dataflow<A: Allocate>(
                 if let RelationExpr::Get { name, typ } = e {
                     if let Some(mut trace) = manager.get_trace(e) {
                         // TODO(frankmcsherry) do the thing
-                        let collection = trace.import(scope).as_collection(|k,_| k.clone());
+                        let collection = trace.import(scope).as_collection(|k, _| k.clone());
                         context.collections.insert(e.clone(), collection);
                         // context.set_local(
                         //     e.clone(),
