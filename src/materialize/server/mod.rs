@@ -106,12 +106,19 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         PeekResultsConfig::Local => dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
         PeekResultsConfig::Remote => dataflow::PeekResultsHandler::Remote,
     };
-    let _dd_workers = dataflow::serve(
+    let dd_workers = dataflow::serve(
         dataflow_command_receivers,
         peek_results_handler,
         clock.clone(),
         config.num_timely_workers,
-    );
+    )?;
+
+    let threads =
+    dd_workers
+        .guards()
+        .iter()
+        .map(|jh| jh.thread().clone())
+        .collect::<Vec<_>>();
 
     // queue and sql planner
     match &config.queue {
@@ -120,6 +127,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
                 sql_command_receiver,
                 sql_response_mux.clone(),
                 dataflow_command_senders,
+                threads,
                 clock.clone(),
             );
         }

@@ -326,6 +326,7 @@ struct FullState {
     clock: Clock,
     planner: Planner,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
+    threads: Vec<std::thread::Thread>,
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<Drop>,
     peek_results_mux: PeekResultsMux,
@@ -375,12 +376,21 @@ impl FullState {
             NUM_TIMELY_WORKERS,
         )
         .unwrap();
+
+        let threads =
+        dataflow_workers
+            .guards()
+            .iter()
+            .map(|jh| jh.thread().clone())
+            .collect::<Vec<_>>();
+
         FullState {
             clock,
             planner,
             dataflow_command_senders,
             _dataflow_workers: Box::new(dataflow_workers),
             peek_results_mux,
+            threads,
         }
     }
 
@@ -396,7 +406,7 @@ impl FullState {
             .unwrap()
             .channel(uuid)
             .unwrap();
-        for dataflow_command_sender in &self.dataflow_command_senders {
+        for (index, dataflow_command_sender) in self.dataflow_command_senders.iter().enumerate() {
             dataflow_command_sender
                 .unbounded_send((
                     dataflow_command.clone(),
@@ -406,6 +416,8 @@ impl FullState {
                     },
                 ))
                 .unwrap();
+
+            self.threads[index].unpark();
         }
         receiver
     }
@@ -553,7 +565,7 @@ impl RecordRunner for FullState {
 
 impl Drop for FullState {
     fn drop(&mut self) {
-        for dataflow_command_sender in &self.dataflow_command_senders {
+        for (index, dataflow_command_sender) in self.dataflow_command_senders.iter().enumerate() {
             drop(dataflow_command_sender.unbounded_send((
                 DataflowCommand::Shutdown,
                 CommandMeta {
@@ -561,6 +573,8 @@ impl Drop for FullState {
                     timestamp: None,
                 },
             )));
+
+            self.threads[index].unpark();
         }
     }
 }

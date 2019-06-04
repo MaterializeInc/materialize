@@ -39,8 +39,9 @@ pub fn serve(
             .map(Some)
             .collect::<Vec<_>>(),
     ));
-    // let insert_mux = source::InsertMux::default();
+
     timely::execute(timely::Configuration::Process(num_workers), move |worker| {
+
         let dataflow_command_receivers = dataflow_command_receivers.clone();
         let dataflow_command_receiver = {
             dataflow_command_receivers.lock().unwrap()[worker.index()]
@@ -131,7 +132,8 @@ where
             }
 
             // Ask Timely to execute a unit of work.
-            self.inner.step();
+            self.inner.step_or_park(None);
+            // self.inner.step();
 
             // See if time has advanced enough to handle any of our pending
             // peeks.

@@ -15,6 +15,7 @@ pub fn serve(
     sql_command_receiver: UnboundedReceiver<(SqlCommand, CommandMeta)>,
     sql_response_mux: SqlResponseMux,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
+    threads: Vec<std::thread::Thread>,
     clock: Clock,
 ) {
     std::thread::spawn(move || {
@@ -30,11 +31,13 @@ pub fn serve(
             };
 
             if let Some(dataflow_command) = dataflow_command {
-                for dataflow_command_sender in &dataflow_command_senders {
+                for (index, dataflow_command_sender) in dataflow_command_senders.iter().enumerate() {
                     dataflow_command_sender
                         .unbounded_send((dataflow_command.clone(), command_meta.clone()))
                         // if the dataflow server has gone down, just explode
                         .unwrap();
+
+                    threads[index].unpark();
                 }
             }
 
