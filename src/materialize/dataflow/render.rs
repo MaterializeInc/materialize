@@ -117,13 +117,15 @@ pub fn build_dataflow<A: Allocate>(
             let mut context = Context::new();
             view.relation_expr.visit(|e| {
                 if let RelationExpr::Get { name, typ } = e {
-                    if let Some(trace) = manager.get_trace(e) {
+                    if let Some(mut trace) = manager.get_trace(e) {
                         // TODO(frankmcsherry) do the thing
-                        context.set_trace(
-                            e.clone(),
-                            &(0..typ.column_types.len()).collect::<Vec<_>>(),
-                            unimplemented!(),
-                        );
+                        let collection = trace.import(scope).as_collection(|k,_| k.clone());
+                        context.collections.insert(e.clone(), collection);
+                        // context.set_local(
+                        //     e.clone(),
+                        //     &(0..typ.column_types.len()).collect::<Vec<_>>(),
+                        //     trace.import(scope),
+                        // );
                     }
                 }
             });
@@ -262,7 +264,7 @@ where
                             .arrange_by_key();
 
                         // TODO: easier idioms for detecting, re-using, and stashing.
-                        if !context.arrangement(&input, &new_keys[..]).is_none() {
+                        if context.arrangement(&input, &new_keys[..]).is_none() {
                             let built = build_relation_expr(input.clone(), scope, context);
                             let new_keys2 = new_keys.clone();
                             let new_keyed = built
@@ -435,7 +437,7 @@ where
                 let keys = (0..arity).collect::<Vec<_>>();
 
                 // TODO: easier idioms for detecting, re-using, and stashing.
-                if !context.arrangement(&input, &keys[..]).is_none() {
+                if context.arrangement(&input, &keys[..]).is_none() {
                     let built = build_relation_expr((*input).clone(), scope, context);
                     let keys2 = keys.clone();
                     let keyed = built
