@@ -46,7 +46,7 @@ impl Dataflow {
         match self {
             Dataflow::Source(_) => (),
             Dataflow::Sink(sink) => out.push(sink.from.as_str()),
-            Dataflow::View(view) => view.plan.uses_inner(&mut out),
+            Dataflow::View(view) => view.relation_expr.uses_inner(&mut out),
         }
         out
     }
@@ -107,35 +107,35 @@ pub struct KafkaSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub name: String,
-    pub plan: Plan,
+    pub relation_expr: RelationExpr,
     pub typ: RelationType,
 }
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum Plan {
+pub enum RelationExpr {
     /// Source data from another dataflow.
     Source(String),
     /// Project or permute the columns in a dataflow.
     Project {
         outputs: Vec<ScalarExpr>,
-        /// Plan for the input.
-        input: Box<Plan>,
+        /// RelationExpr for the input.
+        input: Box<RelationExpr>,
     },
     /// Suppress duplicate tuples.
-    Distinct(Box<Plan>),
+    Distinct(Box<RelationExpr>),
     /// Union several dataflows of the same type.
-    UnionAll(Vec<Plan>),
+    UnionAll(Vec<RelationExpr>),
     /// Join two dataflows.
     Join {
         /// Expression to compute the key from the left input.
         left_key: Vec<ScalarExpr>,
         /// Expression to compute the key from the right input.
         right_key: Vec<ScalarExpr>,
-        /// Plan for the left input.
-        left: Box<Plan>,
-        /// Plan for the right input.
-        right: Box<Plan>,
+        /// RelationExpr for the left input.
+        left: Box<RelationExpr>,
+        /// RelationExpr for the right input.
+        right: Box<RelationExpr>,
         /// Include keys on the left that are not joined (for left/full outer join). The usize value is the number of columns on the right.
         include_left_outer: Option<usize>,
         /// Include keys on the right that are not joined (for right/full outer join). The usize value is the number of columns on the left.
@@ -144,28 +144,28 @@ pub enum Plan {
     /// Filter records based on predicate.
     Filter {
         predicate: ScalarExpr,
-        input: Box<Plan>,
+        input: Box<RelationExpr>,
     },
     /// Aggregate records that share a key.
     Aggregate {
         key: Vec<ScalarExpr>,
         aggs: Vec<Aggregate>,
-        input: Box<Plan>,
+        input: Box<RelationExpr>,
     },
 }
 
-impl Plan {
-    /// Collects the names of the dataflows that this plan depends upon.
+impl RelationExpr {
+    /// Collects the names of the dataflows that this relation_expr depends upon.
     // Intentionally match on all field names to force changes to the AST to
     // be reflected in this function.
     #[allow(clippy::unneeded_field_pattern)]
     fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
         match self {
-            Plan::Source(name) => out.push(&name),
-            Plan::Project { outputs: _, input } => input.uses_inner(out),
-            Plan::Distinct(p) => p.uses_inner(out),
-            Plan::UnionAll(ps) => ps.iter().for_each(|p| p.uses_inner(out)),
-            Plan::Join {
+            RelationExpr::Source(name) => out.push(&name),
+            RelationExpr::Project { outputs: _, input } => input.uses_inner(out),
+            RelationExpr::Distinct(p) => p.uses_inner(out),
+            RelationExpr::UnionAll(ps) => ps.iter().for_each(|p| p.uses_inner(out)),
+            RelationExpr::Join {
                 left_key: _,
                 right_key: _,
                 left,
@@ -176,11 +176,11 @@ impl Plan {
                 left.uses_inner(out);
                 right.uses_inner(out);
             }
-            Plan::Filter {
+            RelationExpr::Filter {
                 predicate: _,
                 input,
             } => input.uses_inner(out),
-            Plan::Aggregate {
+            RelationExpr::Aggregate {
                 key: _,
                 aggs: _,
                 input,
@@ -241,21 +241,23 @@ mod tests {
     use super::*;
     use crate::repr::{ColumnType, ScalarType};
 
-    /// Verify that a basic plan serializes and deserializes to JSON sensibly.
+    /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
         let dataflow = Dataflow::View(View {
             name: "report".into(),
-            plan: Plan::Project {
+            relation_expr: RelationExpr::Project {
                 outputs: vec![ScalarExpr::Column(1), ScalarExpr::Column(2)],
-                input: Box::new(Plan::Join {
+                input: Box::new(RelationExpr::Join {
                     left_key: vec![ScalarExpr::Column(0)],
                     right_key: vec![ScalarExpr::Column(0)],
-                    left: Box::new(Plan::Source("orders".into())),
-                    right: Box::new(Plan::Distinct(Box::new(Plan::UnionAll(vec![
-                        Plan::Source("customers2018".into()),
-                        Plan::Source("customers2019".into()),
-                    ])))),
+                    left: Box::new(RelationExpr::Source("orders".into())),
+                    right: Box::new(RelationExpr::Distinct(Box::new(RelationExpr::UnionAll(
+                        vec![
+                            RelationExpr::Source("customers2018".into()),
+                            RelationExpr::Source("customers2019".into()),
+                        ],
+                    )))),
                     include_left_outer: None,
                     include_right_outer: None,
                 }),

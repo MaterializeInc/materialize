@@ -50,15 +50,15 @@ where
     ///
     /// This method consults all available data assets to create the appropriate
     /// collection. This can be either a collection itself, or if absent we may
-    /// also be able to find a stashed arrangement for the same plan, which we
+    /// also be able to find a stashed arrangement for the same relation_expr, which we
     /// flatten down to a collection.
     ///
     /// If insufficient data assets exist to create the collection the method
     /// will return `None`.
-    pub fn collection(&self, plan: &P) -> Option<Collection<S, Vec<V>, Diff>> {
-        if let Some(collection) = self.collections.get(plan) {
+    pub fn collection(&self, relation_expr: &P) -> Option<Collection<S, Vec<V>, Diff>> {
+        if let Some(collection) = self.collections.get(relation_expr) {
             Some(collection.clone())
-        } else if let Some(local) = self.local.get(plan) {
+        } else if let Some(local) = self.local.get(relation_expr) {
             Some(
                 local
                     .values()
@@ -66,7 +66,7 @@ where
                     .expect("Empty arrangement")
                     .as_collection(|_k, v| v.clone()),
             )
-        } else if let Some(trace) = self.trace.get(plan) {
+        } else if let Some(trace) = self.trace.get(relation_expr) {
             Some(
                 trace
                     .values()
@@ -83,35 +83,48 @@ where
     ///
     /// A context store multiple types of arrangements, and prioritizes
     /// dataflow-local arrangements in its return values.
-    pub fn arrangement(&self, plan: &P, keys: &[usize]) -> Option<ArrangementFlavor<S, V, T>> {
-        if let Some(local) = self.local.get(plan).and_then(|x| x.get(keys)) {
+    pub fn arrangement(
+        &self,
+        relation_expr: &P,
+        keys: &[usize],
+    ) -> Option<ArrangementFlavor<S, V, T>> {
+        if let Some(local) = self.local.get(relation_expr).and_then(|x| x.get(keys)) {
             Some(ArrangementFlavor::Local(local.clone()))
-        } else if let Some(trace) = self.trace.get(plan).and_then(|x| x.get(keys)) {
+        } else if let Some(trace) = self.trace.get(relation_expr).and_then(|x| x.get(keys)) {
             Some(ArrangementFlavor::Trace(trace.clone()))
         } else {
             None
         }
     }
 
-    /// Retrieves an arrangement from a plan and keys.
-    pub fn get_local(&self, plan: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
-        self.local.get(plan).and_then(|x| x.get(keys))
+    /// Retrieves an arrangement from a relation_expr and keys.
+    pub fn get_local(&self, relation_expr: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
+        self.local.get(relation_expr).and_then(|x| x.get(keys))
     }
-    /// Binds a plan and keys to an arrangement.
-    pub fn set_local(&mut self, plan: P, keys: &[usize], arranged: Arrangement<S, V>) {
+    /// Binds a relation_expr and keys to an arrangement.
+    pub fn set_local(&mut self, relation_expr: P, keys: &[usize], arranged: Arrangement<S, V>) {
         self.local
-            .entry(plan)
+            .entry(relation_expr)
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
     }
-    /// Retrieves an arrangement from a plan and keys.
-    pub fn get_trace(&self, plan: &P, keys: &[usize]) -> Option<&ArrangementImport<S, V, T>> {
-        self.trace.get(plan).and_then(|x| x.get(keys))
+    /// Retrieves an arrangement from a relation_expr and keys.
+    pub fn get_trace(
+        &self,
+        relation_expr: &P,
+        keys: &[usize],
+    ) -> Option<&ArrangementImport<S, V, T>> {
+        self.trace.get(relation_expr).and_then(|x| x.get(keys))
     }
-    /// Binds a plan and keys to an arrangement.
-    pub fn set_trace(&mut self, plan: P, keys: &[usize], arranged: ArrangementImport<S, V, T>) {
+    /// Binds a relation_expr and keys to an arrangement.
+    pub fn set_trace(
+        &mut self,
+        relation_expr: P,
+        keys: &[usize],
+        arranged: ArrangementImport<S, V, T>,
+    ) {
         self.trace
-            .entry(plan)
+            .entry(relation_expr)
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
     }

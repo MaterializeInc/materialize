@@ -59,18 +59,20 @@ pub mod join_order {
             if let RelationExpr::Join { inputs, variables } = relation {
                 let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
-                // Step 1: determine a plan order starting from `inputs[0]`.
-                let mut plan_order = vec![0];
-                while plan_order.len() < inputs.len() {
+                // Step 1: determine a relation_expr order starting from `inputs[0]`.
+                let mut relation_expr_order = vec![0];
+                while relation_expr_order.len() < inputs.len() {
                     let mut candidates = (0..inputs.len())
-                        .filter(|i| !plan_order.contains(i))
+                        .filter(|i| !relation_expr_order.contains(i))
                         .map(|i| {
                             (
                                 variables
                                     .iter()
                                     .filter(|vars| {
                                         vars.iter().any(|(idx, _)| &i == idx)
-                                            && vars.iter().any(|(idx, _)| plan_order.contains(idx))
+                                            && vars
+                                                .iter()
+                                                .any(|(idx, _)| relation_expr_order.contains(idx))
                                     })
                                     .count(),
                                 i,
@@ -79,12 +81,12 @@ pub mod join_order {
                         .collect::<Vec<_>>();
 
                     candidates.sort();
-                    plan_order.push(candidates.pop().expect("Candidate expected").1);
+                    relation_expr_order.push(candidates.pop().expect("Candidate expected").1);
                 }
 
                 // Step 2: rewrite `variables`.
-                let mut positions = vec![0; plan_order.len()];
-                for (index, input) in plan_order.iter().enumerate() {
+                let mut positions = vec![0; relation_expr_order.len()];
+                for (index, input) in relation_expr_order.iter().enumerate() {
                     positions[*input] = index;
                 }
 
@@ -102,8 +104,8 @@ pub mod join_order {
                 // In particular, for each (rel, col) in order, we want to figure out where
                 // it lives in our weird local order, and build an expr that picks it out.
                 let mut offset = 0;
-                let mut offsets = vec![0; plan_order.len()];
-                for input in plan_order.iter() {
+                let mut offsets = vec![0; relation_expr_order.len()];
+                for input in relation_expr_order.iter() {
                     offsets[*input] = offset;
                     offset += arities[*input];
                 }
@@ -118,7 +120,7 @@ pub mod join_order {
 
                 // Step 4: prepare output
                 let mut new_inputs = Vec::new();
-                for rel in plan_order.into_iter() {
+                for rel in relation_expr_order.into_iter() {
                     new_inputs.push(inputs[rel].clone()); // TODO: Extract from `inputs`.
                 }
 

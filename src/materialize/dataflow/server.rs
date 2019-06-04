@@ -135,8 +135,8 @@ where
             DataflowCommand::DropDataflows(names) => {
                 for name in names {
                     self.inputs.remove(&name);
-                    let plan = types::Plan::Source(name.to_string());
-                    self.traces.del_trace(&plan);
+                    let relation_expr = types::RelationExpr::Source(name.to_string());
+                    self.traces.del_trace(&relation_expr);
                 }
             }
             DataflowCommand::PeekExisting(ref name) => {
@@ -146,8 +146,8 @@ where
                     }
                 }
 
-                let plan = types::Plan::Source(name.to_string());
-                if let Some(trace) = self.traces.get_trace(&plan) {
+                let relation_expr = types::RelationExpr::Source(name.to_string());
+                if let Some(trace) = self.traces.get_trace(&relation_expr) {
                     self.pending_peeks.push(PendingPeek {
                         connection_uuid: cmd_meta.connection_uuid,
                         timestamp: cmd_meta.timestamp.unwrap(),
@@ -167,7 +167,7 @@ where
 
                 let name = dataflow.name().to_string();
                 render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
-                let plan = types::Plan::Source(name.to_string());
+                let plan = types::RelationExpr::Source(name.to_string());
                 if let Some(trace) = self.traces.get_trace(&plan) {
                     self.pending_peeks.push(PendingPeek {
                         connection_uuid: cmd_meta.connection_uuid,

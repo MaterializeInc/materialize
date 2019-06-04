@@ -10,7 +10,7 @@ pub struct ColumnName {
     pub column_name: Option<String>,
 }
 
-pub fn plan(
+pub fn relation_expr(
     _ast: sqlparser::sqlast::ASTNode,
 ) -> (RelationExpr, OwnedRelationType, Vec<ColumnName>) {
     unimplemented!();

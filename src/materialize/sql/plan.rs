@@ -6,7 +6,7 @@
 use failure::bail;
 use sqlparser::sqlast::SQLFunction;
 
-use crate::dataflow::{Aggregate, Plan, ScalarExpr};
+use crate::dataflow::{Aggregate, RelationExpr, ScalarExpr};
 use crate::repr::{ColumnType, RelationType};
 use ore::option::OptionExt;
 
@@ -27,17 +27,17 @@ impl Name {
     }
 }
 
-/// Wraps a dataflow plan with a sql scope
+/// Wraps a dataflow relation_expr with a sql scope
 #[derive(Debug, Clone)]
-pub struct SQLPlan {
-    plan: Plan,
+pub struct SQLRelationExpr {
+    relation_expr: RelationExpr,
     columns: Vec<(Name, ColumnType)>,
 }
 
-impl SQLPlan {
+impl SQLRelationExpr {
     pub fn from_source(name: &str, types: Vec<ColumnType>) -> Self {
-        SQLPlan {
-            plan: Plan::Source(name.to_owned()),
+        SQLRelationExpr {
+            relation_expr: RelationExpr::Source(name.to_owned()),
             columns: types
                 .into_iter()
                 .map(|typ| {
@@ -118,12 +118,12 @@ impl SQLPlan {
         include_left_outer: bool,
         include_right_outer: bool,
     ) -> Self {
-        let SQLPlan {
-            plan: left_plan,
+        let SQLRelationExpr {
+            relation_expr: left_relation_expr,
             columns: mut left_columns,
         } = self;
-        let SQLPlan {
-            plan: right_plan,
+        let SQLRelationExpr {
+            relation_expr: right_relation_expr,
             columns: mut right_columns,
         } = right;
         if include_left_outer {
@@ -136,10 +136,10 @@ impl SQLPlan {
                 typ.nullable = true;
             }
         }
-        SQLPlan {
-            plan: Plan::Join {
-                left: Box::new(left_plan),
-                right: Box::new(right_plan),
+        SQLRelationExpr {
+            relation_expr: RelationExpr::Join {
+                left: Box::new(left_relation_expr),
+                right: Box::new(right_relation_expr),
                 left_key,
                 right_key,
                 include_left_outer: if include_left_outer {
@@ -233,20 +233,23 @@ impl SQLPlan {
     }
 
     fn project_raw(self, project_key: &[usize]) -> Self {
-        let SQLPlan { plan, columns } = self;
-        SQLPlan {
-            plan: Plan::Project {
+        let SQLRelationExpr {
+            relation_expr,
+            columns,
+        } = self;
+        SQLRelationExpr {
+            relation_expr: RelationExpr::Project {
                 outputs: project_key.iter().map(|&i| ScalarExpr::Column(i)).collect(),
-                input: Box::new(plan),
+                input: Box::new(relation_expr),
             },
             columns: project_key.iter().map(|i| columns[*i].clone()).collect(),
         }
     }
 
     pub fn filter(mut self, predicate: ScalarExpr) -> Self {
-        self.plan = Plan::Filter {
+        self.relation_expr = RelationExpr::Filter {
             predicate,
-            input: Box::new(self.plan),
+            input: Box::new(self.relation_expr),
         };
         self
     }
@@ -257,7 +260,7 @@ impl SQLPlan {
         key_columns: Vec<(Name, ColumnType)>,
         aggregates: Vec<(&SQLFunction, Aggregate, ColumnType)>,
     ) -> Self {
-        let SQLPlan { plan, .. } = self;
+        let SQLRelationExpr { relation_expr, .. } = self;
         // Deduplicate by function hash.
         let mut aggregates: Vec<_> = aggregates
             .into_iter()
@@ -278,22 +281,22 @@ impl SQLPlan {
             ));
             aggs.push(agg);
         }
-        SQLPlan {
-            plan: Plan::Aggregate {
+        SQLRelationExpr {
+            relation_expr: RelationExpr::Aggregate {
                 key: key_expr,
                 aggs,
-                input: Box::new(plan),
+                input: Box::new(relation_expr),
             },
             columns: key_columns.into_iter().chain(agg_columns).collect(),
         }
     }
 
     pub fn project(self, outputs: Vec<(ScalarExpr, ColumnType)>) -> Self {
-        let SQLPlan { plan, .. } = self;
-        SQLPlan {
-            plan: Plan::Project {
+        let SQLRelationExpr { relation_expr, .. } = self;
+        SQLRelationExpr {
+            relation_expr: RelationExpr::Project {
                 outputs: outputs.iter().map(|(e, _)| e.clone()).collect(),
-                input: Box::new(plan),
+                input: Box::new(relation_expr),
             },
             columns: outputs
                 .iter()
@@ -312,7 +315,7 @@ impl SQLPlan {
     }
 
     pub fn distinct(mut self) -> Self {
-        self.plan = Plan::Distinct(Box::new(self.plan));
+        self.relation_expr = RelationExpr::Distinct(Box::new(self.relation_expr));
         self
     }
 
@@ -328,10 +331,13 @@ impl SQLPlan {
             .collect()
     }
 
-    pub fn finish(self) -> (Plan, RelationType) {
-        let SQLPlan { plan, columns } = self;
+    pub fn finish(self) -> (RelationExpr, RelationType) {
+        let SQLRelationExpr {
+            relation_expr,
+            columns,
+        } = self;
         (
-            plan,
+            relation_expr,
             RelationType {
                 column_types: columns.into_iter().map(|(_, typ)| typ).collect(),
             },

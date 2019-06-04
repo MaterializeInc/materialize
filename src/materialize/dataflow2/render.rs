@@ -18,7 +18,7 @@ use crate::dataflow2::types::RelationExpr;
 use crate::repr::Datum;
 
 pub fn render<G>(
-    plan: RelationExpr,
+    relation_expr: RelationExpr,
     scope: &mut G,
     context: &mut Context<G, RelationExpr, Datum, crate::clock::Timestamp>,
 ) -> Collection<G, Vec<Datum>, isize>
@@ -27,8 +27,8 @@ where
     G::Timestamp: Lattice + Refines<crate::clock::Timestamp>,
     // S: BuildHasher + Clone,
 {
-    if context.collection(&plan).is_none() {
-        let collection = match plan.clone() {
+    if context.collection(&relation_expr).is_none() {
+        let collection = match relation_expr.clone() {
             RelationExpr::Constant { rows, .. } => {
                 use differential_dataflow::collection::AsCollection;
                 use timely::dataflow::operators::{Map, ToStream};
@@ -92,7 +92,7 @@ where
 
                 let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
-                // The plan is to implement join as a `fold` over `inputs`.
+                // The relation_expr is to implement join as a `fold` over `inputs`.
                 let mut input_iter = inputs.into_iter().enumerate();
                 if let Some((index, input)) = input_iter.next() {
                     let mut joined = render(input, scope, context);
@@ -187,7 +187,7 @@ where
                 use differential_dataflow::operators::reduce::ReduceCore;
                 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
-                let self_clone = plan.clone();
+                let self_clone = relation_expr.clone();
                 let keys_clone = group_key.clone();
                 let input = render(*input, scope, context);
 
@@ -243,7 +243,7 @@ where
                 use differential_dataflow::operators::reduce::ReduceCore;
                 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
-                let self_clone = plan.clone();
+                let self_clone = relation_expr.clone();
                 let group_clone = group_key.clone();
                 let order_clone = order_key.clone();
                 let input = render(*input, scope, context);
@@ -352,11 +352,13 @@ where
             }
         };
 
-        context.collections.insert(plan.clone(), collection);
+        context
+            .collections
+            .insert(relation_expr.clone(), collection);
     }
 
     context
-        .collection(&plan)
+        .collection(&relation_expr)
         .expect("Collection surprisingly absent")
         .clone()
 }
