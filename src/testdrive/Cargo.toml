@@ -28,7 +28,7 @@ sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rdkafka = "0.20"
 regex = "1"
 reqwest = "0.9.17"
-termcolor = "1.0.4"
+termcolor = "1.0.5"
 
 [dev-dependencies]
 assert_cmd = "0.11.1"
