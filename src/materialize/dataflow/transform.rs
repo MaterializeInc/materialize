@@ -3,7 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow2::types::{RelationExpr, RelationType};
+use super::RelationExpr;
+use crate::repr::RelationType;
 
 pub trait Transform {
     /// Transform a relation into a functionally equivalent relation.
@@ -17,13 +18,14 @@ pub use predicate_pushdown::PredicatePushdown;
 
 pub mod join_order {
 
-    use crate::dataflow2::types::{RelationExpr, RelationType};
+    use crate::dataflow::RelationExpr;
+    use crate::repr::RelationType;
 
     /// Re-order relations in a join to process them in an order that makes sense.
     ///
     /// ```rust
-    /// use materialize::dataflow2::RelationExpr;
-    /// use materialize::dataflow2::ColumnType;
+    /// use materialize::dataflow::RelationExpr;
+    /// use materialize::dataflow::ColumnType;
     /// use materialize::repr::ScalarType;
     ///
     /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
@@ -39,7 +41,7 @@ pub mod join_order {
     ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
     /// ];
     ///
-    /// let join_order = materialize::dataflow2::transform::JoinOrder;
+    /// let join_order = materialize::dataflow::transform::JoinOrder;
     /// join_order.transform(&mut expr, &typ);
     ///
     /// if let RelationExpr::Project { input, outputs } = expr {
@@ -145,8 +147,8 @@ pub mod predicate_pushdown {
     /// Re-order relations in a join to process them in an order that makes sense.
     ///
     /// ```rust
-    /// use materialize::dataflow2::{RelationExpr, ScalarExpr};
-    /// use materialize::dataflow2::ColumnType;
+    /// use materialize::dataflow::{RelationExpr, ScalarExpr};
+    /// use materialize::dataflow::ColumnType;
     /// use materialize::repr::{Datum, ScalarType};
     ///
     /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
@@ -180,7 +182,7 @@ pub mod predicate_pushdown {
     ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
     /// ];
     ///
-    /// let pushdown = materialize::dataflow2::transform::PredicatePushdown;
+    /// let pushdown = materialize::dataflow::transform::PredicatePushdown;
     /// pushdown.transform(&mut expr, &typ);
     ///
     /// let join = RelationExpr::Join {
@@ -194,7 +196,8 @@ pub mod predicate_pushdown {
     ///
     /// assert_eq!(expr, join.filter(vec![predicate01]));
     /// ```
-    use crate::dataflow2::types::{RelationExpr, RelationType, ScalarExpr};
+    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use crate::repr::RelationType;
 
     pub struct PredicatePushdown;
 
@@ -231,7 +234,7 @@ pub mod predicate_pushdown {
                     for mut predicate in predicates.drain(..) {
                         // Determine the relation support of each predicate.
                         let mut support = Vec::new();
-                        predicate.visit(&mut |e| {
+                        predicate.visit(|e| {
                             if let ScalarExpr::Column(i) = e {
                                 support.push(input_relation[*i]);
                             }
@@ -248,7 +251,7 @@ pub mod predicate_pushdown {
                             }
                             1 => {
                                 let relation = support[0];
-                                predicate.visit(&mut |e| {
+                                predicate.visit(|e| {
                                     // subtract
                                     if let ScalarExpr::Column(i) = e {
                                         *i -= prior_arities[relation];
@@ -290,8 +293,8 @@ pub mod fusion {
         /// Re-order relations in a join to process them in an order that makes sense.
         ///
         /// ```rust
-        /// use materialize::dataflow2::{RelationExpr, ScalarExpr};
-        /// use materialize::dataflow2::ColumnType;
+        /// use materialize::dataflow::{RelationExpr, ScalarExpr};
+        /// use materialize::dataflow::ColumnType;
         /// use materialize::repr::{Datum, ScalarType};
         ///
         /// let input = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
@@ -311,18 +314,19 @@ pub mod fusion {
         ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
         /// ];
         ///
-        /// let fusion = materialize::dataflow2::transform::fusion::filter::Filter;
+        /// let fusion = materialize::dataflow::transform::fusion::filter::Filter;
         /// fusion.transform(&mut expr, &typ);
         ///
         /// let correct = input.filter(vec![predicate0, predicate1, predicate2]);
         ///
         /// assert_eq!(expr, correct);
         /// ```
-        use crate::dataflow2::types::{RelationExpr, RelationType};
+        use crate::dataflow::RelationExpr;
+        use crate::repr::RelationType;
 
         pub struct Filter;
 
-        impl crate::dataflow2::transform::Transform for Filter {
+        impl crate::dataflow::transform::Transform for Filter {
             fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
                 self.transform(relation, metadata)
             }

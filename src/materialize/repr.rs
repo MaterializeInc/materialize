@@ -233,3 +233,32 @@ pub struct ColumnType {
 pub struct RelationType {
     pub column_types: Vec<ColumnType>,
 }
+
+impl Datum {
+    pub fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
+        self.scalar_type().is_instance_of(column_typ)
+    }
+}
+
+impl ScalarType {
+    pub fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
+        self == &column_typ.scalar_type || (self == &ScalarType::Null && column_typ.nullable)
+    }
+}
+
+impl ColumnType {
+    pub fn union(&self, other: &Self) -> Self {
+        assert_eq!(self.scalar_type, other.scalar_type);
+        // TODO(jamii) does sql union require same column names?
+        let name = match (self.name, other.name) {
+            (Some(name), None) | (None, Some(name)) => Some(name.to_owned()),
+            (Some(name1), Some(name2)) if name1 == name2 => Some(name1.to_owned()),
+            _ => None,
+        };
+        ColumnType {
+            name,
+            scalar_type: self.scalar_type.clone(),
+            nullable: self.nullable || other.nullable,
+        }
+    }
+}

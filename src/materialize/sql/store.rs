@@ -31,9 +31,7 @@ impl DataflowStore {
     }
 
     pub fn get_type(&self, name: &str) -> Result<&RelationType, failure::Error> {
-        self.get(name)?
-            .typ()
-            .ok_or_else(|| format_err!("dataflow {} is a sink and cannot be depended upon", name))
+        Ok(self.get(name)?.typ())
     }
 
     pub fn insert(&mut self, dataflow: Dataflow) -> Result<(), failure::Error> {
@@ -59,7 +57,12 @@ impl DataflowStore {
         Ok(())
     }
 
-    pub fn remove(&mut self, name: &str, mode: RemoveMode) -> Result<(), failure::Error> {
+    pub fn remove(
+        &mut self,
+        name: &str,
+        mode: RemoveMode,
+        removed: &mut Vec<Dataflow>,
+    ) -> Result<(), failure::Error> {
         let metadata = match self.inner.get(name) {
             Some(metadata) => metadata,
             None => return Ok(()),
@@ -82,7 +85,7 @@ impl DataflowStore {
                     // turn of the loop, so cascading removes must not fail, or
                     // we'll have violated atomicity. Therefore unwrap instead
                     // of propagating the error.
-                    self.remove(&u, RemoveMode::Cascade).unwrap();
+                    self.remove(&u, RemoveMode::Cascade, removed).unwrap();
                 }
             }
         }
@@ -99,6 +102,8 @@ impl DataflowStore {
                 ),
             }
         }
+
+        removed.push(metadata.inner);
 
         Ok(())
     }

@@ -4,15 +4,16 @@
 // distributed without the express permission of Materialize, Inc.
 
 //! Driver for timely/differential dataflow.
-//!
-//! This module is very much a work in progress. Don't look too closely yet.
 
+mod context;
 pub mod func;
+mod optimize;
 mod render;
 pub mod server;
 mod sink;
 mod source;
 mod trace;
+mod transform;
 mod types;
 
 pub use server::{serve, PeekResultsHandler};

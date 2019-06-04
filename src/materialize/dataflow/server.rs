@@ -18,8 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use super::render;
 use super::trace::{KeysOnlyHandle, TraceManager};
-use super::types;
+use super::RelationExpr;
 use crate::clock::Timestamp;
+use crate::dataflow::Dataflow;
 use crate::glue::*;
 use crate::repr::Datum;
 
@@ -68,7 +69,7 @@ struct PendingPeek {
     timestamp: Timestamp,
     /// Handle to trace.
     trace: KeysOnlyHandle,
-    drop_after_peek: Option<String>,
+    drop_after_peek: Option<Dataflow>,
 }
 
 struct Worker<'w, A>
@@ -132,22 +133,27 @@ where
             DataflowCommand::CreateDataflow(dataflow) => {
                 render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
             }
-            DataflowCommand::DropDataflows(names) => {
-                for name in names {
-                    self.inputs.remove(&name);
-                    let relation_expr = types::RelationExpr::Source(name.to_string());
-                    self.traces.del_trace(&relation_expr);
+            DataflowCommand::DropDataflows(dataflows) => {
+                for dataflow in dataflows {
+                    // TODO(jamii) it's not clear how we're supposed to drop a Sink
+                    self.inputs.remove(dataflow.name());
+                    self.traces.del_trace(&RelationExpr::Get {
+                        name: dataflow.name().to_owned(),
+                        typ: dataflow.typ().clone(),
+                    });
                 }
             }
-            DataflowCommand::PeekExisting(ref name) => {
+            DataflowCommand::PeekExisting(dataflow) => {
                 if let Some(time) = cmd_meta.timestamp {
                     for handle in self.inputs.values_mut() {
                         handle.advance_to(time + 1);
                     }
                 }
 
-                let relation_expr = types::RelationExpr::Source(name.to_string());
-                if let Some(trace) = self.traces.get_trace(&relation_expr) {
+                if let Some(trace) = self.traces.get_trace(&RelationExpr::Get {
+                    name: dataflow.name().to_owned(),
+                    typ: dataflow.typ().clone(),
+                }) {
                     self.pending_peeks.push(PendingPeek {
                         connection_uuid: cmd_meta.connection_uuid,
                         timestamp: cmd_meta.timestamp.unwrap(),
@@ -155,25 +161,31 @@ where
                         drop_after_peek: None,
                     });
                 } else {
-                    panic!(format!("Failed to find arrangement for Peek({})", name));
+                    panic!(format!(
+                        "Failed to find arrangement for Peek({:?})",
+                        dataflow
+                    ));
                 }
             }
-            DataflowCommand::PeekTransient(dataflow) => {
+            DataflowCommand::PeekTransient(view) => {
                 if let Some(time) = cmd_meta.timestamp {
                     for handle in self.inputs.values_mut() {
                         handle.advance_to(time + 1);
                     }
-                }
-
-                let name = dataflow.name().to_string();
+                };
+                let name = view.name.to_owned();
+                let get = RelationExpr::Get {
+                    name: view.name.to_owned(),
+                    typ: view.typ.clone(),
+                };
+                let dataflow = Dataflow::View(view);
                 render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
-                let plan = types::RelationExpr::Source(name.to_string());
-                if let Some(trace) = self.traces.get_trace(&plan) {
+                if let Some(trace) = self.traces.get_trace(&get) {
                     self.pending_peeks.push(PendingPeek {
                         connection_uuid: cmd_meta.connection_uuid,
                         timestamp: cmd_meta.timestamp.unwrap(),
                         trace,
-                        drop_after_peek: Some(name),
+                        drop_after_peek: Some(dataflow),
                     });
                 } else {
                     panic!(format!("Failed to find arrangement for Peek({})", name));
@@ -278,8 +290,8 @@ where
                                 .unwrap();
                         }
                     }
-                    if let Some(name) = &peek.drop_after_peek {
-                        dataflows_to_be_dropped.push(name.to_owned());
+                    if let Some(dataflow) = &peek.drop_after_peek {
+                        dataflows_to_be_dropped.push(dataflow.clone());
                     }
                     false // don't retain
                 } else {

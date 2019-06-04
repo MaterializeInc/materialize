@@ -6,7 +6,7 @@
 //! Types and data-structures used to glue all the various components of materialize together
 
 use crate::clock::Timestamp;
-use crate::dataflow::Dataflow;
+use crate::dataflow::{Dataflow, View};
 use crate::repr::{Datum, RelationType};
 use failure::{ensure, format_err};
 use serde::{Deserialize, Serialize};
@@ -55,9 +55,9 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {
     CreateDataflow(Dataflow),
-    DropDataflows(Vec<String>),
-    PeekExisting(String),
-    PeekTransient(Dataflow),
+    DropDataflows(Vec<Dataflow>),
+    PeekExisting(Dataflow),
+    PeekTransient(View),
     Tail(String),
     Insert(String, Vec<(Vec<Datum>, Timestamp, isize)>),
     Shutdown,

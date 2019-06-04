@@ -37,7 +37,12 @@ pub struct SQLRelationExpr {
 impl SQLRelationExpr {
     pub fn from_source(name: &str, types: Vec<ColumnType>) -> Self {
         SQLRelationExpr {
-            relation_expr: RelationExpr::Source(name.to_owned()),
+            relation_expr: RelationExpr::Get {
+                name: name.to_owned(),
+                typ: RelationType {
+                    column_types: types.clone(),
+                },
+            },
             columns: types
                 .into_iter()
                 .map(|typ| {

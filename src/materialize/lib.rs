@@ -12,7 +12,6 @@
 
 pub mod clock;
 pub mod dataflow;
-pub mod dataflow2;
 pub mod glue;
 pub mod interchange;
 pub mod pgwire;
@@ -20,4 +19,3 @@ pub mod queue;
 pub mod repr;
 pub mod server;
 pub mod sql;
-pub mod sql2;

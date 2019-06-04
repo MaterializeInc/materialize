@@ -10,9 +10,9 @@ use crate::repr::*;
 use super::types::*;
 
 impl ScalarExpr {
-    fn visit1<F>(&mut self, f: &mut F)
+    pub fn visit1<'a, F>(&'a self, f: F)
     where
-        F: FnMut(&mut Self),
+        F: FnMut(&'a Self),
     {
         match self {
             ScalarExpr::Column(_) => (),
@@ -37,27 +37,62 @@ impl ScalarExpr {
         }
     }
 
-    pub fn visit<F>(&mut self, f: &mut F)
+    pub fn visit<'a, F>(&'a self, f: F)
     where
-        F: FnMut(&mut Self),
+        F: FnMut(&'a Self),
     {
-        self.visit1(&mut |e| e.visit(f));
+        let f = &mut f;
+        self.visit1(|e| e.visit(f));
         f(self);
     }
 
-    #[allow(dead_code)]
+    pub fn visit1_mut<'a, F>(&'a mut self, f: F)
+    where
+        F: FnMut(&'a mut Self),
+    {
+        match self {
+            ScalarExpr::Column(_) => (),
+            ScalarExpr::Literal(_) => (),
+            ScalarExpr::CallUnary { expr, .. } => {
+                f(expr);
+            }
+            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            ScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            ScalarExpr::If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+        }
+    }
+
+    pub fn visit_mut<F>(&mut self, f: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        let f = &mut f;
+        self.visit1_mut(|e| e.visit_mut(f));
+        f(self);
+    }
+
     fn permute(&mut self, permutation: &HashMap<usize, usize>) {
-        self.visit(&mut |e| {
+        self.visit_mut(|e| {
             if let ScalarExpr::Column(old_i) = e {
                 *old_i = permutation[old_i];
             }
         });
     }
 
-    #[allow(dead_code)]
-    fn support(&mut self) -> HashSet<usize> {
+    pub fn support(&mut self) -> HashSet<usize> {
         let mut support = HashSet::new();
-        self.visit(&mut |e| {
+        self.visit_mut(|e| {
             if let ScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
@@ -76,7 +111,7 @@ impl ScalarExpr {
     /// Reduces a complex expression where possible.
     ///
     /// ```rust
-    /// use materialize::dataflow2::{ScalarExpr};
+    /// use materialize::dataflow::{ScalarExpr};
     /// use materialize::repr::Datum;
     ///
     /// let expr_0 = ScalarExpr::column(0);
@@ -93,7 +128,7 @@ impl ScalarExpr {
     /// assert_eq!(test, expr_t);
     /// ```
     pub fn reduce(&mut self) {
-        self.visit(&mut |e| {
+        self.visit(|e| {
             let should_eval = match e {
                 ScalarExpr::CallUnary { expr, .. } => expr.is_literal(),
                 ScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -123,9 +158,9 @@ impl ScalarExpr {
 }
 
 impl RelationExpr {
-    fn visit1<F>(&mut self, f: &mut F)
+    pub fn visit1<'a, F>(&'a self, f: F)
     where
-        F: FnMut(&mut Self),
+        F: FnMut(&'a Self),
     {
         match self {
             RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
@@ -166,11 +201,63 @@ impl RelationExpr {
     }
 
     #[allow(dead_code)]
-    fn visit<F>(&mut self, f: &mut F)
+    pub fn visit<'a, F>(&'a self, f: F)
     where
-        F: FnMut(&mut Self),
+        F: FnMut(&'a Self),
     {
-        self.visit1(&mut |e| e.visit(f));
+        self.visit1(|e| e.visit(f));
+        f(self)
+    }
+
+    pub fn visit1_mut<'a, F>(&'a mut self, f: F)
+    where
+        F: FnMut(&'a mut Self),
+    {
+        match self {
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+            RelationExpr::Let { value, body, .. } => {
+                f(value);
+                f(body);
+            }
+            RelationExpr::Project { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Map { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Filter { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Join { inputs, .. } => {
+                for input in inputs {
+                    f(input);
+                }
+            }
+            RelationExpr::Reduce { input, .. } => {
+                f(input);
+            }
+            RelationExpr::TopK { input, .. } => {
+                f(input);
+            }
+            RelationExpr::OrDefault { input, .. } => {
+                f(input);
+            }
+            RelationExpr::Negate { input } => f(input),
+            RelationExpr::Distinct { input } => f(input),
+            RelationExpr::Union { left, right } => {
+                f(left);
+                f(right);
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn visit_mut<'a, F>(&'a mut self, f: F)
+    where
+        F: FnMut(&'a mut Self),
+    {
+        let f = &mut f;
+        self.visit1_mut(|e| e.visit_mut(f));
         f(self)
     }
 
@@ -181,8 +268,14 @@ impl RelationExpr {
                 for row in rows.iter_mut() {
                     *row = outputs.iter().map(|&i| row[i].clone()).collect();
                 }
-                let typ = outputs.iter().map(|&i| typ[i].clone()).collect();
-                RelationExpr::Constant { rows, typ }
+                let column_types = outputs
+                    .iter()
+                    .map(|&i| typ.column_types[i].clone())
+                    .collect();
+                RelationExpr::Constant {
+                    rows,
+                    typ: RelationType { column_types },
+                }
             }
             get @ RelationExpr::Get { .. } => {
                 let input = Box::new(get.push_down_projects());
@@ -239,13 +332,15 @@ impl RelationExpr {
         match self {
             RelationExpr::Project { input, outputs } => input.push_down_projects_with(&outputs),
             mut other => {
-                other.visit1(&mut |e| {
+                other.visit1_mut(|e| {
                     let owned = std::mem::replace(
                         e,
                         // dummy value
                         RelationExpr::Constant {
                             rows: vec![],
-                            typ: vec![],
+                            typ: RelationType {
+                                column_types: vec![],
+                            },
                         },
                     );
                     *e = owned.push_down_projects()

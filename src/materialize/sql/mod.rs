@@ -115,19 +115,21 @@ impl Planner {
             }
         }
         let mode = RemoveMode::from_cascade(drop.cascade);
+        let removed = vec![];
         for name in &names {
-            self.dataflows.remove(name, mode)?;
+            self.dataflows.remove(name, mode, &mut removed)?;
         }
-        Ok((sql_response, Some(DataflowCommand::DropDataflows(names))))
+        Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
     }
 
     fn handle_peek(&mut self, name: SQLObjectName) -> PlannerResult {
         let name = name.to_string();
-        let typ = self.dataflows.get_type(&name)?.clone();
-
+        let dataflow = self.dataflows.get(&name)?.clone();
         Ok((
-            SqlResponse::Peeking { typ },
-            Some(DataflowCommand::PeekExisting(name)),
+            SqlResponse::Peeking {
+                typ: dataflow.typ().clone(),
+            },
+            Some(DataflowCommand::PeekExisting(dataflow)),
         ))
     }
 
@@ -140,14 +142,16 @@ impl Planner {
             materialized: true,
             with_options: vec![],
         })?;
-        // Safe to unwrap dataflow.typ() below, as relation_exprning a view always yields
-        // a dataflow with a type.
-        let typ = dataflow.typ().unwrap().clone();
-
-        Ok((
-            SqlResponse::Peeking { typ },
-            Some(DataflowCommand::PeekTransient(dataflow)),
-        ))
+        if let Dataflow::View(view) = dataflow {
+            Ok((
+                SqlResponse::Peeking {
+                    typ: view.typ.clone(),
+                },
+                Some(DataflowCommand::PeekTransient(view)),
+            ))
+        } else {
+            panic!("Got a non-view dataflow for a SELECT: {:?}", dataflow);
+        }
     }
 
     fn handle_insert(
@@ -408,11 +412,11 @@ impl Planner {
                 }
                 let name = extract_sql_object_name(name)?;
                 let from = extract_sql_object_name(from)?;
-                let _ = self.dataflows.get(&from)?;
+                let dataflow = self.dataflows.get(&from)?;
                 let (addr, topic) = parse_kafka_url(url)?;
                 Ok(Dataflow::Sink(Sink {
                     name,
-                    from,
+                    from: (from, dataflow.typ().clone()),
                     connector: SinkConnector::Kafka(KafkaSinkConnector {
                         addr,
                         topic,
@@ -504,12 +508,16 @@ impl Planner {
                 let (left_relation_expr, left_type) = self.plan_set_expr(left)?;
                 let (right_relation_expr, right_type) = self.plan_set_expr(right)?;
 
-                let relation_expr =
-                    RelationExpr::UnionAll(vec![left_relation_expr, right_relation_expr]);
+                let relation_expr = RelationExpr::Union {
+                    left: Box::new(left_relation_expr),
+                    right: Box::new(right_relation_expr),
+                };
                 let relation_expr = if *all {
                     relation_expr
                 } else {
-                    RelationExpr::Distinct(Box::new(relation_expr))
+                    RelationExpr::Distinct {
+                        input: Box::new(relation_expr),
+                    }
                 };
 
                 // left and right must have the same number of columns and the same column types

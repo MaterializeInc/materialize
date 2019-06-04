@@ -32,11 +32,11 @@ impl Dataflow {
     }
 
     /// Reports the type of the datums produced by this dataflow.
-    pub fn typ(&self) -> Option<&RelationType> {
+    pub fn typ(&self) -> &RelationType {
         match self {
-            Dataflow::Source(src) => Some(&src.typ),
-            Dataflow::Sink(_) => None,
-            Dataflow::View(view) => Some(&view.typ),
+            Dataflow::Source(src) => &src.typ,
+            Dataflow::Sink(sink) => &sink.from.1,
+            Dataflow::View(view) => &view.typ,
         }
     }
 
@@ -45,7 +45,7 @@ impl Dataflow {
         let mut out = Vec::new();
         match self {
             Dataflow::Source(_) => (),
-            Dataflow::Sink(sink) => out.push(sink.from.as_str()),
+            Dataflow::Sink(sink) => out.push(sink.from.0.as_str()),
             Dataflow::View(view) => view.relation_expr.uses_inner(&mut out),
         }
         out
@@ -68,7 +68,7 @@ pub struct Source {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Sink {
     pub name: String,
-    pub from: String,
+    pub from: (String, RelationType),
     pub connector: SinkConnector,
 }
 
@@ -114,9 +114,20 @@ pub struct View {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum RelationExpr {
-    /// Source data from another dataflow.
-    Source(String),
-    /// Project or permute the columns in a dataflow.
+    /// Always return the same value
+    Constant {
+        rows: Vec<Vec<Datum>>,
+        typ: RelationType,
+    },
+    /// Get an existing dataflow
+    Get { name: String, typ: RelationType },
+    /// Introduce a temporary dataflow
+    Let {
+        name: String,
+        value: Box<RelationExpr>,
+        body: Box<RelationExpr>,
+    },
+    /// Project out some columns from a dataflow
     Project {
         input: Box<RelationExpr>,
         outputs: Vec<usize>,
@@ -127,71 +138,195 @@ pub enum RelationExpr {
         // these are appended to output in addition to all the columns of input
         scalars: Vec<(ScalarExpr, ColumnType)>,
     },
-    /// Suppress duplicate tuples.
-    Distinct(Box<RelationExpr>),
-    /// Union several dataflows of the same type.
-    UnionAll(Vec<RelationExpr>),
-    /// Join two dataflows.
-    Join {
-        /// Expression to compute the key from the left input.
-        left_key: Vec<ScalarExpr>,
-        /// Expression to compute the key from the right input.
-        right_key: Vec<ScalarExpr>,
-        /// RelationExpr for the left input.
-        left: Box<RelationExpr>,
-        /// RelationExpr for the right input.
-        right: Box<RelationExpr>,
-        /// Include keys on the left that are not joined (for left/full outer join). The usize value is the number of columns on the right.
-        include_left_outer: Option<usize>,
-        /// Include keys on the right that are not joined (for right/full outer join). The usize value is the number of columns on the left.
-        include_right_outer: Option<usize>,
-    },
-    /// Filter records based on predicate.
+    /// Keep rows from a dataflow where all the predicates are true
     Filter {
-        predicate: ScalarExpr,
         input: Box<RelationExpr>,
+        predicates: Vec<ScalarExpr>,
     },
-    /// Aggregate records that share a key.
-    Aggregate {
-        key: Vec<ScalarExpr>,
-        aggs: Vec<AggregateExpr>,
+    /// Join several dataflows together at once
+    Join {
+        inputs: Vec<RelationExpr>,
+        // each HashSet is an equivalence class of (input_index, column_index)
+        variables: Vec<Vec<(usize, usize)>>,
+    },
+    /// Group a dataflow by some columns and aggregate over each group
+    Reduce {
         input: Box<RelationExpr>,
+        group_key: Vec<usize>,
+        // these are appended to output in addition to all the columns of input that are in group_key
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
     },
+    /// Groups and orders within each group, limiting output.
+    TopK {
+        input: Box<RelationExpr>,
+        group_key: Vec<usize>,
+        order_key: Vec<usize>,
+        limit: usize,
+    },
+    /// If the input is empty, return a default row
+    // Used only for some SQL aggregate edge cases
+    OrDefault {
+        input: Box<RelationExpr>,
+        default: Vec<Datum>,
+    },
+    /// Return a dataflow where the row counts are negated
+    Negate { input: Box<RelationExpr> },
+    /// Return a dataflow where the row counts are all set to 1
+    Distinct { input: Box<RelationExpr> },
+    /// Return the union of two dataflows
+    Union {
+        left: Box<RelationExpr>,
+        right: Box<RelationExpr>,
+    },
+    // TODO Lookup/Arrange
+}
+
+impl RelationExpr {
+    pub fn typ(&self) -> RelationType {
+        match self {
+            RelationExpr::Constant { rows, typ } => {
+                for row in rows {
+                    for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
+                        assert!(datum.is_instance_of(column_typ));
+                    }
+                }
+                typ.clone()
+            }
+            RelationExpr::Get { typ, .. } => typ.clone(),
+            RelationExpr::Let { body, .. } => body.typ(),
+            RelationExpr::Project { input, outputs } => {
+                let input_typ = input.typ();
+                RelationType {
+                    column_types: outputs
+                        .iter()
+                        .map(|&i| input_typ.column_types[i].clone())
+                        .collect(),
+                }
+            }
+            RelationExpr::Map { input, scalars } => {
+                let mut typ = input.typ();
+                for (_, column_typ) in scalars {
+                    typ.column_types.push(column_typ.clone());
+                }
+                typ
+            }
+            RelationExpr::Filter { input, .. } => input.typ(),
+            RelationExpr::Join { inputs, .. } => {
+                let mut column_types = vec![];
+                for input in inputs {
+                    column_types.append(&mut input.typ().column_types);
+                }
+                RelationType { column_types }
+            }
+            RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => {
+                let input_typ = input.typ();
+                let mut column_types = group_key
+                    .iter()
+                    .map(|&i| input_typ.column_types[i].clone())
+                    .collect::<Vec<_>>();
+                for (_, column_typ) in aggregates {
+                    column_types.push(column_typ.clone());
+                }
+                RelationType { column_types }
+            }
+            RelationExpr::TopK { input, .. } => input.typ(),
+            RelationExpr::OrDefault { input, default } => {
+                let typ = input.typ();
+                for (column_typ, datum) in typ.column_types.iter().zip(default.iter()) {
+                    assert!(datum.scalar_type().is_instance_of(column_typ));
+                }
+                typ
+            }
+            RelationExpr::Negate { input } => input.typ(),
+            RelationExpr::Distinct { input } => input.typ(),
+            RelationExpr::Union { left, right } => {
+                let left_typ = left.typ();
+                let right_typ = right.typ();
+                assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
+                RelationType {
+                    column_types: left_typ
+                        .column_types
+                        .iter()
+                        .zip(right_typ.column_types.iter())
+                        .map(|(l, r)| l.union(r))
+                        .collect(),
+                }
+            }
+        }
+    }
+
+    pub fn arity(&self) -> usize {
+        self.typ().column_types.len()
+    }
+}
+
+impl RelationExpr {
+    pub fn project(self, outputs: Vec<usize>) -> Self {
+        RelationExpr::Project {
+            input: Box::new(self),
+            outputs,
+        }
+    }
+    pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
+        RelationExpr::Map {
+            input: Box::new(self),
+            scalars,
+        }
+    }
+    pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
+        RelationExpr::Filter {
+            input: Box::new(self),
+            predicates,
+        }
+    }
+    pub fn reduce(
+        self,
+        group_key: Vec<usize>,
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
+    ) -> Self {
+        RelationExpr::Reduce {
+            input: Box::new(self),
+            group_key,
+            aggregates,
+        }
+    }
+    pub fn or_default(self, default: Vec<Datum>) -> Self {
+        RelationExpr::OrDefault {
+            input: Box::new(self),
+            default,
+        }
+    }
+    pub fn negate(self) -> Self {
+        RelationExpr::Negate {
+            input: Box::new(self),
+        }
+    }
+    pub fn distinct(self) -> Self {
+        RelationExpr::Distinct {
+            input: Box::new(self),
+        }
+    }
+    pub fn union(self, other: Self) -> Self {
+        RelationExpr::Union {
+            left: Box::new(self),
+            right: Box::new(other),
+        }
+    }
 }
 
 impl RelationExpr {
     /// Collects the names of the dataflows that this relation_expr depends upon.
-    // Intentionally match on all field names to force changes to the AST to
-    // be reflected in this function.
     #[allow(clippy::unneeded_field_pattern)]
     fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
-        match self {
-            RelationExpr::Source(name) => out.push(&name),
-            RelationExpr::Project { outputs: _, input } => input.uses_inner(out),
-            RelationExpr::Map { scalars: _, input } => input.uses_inner(out),
-            RelationExpr::Distinct(p) => p.uses_inner(out),
-            RelationExpr::UnionAll(ps) => ps.iter().for_each(|p| p.uses_inner(out)),
-            RelationExpr::Join {
-                left_key: _,
-                right_key: _,
-                left,
-                right,
-                include_left_outer: _,
-                include_right_outer: _,
-            } => {
-                left.uses_inner(out);
-                right.uses_inner(out);
+        self.visit(|e| {
+            if let RelationExpr::Get { name, .. } = e {
+                out.push(&name);
             }
-            RelationExpr::Filter {
-                predicate: _,
-                input,
-            } => input.uses_inner(out),
-            RelationExpr::Aggregate {
-                key: _,
-                aggs: _,
-                input,
-            } => input.uses_inner(out),
-        }
+        });
     }
 }
 
