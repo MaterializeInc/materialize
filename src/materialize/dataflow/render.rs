@@ -115,6 +115,18 @@ pub fn build_dataflow<A: Allocate>(
         }
         Dataflow::View(view) => {
             let mut context = Context::new();
+            view.relation_expr.visit(|e| {
+                if let RelationExpr::Get { name, typ } = e {
+                    if let Some(trace) = manager.get_trace(e) {
+                        // TODO(frankmcsherry) do the thing
+                        context.set_trace(
+                            e.clone(),
+                            &(0..typ.column_types.len()).collect::<Vec<_>>(),
+                            unimplemented!(),
+                        );
+                    }
+                }
+            });
             let arrangement =
                 build_relation_expr(view.relation_expr, scope, &mut context).arrange_by_self();
             manager.set_trace(
