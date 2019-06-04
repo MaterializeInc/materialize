@@ -6,7 +6,7 @@
 use failure::bail;
 use sqlparser::sqlast::SQLFunction;
 
-use crate::dataflow::{Aggregate, RelationExpr, ScalarExpr};
+use crate::dataflow::{AggregateExpr, RelationExpr, ScalarExpr};
 use crate::repr::{ColumnType, RelationType};
 use ore::option::OptionExt;
 
@@ -258,7 +258,7 @@ impl SQLRelationExpr {
         self,
         key_expr: Vec<ScalarExpr>,
         key_columns: Vec<(Name, ColumnType)>,
-        aggregates: Vec<(&SQLFunction, Aggregate, ColumnType)>,
+        aggregates: Vec<(&SQLFunction, AggregateExpr, ColumnType)>,
     ) -> Self {
         let SQLRelationExpr { relation_expr, .. } = self;
         // Deduplicate by function hash.

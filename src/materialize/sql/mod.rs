@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::dataflow::{
-    Aggregate, Dataflow, KafkaSinkConnector, KafkaSourceConnector, LocalSourceConnector,
+    AggregateExpr, Dataflow, KafkaSinkConnector, KafkaSourceConnector, LocalSourceConnector,
     RelationExpr, ScalarExpr, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use crate::glue::*;
@@ -655,7 +655,7 @@ impl Planner {
                 };
                 aggs.push((
                     agg_func,
-                    Aggregate {
+                    AggregateExpr {
                         func,
                         expr,
                         distinct: agg_func.distinct,

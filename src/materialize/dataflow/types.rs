@@ -149,7 +149,7 @@ pub enum RelationExpr {
     /// Aggregate records that share a key.
     Aggregate {
         key: Vec<ScalarExpr>,
-        aggs: Vec<Aggregate>,
+        aggs: Vec<AggregateExpr>,
         input: Box<RelationExpr>,
     },
 }
@@ -191,7 +191,7 @@ impl RelationExpr {
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct Aggregate {
+pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: ScalarExpr,
     pub distinct: bool,
