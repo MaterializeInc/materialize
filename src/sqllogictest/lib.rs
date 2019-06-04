@@ -377,8 +377,7 @@ impl FullState {
         )
         .unwrap();
 
-        let threads =
-        dataflow_workers
+        let threads = dataflow_workers
             .guards()
             .iter()
             .map(|jh| jh.thread().clone())

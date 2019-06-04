@@ -113,8 +113,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         config.num_timely_workers,
     )?;
 
-    let threads =
-    dd_workers
+    let threads = dd_workers
         .guards()
         .iter()
         .map(|jh| jh.thread().clone())

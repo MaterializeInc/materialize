@@ -31,7 +31,8 @@ pub fn serve(
             };
 
             if let Some(dataflow_command) = dataflow_command {
-                for (index, dataflow_command_sender) in dataflow_command_senders.iter().enumerate() {
+                for (index, dataflow_command_sender) in dataflow_command_senders.iter().enumerate()
+                {
                     dataflow_command_sender
                         .unbounded_send((dataflow_command.clone(), command_meta.clone()))
                         // if the dataflow server has gone down, just explode
