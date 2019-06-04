@@ -10,7 +10,6 @@ use differential_dataflow::trace::TraceReader;
 
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
-// use timely::dataflow::operators::probe::Handle as ProbeHandle;
 use timely::dataflow::InputHandle;
 use timely::worker::Worker as TimelyWorker;
 
@@ -20,15 +19,13 @@ use std::sync::{Arc, Mutex};
 use super::render;
 use super::trace::{KeysOnlyHandle, TraceManager};
 use super::types;
-use crate::clock::{Clock, Timestamp};
-use crate::dataflow::source;
+use crate::clock::Timestamp;
 use crate::glue::*;
 use crate::repr::Datum;
 
 pub fn serve(
     dataflow_command_receivers: Vec<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
     peek_results_handler: PeekResultsHandler,
-    clock: Clock,
     num_workers: usize,
 ) -> Result<WorkerGuards<()>, String> {
     assert_eq!(dataflow_command_receivers.len(), num_workers);
@@ -51,7 +48,7 @@ pub fn serve(
             worker,
             dataflow_command_receiver,
             peek_results_handler.clone(),
-            clock.clone(),
+            // clock.clone(),
             // insert_mux.clone(),
         )
         .run()
@@ -79,14 +76,12 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    clock: Clock,
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
     peek_results_handler: PeekResultsHandler,
     pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
-    // insert_mux: source::InsertMux,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -97,21 +92,17 @@ where
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
         peek_results_handler: PeekResultsHandler,
-        clock: Clock,
-        // insert_mux: source::InsertMux,
     ) -> Worker<'w, A> {
         let mut traces = TraceManager::new();
         render::add_builtin_dataflows(&mut traces, w);
         Worker {
             inner: w,
-            clock,
             dataflow_command_receiver,
             peek_results_handler,
             pending_peeks: Vec::new(),
             traces,
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
-            // insert_mux,
         }
     }
 
@@ -143,7 +134,6 @@ where
                     &dataflow,
                     &mut self.traces,
                     self.inner,
-                    &self.clock,
                     &mut self.inputs,
                 );
             }
@@ -185,7 +175,6 @@ where
                     &dataflow,
                     &mut self.traces,
                     self.inner,
-                    &self.clock,
                     &mut self.inputs,
                 );
                 let plan = types::Plan::Source(name.to_string());
@@ -312,7 +301,9 @@ where
             DataflowCommand::DropDataflows(dataflows_to_be_dropped),
             CommandMeta {
                 connection_uuid: Uuid::nil(),
-                timestamp: Some(self.clock.now()),
+                // timestamp: Some(self.clock.now()),
+                // timestamp: Some(worker.timer().elapsed().as_millis() as u64),
+                timestamp: None,
             },
         );
     }

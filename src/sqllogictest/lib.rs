@@ -18,7 +18,6 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
-use materialize::clock::Clock;
 use materialize::dataflow;
 use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
@@ -323,7 +322,8 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
-    clock: Clock,
+    // clock: Clock,
+    timer: std::time::Instant,
     planner: Planner,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
     threads: Vec<std::thread::Thread>,
@@ -364,7 +364,7 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
 
 impl FullState {
     fn start() -> Self {
-        let clock = Clock::new();
+        // let clock = Clock::new();
         let planner = Planner::default();
         let (dataflow_command_senders, dataflow_command_receivers) =
             (0..NUM_TIMELY_WORKERS).map(|_| unbounded()).unzip();
@@ -372,7 +372,7 @@ impl FullState {
         let dataflow_workers = dataflow::serve(
             dataflow_command_receivers,
             dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
-            clock.clone(),
+            // clock.clone(),
             NUM_TIMELY_WORKERS,
         )
         .unwrap();
@@ -384,7 +384,8 @@ impl FullState {
             .collect::<Vec<_>>();
 
         FullState {
-            clock,
+            // clock,
+            timer: std::time::Instant::now(),
             planner,
             dataflow_command_senders,
             _dataflow_workers: Box::new(dataflow_workers),
@@ -397,7 +398,8 @@ impl FullState {
         &self,
         dataflow_command: DataflowCommand,
     ) -> UnboundedReceiver<PeekResults> {
-        let timestamp = self.clock.now();
+        // let timestamp = self.clock.now();
+        let timestamp = self.timer.elapsed().as_millis() as u64;
         let uuid = Uuid::new_v4();
         let receiver = self
             .peek_results_mux

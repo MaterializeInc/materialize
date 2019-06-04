@@ -13,7 +13,7 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use crate::clock::{Clock, Timestamp};
+use crate::clock::Timestamp;
 use crate::dataflow::types::{Diff, KafkaSinkConnector};
 
 pub fn kafka<G, B, K, V>(
@@ -21,7 +21,8 @@ pub fn kafka<G, B, K, V>(
     name: &str,
     _connector: &KafkaSinkConnector,
     _done: Rc<Cell<bool>>,
-    _clock: &Clock,
+    // _clock: &Clock,
+    _timer: std::time::Instant,
 ) where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<K, V, Timestamp, Diff>,

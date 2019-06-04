@@ -23,7 +23,7 @@ use super::sink;
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
-use crate::clock::{Clock, Timestamp};
+use crate::clock::Timestamp;
 use crate::repr::Datum;
 
 pub fn add_builtin_dataflows<A: Allocate>(
@@ -47,17 +47,19 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    clock: &Clock,
+    // clock: &Clock,
     // insert_mux: &source::InsertMux,
     inputs: &mut HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
 ) {
+    let worker_timer = worker.timer();
     let worker_index = worker.index();
+
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
             let done = Rc::new(Cell::new(false));
             let plan = match &src.connector {
                 SourceConnector::Kafka(c) => {
-                    source::kafka(scope, &src.name, &c, done.clone(), clock)
+                    source::kafka(scope, &src.name, &c, done.clone(), worker_timer)
                 }
                 SourceConnector::Local(l) => {
                     use timely::dataflow::operators::input::Input;
@@ -86,7 +88,7 @@ pub fn build_dataflow<A: Allocate>(
                 .import_core(scope, &format!("Import({})", sink.from));
             match &sink.connector {
                 SinkConnector::Kafka(c) => {
-                    sink::kafka(&arrangement.stream, &sink.name, c, done, clock)
+                    sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
                 }
             }
         }
