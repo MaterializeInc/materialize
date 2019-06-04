@@ -115,113 +115,24 @@ where
         }
     }
 
+    /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
-        loop {
-            // Handle any received commands
-            while let Ok(Some((cmd, cmd_meta))) = self.dataflow_command_receiver.try_next() {
-                let is_shutdown = if let DataflowCommand::Shutdown = cmd {
-                    true
-                } else {
-                    false
-                };
-                self.handle_command(cmd, cmd_meta);
-                if is_shutdown {
-                    return;
-                }
-            }
-
+        let mut shutdown = false;
+        while !shutdown {
             // Ask Timely to execute a unit of work.
+            // Can either yield tastefully, or busy-wait.
             self.inner.step_or_park(None);
             // self.inner.step();
 
-            // See if time has advanced enough to handle any of our pending
-            // peeks.
-            let mut dataflows_to_be_dropped = vec![];
-            {
-                let Worker {
-                    pending_peeks,
-                    peek_results_handler,
-                    rpc_client,
-                    ..
-                } = self;
-                pending_peeks.retain(|peek| {
-                    let mut upper = timely::progress::frontier::Antichain::new();
-                    let mut trace = peek.trace.clone();
-                    trace.read_upper(&mut upper);
+            self.process_peeks();
 
-                    // To produce output at `peek.timestamp`, we must be certain that
-                    // it is no longer changing. A trace guarantees that all future
-                    // changes will be greater than or equal to an element of `upper`.
-                    //
-                    // If an element of `upper` is less or equal to `peek.timestamp`,
-                    // then there can be further updates that would change the output.
-                    // If no element of `upper` is less or equal to `peek.timestamp`,
-                    // then for any time `t` less or equal to `peek.timestamp` it is
-                    // not the case that `upper` is less or equal to that timestamp,
-                    // and so the result cannot further evolve.
-                    if !upper.less_equal(&peek.timestamp) {
-                        let (mut cur, storage) = peek.trace.clone().cursor();
-                        let mut out = Vec::new();
-                        while let Some(key) = cur.get_key(&storage) {
-                            // TODO: Absent value iteration might be weird (in principle
-                            // the cursor *could* say no `()` values associated with the
-                            // key, though I can't imagine how that would happen for this
-                            // specific trace implementation).
-
-                            let mut copies = 0;
-                            cur.map_times(&storage, |time, diff| {
-                                use timely::order::PartialOrder;
-                                if time.less_equal(&peek.timestamp) {
-                                    copies += diff;
-                                }
-                            });
-                            assert!(copies >= 0);
-                            for _ in 0..copies {
-                                out.push(key.clone());
-                            }
-
-                            cur.step_key(&storage)
-                        }
-                        match peek_results_handler {
-                            PeekResultsHandler::Local(peek_results_mux) => {
-                                // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-                                if let Ok(sender) = peek_results_mux
-                                    .read()
-                                    .unwrap()
-                                    .sender(&peek.connection_uuid)
-                                {
-                                    drop(sender.unbounded_send(out))
-                                }
-                            }
-                            PeekResultsHandler::Remote => {
-                                let encoded = bincode::serialize(&out).unwrap();
-                                rpc_client
-                                    .post("http://localhost:6875/api/peek-results")
-                                    .header(
-                                        "X-Materialize-Query-UUID",
-                                        peek.connection_uuid.to_string(),
-                                    )
-                                    .body(encoded)
-                                    .send()
-                                    .unwrap();
-                            }
-                        }
-                        if let Some(name) = &peek.drop_after_peek {
-                            dataflows_to_be_dropped.push(name.to_owned());
-                        }
-                        false // don't retain
-                    } else {
-                        true
-                    }
-                });
+            // Handle any received commands
+            while let Ok(Some((cmd, cmd_meta))) = self.dataflow_command_receiver.try_next() {
+                if let DataflowCommand::Shutdown = cmd {
+                    shutdown = true;
+                }
+                self.handle_command(cmd, cmd_meta);
             }
-            self.handle_command(
-                DataflowCommand::DropDataflows(dataflows_to_be_dropped),
-                CommandMeta {
-                    connection_uuid: Uuid::nil(),
-                    timestamp: Some(self.clock.now()),
-                },
-            );
         }
     }
 
@@ -312,5 +223,97 @@ where
                 self.traces.del_all_traces();
             }
         }
+    }
+
+    /// Scan pending peeks and attempt to retire each.
+    fn process_peeks(&mut self) {
+        // See if time has advanced enough to handle any of our pending
+        // peeks.
+        let mut dataflows_to_be_dropped = vec![];
+        {
+            let Worker {
+                pending_peeks,
+                peek_results_handler,
+                rpc_client,
+                ..
+            } = self;
+            pending_peeks.retain(|peek| {
+                let mut upper = timely::progress::frontier::Antichain::new();
+                let mut trace = peek.trace.clone();
+                trace.read_upper(&mut upper);
+
+                // To produce output at `peek.timestamp`, we must be certain that
+                // it is no longer changing. A trace guarantees that all future
+                // changes will be greater than or equal to an element of `upper`.
+                //
+                // If an element of `upper` is less or equal to `peek.timestamp`,
+                // then there can be further updates that would change the output.
+                // If no element of `upper` is less or equal to `peek.timestamp`,
+                // then for any time `t` less or equal to `peek.timestamp` it is
+                // not the case that `upper` is less or equal to that timestamp,
+                // and so the result cannot further evolve.
+                if !upper.less_equal(&peek.timestamp) {
+                    let (mut cur, storage) = peek.trace.clone().cursor();
+                    let mut out = Vec::new();
+                    while let Some(key) = cur.get_key(&storage) {
+                        // TODO: Absent value iteration might be weird (in principle
+                        // the cursor *could* say no `()` values associated with the
+                        // key, though I can't imagine how that would happen for this
+                        // specific trace implementation).
+
+                        let mut copies = 0;
+                        cur.map_times(&storage, |time, diff| {
+                            use timely::order::PartialOrder;
+                            if time.less_equal(&peek.timestamp) {
+                                copies += diff;
+                            }
+                        });
+                        assert!(copies >= 0);
+                        for _ in 0..copies {
+                            out.push(key.clone());
+                        }
+
+                        cur.step_key(&storage)
+                    }
+                    match peek_results_handler {
+                        PeekResultsHandler::Local(peek_results_mux) => {
+                            // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
+                            if let Ok(sender) = peek_results_mux
+                                .read()
+                                .unwrap()
+                                .sender(&peek.connection_uuid)
+                            {
+                                drop(sender.unbounded_send(out))
+                            }
+                        }
+                        PeekResultsHandler::Remote => {
+                            let encoded = bincode::serialize(&out).unwrap();
+                            rpc_client
+                                .post("http://localhost:6875/api/peek-results")
+                                .header(
+                                    "X-Materialize-Query-UUID",
+                                    peek.connection_uuid.to_string(),
+                                )
+                                .body(encoded)
+                                .send()
+                                .unwrap();
+                        }
+                    }
+                    if let Some(name) = &peek.drop_after_peek {
+                        dataflows_to_be_dropped.push(name.to_owned());
+                    }
+                    false // don't retain
+                } else {
+                    true
+                }
+            });
+        }
+        self.handle_command(
+            DataflowCommand::DropDataflows(dataflows_to_be_dropped),
+            CommandMeta {
+                connection_uuid: Uuid::nil(),
+                timestamp: Some(self.clock.now()),
+            },
+        );
     }
 }
