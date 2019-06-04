@@ -130,12 +130,7 @@ where
     fn handle_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
         match cmd {
             DataflowCommand::CreateDataflow(dataflow) => {
-                render::build_dataflow(
-                    &dataflow,
-                    &mut self.traces,
-                    self.inner,
-                    &mut self.inputs,
-                );
+                render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
             }
             DataflowCommand::DropDataflows(names) => {
                 for name in names {
@@ -171,12 +166,7 @@ where
                 }
 
                 let name = dataflow.name().to_string();
-                render::build_dataflow(
-                    &dataflow,
-                    &mut self.traces,
-                    self.inner,
-                    &mut self.inputs,
-                );
+                render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
                 let plan = types::Plan::Source(name.to_string());
                 if let Some(trace) = self.traces.get_trace(&plan) {
                     self.pending_peeks.push(PendingPeek {
