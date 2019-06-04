@@ -250,7 +250,7 @@ impl ColumnType {
     pub fn union(&self, other: &Self) -> Self {
         assert_eq!(self.scalar_type, other.scalar_type);
         // TODO(jamii) does sql union require same column names?
-        let name = match (self.name, other.name) {
+        let name = match (&self.name, &other.name) {
             (Some(name), None) | (None, Some(name)) => Some(name.to_owned()),
             (Some(name1), Some(name2)) if name1 == name2 => Some(name1.to_owned()),
             _ => None,

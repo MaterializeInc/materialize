@@ -677,8 +677,8 @@ impl Planner {
                 ));
             }
 
-            let mut key_exprs = Vec::new();
-            let mut key_columns = Vec::new();
+            let mut group_key = Vec::new();
+            let mut group_names = Vec::new();
             for expr in &s.group_by {
                 // we have to remember the names of GROUP BY exprs so we can SELECT them later
                 let name = match expr {
@@ -694,15 +694,15 @@ impl Planner {
                     // TODO(jamii) for complex exprs, we need to remember the expr itself so we can do eg `SELECT (a+1)+1 FROM .. GROUP BY a+1` :(
                     _ => plan::Name::none(),
                 };
-                let (expr, typ) = self.plan_expr(ctx, &expr, &relation_expr)?;
                 // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
-                if !key_exprs.contains(&expr) {
-                    key_columns.push((name, typ));
-                    key_exprs.push(expr);
+                if !group_names.contains(&name) {
+                    let (expr, typ) = self.plan_expr(ctx, &expr, &relation_expr)?;
+                    group_key.push((expr, typ));
+                    group_names.push(name);
                 }
             }
 
-            relation_expr = relation_expr.aggregate(key_exprs, key_columns, aggs);
+            relation_expr = relation_expr.reduce(group_key, group_names, aggs);
         }
 
         // Step 4. Handle HAVING clause.
@@ -991,49 +991,8 @@ impl Planner {
         expr: Option<&ASTNode>,
         left_relation_expr: &SQLRelationExpr,
         right_relation_expr: &SQLRelationExpr,
-    ) -> Result<(Vec<ScalarExpr>, Vec<ScalarExpr>, Option<ASTNode>), failure::Error> {
-        let mut exprs = expr.into_iter().collect::<Vec<&ASTNode>>();
-        let mut left_keys = Vec::new();
-        let mut right_keys = Vec::new();
-        let mut left_over = vec![];
-
-        while let Some(expr) = exprs.pop() {
-            match unnest(expr) {
-                ASTNode::SQLBinaryExpr { left, op, right } => match op {
-                    SQLOperator::And => {
-                        exprs.push(left);
-                        exprs.push(right);
-                    }
-                    SQLOperator::Eq => {
-                        match self.plan_eq_expr(
-                            left,
-                            right,
-                            left_relation_expr,
-                            right_relation_expr,
-                        ) {
-                            Ok((left_expr, right_expr)) => {
-                                left_keys.push(left_expr);
-                                right_keys.push(right_expr);
-                            }
-                            Err(_) => left_over.push(expr),
-                        }
-                    }
-                    _ => left_over.push(expr),
-                },
-                _ => left_over.push(expr),
-            }
-        }
-
-        let mut left_over_iter = left_over.into_iter();
-        let left_over = left_over_iter.next().map(|expr| {
-            left_over_iter.fold(expr.clone(), |e1, e2| ASTNode::SQLBinaryExpr {
-                left: Box::new(e1.clone()),
-                op: SQLOperator::And,
-                right: Box::new(e2.clone()),
-            })
-        });
-
-        Ok((left_keys, right_keys, left_over))
+    ) -> Result<(Vec<usize>, Vec<usize>, Option<ASTNode>), failure::Error> {
+        Ok((vec![], vec![], expr.cloned()))
     }
 
     fn plan_expr<'a>(

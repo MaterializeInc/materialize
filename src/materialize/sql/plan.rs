@@ -6,11 +6,12 @@
 use failure::bail;
 use sqlparser::sqlast::SQLFunction;
 
+use crate::dataflow::func::BinaryFunc;
 use crate::dataflow::{AggregateExpr, RelationExpr, ScalarExpr};
 use crate::repr::{ColumnType, RelationType};
 use ore::option::OptionExt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Name {
     table_name: Option<String>,
     column_name: Option<String>,
@@ -118,8 +119,8 @@ impl SQLRelationExpr {
     pub fn join_on(
         self,
         right: Self,
-        left_key: Vec<ScalarExpr>,
-        right_key: Vec<ScalarExpr>,
+        left_key: Vec<usize>,
+        right_key: Vec<usize>,
         include_left_outer: bool,
         include_right_outer: bool,
     ) -> Self {
@@ -143,20 +144,12 @@ impl SQLRelationExpr {
         }
         SQLRelationExpr {
             relation_expr: RelationExpr::Join {
-                left: Box::new(left_relation_expr),
-                right: Box::new(right_relation_expr),
-                left_key,
-                right_key,
-                include_left_outer: if include_left_outer {
-                    Some(left_columns.len())
-                } else {
-                    None
-                },
-                include_right_outer: if include_right_outer {
-                    Some(right_columns.len())
-                } else {
-                    None
-                },
+                inputs: vec![left_relation_expr, right_relation_expr],
+                variables: left_key
+                    .into_iter()
+                    .zip(right_key.into_iter())
+                    .map(|(l, r)| vec![(0, l), (1, r)])
+                    .collect(),
             },
             columns: left_columns
                 .into_iter()
@@ -194,8 +187,8 @@ impl SQLRelationExpr {
             .collect::<Vec<_>>();
         left.join_on(
             right,
-            ScalarExpr::columns(&left_key),
-            ScalarExpr::columns(&right_key),
+            left_key,
+            right_key,
             include_left_outer,
             include_right_outer,
         )
@@ -229,8 +222,8 @@ impl SQLRelationExpr {
         Ok(left
             .join_on(
                 right,
-                ScalarExpr::columns(&left_key),
-                ScalarExpr::columns(&right_key),
+                left_key,
+                right_key,
                 include_left_outer,
                 include_right_outer,
             )
@@ -252,20 +245,45 @@ impl SQLRelationExpr {
     }
 
     pub fn filter(mut self, predicate: ScalarExpr) -> Self {
+        let mut predicates = vec![];
+        fn get_predicates(predicate: ScalarExpr, predicates: &mut Vec<ScalarExpr>) {
+            match predicate {
+                ScalarExpr::CallBinary {
+                    func: BinaryFunc::And,
+                    expr1,
+                    expr2,
+                } => {
+                    get_predicates(*expr1, predicates);
+                    get_predicates(*expr2, predicates);
+                }
+                _ => predicates.push(predicate),
+            }
+        }
+        get_predicates(predicate, &mut predicates);
         self.relation_expr = RelationExpr::Filter {
-            predicate,
+            predicates,
             input: Box::new(self.relation_expr),
         };
         self
     }
 
-    pub fn aggregate(
+    pub fn reduce(
         self,
-        key_expr: Vec<ScalarExpr>,
-        key_columns: Vec<(Name, ColumnType)>,
+        group_key: Vec<(ScalarExpr, ColumnType)>,
+        group_names: Vec<Name>,
         aggregates: Vec<(&SQLFunction, AggregateExpr, ColumnType)>,
     ) -> Self {
-        let SQLRelationExpr { relation_expr, .. } = self;
+        let key_columns = group_key
+            .iter()
+            .zip(group_names.into_iter())
+            .map(|(key, name)| (name, key.1.clone()))
+            .collect::<Vec<_>>();
+        let (
+            SQLRelationExpr {
+                mut relation_expr, ..
+            },
+            group_key,
+        ) = self.map(group_key);
         // Deduplicate by function hash.
         let mut aggregates: Vec<_> = aggregates
             .into_iter()
@@ -282,16 +300,18 @@ impl SQLRelationExpr {
                     column_name: None,
                     func_hash: Some(func_hash),
                 },
-                typ,
+                typ.clone(),
             ));
-            aggs.push(agg);
+            aggs.push((agg, typ));
         }
+        relation_expr = RelationExpr::Reduce {
+            input: Box::new(relation_expr),
+            group_key,
+            aggregates: aggs,
+        };
+        // TODO(jamii) deal with defaults
         SQLRelationExpr {
-            relation_expr: RelationExpr::Aggregate {
-                key: key_expr,
-                aggs,
-                input: Box::new(relation_expr),
-            },
+            relation_expr,
             columns: key_columns.into_iter().chain(agg_columns).collect(),
         }
     }
@@ -330,8 +350,46 @@ impl SQLRelationExpr {
         }
     }
 
+    pub fn map(self, outputs: Vec<(ScalarExpr, ColumnType)>) -> (Self, Vec<usize>) {
+        let input_arity = self.columns.len();
+        let SQLRelationExpr {
+            relation_expr,
+            mut columns,
+        } = self;
+        let mut map_scalars = vec![];
+        let mut project_outputs = vec![];
+        for (expr, typ) in outputs {
+            if let ScalarExpr::Column(i) = expr {
+                project_outputs.push(i);
+            } else {
+                project_outputs.push(input_arity + map_scalars.len());
+                map_scalars.push((expr, typ.clone()));
+                columns.push((
+                    Name {
+                        table_name: None,
+                        column_name: typ.name.clone(),
+                        func_hash: None,
+                    },
+                    typ.clone(),
+                ));
+            }
+        }
+        (
+            SQLRelationExpr {
+                relation_expr: RelationExpr::Map {
+                    scalars: map_scalars,
+                    input: Box::new(relation_expr),
+                },
+                columns,
+            },
+            project_outputs,
+        )
+    }
+
     pub fn distinct(mut self) -> Self {
-        self.relation_expr = RelationExpr::Distinct(Box::new(self.relation_expr));
+        self.relation_expr = RelationExpr::Distinct {
+            input: Box::new(self.relation_expr),
+        };
         self
     }
 
