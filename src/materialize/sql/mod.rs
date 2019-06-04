@@ -115,7 +115,7 @@ impl Planner {
             }
         }
         let mode = RemoveMode::from_cascade(drop.cascade);
-        let removed = vec![];
+        let mut removed = vec![];
         for name in &names {
             self.dataflows.remove(name, mode, &mut removed)?;
         }

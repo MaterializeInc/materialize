@@ -10,7 +10,7 @@ use crate::repr::*;
 use super::types::*;
 
 impl ScalarExpr {
-    pub fn visit1<'a, F>(&'a self, f: F)
+    pub fn visit1<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
     {
@@ -37,49 +37,61 @@ impl ScalarExpr {
         }
     }
 
-    pub fn visit<'a, F>(&'a self, f: F)
+    fn visit_inner<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
     {
-        let f = &mut f;
-        self.visit1(|e| e.visit(f));
+        self.visit1(|e| e.visit_inner(f));
         f(self);
     }
 
-    pub fn visit1_mut<'a, F>(&'a mut self, f: F)
+    pub fn visit<'a, F>(&'a self, mut f: F)
     where
-        F: FnMut(&'a mut Self),
+        F: FnMut(&'a Self),
     {
-        match self {
-            ScalarExpr::Column(_) => (),
-            ScalarExpr::Literal(_) => (),
-            ScalarExpr::CallUnary { expr, .. } => {
-                f(expr);
-            }
-            ScalarExpr::CallBinary { expr1, expr2, .. } => {
-                f(expr1);
-                f(expr2);
-            }
-            ScalarExpr::CallVariadic { exprs, .. } => {
-                for expr in exprs {
-                    f(expr);
-                }
-            }
-            ScalarExpr::If { cond, then, els } => {
-                f(cond);
-                f(then);
-                f(els);
-            }
-        }
+        self.visit_inner(&mut f);
     }
 
-    pub fn visit_mut<F>(&mut self, f: F)
+    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
     where
         F: FnMut(&mut Self),
     {
-        let f = &mut f;
-        self.visit1_mut(|e| e.visit_mut(f));
+        match self {
+            ScalarExpr::Column(_) => (),
+            ScalarExpr::Literal(_) => (),
+            ScalarExpr::CallUnary { expr, .. } => {
+                f(expr);
+            }
+            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                f(expr1);
+                f(expr2);
+            }
+            ScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    f(expr);
+                }
+            }
+            ScalarExpr::If { cond, then, els } => {
+                f(cond);
+                f(then);
+                f(els);
+            }
+        }
+    }
+
+    fn visit_mut_inner<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Self),
+    {
+        self.visit1_mut(|e| e.visit_mut_inner(f));
         f(self);
+    }
+
+    pub fn visit_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        self.visit_mut_inner(&mut f);
     }
 
     fn permute(&mut self, permutation: &HashMap<usize, usize>) {
@@ -128,7 +140,7 @@ impl ScalarExpr {
     /// assert_eq!(test, expr_t);
     /// ```
     pub fn reduce(&mut self) {
-        self.visit(|e| {
+        self.visit_mut(|e| {
             let should_eval = match e {
                 ScalarExpr::CallUnary { expr, .. } => expr.is_literal(),
                 ScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -158,7 +170,7 @@ impl ScalarExpr {
 }
 
 impl RelationExpr {
-    pub fn visit1<'a, F>(&'a self, f: F)
+    pub fn visit1<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
     {
@@ -200,16 +212,22 @@ impl RelationExpr {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn visit<'a, F>(&'a self, f: F)
+    fn visit_inner<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
     {
-        self.visit1(|e| e.visit(f));
-        f(self)
+        self.visit1(|e| e.visit_inner(f));
+        f(self);
     }
 
-    pub fn visit1_mut<'a, F>(&'a mut self, f: F)
+    pub fn visit<'a, F>(&'a self, mut f: F)
+    where
+        F: FnMut(&'a Self),
+    {
+        self.visit_inner(&mut f)
+    }
+
+    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
     where
         F: FnMut(&'a mut Self),
     {
@@ -252,13 +270,19 @@ impl RelationExpr {
     }
 
     #[allow(dead_code)]
-    pub fn visit_mut<'a, F>(&'a mut self, f: F)
+    pub fn visit_mut_inner<F>(&mut self, f: &mut F)
     where
-        F: FnMut(&'a mut Self),
+        F: FnMut(&mut Self),
     {
-        let f = &mut f;
-        self.visit1_mut(|e| e.visit_mut(f));
+        self.visit1_mut(|e| e.visit_mut_inner(f));
         f(self)
+    }
+
+    fn visit_mug<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        self.visit_mut_inner(&mut f);
     }
 
     #[allow(dead_code)]

@@ -127,8 +127,8 @@ pub fn build_dataflow<A: Allocate>(
                     }
                 }
             });
-            let arrangement =
-                build_relation_expr(view.relation_expr, scope, &mut context).arrange_by_self();
+            let arrangement = build_relation_expr(view.relation_expr.clone(), scope, &mut context)
+                .arrange_by_self();
             manager.set_trace(
                 &RelationExpr::Get {
                     name: view.name.clone(),

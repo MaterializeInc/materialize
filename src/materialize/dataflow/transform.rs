@@ -251,7 +251,7 @@ pub mod predicate_pushdown {
                             }
                             1 => {
                                 let relation = support[0];
-                                predicate.visit(|e| {
+                                predicate.visit_mut(|e| {
                                     // subtract
                                     if let ScalarExpr::Column(i) = e {
                                         *i -= prior_arities[relation];
