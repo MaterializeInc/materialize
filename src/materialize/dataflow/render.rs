@@ -335,7 +335,7 @@ impl ScalarExpr {
             }
             ScalarExpr::If { cond, then, els } => match cond.eval(data) {
                 Datum::True => then.eval(data),
-                Datum::False => els.eval(data),
+                Datum::False | Datum::Null => els.eval(data),
                 d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
             },
         }
