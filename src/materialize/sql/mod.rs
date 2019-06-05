@@ -8,7 +8,6 @@
 use failure::{bail, format_err};
 use itertools::Itertools;
 use sqlparser::dialect::AnsiSqlDialect;
-use sqlparser::sqlast;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
@@ -207,7 +206,7 @@ impl Planner {
         let datums = match source.body {
             SQLSetExpr::Values(SQLValues(values)) => {
                 assert!(!values.is_empty());
-                if !values.iter().map(|row| row.len()).all_equal() {
+                if !values.iter().map(Vec::len).all_equal() {
                     bail!("VALUES lists must all be the same length");
                 }
                 if values[0].len() != permutation.len() {
@@ -576,45 +575,14 @@ impl Planner {
         s: &SQLSelect,
     ) -> Result<(RelationExpr, RelationType), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
-        let none = None;
-        let (from_name, from_alias) = match &s.relation {
-            Some(TableFactor::Table {
-                name,
-                alias,
-                args,
-                with_hints,
-            }) => {
-                if !args.is_empty() {
-                    bail!("table arguments are not supported");
-                }
-                if !with_hints.is_empty() {
-                    bail!("WITH hints are not supported");
-                }
-                (extract_sql_object_name(name)?, alias)
-            }
-            Some(TableFactor::Derived { .. }) => {
-                bail!("subqueries are not yet supported");
-            }
-            None => ("dual".into(), &none),
-        };
-        let relation_expr = {
-            let typ = self.dataflows.get_type(&from_name)?;
-            let mut relation_expr =
-                SQLRelationExpr::from_source(&from_name, typ.column_types.clone());
-            if let Some(alias) = from_alias {
-                relation_expr = relation_expr.alias_table(alias);
-            }
-            relation_expr
-        };
-
-        let (mut relation_expr, selection) =
-            self.plan_multiple_joins(relation_expr, &s.joins[..], s.selection.clone())?;
-
-        // if we have a `SELECT *` later, this is what it selects
-        let named_columns = relation_expr.named_columns();
+        let mut relation_expr = self.plan_table_factor(s.relation.as_ref())?;
+        for join in &s.joins {
+            let right = self.plan_table_factor(Some(&join.relation))?;
+            relation_expr = self.plan_join_operator(&join.join_operator, relation_expr, right)?;
+        }
 
         // Step 2. Handle WHERE clause.
-        if let Some(selection) = selection {
+        if let Some(selection) = &s.selection {
             let ctx = &ExprContext {
                 scope: "WHERE clause",
                 allow_aggregates: false,
@@ -628,6 +596,9 @@ impl Planner {
             }
             relation_expr = relation_expr.filter(expr);
         }
+
+        // if we have a `SELECT *` later, this is what it selects
+        let named_columns = relation_expr.named_columns();
 
         // Step 3. Handle GROUP BY clause.
         let mut agg_visitor = AggregateFuncVisitor::new();
@@ -728,7 +699,7 @@ impl Planner {
                 outputs.push((expr, typ));
             }
         }
-        relation_expr = relation_expr.project(outputs);
+        relation_expr = relation_expr.select(outputs);
 
         // Step 6. Handle DISTINCT.
         if s.distinct {
@@ -780,221 +751,136 @@ impl Planner {
         }
     }
 
-    fn plan_multiple_joins(
+    fn plan_table_factor(
         &self,
-        mut relation_expr: SQLRelationExpr,
-        joins: &[sqlast::Join],
-        mut selection: Option<ASTNode>,
-    ) -> Result<(SQLRelationExpr, Option<ASTNode>), failure::Error> {
-        if joins.is_empty() {
-            Ok((relation_expr, selection))
-        } else {
-            // Assemble participating tables.
-            let mut tables = Vec::new();
-            tables.push(relation_expr.clone());
-
-            for join in joins.iter() {
-                match &join.relation {
-                    TableFactor::Table {
-                        name,
-                        alias,
-                        args,
-                        with_hints,
-                    } => {
-                        if !args.is_empty() {
-                            bail!("table arguments are not supported");
-                        }
-                        if !with_hints.is_empty() {
-                            bail!("WITH hints are not supported");
-                        }
-                        let name = extract_sql_object_name(&name)?;
-                        let typ = self.dataflows.get_type(&name)?;
-                        let mut right =
-                            SQLRelationExpr::from_source(&name, typ.column_types.clone());
-                        if let Some(alias) = alias {
-                            right = right.alias_table(alias);
-                        }
-                        tables.push(right);
-                    }
-                    TableFactor::Derived { .. } => {
-                        bail!("subqueries are not yet supported");
-                    }
+        table_factor: Option<&TableFactor>,
+    ) -> Result<SQLRelationExpr, failure::Error> {
+        let (from_name, from_alias) = match table_factor {
+            Some(TableFactor::Table {
+                name,
+                alias,
+                args,
+                with_hints,
+            }) => {
+                if !args.is_empty() {
+                    bail!("table arguments are not supported");
                 }
+                if !with_hints.is_empty() {
+                    bail!("WITH hints are not supported");
+                }
+                (extract_sql_object_name(name)?, alias.as_ref())
             }
-
-            // Assert that we have the right number of tables at hand (e.g. that we didn't
-            // miss something in that loop above with the special cases).
-            assert!(tables.len() == joins.len() + 1);
-
-            // Extract all ASTNode join constraints
-            for (index, join) in joins.iter().enumerate() {
-                relation_expr = self.plan_join_operator(
-                    &join.join_operator,
-                    &mut selection,
-                    relation_expr,
-                    tables[index + 1].clone(),
-                )?;
+            Some(TableFactor::Derived { .. }) => {
+                bail!("subqueries are not yet supported");
             }
-            Ok((relation_expr, selection))
+            None => ("dual".into(), None),
+        };
+        let typ = self.dataflows.get_type(&from_name)?;
+        let mut relation_expr = SQLRelationExpr::from_source(&from_name, typ.column_types.clone());
+        if let Some(alias) = from_alias {
+            relation_expr = relation_expr.alias_table(alias);
         }
+        Ok(relation_expr)
     }
 
     fn plan_join_operator(
         &self,
         operator: &JoinOperator,
-        selection: &mut Option<ASTNode>,
         left: SQLRelationExpr,
         right: SQLRelationExpr,
     ) -> Result<SQLRelationExpr, failure::Error> {
         match operator {
-            JoinOperator::Inner(constraint) => {
-                self.plan_join_constraint(selection, constraint, left, right, false, false)
-            }
+            JoinOperator::Inner(constraint) => self.plan_join_constraint(&constraint, left, right),
             JoinOperator::LeftOuter(constraint) => {
-                self.plan_join_constraint(selection, constraint, left, right, true, false)
+                let _joined = self.plan_join_constraint(&constraint, left, right);
+                unimplemented!()
             }
             JoinOperator::RightOuter(constraint) => {
-                self.plan_join_constraint(selection, constraint, left, right, false, true)
+                let _joined = self.plan_join_constraint(&constraint, left, right);
+                unimplemented!()
             }
             JoinOperator::FullOuter(constraint) => {
-                self.plan_join_constraint(selection, constraint, left, right, true, true)
+                let _joined = self.plan_join_constraint(&constraint, left, right);
+                unimplemented!()
             }
-            JoinOperator::Implicit => {
-                let (left_key, right_key, new_selection) =
-                    self.plan_join_expr(selection.as_ref(), &left, &right)?;
-                *selection = new_selection;
-                Ok(left.join_on(right, left_key, right_key, false, false))
-            }
-            JoinOperator::Cross => Ok(left.join_on(right, vec![], vec![], false, false)),
+            JoinOperator::Implicit | JoinOperator::Cross => Ok(left.product(right)),
         }
     }
 
     fn plan_join_constraint<'a>(
         &self,
-        selection: &mut Option<ASTNode>,
         constraint: &'a JoinConstraint,
         left: SQLRelationExpr,
         right: SQLRelationExpr,
-        include_left_outer: bool,
-        include_right_outer: bool,
     ) -> Result<SQLRelationExpr, failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
-                let (left_key, right_key, left_over_expr) =
-                    self.plan_join_expr(Some(expr), &left, &right)?;
-                if let Some(left_over_expr) = left_over_expr {
-                    if let Some(existing_selection) = selection.take() {
-                        *selection = Some(ASTNode::SQLBinaryExpr {
-                            left: Box::new(left_over_expr),
-                            op: SQLOperator::And,
-                            right: Box::new(existing_selection),
-                        });
-                    } else {
-                        *selection = Some(left_over_expr);
-                    }
-                }
-                Ok(left.join_on(
-                    right,
-                    left_key,
-                    right_key,
-                    include_left_outer,
-                    include_right_outer,
-                ))
-            }
-            JoinConstraint::Natural => {
-                Ok(left.join_natural(right, include_left_outer, include_right_outer))
+                let product = left.product(right);
+                let context = ExprContext {
+                    scope: "ON clause",
+                    allow_aggregates: false,
+                };
+                let (predicate, _) = self.plan_expr(&context, expr, &product)?;
+                Ok(product.filter(predicate))
             }
             JoinConstraint::Using(column_names) => {
-                Ok(left.join_using(right, column_names, include_left_outer, include_right_outer)?)
+                let (predicate, project_key) =
+                    self.plan_using_constraint(&column_names, &left, &right)?;
+                Ok(left.product(right).filter(predicate).project(&project_key))
+            }
+            JoinConstraint::Natural => {
+                let mut column_names = HashSet::new();
+                for (_, r_type) in right.columns.iter() {
+                    if let Some(column_name) = &r_type.name {
+                        if left.resolve_column(column_name).is_ok() {
+                            column_names.insert(column_name.clone());
+                        }
+                    }
+                }
+                let column_names = column_names.into_iter().collect::<Vec<_>>();
+                let (predicate, project_key) =
+                    self.plan_using_constraint(&column_names, &left, &right)?;
+                Ok(left.product(right).filter(predicate).project(&project_key))
             }
         }
     }
 
-    #[allow(dead_code)] // TODO(benesch): why?
-    fn resolve_name(
+    fn plan_using_constraint(
         &self,
-        name: &ASTNode,
+        column_names: &[String],
         left: &SQLRelationExpr,
         right: &SQLRelationExpr,
-    ) -> Result<(usize, ColumnType, Side), failure::Error> {
-        match name {
-            ASTNode::SQLIdentifier(column_name) => {
-                match (
-                    left.resolve_column(column_name),
-                    right.resolve_column(column_name),
-                ) {
-                    (Ok(_), Ok(_)) => bail!("column name {} is ambiguous", column_name),
-                    (Ok((pos, _, typ)), Err(_)) => Ok((pos, typ.clone(), Side::Left)),
-                    (Err(_), Ok((pos, _, typ))) => Ok((pos, typ.clone(), Side::Right)),
-                    (Err(left_err), Err(right_err)) => bail!(
-                        "{} on left of join, {} on right of join",
-                        left_err,
-                        right_err
-                    ),
-                }
-            }
-            ASTNode::SQLCompoundIdentifier(names) if names.len() == 2 => {
-                let table_name = &names[0];
-                let column_name = &names[1];
-                match (
-                    left.resolve_table_column(table_name, column_name),
-                    right.resolve_table_column(table_name, column_name),
-                ) {
-                    (Ok(_), Ok(_)) => {
-                        bail!("column name {}.{} is ambiguous", table_name, column_name)
-                    }
-                    (Ok((pos, _, typ)), Err(_)) => Ok((pos, typ.clone(), Side::Left)),
-                    (Err(_), Ok((pos, _, typ))) => Ok((pos, typ.clone(), Side::Right)),
-                    (Err(left_err), Err(right_err)) => bail!(
-                        "{} on left of join, {} on right of join",
-                        left_err,
-                        right_err
-                    ),
-                }
-            }
-            _ => bail!(
-                "cannot resolve unsupported complicated expression: {:?}",
-                name
-            ),
+    ) -> Result<(ScalarExpr, Vec<usize>), failure::Error> {
+        let mut exprs = vec![];
+        let mut dropped_columns = HashSet::new();
+        for column_name in column_names {
+            let (l, _, _) = left.resolve_column(column_name)?;
+            let (r, _, _) = right.resolve_column(column_name)?;
+            exprs.push(ScalarExpr::CallBinary {
+                func: BinaryFunc::Eq,
+                expr1: Box::new(ScalarExpr::Column(l)),
+                expr2: Box::new(ScalarExpr::Column(2)),
+            });
+            dropped_columns.insert(r);
         }
-    }
-
-    #[allow(dead_code)] // TODO(benesch): why?
-    fn plan_eq_expr(
-        &self,
-        left: &ASTNode,
-        right: &ASTNode,
-        left_relation_expr: &SQLRelationExpr,
-        right_relation_expr: &SQLRelationExpr,
-    ) -> Result<(ScalarExpr, ScalarExpr), failure::Error> {
-        let (lpos, ltype, lside) =
-            self.resolve_name(left, left_relation_expr, right_relation_expr)?;
-        let (rpos, rtype, rside) =
-            self.resolve_name(right, left_relation_expr, right_relation_expr)?;
-        let (lpos, ltype, rpos, rtype) = match (lside, rside) {
-            (Side::Left, Side::Left) | (Side::Right, Side::Right) => {
-                bail!("ON clause compares two columns from the same table");
-            }
-            (Side::Left, Side::Right) => (lpos, ltype, rpos, rtype),
-            (Side::Right, Side::Left) => (rpos, rtype, lpos, ltype),
-        };
-        if ltype.scalar_type != rtype.scalar_type {
-            bail!(
-                "cannot compare {:?} and {:?}",
-                ltype.scalar_type,
-                rtype.scalar_type
-            );
-        }
-        Ok((ScalarExpr::Column(lpos), ScalarExpr::Column(rpos)))
-    }
-
-    fn plan_join_expr(
-        &self,
-        expr: Option<&ASTNode>,
-        _left_relation_expr: &SQLRelationExpr,
-        _right_relation_expr: &SQLRelationExpr,
-    ) -> Result<(Vec<usize>, Vec<usize>, Option<ASTNode>), failure::Error> {
-        Ok((vec![], vec![], expr.cloned()))
+        let expr = exprs
+            .into_iter()
+            .fold(ScalarExpr::Literal(Datum::True), |a, b| {
+                ScalarExpr::CallBinary {
+                    func: BinaryFunc::And,
+                    expr1: Box::new(a),
+                    expr2: Box::new(b),
+                }
+            });
+        let project_key = (0..left.columns.len())
+            .chain(
+                (0..right.columns.len())
+                    // drop columns on the right that were joined
+                    .filter(|r| !dropped_columns.contains(r))
+                    .map(|r| left.columns.len() + r),
+            )
+            .collect::<Vec<_>>();
+        Ok((expr, project_key))
     }
 
     fn plan_expr<'a>(

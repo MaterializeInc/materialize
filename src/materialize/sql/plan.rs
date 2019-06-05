@@ -31,8 +31,8 @@ impl Name {
 /// Wraps a dataflow relation_expr with a sql scope
 #[derive(Debug, Clone)]
 pub struct SQLRelationExpr {
-    relation_expr: RelationExpr,
-    columns: Vec<(Name, ColumnType)>,
+    pub relation_expr: RelationExpr,
+    pub columns: Vec<(Name, ColumnType)>,
 }
 
 impl SQLRelationExpr {
@@ -116,121 +116,7 @@ impl SQLRelationExpr {
         }
     }
 
-    pub fn join_on(
-        self,
-        right: Self,
-        left_key: Vec<usize>,
-        right_key: Vec<usize>,
-        include_left_outer: bool,
-        include_right_outer: bool,
-    ) -> Self {
-        let SQLRelationExpr {
-            relation_expr: left_relation_expr,
-            columns: mut left_columns,
-        } = self;
-        let SQLRelationExpr {
-            relation_expr: right_relation_expr,
-            columns: mut right_columns,
-        } = right;
-        if include_left_outer {
-            for (_, typ) in &mut right_columns {
-                typ.nullable = true;
-            }
-        }
-        if include_right_outer {
-            for (_, typ) in &mut left_columns {
-                typ.nullable = true;
-            }
-        }
-        SQLRelationExpr {
-            relation_expr: RelationExpr::Join {
-                inputs: vec![left_relation_expr, right_relation_expr],
-                variables: left_key
-                    .into_iter()
-                    .zip(right_key.into_iter())
-                    .map(|(l, r)| vec![(0, l), (1, r)])
-                    .collect(),
-            },
-            columns: left_columns
-                .into_iter()
-                .chain(right_columns.into_iter())
-                .collect(),
-        }
-    }
-
-    pub fn join_natural(
-        self,
-        right: Self,
-        include_left_outer: bool,
-        include_right_outer: bool,
-    ) -> Self {
-        let left = self;
-        let mut left_key = vec![];
-        let mut right_key = vec![];
-        // TODO(jamii) check that we don't join on ambiguous column names
-        for (r, (_, r_type)) in right.columns.iter().enumerate() {
-            if let Some(name) = &r_type.name {
-                if let Ok((l, _, _)) = left.resolve_column(name) {
-                    left_key.push(l);
-                    right_key.push(r);
-                }
-            }
-        }
-        // TODO(jamii) should natural join fail if left/right_key are empty?
-        let project_key = (0..left.columns.len())
-            .chain(
-                (0..right.columns.len())
-                    // drop columns on the right that were joined
-                    .filter(|r| right_key.iter().find(|r2| *r2 == r).is_none())
-                    .map(|r| left.columns.len() + r),
-            )
-            .collect::<Vec<_>>();
-        left.join_on(
-            right,
-            left_key,
-            right_key,
-            include_left_outer,
-            include_right_outer,
-        )
-        .project_raw(&project_key)
-    }
-
-    pub fn join_using(
-        self,
-        right: Self,
-        names: &[String],
-        include_left_outer: bool,
-        include_right_outer: bool,
-    ) -> Result<Self, failure::Error> {
-        let left = self;
-        let mut left_key = vec![];
-        let mut right_key = vec![];
-        for name in names {
-            let (l, _, _) = left.resolve_column(name)?;
-            let (r, _, _) = right.resolve_column(name)?;
-            left_key.push(l);
-            right_key.push(r);
-        }
-        let project_key = (0..left.columns.len())
-            .chain(
-                (0..right.columns.len())
-                    // drop columns on the right that were joined
-                    .filter(|r| right_key.iter().find(|r2| *r2 == r).is_none())
-                    .map(|r| left.columns.len() + r),
-            )
-            .collect::<Vec<_>>();
-        Ok(left
-            .join_on(
-                right,
-                left_key,
-                right_key,
-                include_left_outer,
-                include_right_outer,
-            )
-            .project_raw(&project_key))
-    }
-
-    fn project_raw(self, project_key: &[usize]) -> Self {
+    pub fn project(self, project_key: &[usize]) -> Self {
         let SQLRelationExpr {
             relation_expr,
             columns,
@@ -241,6 +127,27 @@ impl SQLRelationExpr {
                 input: Box::new(relation_expr),
             },
             columns: project_key.iter().map(|i| columns[*i].clone()).collect(),
+        }
+    }
+
+    pub fn product(self, right: Self) -> Self {
+        let SQLRelationExpr {
+            relation_expr: left_relation_expr,
+            columns: left_columns,
+        } = self;
+        let SQLRelationExpr {
+            relation_expr: right_relation_expr,
+            columns: right_columns,
+        } = right;
+        SQLRelationExpr {
+            relation_expr: RelationExpr::Join {
+                inputs: vec![left_relation_expr, right_relation_expr],
+                variables: vec![],
+            },
+            columns: left_columns
+                .into_iter()
+                .chain(right_columns.into_iter())
+                .collect(),
         }
     }
 
@@ -324,7 +231,7 @@ impl SQLRelationExpr {
         }
     }
 
-    pub fn project(self, outputs: Vec<(ScalarExpr, ColumnType)>) -> Self {
+    pub fn select(self, outputs: Vec<(ScalarExpr, ColumnType)>) -> Self {
         let input_arity = self.columns.len();
         let SQLRelationExpr { relation_expr, .. } = self;
         let mut map_scalars = vec![];
