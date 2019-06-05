@@ -203,6 +203,11 @@ pub mod predicate_pushdown {
 
     impl PredicatePushdown {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            relation.visit_mut_inner(&mut |e| {
+                self.action(e, &e.typ());
+            });
+        }
+        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
             if let RelationExpr::Filter { input, predicates } = relation {
                 if let RelationExpr::Join {
                     inputs,

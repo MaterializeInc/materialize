@@ -126,6 +126,14 @@ pub fn build_dataflow<A: Allocate>(
                     }
                 }
             });
+
+            // Push predicates down a few times.
+            let mut view = view.clone();
+            let pushdown = crate::dataflow::transform::PredicatePushdown;
+            pushdown.transform(&mut view.relation_expr, &view.typ);
+            pushdown.transform(&mut view.relation_expr, &view.typ);
+            pushdown.transform(&mut view.relation_expr, &view.typ);
+
             let arrangement = build_relation_expr(view.relation_expr.clone(), scope, &mut context)
                 .arrange_by_self();
             manager.set_trace(
