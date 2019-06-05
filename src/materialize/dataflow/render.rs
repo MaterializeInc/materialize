@@ -114,18 +114,15 @@ pub fn build_dataflow<A: Allocate>(
             }
         }
         Dataflow::View(view) => {
+            let mut buttons = Vec::new();
             let mut context = Context::new();
             view.relation_expr.visit(|e| {
                 if let RelationExpr::Get { name, typ } = e {
                     if let Some(mut trace) = manager.get_trace(e) {
                         // TODO(frankmcsherry) do the thing
-                        let collection = trace.import(scope).as_collection(|k, _| k.clone());
-                        context.collections.insert(e.clone(), collection);
-                        // context.set_local(
-                        //     e.clone(),
-                        //     &(0..typ.column_types.len()).collect::<Vec<_>>(),
-                        //     trace.import(scope),
-                        // );
+                        let (arranged, button) = trace.import_core(scope, name);
+                        context.collections.insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
+                        buttons.push(button);
                     }
                 }
             });
@@ -137,7 +134,11 @@ pub fn build_dataflow<A: Allocate>(
                     typ: view.typ.clone(),
                 },
                 arrangement.trace,
-                Box::new(|| ()),
+                Box::new(move || {
+                    for mut button in buttons.drain(..) {
+                        button.press();
+                    }
+                }),
             );
         }
     })
@@ -204,6 +205,7 @@ where
                 })
             }
             RelationExpr::Join { inputs, variables } => {
+
                 // For the moment, assert that each relation participates at most
                 // once in each equivalence class. If not, we should be able to
                 // push a filter upwards, and if we can't do that it means a bit
