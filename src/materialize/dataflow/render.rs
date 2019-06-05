@@ -214,7 +214,7 @@ where
                 input.filter(move |x| {
                     predicates.iter().all(|predicate| match predicate.eval(x) {
                         Datum::True => true,
-                        Datum::False => false,
+                        Datum::False | Datum::Null => false,
                         _ => unreachable!(),
                     })
                 })
