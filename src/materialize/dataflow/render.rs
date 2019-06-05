@@ -46,7 +46,7 @@ pub fn add_builtin_dataflows<A: Allocate>(
                 name: "dual".into(),
                 typ: RelationType {
                     column_types: vec![ColumnType {
-                        name: None,
+                        name: Some("x".into()),
                         nullable: false,
                         scalar_type: ScalarType::String,
                     }],
