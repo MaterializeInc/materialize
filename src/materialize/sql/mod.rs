@@ -989,8 +989,8 @@ impl Planner {
     fn plan_join_expr(
         &self,
         expr: Option<&ASTNode>,
-        left_relation_expr: &SQLRelationExpr,
-        right_relation_expr: &SQLRelationExpr,
+        _left_relation_expr: &SQLRelationExpr,
+        _right_relation_expr: &SQLRelationExpr,
     ) -> Result<(Vec<usize>, Vec<usize>, Option<ASTNode>), failure::Error> {
         Ok((vec![], vec![], expr.cloned()))
     }

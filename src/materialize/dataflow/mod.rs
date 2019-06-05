@@ -13,7 +13,7 @@ pub mod server;
 mod sink;
 mod source;
 mod trace;
-mod transform;
+pub mod transform;
 mod types;
 
 pub use server::{serve, PeekResultsHandler};

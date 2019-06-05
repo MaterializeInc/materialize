@@ -146,7 +146,7 @@ pub enum RelationExpr {
     /// Join several dataflows together at once
     Join {
         inputs: Vec<RelationExpr>,
-        // each HashSet is an equivalence class of (input_index, column_index)
+        // each Vec<(usize, usize)> is an equivalence class of (input_index, column_index)
         variables: Vec<Vec<(usize, usize)>>,
     },
     /// Group a dataflow by some columns and aggregate over each group
@@ -265,24 +265,38 @@ impl RelationExpr {
 }
 
 impl RelationExpr {
+    pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
+        RelationExpr::Constant { rows, typ }
+    }
+
     pub fn project(self, outputs: Vec<usize>) -> Self {
         RelationExpr::Project {
             input: Box::new(self),
             outputs,
         }
     }
+
     pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
         RelationExpr::Map {
             input: Box::new(self),
             scalars,
         }
     }
+
     pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
         RelationExpr::Filter {
             input: Box::new(self),
             predicates,
         }
     }
+
+    pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
+        RelationExpr::Join {
+            inputs,
+            variables,
+        }
+    }
+
     pub fn reduce(
         self,
         group_key: Vec<usize>,
@@ -294,22 +308,26 @@ impl RelationExpr {
             aggregates,
         }
     }
+
     pub fn or_default(self, default: Vec<Datum>) -> Self {
         RelationExpr::OrDefault {
             input: Box::new(self),
             default,
         }
     }
+
     pub fn negate(self) -> Self {
         RelationExpr::Negate {
             input: Box::new(self),
         }
     }
+
     pub fn distinct(self) -> Self {
         RelationExpr::Distinct {
             input: Box::new(self),
         }
     }
+
     pub fn union(self, other: Self) -> Self {
         RelationExpr::Union {
             left: Box::new(self),
@@ -371,6 +389,37 @@ pub enum ScalarExpr {
 impl ScalarExpr {
     pub fn columns(is: &[usize]) -> Vec<ScalarExpr> {
         is.iter().map(|i| ScalarExpr::Column(*i)).collect()
+    }
+
+    pub fn column(column: usize) -> Self {
+        ScalarExpr::Column(column)
+    }
+
+    pub fn literal(datum: Datum) -> Self {
+        ScalarExpr::Literal(datum)
+    }
+
+    pub fn call_unary(self, func: UnaryFunc) -> Self {
+        ScalarExpr::CallUnary {
+            func,
+            expr: Box::new(self),
+        }
+    }
+
+    pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
+        ScalarExpr::CallBinary {
+            func,
+            expr1: Box::new(self),
+            expr2: Box::new(other),
+        }
+    }
+
+    pub fn if_then_else(self, t: Self, f: Self) -> Self {
+        ScalarExpr::If {
+            cond: Box::new(self),
+            then: Box::new(t),
+            els: Box::new(f),
+        }
     }
 }
 

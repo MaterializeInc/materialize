@@ -123,17 +123,18 @@ impl ScalarExpr {
     /// Reduces a complex expression where possible.
     ///
     /// ```rust
-    /// use materialize::dataflow::{ScalarExpr};
+    /// use materialize::dataflow::ScalarExpr;
+    /// use materialize::dataflow::func::BinaryFunc;
     /// use materialize::repr::Datum;
     ///
-    /// let expr_0 = ScalarExpr::column(0);
-    /// let expr_t = ScalarExpr::literal(Datum::True);
-    /// let expr_f = ScalarExpr::literal(Datum::False);
+    /// let expr_0 = ScalarExpr::Column(0);
+    /// let expr_t = ScalarExpr::Literal(Datum::True);
+    /// let expr_f = ScalarExpr::Literal(Datum::False);
     ///
     /// let mut test =
     /// expr_t
     ///     .clone()
-    ///     .call_binary(expr_f.clone(), materialize::dataflow::func::BinaryFunc::And)
+    ///     .call_binary(expr_f.clone(), BinaryFunc::And)
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
     /// test.reduce();

@@ -7,7 +7,6 @@ use differential_dataflow::input::Input;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
-use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::{AsCollection, Collection};
 use std::cell::Cell;
@@ -76,7 +75,7 @@ pub fn build_dataflow<A: Allocate>(
                 SourceConnector::Kafka(c) => {
                     source::kafka(scope, &src.name, &c, done.clone(), worker_timer)
                 }
-                SourceConnector::Local(l) => {
+                SourceConnector::Local(_) => {
                     use timely::dataflow::operators::input::Input;
                     let (handle, stream) = scope.new_input();
                     if worker_index == 0 {
@@ -117,7 +116,7 @@ pub fn build_dataflow<A: Allocate>(
             let mut buttons = Vec::new();
             let mut context = Context::new();
             view.relation_expr.visit(|e| {
-                if let RelationExpr::Get { name, typ } = e {
+                if let RelationExpr::Get { name, typ: _ } = e {
                     if let Some(mut trace) = manager.get_trace(e) {
                         // TODO(frankmcsherry) do the thing
                         let (arranged, button) = trace.import_core(scope, name);

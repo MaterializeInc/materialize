@@ -25,24 +25,29 @@ pub mod join_order {
     ///
     /// ```rust
     /// use materialize::dataflow::RelationExpr;
-    /// use materialize::dataflow::ColumnType;
-    /// use materialize::repr::ScalarType;
+    /// use materialize::repr::{ColumnType, RelationType, ScalarType};
+    /// use materialize::dataflow::transform::JoinOrder;
     ///
-    /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
-    /// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
-    /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
-    /// let mut expr = RelationExpr::Join {
-    ///     inputs: vec![input1, input2, input3],
-    ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
-    /// };
-    /// let typ = vec![
-    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
-    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
-    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
-    /// ];
+    /// let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]));
+    /// let input2 = RelationExpr::constant(vec![], RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]));
+    /// let input3 = RelationExpr::constant(vec![], RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]));
+    /// let mut expr = RelationExpr::join(
+    ///     vec![input1, input2, input3],
+    ///     vec![vec![(0, 0), (2, 0)]],
+    /// );
+    /// let typ = RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    ///     ColumnType::new(ScalarType::Bool),
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]);
     ///
-    /// let join_order = materialize::dataflow::transform::JoinOrder;
-    /// join_order.transform(&mut expr, &typ);
+    /// JoinOrder.transform(&mut expr, &typ);
     ///
     /// if let RelationExpr::Project { input, outputs } = expr {
     ///     assert_eq!(outputs, vec![0, 2, 1]);
@@ -152,26 +157,31 @@ pub mod predicate_pushdown {
     /// Re-order relations in a join to process them in an order that makes sense.
     ///
     /// ```rust
+    /// # use pretty_assertions::assert_eq;
+    ///
     /// use materialize::dataflow::{RelationExpr, ScalarExpr};
-    /// use materialize::dataflow::ColumnType;
-    /// use materialize::repr::{Datum, ScalarType};
+    /// use materialize::dataflow::func::BinaryFunc;
+    /// use materialize::dataflow::transform::PredicatePushdown;
+    /// use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
     ///
-    /// let input1 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
-    /// let input2 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
-    /// let input3 = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
-    /// let join = RelationExpr::Join {
-    ///     inputs: vec![input1.clone(), input2.clone(), input3.clone()],
-    ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
-    /// };
+    /// let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]));
+    /// let input2 = RelationExpr::constant(vec![], RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]));
+    /// let input3 = RelationExpr::constant(vec![], RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]));
+    /// let join = RelationExpr::join(
+    ///     vec![input1.clone(), input2.clone(), input3.clone()],
+    ///     vec![vec![(0, 0), (2, 0)].into_iter().collect()],
+    /// );
     ///
-    /// let predicate0 = ScalarExpr::Column(0);
-    /// let predicate1 = ScalarExpr::Column(1);
-    /// let predicate01 = ScalarExpr::CallBinary {
-    ///     func: materialize::dataflow::func::BinaryFunc::Eq,
-    ///     expr1: Box::new(ScalarExpr::Column(0)),
-    ///     expr2: Box::new(ScalarExpr::Column(1)),
-    /// };
-    /// let predicate012 = ScalarExpr::Literal(Datum::False);
+    /// let predicate0 = ScalarExpr::column(0);
+    /// let predicate1 = ScalarExpr::column(1);
+    /// let predicate01 = ScalarExpr::column(0).call_binary(ScalarExpr::column(2), BinaryFunc::AddInt64);
+    /// let predicate012 = ScalarExpr::literal(Datum::False);
     ///
     /// let mut expr = join.filter(
     ///    vec![
@@ -181,25 +191,24 @@ pub mod predicate_pushdown {
     ///        predicate012.clone(),
     ///    ]);
     ///
-    /// let typ = vec![
-    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
-    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
-    ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
-    /// ];
+    /// let typ = RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Bool),
+    ///     ColumnType::new(ScalarType::Bool),
+    ///     ColumnType::new(ScalarType::Bool),
+    /// ]);
     ///
-    /// let pushdown = materialize::dataflow::transform::PredicatePushdown;
-    /// pushdown.transform(&mut expr, &typ);
+    /// PredicatePushdown.transform(&mut expr, &typ);
     ///
-    /// let join = RelationExpr::Join {
-    ///     inputs: vec![
+    /// let expected = RelationExpr::join(
+    ///     vec![
     ///         input1.filter(vec![predicate0.clone(), predicate012.clone()]),
     ///         input2.filter(vec![predicate0.clone(), predicate012.clone()]),
     ///         input3.filter(vec![predicate012]),
     ///     ],
-    ///     variables: vec![vec![(0,0),(2,0)].into_iter().collect()],
-    /// };
+    ///     vec![vec![(0, 0), (2, 0)]],
+    /// ).filter(vec![predicate01]);
     ///
-    /// assert_eq!(expr, join.filter(vec![predicate01]));
+    /// assert_eq!(expr, expected);
     /// ```
     use crate::dataflow::types::{RelationExpr, ScalarExpr};
     use crate::repr::RelationType;
@@ -364,10 +373,12 @@ pub mod fusion {
         ///
         /// ```rust
         /// use materialize::dataflow::{RelationExpr, ScalarExpr};
-        /// use materialize::dataflow::ColumnType;
-        /// use materialize::repr::{Datum, ScalarType};
+        /// use materialize::dataflow::transform::fusion::filter::Filter;
+        /// use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
         ///
-        /// let input = RelationExpr::Constant { rows: vec![], typ: vec![ColumnType { typ: ScalarType::Bool, is_nullable: false }] };
+        /// let input = RelationExpr::constant(vec![], RelationType::new(vec![
+        ///     ColumnType::new(ScalarType::Bool),
+        /// ]));
         ///
         /// let predicate0 = ScalarExpr::Column(0);
         /// let predicate1 = ScalarExpr::Column(0);
@@ -380,12 +391,11 @@ pub mod fusion {
         ///     .filter(vec![predicate1.clone()])
         ///     .filter(vec![predicate2.clone()]);
         ///
-        /// let typ = vec![
-        ///     ColumnType { typ: ScalarType::Bool, is_nullable: false },
-        /// ];
+        /// let typ = RelationType::new(vec![
+        ///     ColumnType::new(ScalarType::Bool),
+        /// ]);
         ///
-        /// let fusion = materialize::dataflow::transform::fusion::filter::Filter;
-        /// fusion.transform(&mut expr, &typ);
+        /// Filter.transform(&mut expr, &typ);
         ///
         /// let correct = input.filter(vec![predicate0, predicate1, predicate2]);
         ///
@@ -456,7 +466,8 @@ pub mod fusion {
                     self.action(e, &e.typ());
                 });
             }
-            pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+
+            pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
                 if let RelationExpr::Join { inputs, variables } = relation {
                     let mut new_inputs = Vec::new();
                     let mut new_variables = Vec::new();
@@ -472,7 +483,7 @@ pub mod fusion {
                         {
                             // Update and push all of the variables.
                             for mut variable in variables.drain(..) {
-                                for (rel, col) in variable.iter_mut() {
+                                for (rel, _col) in variable.iter_mut() {
                                     *rel += new_inputs.len();
                                 }
                                 new_variables.push(variable);

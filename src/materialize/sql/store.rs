@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use failure::{bail, format_err};
+use failure::bail;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::FromIterator;
