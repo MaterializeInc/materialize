@@ -121,7 +121,9 @@ pub fn build_dataflow<A: Allocate>(
                     if let Some(mut trace) = manager.get_trace(e) {
                         // TODO(frankmcsherry) do the thing
                         let (arranged, button) = trace.import_core(scope, name);
-                        context.collections.insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
+                        context
+                            .collections
+                            .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
                         buttons.push(button);
                     }
                 }
@@ -129,10 +131,15 @@ pub fn build_dataflow<A: Allocate>(
 
             // Push predicates down a few times.
             let mut view = view.clone();
+            let join_fusion = crate::dataflow::transform::fusion::join::Join;
+            join_fusion.transform(&mut view.relation_expr, &view.typ);
             let pushdown = crate::dataflow::transform::PredicatePushdown;
             pushdown.transform(&mut view.relation_expr, &view.typ);
-            pushdown.transform(&mut view.relation_expr, &view.typ);
-            pushdown.transform(&mut view.relation_expr, &view.typ);
+            let filter_fusion = crate::dataflow::transform::fusion::filter::Filter;
+            filter_fusion.transform(&mut view.relation_expr, &view.typ);
+            let join_order = crate::dataflow::transform::join_order::JoinOrder;
+            join_order.transform(&mut view.relation_expr, &view.typ);
+            // println!("Optimized: {:#?}", view.relation_expr);
 
             let arrangement = build_relation_expr(view.relation_expr.clone(), scope, &mut context)
                 .arrange_by_self();
@@ -213,7 +220,6 @@ where
                 })
             }
             RelationExpr::Join { inputs, variables } => {
-
                 // For the moment, assert that each relation participates at most
                 // once in each equivalence class. If not, we should be able to
                 // push a filter upwards, and if we can't do that it means a bit
@@ -251,7 +257,11 @@ where
                         let mut new_keys = Vec::new();
 
                         for sets in variables.iter() {
-                            let new_pos = sets.iter().position(|(i, _)| i == &index);
+                            let new_pos = sets
+                                .iter()
+                                .filter(|(i, _)| i == &index)
+                                .map(|(_, c)| *c)
+                                .next();
                             let old_pos = columns.iter().position(|i| sets.contains(i));
 
                             // If we have both a new and an old column in the constraint ...

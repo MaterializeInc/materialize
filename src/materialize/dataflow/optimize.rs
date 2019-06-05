@@ -278,6 +278,15 @@ impl RelationExpr {
         f(self)
     }
 
+    #[allow(dead_code)]
+    pub fn visit_mut_inner_pre<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut Self),
+    {
+        f(self);
+        self.visit1_mut(|e| e.visit_mut_inner_pre(f));
+    }
+
     fn visit_mug<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut Self),

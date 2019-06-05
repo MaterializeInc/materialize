@@ -58,6 +58,11 @@ pub mod join_order {
 
     impl JoinOrder {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            relation.visit_mut_inner(&mut |e| {
+                self.action(e, &e.typ());
+            });
+        }
+        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
             if let RelationExpr::Join { inputs, variables } = relation {
                 let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
@@ -203,17 +208,13 @@ pub mod predicate_pushdown {
 
     impl PredicatePushdown {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            relation.visit_mut_inner(&mut |e| {
+            relation.visit_mut_inner_pre(&mut |e| {
                 self.action(e, &e.typ());
             });
         }
         pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
             if let RelationExpr::Filter { input, predicates } = relation {
-                if let RelationExpr::Join {
-                    inputs,
-                    variables: _,
-                } = &mut **input
-                {
+                if let RelationExpr::Join { inputs, variables } = &mut **input {
                     // We want to scan `predicates` for any that can apply
                     // to individual elements of `inputs`.
 
@@ -265,7 +266,71 @@ pub mod predicate_pushdown {
                                 push_downs[relation].push(predicate);
                             }
                             _ => {
-                                retain.push(predicate);
+                                use crate::dataflow::func::BinaryFunc;
+                                if let ScalarExpr::CallBinary {
+                                    func: BinaryFunc::Eq,
+                                    expr1,
+                                    expr2,
+                                } = &predicate
+                                {
+                                    if let (ScalarExpr::Column(c1), ScalarExpr::Column(c2)) =
+                                        (&**expr1, &**expr2)
+                                    {
+                                        let relation1 = input_relation[*c1];
+                                        let relation2 = input_relation[*c2];
+                                        assert!(relation1 != relation2);
+                                        let key1 = (relation1, *c1 - prior_arities[relation1]);
+                                        let key2 = (relation2, *c2 - prior_arities[relation2]);
+                                        let pos1 = variables.iter().position(|l| l.contains(&key1));
+                                        let pos2 = variables.iter().position(|l| l.contains(&key2));
+                                        match (pos1, pos2) {
+                                            (None, None) => {
+                                                variables.push(vec![key1, key2]);
+                                            }
+                                            (Some(idx1), None) => {
+                                                variables[idx1].push(key2);
+                                            }
+                                            (None, Some(idx2)) => {
+                                                variables[idx2].push(key1);
+                                            }
+                                            (Some(idx1), Some(idx2)) => {
+                                                // assert!(idx1 != idx2);
+                                                if idx1 != idx2 {
+                                                    let temp = variables[idx2].clone();
+                                                    variables[idx1].extend(temp);
+                                                    variables[idx1].sort();
+                                                    variables[idx1].dedup();
+                                                    variables.remove(idx2);
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        retain.push(predicate);
+                                    }
+                                } else {
+                                    retain.push(predicate);
+                                }
+                            }
+                        }
+                    }
+
+                    // promote same-relation constraints.
+                    for variable in variables.iter_mut() {
+                        variable.sort();
+                        variable.dedup(); // <-- not obviously necessary.
+
+                        let mut pos = 0;
+                        while pos + 1 < variable.len() {
+                            if variable[pos].0 == variable[pos + 1].0 {
+                                use crate::dataflow::func::BinaryFunc;
+                                push_downs[variable[pos].0].push(ScalarExpr::CallBinary {
+                                    func: BinaryFunc::Eq,
+                                    expr1: Box::new(ScalarExpr::Column(variable[pos].1)),
+                                    expr2: Box::new(ScalarExpr::Column(variable[pos + 1].1)),
+                                });
+                                variable.remove(pos + 1);
+                            } else {
+                                pos += 1;
                             }
                         }
                     }
@@ -338,7 +403,12 @@ pub mod fusion {
         }
 
         impl Filter {
-            pub fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+            pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+                relation.visit_mut_inner_pre(&mut |e| {
+                    self.action(e, &e.typ());
+                });
+            }
+            pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
                 if let RelationExpr::Filter { input, predicates } = relation {
                     // consolidate nested filters.
                     while let RelationExpr::Filter {
@@ -362,6 +432,78 @@ pub mod fusion {
                         };
                         *relation = std::mem::replace(input, empty);
                     }
+                }
+            }
+        }
+    }
+
+    pub mod join {
+
+        use crate::dataflow::RelationExpr;
+        use crate::repr::RelationType;
+
+        pub struct Join;
+
+        impl crate::dataflow::transform::Transform for Join {
+            fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+                self.transform(relation, metadata)
+            }
+        }
+
+        impl Join {
+            pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+                relation.visit_mut_inner(&mut |e| {
+                    self.action(e, &e.typ());
+                });
+            }
+            pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+                if let RelationExpr::Join { inputs, variables } = relation {
+                    let mut new_inputs = Vec::new();
+                    let mut new_variables = Vec::new();
+
+                    let mut new_relation = Vec::new();
+
+                    for input in inputs.drain(..) {
+                        let mut columns = Vec::new();
+                        if let RelationExpr::Join {
+                            mut inputs,
+                            mut variables,
+                        } = input
+                        {
+                            // Update and push all of the variables.
+                            for mut variable in variables.drain(..) {
+                                for (rel, col) in variable.iter_mut() {
+                                    *rel += new_inputs.len();
+                                }
+                                new_variables.push(variable);
+                            }
+                            // Add all of the inputs.
+                            for input in inputs.drain(..) {
+                                let new_inputs_len = new_inputs.len();
+                                let arity = input.arity();
+                                columns.extend((0..arity).map(|c| (new_inputs_len, c)));
+                                new_inputs.push(input);
+                            }
+                        } else {
+                            // Retain the input.
+                            let new_inputs_len = new_inputs.len();
+                            let arity = input.arity();
+                            columns.extend((0..arity).map(|c| (new_inputs_len, c)));
+                            new_inputs.push(input);
+                        }
+                        new_relation.push(columns);
+                    }
+
+                    for mut variable in variables.drain(..) {
+                        for (rel, col) in variable.iter_mut() {
+                            let (rel2, col2) = new_relation[*rel][*col];
+                            *rel = rel2;
+                            *col = col2;
+                        }
+                    }
+
+                    *inputs = new_inputs;
+                    *variables = new_variables;
                 }
             }
         }
