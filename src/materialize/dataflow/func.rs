@@ -838,7 +838,7 @@ impl AggregateFunc {
         }
     }
 
-    pub fn default(&self) -> Datum {
+    pub fn default(self) -> Datum {
         match self {
             AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
             _ => Datum::Null,

@@ -417,7 +417,7 @@ impl RelationExpr {
                 out.push(&name);
             }
             RelationExpr::Let { name, .. } => {
-                out.retain(|n| n != &name);
+                out.retain(|n| n != name);
             }
             _ => (),
         });
