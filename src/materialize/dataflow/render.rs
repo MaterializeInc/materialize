@@ -179,6 +179,7 @@ where
             RelationExpr::Constant { rows, .. } => {
                 use differential_dataflow::collection::AsCollection;
                 use timely::dataflow::operators::{Map, ToStream};
+                let rows = if worker_index == 0 { rows } else { vec![] };
                 rows.to_stream(scope)
                     .map(|x| (x, Default::default(), 1))
                     .as_collection()
