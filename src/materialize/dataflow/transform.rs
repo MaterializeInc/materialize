@@ -511,6 +511,7 @@ pub mod fusion {
                             *rel = rel2;
                             *col = col2;
                         }
+                        new_variables.push(variable);
                     }
 
                     *inputs = new_inputs;
