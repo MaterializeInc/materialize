@@ -215,6 +215,12 @@ pub mod predicate_pushdown {
 
     pub struct PredicatePushdown;
 
+    impl super::Transform for PredicatePushdown {
+        fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+            self.transform(relation, metadata)
+        }
+    }
+
     impl PredicatePushdown {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
             relation.visit_mut_inner_pre(&mut |e| {
@@ -529,6 +535,12 @@ pub mod reduction {
     use crate::repr::RelationType;
 
     pub struct FoldConstants;
+
+    impl super::Transform for FoldConstants {
+        fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+            self.transform(relation, metadata)
+        }
+    }
 
     impl FoldConstants {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {

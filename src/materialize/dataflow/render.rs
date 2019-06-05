@@ -130,15 +130,18 @@ pub fn build_dataflow<A: Allocate>(
 
             // Push predicates down a few times.
             let mut view = view.clone();
-            let join_fusion = crate::dataflow::transform::fusion::join::Join;
-            join_fusion.transform(&mut view.relation_expr, &view.typ);
-            let pushdown = crate::dataflow::transform::PredicatePushdown;
-            pushdown.transform(&mut view.relation_expr, &view.typ);
-            let filter_fusion = crate::dataflow::transform::fusion::filter::Filter;
-            filter_fusion.transform(&mut view.relation_expr, &view.typ);
-            let join_order = crate::dataflow::transform::join_order::JoinOrder;
-            join_order.transform(&mut view.relation_expr, &view.typ);
-            // println!("Optimized: {:#?}", view.relation_expr);
+
+            use crate::dataflow::transform;
+            let transforms: Vec<Box<dyn transform::Transform>> = vec![
+                Box::new(transform::fusion::join::Join),
+                Box::new(transform::PredicatePushdown),
+                Box::new(transform::fusion::filter::Filter),
+                Box::new(transform::join_order::JoinOrder),
+                Box::new(transform::reduction::FoldConstants),
+            ];
+            for transform in transforms.iter() {
+                transform.transform(&mut view.relation_expr, &view.typ);
+            }
 
             let arrangement = build_relation_expr(
                 view.relation_expr.clone(),
