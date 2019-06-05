@@ -153,8 +153,10 @@ impl ScalarExpr {
                         let eval = cond.eval(&[]);
                         if eval == Datum::True {
                             then.is_literal()
-                        } else {
+                        } else if eval == Datum::False || eval == Datum::Null {
                             els.is_literal()
+                        } else {
+                            unreachable!()
                         }
                     } else {
                         false
