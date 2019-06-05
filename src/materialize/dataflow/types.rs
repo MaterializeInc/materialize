@@ -35,7 +35,10 @@ impl Dataflow {
     pub fn typ(&self) -> &RelationType {
         match self {
             Dataflow::Source(src) => &src.typ,
-            Dataflow::Sink(sink) => &sink.from.1,
+            Dataflow::Sink(_) => panic!(
+                "programming error: Dataflow.typ called on Sink variant, \
+                 but sinks don't have a type"
+            ),
             Dataflow::View(view) => &view.typ,
         }
     }

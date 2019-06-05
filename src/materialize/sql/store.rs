@@ -31,7 +31,12 @@ impl DataflowStore {
     }
 
     pub fn get_type(&self, name: &str) -> Result<&RelationType, failure::Error> {
-        Ok(self.get(name)?.typ())
+        match self.get(name)? {
+            Dataflow::Sink { .. } => {
+                bail!("dataflow {} is a sink and cannot be depended upon", name)
+            }
+            dataflow => Ok(dataflow.typ()),
+        }
     }
 
     pub fn insert(&mut self, dataflow: Dataflow) -> Result<(), failure::Error> {

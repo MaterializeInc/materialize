@@ -135,12 +135,15 @@ where
             }
             DataflowCommand::DropDataflows(dataflows) => {
                 for dataflow in dataflows {
-                    // TODO(jamii) it's not clear how we're supposed to drop a Sink
                     self.inputs.remove(dataflow.name());
-                    self.traces.del_trace(&RelationExpr::Get {
-                        name: dataflow.name().to_owned(),
-                        typ: dataflow.typ().clone(),
-                    });
+                    if let Dataflow::Sink { .. } = dataflow {
+                        // TODO(jamii) it's not clear how we're supposed to drop a Sink
+                    } else {
+                        self.traces.del_trace(&RelationExpr::Get {
+                            name: dataflow.name().to_owned(),
+                            typ: dataflow.typ().clone(),
+                        });
+                    }
                 }
             }
             DataflowCommand::PeekExisting(dataflow) => {
