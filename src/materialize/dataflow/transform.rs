@@ -521,3 +521,50 @@ pub mod fusion {
         }
     }
 }
+
+pub mod reduction {
+
+    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use crate::repr::Datum;
+    use crate::repr::RelationType;
+
+    pub struct FoldConstants;
+
+    impl FoldConstants {
+        pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            relation.visit_mut_inner_pre(&mut |e| {
+                self.action(e, &e.typ());
+            });
+        }
+        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            match relation {
+                RelationExpr::Map { input: _, scalars } => {
+                    for (scalar, _typ) in scalars.iter_mut() {
+                        scalar.reduce();
+                    }
+                }
+                RelationExpr::Filter {
+                    input: _,
+                    predicates,
+                } => {
+                    for predicate in predicates.iter_mut() {
+                        predicate.reduce();
+                    }
+                    predicates.retain(|p| p != &ScalarExpr::Literal(Datum::True));
+
+                    // If any predicate is false, reduce to the empty collection.
+                    if predicates.iter().any(|p| {
+                        p == &ScalarExpr::Literal(Datum::False)
+                            || p == &ScalarExpr::Literal(Datum::Null)
+                    }) {
+                        *relation = RelationExpr::Constant {
+                            rows: Vec::new(),
+                            typ: _metadata.clone(),
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
