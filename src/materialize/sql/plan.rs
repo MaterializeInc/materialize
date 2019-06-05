@@ -293,23 +293,31 @@ impl SQLRelationExpr {
         aggregates.dedup_by_key(|(func_hash, _agg, _typ)| *func_hash);
         let mut agg_columns = Vec::new();
         let mut aggs = Vec::new();
-        for (func_hash, agg, typ) in aggregates {
+        for (func_hash, agg, typ) in aggregates.iter() {
             agg_columns.push((
                 Name {
                     table_name: None,
                     column_name: None,
-                    func_hash: Some(func_hash),
+                    func_hash: Some(*func_hash),
                 },
                 typ.clone(),
             ));
-            aggs.push((agg, typ));
+            aggs.push((agg.clone(), typ.clone()));
         }
         relation_expr = RelationExpr::Reduce {
             input: Box::new(relation_expr),
-            group_key,
+            group_key: group_key.clone(),
             aggregates: aggs,
         };
-        // TODO(jamii) deal with defaults
+        if group_key.is_empty() {
+            relation_expr = RelationExpr::OrDefault {
+                input: Box::new(relation_expr),
+                default: aggregates
+                    .iter()
+                    .map(|(_, agg, _)| agg.func.default())
+                    .collect(),
+            }
+        }
         SQLRelationExpr {
             relation_expr,
             columns: key_columns.into_iter().chain(agg_columns).collect(),

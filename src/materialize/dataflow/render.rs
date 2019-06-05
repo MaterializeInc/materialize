@@ -140,8 +140,13 @@ pub fn build_dataflow<A: Allocate>(
             join_order.transform(&mut view.relation_expr, &view.typ);
             // println!("Optimized: {:#?}", view.relation_expr);
 
-            let arrangement = build_relation_expr(view.relation_expr.clone(), scope, &mut context)
-                .arrange_by_self();
+            let arrangement = build_relation_expr(
+                view.relation_expr.clone(),
+                scope,
+                &mut context,
+                worker_index,
+            )
+            .arrange_by_self();
             manager.set_trace(
                 &RelationExpr::Get {
                     name: view.name.clone(),
@@ -162,6 +167,7 @@ pub fn build_relation_expr<G>(
     relation_expr: RelationExpr,
     scope: &mut G,
     context: &mut Context<G, RelationExpr, Datum, crate::clock::Timestamp>,
+    worker_index: usize,
 ) -> Collection<G, Vec<Datum>, isize>
 where
     G: Scope,
@@ -188,17 +194,17 @@ where
                 if context.collection(&bind).is_some() {
                     panic!("Inappropriate to re-bind name: {:?}", bind);
                 } else {
-                    let value = build_relation_expr(*value, scope, context);
+                    let value = build_relation_expr(*value, scope, context, worker_index);
                     context.collections.insert(bind.clone(), value);
-                    build_relation_expr(*body, scope, context)
+                    build_relation_expr(*body, scope, context, worker_index)
                 }
             }
             RelationExpr::Project { input, outputs } => {
-                let input = build_relation_expr(*input, scope, context);
+                let input = build_relation_expr(*input, scope, context, worker_index);
                 input.map(move |tuple| outputs.iter().map(|i| tuple[*i].clone()).collect())
             }
             RelationExpr::Map { input, scalars } => {
-                let input = build_relation_expr(*input, scope, context);
+                let input = build_relation_expr(*input, scope, context, worker_index);
                 input.map(move |mut tuple| {
                     let len = tuple.len();
                     for s in scalars.iter() {
@@ -209,7 +215,7 @@ where
                 })
             }
             RelationExpr::Filter { input, predicates } => {
-                let input = build_relation_expr(*input, scope, context);
+                let input = build_relation_expr(*input, scope, context, worker_index);
                 input.filter(move |x| {
                     predicates.iter().all(|predicate| match predicate.eval(x) {
                         Datum::True => true,
@@ -236,7 +242,7 @@ where
                 // The relation_expr is to implement join as a `fold` over `inputs`.
                 let mut input_iter = inputs.into_iter().enumerate();
                 if let Some((index, input)) = input_iter.next() {
-                    let mut joined = build_relation_expr(input, scope, context);
+                    let mut joined = build_relation_expr(input, scope, context, worker_index);
 
                     // Maintain sources of each in-progress column.
                     let mut columns = (0..arities[index]).map(|c| (index, c)).collect::<Vec<_>>();
@@ -284,7 +290,8 @@ where
 
                         // TODO: easier idioms for detecting, re-using, and stashing.
                         if context.arrangement(&input, &new_keys[..]).is_none() {
-                            let built = build_relation_expr(input.clone(), scope, context);
+                            let built =
+                                build_relation_expr(input.clone(), scope, context, worker_index);
                             let new_keys2 = new_keys.clone();
                             let new_keyed = built
                                 .map(move |tuple| {
@@ -334,7 +341,7 @@ where
 
                 let self_clone = relation_expr.clone();
                 let keys_clone = group_key.clone();
-                let input = build_relation_expr(*input, scope, context);
+                let input = build_relation_expr(*input, scope, context, worker_index);
 
                 let arrangement = input
                     .map(move |tuple| {
@@ -391,7 +398,7 @@ where
                 let self_clone = relation_expr.clone();
                 let group_clone = group_key.clone();
                 let order_clone = order_key.clone();
-                let input = build_relation_expr(*input, scope, context);
+                let input = build_relation_expr(*input, scope, context, worker_index);
 
                 let arrangement = input
                     .map(move |tuple| {
@@ -436,9 +443,14 @@ where
                 use differential_dataflow::operators::Join;
                 use timely::dataflow::operators::to_stream::ToStream;
 
-                let input = build_relation_expr(*input, scope, context);
+                let input = build_relation_expr(*input, scope, context, worker_index);
                 let present = input.map(|_| ()).distinct();
-                let default = vec![(((), default), Default::default(), 1isize)]
+                let value = if worker_index == 0 {
+                    vec![(((), default), Default::default(), 1isize)]
+                } else {
+                    vec![]
+                };
+                let default = value
                     .to_stream(scope)
                     .as_collection()
                     .antijoin(&present)
@@ -447,7 +459,7 @@ where
                 input.concat(&default)
             }
             RelationExpr::Negate { input } => {
-                let input = build_relation_expr(*input, scope, context);
+                let input = build_relation_expr(*input, scope, context, worker_index);
                 input.negate()
             }
             RelationExpr::Distinct { input } => {
@@ -457,7 +469,7 @@ where
 
                 // TODO: easier idioms for detecting, re-using, and stashing.
                 if context.arrangement(&input, &keys[..]).is_none() {
-                    let built = build_relation_expr((*input).clone(), scope, context);
+                    let built = build_relation_expr((*input).clone(), scope, context, worker_index);
                     let keys2 = keys.clone();
                     let keyed = built
                         .map(move |tuple| {
@@ -491,8 +503,8 @@ where
                 arranged.as_collection(|_k, v| v.clone())
             }
             RelationExpr::Union { left, right } => {
-                let input1 = build_relation_expr(*left, scope, context);
-                let input2 = build_relation_expr(*right, scope, context);
+                let input1 = build_relation_expr(*left, scope, context, worker_index);
+                let input2 = build_relation_expr(*right, scope, context, worker_index);
                 input1.concat(&input2)
             }
         };
