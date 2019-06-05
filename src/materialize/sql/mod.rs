@@ -910,6 +910,7 @@ impl Planner {
         }
     }
 
+    #[allow(dead_code)] // TODO(benesch): why?
     fn resolve_name(
         &self,
         name: &ASTNode,
@@ -958,6 +959,7 @@ impl Planner {
         }
     }
 
+    #[allow(dead_code)] // TODO(benesch): why?
     fn plan_eq_expr(
         &self,
         left: &ASTNode,
@@ -1593,6 +1595,7 @@ fn extract_sql_object_name(n: &SQLObjectName) -> Result<String, failure::Error> 
     Ok(n.to_string())
 }
 
+#[allow(dead_code)] // TODO(benesch): why?
 fn unnest(expr: &ASTNode) -> &ASTNode {
     match expr {
         ASTNode::SQLNested(expr) => unnest(expr),

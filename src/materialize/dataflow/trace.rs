@@ -41,6 +41,7 @@ pub struct TraceManager {
 }
 
 struct TraceInfoKeyed {
+    #[allow(dead_code)]
     trace: KeysValsHandle,
     delete_callback: DeleteCallback,
 }
@@ -81,16 +82,6 @@ impl TraceManager {
         self.traces
             .get(relation_expr)
             .and_then(|x| x.0.as_ref().map(|ti| ti.trace.clone()))
-    }
-
-    pub fn get_keyed_trace(
-        &self,
-        relation_expr: &RelationExpr,
-        key: &[ScalarExpr],
-    ) -> Option<KeysValsHandle> {
-        self.traces
-            .get(relation_expr)
-            .and_then(|x| x.1.get(key).map(|ti| ti.trace.clone()))
     }
 
     pub fn set_trace(

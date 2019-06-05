@@ -52,7 +52,7 @@ impl ScalarExpr {
         self.visit_inner(&mut f);
     }
 
-    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
+    pub fn visit1_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut Self),
     {
@@ -286,13 +286,6 @@ impl RelationExpr {
     {
         f(self);
         self.visit1_mut(|e| e.visit_mut_inner_pre(f));
-    }
-
-    fn visit_mug<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Self),
-    {
-        self.visit_mut_inner(&mut f);
     }
 
     #[allow(dead_code)]

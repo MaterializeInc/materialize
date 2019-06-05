@@ -510,7 +510,7 @@ impl RecordRunner for FullState {
                 if inferred_types.len() != expected_types.len() {
                     return Ok(Outcome::InferenceFailure {
                         expected_types,
-                        inferred_types: inferred_types.into_iter().cloned().collect(),
+                        inferred_types: inferred_types.to_vec(),
                     });
                 }
 

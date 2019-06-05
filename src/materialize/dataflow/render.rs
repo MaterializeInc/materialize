@@ -13,6 +13,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
+use timely::dataflow::operators::input::Input as TimelyInput;
 use timely::dataflow::InputHandle;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
@@ -76,14 +77,13 @@ pub fn build_dataflow<A: Allocate>(
                     source::kafka(scope, &src.name, &c, done.clone(), worker_timer)
                 }
                 SourceConnector::Local(_) => {
-                    use timely::dataflow::operators::input::Input;
                     let (handle, stream) = scope.new_input();
                     if worker_index == 0 {
-                        // drop the handle if not worker zero.
+                        // Only insert if we're worker 0, to avoid duplicating
+                        // the insert.
                         inputs.insert(src.name.clone(), handle);
                     }
                     stream
-                    // source::local(scope, &src.name, &l, done.clone(), clock, insert_mux)
                 }
             };
             let arrangement = relation_expr.as_collection().arrange_by_self();

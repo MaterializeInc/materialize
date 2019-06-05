@@ -97,6 +97,14 @@ disabled_lints=(
     # trivially optimized away by LLVM.
     clippy::redundant_closure
 
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#type_complexity
+    #
+    # clippy::type_complexity disallows types that are excessively nested.
+    # Unfortunately Frank McSherry loves highly nested types, and, indeed,
+    # sometimes extracting the type alias that Clippy demands makes the types
+    # less readable.
+    clippy::type_complexity
+
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#unneeded_field_pattern
     #
     # clippy::unneeded_field_patterns disallows wildcard struct patterns, like

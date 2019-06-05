@@ -8,14 +8,13 @@ use std::collections::HashMap;
 use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::{timestamp::Refines, Timestamp};
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::ord::{OrdKeySpine, OrdValSpine};
+use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
+use differential_dataflow::Collection;
 use differential_dataflow::Data;
-use differential_dataflow::{lattice::Lattice, Collection};
 
-/// A trace handle for key-only data.
-pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 
@@ -38,6 +37,7 @@ where
     /// Dataflow local arrangements.
     pub local: HashMap<P, HashMap<Vec<usize>, Arrangement<S, V>>>,
     /// Imported arrangements.
+    #[allow(clippy::type_complexity)] // TODO(fms): fix or ignore lint globally.
     pub trace: HashMap<P, HashMap<Vec<usize>, ArrangementImport<S, V, T>>>,
 }
 
@@ -46,6 +46,15 @@ where
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
+    /// Creates a new empty Context.
+    pub fn new() -> Self {
+        Self {
+            collections: HashMap::new(),
+            local: HashMap::new(),
+            trace: HashMap::new(),
+        }
+    }
+
     /// Assembles a collection if available.
     ///
     /// This method consults all available data assets to create the appropriate
@@ -98,9 +107,11 @@ where
     }
 
     /// Retrieves an arrangement from a relation_expr and keys.
+    #[allow(dead_code)]
     pub fn get_local(&self, relation_expr: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
         self.local.get(relation_expr).and_then(|x| x.get(keys))
     }
+
     /// Binds a relation_expr and keys to an arrangement.
     pub fn set_local(&mut self, relation_expr: P, keys: &[usize], arranged: Arrangement<S, V>) {
         self.local
@@ -108,7 +119,9 @@ where
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
     }
+
     /// Retrieves an arrangement from a relation_expr and keys.
+    #[allow(dead_code)]
     pub fn get_trace(
         &self,
         relation_expr: &P,
@@ -116,7 +129,9 @@ where
     ) -> Option<&ArrangementImport<S, V, T>> {
         self.trace.get(relation_expr).and_then(|x| x.get(keys))
     }
+
     /// Binds a relation_expr and keys to an arrangement.
+    #[allow(dead_code)]
     pub fn set_trace(
         &mut self,
         relation_expr: P,
@@ -127,15 +142,6 @@ where
             .entry(relation_expr)
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
-    }
-
-    /// Creates a new empty Context.
-    pub fn new() -> Self {
-        Self {
-            collections: HashMap::new(),
-            local: HashMap::new(),
-            trace: HashMap::new(),
-        }
     }
 }
 

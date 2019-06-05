@@ -291,10 +291,7 @@ impl RelationExpr {
     }
 
     pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
-        RelationExpr::Join {
-            inputs,
-            variables,
-        }
+        RelationExpr::Join { inputs, variables }
     }
 
     pub fn reduce(
