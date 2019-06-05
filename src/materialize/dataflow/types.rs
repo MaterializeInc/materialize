@@ -5,9 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 use url::Url;
+use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::repr::{ColumnType, Datum, RelationType};
+use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -268,6 +269,19 @@ impl RelationExpr {
 }
 
 impl RelationExpr {
+    pub fn let_<F>(value: RelationExpr, f: F) -> Result<Self, failure::Error>
+    where
+        F: FnOnce(Self) -> Result<Self, failure::Error>,
+    {
+        let name = format!("tmp_{}", Uuid::new_v4());
+        let typ = value.typ();
+        Ok(RelationExpr::Let {
+            name: name.clone(),
+            value: Box::new(value),
+            body: Box::new(f(RelationExpr::Get { name, typ })?),
+        })
+    }
+
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
         RelationExpr::Constant { rows, typ }
     }
@@ -334,16 +348,78 @@ impl RelationExpr {
             right: Box::new(other),
         }
     }
+
+    pub fn left_outer(self, left: Self) -> Self {
+        let both = self;
+        let both_arity = both.arity();
+        let left_arity = left.arity();
+        assert!(both_arity >= left_arity);
+
+        RelationExpr::Join {
+            inputs: vec![
+                left.union(both.project((0..left_arity).collect()).distinct().negate()),
+                RelationExpr::Constant {
+                    rows: vec![vec![Datum::Null; both_arity - left_arity]],
+                    typ: RelationType {
+                        column_types: vec![
+                            ColumnType {
+                                name: None,
+                                nullable: true,
+                                scalar_type: ScalarType::Null
+                            };
+                            both_arity - left_arity
+                        ],
+                    },
+                },
+            ],
+            variables: vec![],
+        }
+    }
+
+    pub fn right_outer(self, right: Self) -> Self {
+        let both = self;
+        let both_arity = both.arity();
+        let right_arity = right.arity();
+        assert!(both_arity >= right_arity);
+
+        RelationExpr::Join {
+            inputs: vec![
+                RelationExpr::Constant {
+                    rows: vec![vec![Datum::Null; both_arity - right_arity]],
+                    typ: RelationType {
+                        column_types: vec![
+                            ColumnType {
+                                name: None,
+                                nullable: true,
+                                scalar_type: ScalarType::Null
+                            };
+                            both_arity - right_arity
+                        ],
+                    },
+                },
+                right.union(
+                    both.project(((both_arity - right_arity)..both_arity).collect())
+                        .distinct()
+                        .negate(),
+                ),
+            ],
+            variables: vec![],
+        }
+    }
 }
 
 impl RelationExpr {
     /// Collects the names of the dataflows that this relation_expr depends upon.
     #[allow(clippy::unneeded_field_pattern)]
     fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
-        self.visit(|e| {
-            if let RelationExpr::Get { name, .. } = e {
+        self.visit(|e| match e {
+            RelationExpr::Get { name, .. } => {
                 out.push(&name);
             }
+            RelationExpr::Let { name, .. } => {
+                out.retain(|n| n != &name);
+            }
+            _ => (),
         });
     }
 }

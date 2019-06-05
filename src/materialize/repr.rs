@@ -262,7 +262,11 @@ impl ColumnType {
     }
 
     pub fn union(&self, other: &Self) -> Self {
-        assert_eq!(self.scalar_type, other.scalar_type);
+        let scalar_type = match (&self.scalar_type, &other.scalar_type) {
+            (ScalarType::Null, s) | (s, ScalarType::Null) => s,
+            (s1, s2) if s1 == s2 => s1,
+            (s1, s2) => panic!("Can't union types: {:?} and {:?}", s1, s2),
+        };
         // TODO(jamii) does sql union require same column names?
         let name = match (&self.name, &other.name) {
             (Some(name), None) | (None, Some(name)) => Some(name.to_owned()),
@@ -271,8 +275,11 @@ impl ColumnType {
         };
         ColumnType {
             name,
-            scalar_type: self.scalar_type.clone(),
-            nullable: self.nullable || other.nullable,
+            scalar_type: scalar_type.clone(),
+            nullable: self.nullable
+                || other.nullable
+                || self.scalar_type == ScalarType::Null
+                || other.scalar_type == ScalarType::Null,
         }
     }
 

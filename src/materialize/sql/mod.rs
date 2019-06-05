@@ -792,16 +792,95 @@ impl Planner {
         match operator {
             JoinOperator::Inner(constraint) => self.plan_join_constraint(&constraint, left, right),
             JoinOperator::LeftOuter(constraint) => {
-                let _joined = self.plan_join_constraint(&constraint, left, right);
-                unimplemented!()
+                let left_columns = left.columns.clone();
+                let right_columns = right.columns.clone();
+                Ok(SQLRelationExpr {
+                    relation_expr: {
+                        RelationExpr::let_(left.relation_expr.clone(), |left| {
+                            let both = self.plan_join_constraint(
+                                &constraint,
+                                SQLRelationExpr {
+                                    relation_expr: left.clone(),
+                                    columns: left_columns.clone(),
+                                },
+                                right,
+                            )?;
+                            RelationExpr::let_(both.relation_expr, |both| {
+                                Ok(both.clone().union(both.left_outer(left)))
+                            })
+                        })?
+                    },
+                    columns: left_columns
+                        .into_iter()
+                        .chain(right_columns.into_iter().map(|mut c| {
+                            c.1.nullable = true;
+                            c
+                        }))
+                        .collect(),
+                })
             }
             JoinOperator::RightOuter(constraint) => {
-                let _joined = self.plan_join_constraint(&constraint, left, right);
-                unimplemented!()
+                let left_columns = left.columns.clone();
+                let right_columns = right.columns.clone();
+                Ok(SQLRelationExpr {
+                    relation_expr: {
+                        RelationExpr::let_(right.relation_expr.clone(), |right| {
+                            let both = self.plan_join_constraint(
+                                &constraint,
+                                left,
+                                SQLRelationExpr {
+                                    relation_expr: right.clone(),
+                                    columns: right_columns.clone(),
+                                },
+                            )?;
+                            RelationExpr::let_(both.relation_expr, |both| {
+                                Ok(both.clone().union(both.right_outer(right)))
+                            })
+                        })?
+                    },
+                    columns: left_columns
+                        .into_iter()
+                        .map(|mut c| {
+                            c.1.nullable = true;
+                            c
+                        })
+                        .chain(right_columns.into_iter())
+                        .collect(),
+                })
             }
             JoinOperator::FullOuter(constraint) => {
-                let _joined = self.plan_join_constraint(&constraint, left, right);
-                unimplemented!()
+                let left_columns = left.columns.clone();
+                let right_columns = right.columns.clone();
+                Ok(SQLRelationExpr {
+                    relation_expr: {
+                        RelationExpr::let_(left.relation_expr.clone(), |left| {
+                            RelationExpr::let_(right.relation_expr.clone(), |right| {
+                                let both = self.plan_join_constraint(
+                                    &constraint,
+                                    SQLRelationExpr {
+                                        relation_expr: left.clone(),
+                                        columns: left_columns.clone(),
+                                    },
+                                    SQLRelationExpr {
+                                        relation_expr: right.clone(),
+                                        columns: right_columns.clone(),
+                                    },
+                                )?;
+                                RelationExpr::let_(both.relation_expr, |both| {
+                                    Ok(both.clone().union(both.left_outer(left)))
+                                })
+                            })
+                        })?
+                    },
+                    columns: left_columns
+                        .into_iter()
+                        .chain(right_columns.into_iter())
+                        .map(|mut c| {
+                            c.1.nullable = true;
+                            c
+                        })
+                        .collect(),
+                })
             }
             JoinOperator::Implicit | JoinOperator::Cross => Ok(left.product(right)),
         }
