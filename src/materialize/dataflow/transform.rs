@@ -580,3 +580,164 @@ pub mod reduction {
         }
     }
 }
+
+pub mod aggregation {
+
+    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use crate::repr::RelationType;
+
+    pub struct FractureReduce;
+
+    impl super::Transform for FractureReduce {
+        fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+            self.transform(relation, metadata)
+        }
+    }
+
+    impl FractureReduce {
+        pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            relation.visit_mut_inner_pre(&mut |e| {
+                self.action(e, &e.typ());
+            });
+        }
+        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            if let RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } = relation {
+
+                if aggregates.len() > 1 {
+
+                    let keys = group_key.len();
+                    let mut projection = group_key.clone();
+                    projection.push(input.arity());
+
+                    let mut to_join = Vec::new();
+                    for (agg, typ) in aggregates.drain(..) {
+                        let temp =
+                        input
+                            .clone()
+                            .map(vec![(agg.expr, typ.clone())]) // TODO: correct for Average?
+                            .project(projection.clone());
+
+                        // // TODO: this is not always a win, but it seemed like a way to
+                        // // elicit more opportunities for re-use.
+                        // if agg.distinct {
+                        //     temp = temp.distinct();
+                        //     agg.distinct = false;
+                        // }
+
+                        let single_reduce =
+                        temp.reduce(
+                            (0 .. keys).collect(),
+                            vec![(
+                                crate::dataflow::types::AggregateExpr {
+                                    func: agg.func,
+                                    expr: ScalarExpr::Column(keys),
+                                    distinct: agg.distinct,
+                                },
+                                typ,
+                            )]
+                        );
+                        to_join.push(single_reduce);
+                    }
+
+                    // All pairs of aggregate, key_column.
+                    let variables =
+                    (0 .. group_key.len())
+                        .map(|k| (0 .. to_join.len())
+                                .map(|a| (a,k))
+                                .collect::<Vec<_>>())
+                        .collect::<Vec<_>>();
+
+                    *relation = RelationExpr::join(
+                        to_join,
+                        variables,
+                    );
+                }
+            }
+        }
+    }
+
+
+    #[cfg(test)]
+    mod tests {
+
+        use crate::dataflow::types::{RelationExpr, ScalarExpr};
+        use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
+        use crate::dataflow::func::AggregateFunc;
+
+        #[test]
+        fn transform() {
+
+            let typ1 =
+            RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+            ]);
+
+            let data = RelationExpr::constant(vec![], typ1);
+
+            let agg0 =
+            crate::dataflow::types::AggregateExpr {
+                func: AggregateFunc::AvgInt64,
+                expr: ScalarExpr::Column(0),
+                distinct: false,
+            };
+            let agg1 =
+            crate::dataflow::types::AggregateExpr {
+                func: AggregateFunc::SumInt64,
+                expr: ScalarExpr::Column(2),
+                distinct: false,
+            };
+            let agg2 =
+            crate::dataflow::types::AggregateExpr {
+                func: AggregateFunc::Count,
+                expr: ScalarExpr::Column(1),
+                distinct: true,
+            };
+            let agg3 =
+            crate::dataflow::types::AggregateExpr {
+                func: AggregateFunc::MinInt64,
+                expr: ScalarExpr::Column(0),
+                distinct: false,
+            };
+
+            let data =
+            data.reduce(
+                vec![1,3],
+                vec![
+                    (agg0, ColumnType::new(ScalarType::Int64)),
+                    (agg1, ColumnType::new(ScalarType::Int64)),
+                    (agg2, ColumnType::new(ScalarType::Int64)),
+                    (agg3, ColumnType::new(ScalarType::Int64)),
+                ]
+            );
+
+            let mut new_data = data.clone();
+            let fracture_reduce = super::FractureReduce;
+
+            let typ2 =
+            RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+                ColumnType::new(ScalarType::Int64),
+            ]);
+
+            fracture_reduce.transform(&mut new_data, &typ2);
+
+            println!("Input: {:#?}", data);
+            println!("Optimized: {:#?}", new_data);
+
+            // assert_eq!(new_data, data);
+        }
+
+
+    }
+}

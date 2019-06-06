@@ -138,6 +138,7 @@ pub fn build_dataflow<A: Allocate>(
                 Box::new(transform::fusion::filter::Filter),
                 Box::new(transform::join_order::JoinOrder),
                 Box::new(transform::reduction::FoldConstants),
+                Box::new(transform::aggregation::FractureReduce),
             ];
             for transform in transforms.iter() {
                 transform.transform(&mut view.relation_expr, &view.typ);
