@@ -119,6 +119,39 @@ The VPC in which agents are launched has a private Route 53 hosted zone,
 `internal.mtrlz.dev`. Records are not accessible outside of instances launched
 into the VPC.
 
+## Debugging build agents
+
+I propose the following corollary to Murphy's law:
+
+  > Anything that can go wrong will only go wrong in CI.
+
+It follows that one will frequently need to SSH into build agents to diagnose
+bugs that only occur in CI. You can even attach GDB to a running Rust test
+binary, with a bit of elbow grease.
+
+You'll need the ID of the container in which the faulty process is running and
+the exact version of the image it's running. The goal is to launch a new
+container with "ptrace" capabilities into the same PID and network namespace,
+so that you can attach GDB to the process. If you attempt to GDB directly from the host, GDB will get confused because userspace differs, and the userspace libraries that the binary claims to link against won't exist. If you GDB with a `docker exec` from within the already-running container, GDB will fail to ptrace, since CI, quite reasonably, doesn't launch containers with ptrace capabilities.
+
+Roughly:
+
+```bash
+# From the host.
+$ docker ps
+$ docker run -it \
+  --pid=container:<CONTAINER-ID> --net=container:<CONTAINER-ID> \
+  --cap-add sys_admin --cap-add sys_ptrace \
+  --entrypoint bash \
+  --rm \
+  materialize/test:<YYYYMMDD-HHMMSS>
+
+# Within the container.
+$ sudo apt install gdb
+$ ps ax | grep <FAULTY-PROCESS-NAME>
+$ gdb -p <FAULTY-PROCESS-PID>
+```
+
 ## Performance testing
 
 We have a dedicated Linux machine in the office that Nikhil intends to use for
