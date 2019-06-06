@@ -12,8 +12,8 @@ use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
     ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLFunction, SQLIdent, SQLObjectName,
-    SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement,
-    SQLTableConstraint, SQLType, SQLValues, TableAlias, TableFactor, Value,
+    SQLObjectType, SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator,
+    SQLStatement, SQLType, SQLValues, TableAlias, TableConstraint, TableFactor, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
@@ -62,9 +62,7 @@ impl Planner {
             | SQLStatement::SQLCreateDataSink { .. }
             | SQLStatement::SQLCreateView { .. }
             | SQLStatement::SQLCreateTable { .. } => self.handle_create_dataflow(stmt),
-            SQLStatement::SQLDropDataSource { .. }
-            | SQLStatement::SQLDropView { .. }
-            | SQLStatement::SQLDropTable { .. } => self.handle_drop_dataflow(stmt),
+            SQLStatement::SQLDrop { .. } => self.handle_drop_dataflow(stmt),
 
             // these are intended mostly for testing:
             SQLStatement::SQLQuery(query) => self.handle_select(*query),
@@ -96,16 +94,19 @@ impl Planner {
     }
 
     fn handle_drop_dataflow(&mut self, stmt: SQLStatement) -> PlannerResult {
-        // TODO(benesch): DROP <TYPE> should error if the named object is not
-        // of the correct type (#38).
-        let (sql_response, drop) = match stmt {
-            SQLStatement::SQLDropDataSource(drop) => (SqlResponse::DroppedDataSource, drop),
-            SQLStatement::SQLDropTable(drop) => (SqlResponse::DroppedTable, drop),
-            SQLStatement::SQLDropView(drop) => (SqlResponse::DroppedView, drop),
+        let (object_type, if_exists, names, cascade) = match stmt {
+            SQLStatement::SQLDrop {
+                object_type,
+                if_exists,
+                names,
+                cascade,
+            } => (object_type, if_exists, names, cascade),
             _ => unreachable!(),
         };
-        let names: Vec<String> = Result::from_iter(drop.names.iter().map(extract_sql_object_name))?;
-        if !drop.if_exists {
+        // TODO(benesch): DROP <TYPE> should error if the named object is not
+        // of the correct type (#38).
+        let names: Vec<String> = Result::from_iter(names.iter().map(extract_sql_object_name))?;
+        if !if_exists {
             // Without IF EXISTS, we need to verify that every named
             // dataflow exists before proceeding with the drop
             // implementation.
@@ -113,11 +114,17 @@ impl Planner {
                 let _ = self.dataflows.get(name)?;
             }
         }
-        let mode = RemoveMode::from_cascade(drop.cascade);
+        let mode = RemoveMode::from_cascade(cascade);
         let mut removed = vec![];
         for name in &names {
             self.dataflows.remove(name, mode, &mut removed)?;
         }
+        let sql_response = match object_type {
+            SQLObjectType::DataSource => SqlResponse::DroppedDataSource,
+            SQLObjectType::Table => SqlResponse::DroppedTable,
+            SQLObjectType::View => SqlResponse::DroppedView,
+            _ => unreachable!(),
+        };
         Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
     }
 
@@ -256,7 +263,7 @@ impl Datum {
                         bail!("Tried to insert null into non-nullable column")
                     }
                 }
-                (Value::Long(l), ScalarType::Int64) => Datum::Int64(l),
+                (Value::Long(l), ScalarType::Int64) => Datum::Int64(l as i64), // TODO(benesch): safe conversion
                 (Value::Double(f), ScalarType::Float64) => Datum::Float64(f),
                 (Value::SingleQuotedString(s), ScalarType::String)
                 | (Value::NationalStringLiteral(s), ScalarType::String) => Datum::String(s),
@@ -454,11 +461,15 @@ impl Planner {
                 }
                 for constraint in constraints {
                     match constraint {
-                        SQLTableConstraint::Check { .. } => {
+                        TableConstraint::Check { .. } => {
                             bail!("CHECK constraints are not supported")
                         }
-                        SQLTableConstraint::PrimaryKey { .. }
-                        | SQLTableConstraint::Unique { .. } => (),
+                        TableConstraint::ForeignKey { .. } => {
+                            bail!("FOREIGN KEY constraints are not supported")
+                        }
+                        // TODO(benesch): we should probably actually enforce
+                        // this, if we're going to allow it.
+                        TableConstraint::Unique { .. } => (),
                     }
                 }
                 let types = columns
@@ -476,9 +487,10 @@ impl Planner {
                                 SQLType::Float(_) | SQLType::Real | SQLType::Double => {
                                     ScalarType::Float64
                                 }
-                                SQLType::Decimal(scale, precision) => {
-                                    ScalarType::Decimal(scale.unwrap_or(0), precision.unwrap_or(0))
-                                }
+                                SQLType::Decimal(scale, precision) => ScalarType::Decimal(
+                                    scale.unwrap_or(0) as usize,
+                                    precision.unwrap_or(0) as usize,
+                                ),
                                 SQLType::Date => ScalarType::Date,
                                 SQLType::Timestamp => ScalarType::Timestamp,
                                 SQLType::Time => ScalarType::Time,
@@ -1555,7 +1567,7 @@ impl Planner {
 
     fn plan_literal<'a>(&self, l: &'a Value) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (datum, scalar_type) = match l {
-            Value::Long(i) => (Datum::Int64(*i), ScalarType::Int64),
+            Value::Long(i) => (Datum::Int64(*i as i64), ScalarType::Int64), // TODO(benesch): safe conversion
             Value::Double(f) => (Datum::Float64(*f), ScalarType::Float64),
             Value::SingleQuotedString(s) => (Datum::String(s.clone()), ScalarType::String),
             Value::NationalStringLiteral(_) => {
