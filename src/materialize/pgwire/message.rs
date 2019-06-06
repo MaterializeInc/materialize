@@ -6,7 +6,7 @@
 use bytes::Bytes;
 
 use super::types::PgType;
-use crate::repr::{Datum, FType, Type};
+use crate::repr::{Datum, RelationType};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -81,23 +81,20 @@ pub enum FieldFormat {
     Binary = 1,
 }
 
-pub fn row_description_from_type(typ: &Type) -> Vec<FieldDescription> {
-    match &typ.ftype {
-        FType::Tuple(types) => types
-            .iter()
-            .map(|typ| {
-                let pg_type: PgType = (&typ.ftype).into();
-                FieldDescription {
-                    name: typ.name.as_ref().unwrap_or(&"?column?".into()).to_owned(),
-                    table_id: 0,
-                    column_id: 0,
-                    type_oid: pg_type.oid,
-                    type_len: pg_type.typlen,
-                    type_mod: -1,
-                    format: FieldFormat::Text,
-                }
-            })
-            .collect(),
-        _ => unimplemented!(),
-    }
+pub fn row_description_from_type(typ: &RelationType) -> Vec<FieldDescription> {
+    typ.column_types
+        .iter()
+        .map(|typ| {
+            let pg_type: PgType = (&typ.scalar_type).into();
+            FieldDescription {
+                name: typ.name.as_ref().unwrap_or(&"?column?".into()).to_owned(),
+                table_id: 0,
+                column_id: 0,
+                type_oid: pg_type.oid,
+                type_len: pg_type.typlen,
+                type_mod: -1,
+                format: FieldFormat::Text,
+            }
+        })
+        .collect()
 }

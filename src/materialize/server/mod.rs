@@ -14,7 +14,6 @@ use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
-use crate::clock::Clock;
 use crate::dataflow;
 use crate::glue::*;
 use crate::pgwire;
@@ -92,7 +91,7 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
-    let clock = Clock::default();
+    // let clock = Clock::default();
 
     let (sql_command_sender, sql_command_receiver) = unbounded::<(SqlCommand, CommandMeta)>();
     let sql_response_mux = SqlResponseMux::default();
@@ -106,12 +105,18 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         PeekResultsConfig::Local => dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
         PeekResultsConfig::Remote => dataflow::PeekResultsHandler::Remote,
     };
-    let _dd_workers = dataflow::serve(
+    let dd_workers = dataflow::serve(
         dataflow_command_receivers,
         peek_results_handler,
-        clock.clone(),
+        // clock.clone(),
         config.num_timely_workers,
-    );
+    )?;
+
+    let threads = dd_workers
+        .guards()
+        .iter()
+        .map(|jh| jh.thread().clone())
+        .collect::<Vec<_>>();
 
     // queue and sql planner
     match &config.queue {
@@ -120,7 +125,8 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
                 sql_command_receiver,
                 sql_response_mux.clone(),
                 dataflow_command_senders,
-                clock.clone(),
+                threads,
+                // clock.clone(),
             );
         }
     }

@@ -26,15 +26,8 @@ set -x
 
 mkdir -p target
 
-# TODO(jamii) We can't run test/select4.test without predicate pushdown - it's too slow
 cargo run --release --bin=sqllogictest -- \
-    sqllogictest/test/select1.test \
-    sqllogictest/test/select2.test \
-    sqllogictest/test/select3.test \
-    sqllogictest/test/select5.test \
-    sqllogictest/test/evidence \
-    sqllogictest/test/index \
-    sqllogictest/test/random \
+    sqllogictest/test/ \
     test/*.slt \
     "$verbosity" "$@" | tee target/slt.out || true
 

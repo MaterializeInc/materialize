@@ -4,33 +4,36 @@
 // distributed without the express permission of Materialize, Inc.
 
 use differential_dataflow::input::Input;
-use differential_dataflow::operators::arrange::{ArrangeBySelf, ShutdownButton};
-use differential_dataflow::operators::join::Join;
-use differential_dataflow::operators::reduce::Reduce;
-use differential_dataflow::operators::threshold::ThresholdTotal;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::{AsCollection, Collection};
 use std::cell::Cell;
-use std::collections::HashSet;
-use std::iter;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
-use timely::dataflow::operators::CapabilitySet;
+use timely::dataflow::operators::input::Input as TimelyInput;
+use timely::dataflow::InputHandle;
 use timely::dataflow::Scope;
+use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
 
 use super::sink;
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
-use crate::clock::{Clock, Timestamp};
-use crate::repr::Datum;
+use crate::clock::Timestamp;
+use crate::dataflow::context::{ArrangementFlavor, Context};
+use crate::dataflow::types::RelationExpr;
+use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 pub fn add_builtin_dataflows<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
 ) {
     let dual_table_data = if worker.index() == 0 {
-        vec![Datum::String("X".into())]
+        vec![vec![Datum::String("X".into())]]
     } else {
         vec![]
     };
@@ -38,7 +41,20 @@ pub fn add_builtin_dataflows<A: Allocate>(
         let (_, collection) = scope.new_collection_from(dual_table_data);
         let arrangement = collection.arrange_by_self();
         let on_delete = Box::new(|| ());
-        manager.set_trace(&Plan::Source("dual".into()), arrangement.trace, on_delete);
+        manager.set_trace(
+            &RelationExpr::Get {
+                name: "dual".into(),
+                typ: RelationType {
+                    column_types: vec![ColumnType {
+                        name: Some("x".into()),
+                        nullable: false,
+                        scalar_type: ScalarType::String,
+                    }],
+                },
+            },
+            arrangement.trace,
+            on_delete,
+        );
     })
 }
 
@@ -46,25 +62,37 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    clock: &Clock,
-    insert_mux: &source::InsertMux,
+    // clock: &Clock,
+    // insert_mux: &source::InsertMux,
+    inputs: &mut HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
 ) {
+    let worker_timer = worker.timer();
     let worker_index = worker.index();
+
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
             let done = Rc::new(Cell::new(false));
-            let plan = match &src.connector {
+            let relation_expr = match &src.connector {
                 SourceConnector::Kafka(c) => {
-                    source::kafka(scope, &src.name, &c, done.clone(), clock)
+                    source::kafka(scope, &src.name, &c, done.clone(), worker_timer)
                 }
-                SourceConnector::Local(l) => {
-                    source::local(scope, &src.name, &l, done.clone(), clock, insert_mux)
+                SourceConnector::Local(_) => {
+                    let (handle, stream) = scope.new_input();
+                    if worker_index == 0 {
+                        // Only insert if we're worker 0, to avoid duplicating
+                        // the insert.
+                        inputs.insert(src.name.clone(), handle);
+                    }
+                    stream
                 }
             };
-            let arrangement = plan.as_collection().arrange_by_self();
+            let arrangement = relation_expr.as_collection().arrange_by_self();
             let on_delete = Box::new(move || done.set(true));
             manager.set_trace(
-                &Plan::Source(src.name.clone()),
+                &RelationExpr::Get {
+                    name: src.name.clone(),
+                    typ: src.typ.clone(),
+                },
                 arrangement.trace,
                 on_delete,
             );
@@ -72,408 +100,453 @@ pub fn build_dataflow<A: Allocate>(
         Dataflow::Sink(sink) => {
             let done = Rc::new(Cell::new(false));
             let (arrangement, _) = manager
-                .get_trace(&Plan::Source(sink.from.to_owned()))
-                .unwrap_or_else(|| panic!(format!("unable to find dataflow {}", sink.from)))
-                .import_core(scope, &format!("Import({})", sink.from));
+                .get_trace(&RelationExpr::Get {
+                    name: sink.from.0.clone(),
+                    typ: sink.from.1.clone(),
+                })
+                .unwrap_or_else(|| panic!(format!("unable to find dataflow {:?}", sink.from)))
+                .import_core(scope, &format!("Import({:?})", sink.from));
             match &sink.connector {
                 SinkConnector::Kafka(c) => {
-                    sink::kafka(&arrangement.stream, &sink.name, c, done, clock)
+                    sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
                 }
             }
         }
         Dataflow::View(view) => {
             let mut buttons = Vec::new();
-            let arrangement = build_plan(&view.plan, manager, worker_index, scope, &mut buttons)
-                .arrange_by_self();
-            let on_delete = Box::new(move || {
-                for button in &mut buttons {
-                    button.press();
+            let mut context = Context::new();
+            view.relation_expr.visit(|e| {
+                if let RelationExpr::Get { name, typ: _ } = e {
+                    if let Some(mut trace) = manager.get_trace(e) {
+                        // TODO(frankmcsherry) do the thing
+                        let (arranged, button) = trace.import_core(scope, name);
+                        context
+                            .collections
+                            .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
+                        buttons.push(button);
+                    }
                 }
             });
+
+            // Push predicates down a few times.
+            let mut view = view.clone();
+
+            use crate::dataflow::transform;
+            let transforms: Vec<Box<dyn transform::Transform>> = vec![
+                Box::new(transform::fusion::join::Join),
+                Box::new(transform::PredicatePushdown),
+                Box::new(transform::fusion::filter::Filter),
+                Box::new(transform::join_order::JoinOrder),
+                Box::new(transform::reduction::FoldConstants),
+            ];
+            for transform in transforms.iter() {
+                transform.transform(&mut view.relation_expr, &view.typ);
+            }
+
+            let arrangement = build_relation_expr(
+                view.relation_expr.clone(),
+                scope,
+                &mut context,
+                worker_index,
+            )
+            .arrange_by_self();
             manager.set_trace(
-                &Plan::Source(view.name.clone()),
+                &RelationExpr::Get {
+                    name: view.name.clone(),
+                    typ: view.typ.clone(),
+                },
                 arrangement.trace,
-                on_delete,
+                Box::new(move || {
+                    for mut button in buttons.drain(..) {
+                        button.press();
+                    }
+                }),
             );
         }
     })
 }
 
-fn build_plan<S: Scope<Timestamp = Timestamp>>(
-    plan: &Plan,
-    manager: &mut TraceManager,
+pub fn build_relation_expr<G>(
+    relation_expr: RelationExpr,
+    scope: &mut G,
+    context: &mut Context<G, RelationExpr, Datum, crate::clock::Timestamp>,
     worker_index: usize,
-    scope: &mut S,
-    buttons: &mut Vec<ShutdownButton<CapabilitySet<Timestamp>>>,
-) -> Collection<S, Datum, Diff> {
-    match plan {
-        Plan::Source(name) => {
-            let (arrangement, button) = manager
-                .get_trace(&Plan::Source(name.to_owned()))
-                .unwrap_or_else(|| panic!(format!("unable to find dataflow {}", name)))
-                .import_core(scope, &format!("Import({})", name));
-            buttons.push(button);
-            arrangement.as_collection(|k, ()| k.to_owned())
-        }
-
-        Plan::Project { outputs, input } => {
-            let outputs = outputs.clone();
-            build_plan(&input, manager, worker_index, scope, buttons).map(move |datum| {
-                Datum::Tuple(outputs.iter().map(|expr| eval_expr(expr, &datum)).collect())
-            })
-        }
-
-        Plan::Filter { predicate, input } => {
-            let predicate = predicate.clone();
-            build_plan(&input, manager, worker_index, scope, buttons).filter(move |datum| {
-                match eval_expr(&predicate, &datum) {
-                    Datum::False | Datum::Null => false,
-                    Datum::True => true,
-                    _ => unreachable!(),
-                }
-            })
-        }
-
-        // TODO(benesch): this is extremely inefficient. Optimize.
-        Plan::Aggregate { key, aggs, input } => {
-            let mut plan = {
-                let key = key.clone();
-                build_plan(&input, manager, worker_index, scope, buttons)
-                    .map(move |datum| (eval_expr(&key, &datum), Some(datum)))
-            };
-            match &key {
-                // empty GROUP BY, add a sentinel value so that reduce produces output even on empty inputs
-                Expr::Tuple(exprs) if exprs.is_empty() => {
-                    let sentinel = if worker_index == 0 {
-                        vec![(Datum::Tuple(vec![]), None)]
-                    } else {
-                        vec![]
-                    };
-                    plan = plan.concat(&scope.new_collection_from(sentinel).1);
-                }
-                _ => (),
+) -> Collection<G, Vec<Datum>, isize>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<crate::clock::Timestamp>,
+    // S: BuildHasher + Clone,
+{
+    if context.collection(&relation_expr).is_none() {
+        let collection = match relation_expr.clone() {
+            RelationExpr::Constant { rows, .. } => {
+                use differential_dataflow::collection::AsCollection;
+                use timely::dataflow::operators::{Map, ToStream};
+                let rows = if worker_index == 0 { rows } else { vec![] };
+                rows.to_stream(scope)
+                    .map(|x| (x, Default::default(), 1))
+                    .as_collection()
             }
-            let aggs = aggs.clone();
-            let plan = plan
-                .reduce(move |_key, input, output| {
-                    let res: Vec<_> = aggs
-                        .iter()
-                        .map(|agg| {
-                            if agg.distinct {
-                                let datums = input
-                                    .iter()
-                                    .filter_map(|(datum, _cnt)| {
-                                        datum.as_ref().map(|datum| eval_expr(&agg.expr, datum))
-                                    })
-                                    .collect::<HashSet<_>>();
-                                (agg.func.func())(datums)
-                            } else {
-                                let datums = input
-                                    .iter()
-                                    .filter_map(|(datum, cnt)| {
-                                        datum.as_ref().map(|datum| {
-                                            let datum = eval_expr(&agg.expr, datum);
-                                            iter::repeat(datum).take(*cnt as usize)
-                                        })
-                                    })
-                                    .flatten();
-                                (agg.func.func())(datums)
-                            }
-                        })
-                        .collect();
-                    output.push((res, 1));
-                })
-                .map(|(key, values)| {
-                    let mut tuple = key.unwrap_tuple();
-                    tuple.extend(values);
-                    Datum::Tuple(tuple)
-                });
-            plan
-        }
-
-        Plan::Join {
-            left_key,
-            right_key,
-            left,
-            right,
-            include_left_outer,
-            include_right_outer,
-        } => {
-            use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-            use differential_dataflow::operators::join::JoinCore;
-            use differential_dataflow::operators::reduce::Threshold;
-
-            let left_plan = left;
-            let right_plan = right;
-
-            // Ensure left arrangement.
-            let left_arranged = if let Some(mut trace) = manager.get_keyed_trace(&left, &left_key) {
-                trace.import(scope)
-            } else {
-                let left_key2 = left_key.clone();
-                let left_trace = build_plan(&left_plan, manager, worker_index, scope, buttons)
-                    .map(move |datum| (eval_expr(&left_key2, &datum), datum))
-                    .arrange_by_key();
-
-                // manager.set_keyed_trace(
-                //     &left_plan,
-                //     &left_key,
-                //     left_trace.trace.clone(),
-                //     Box::new(|| ()),
-                // );
-                left_trace
-            };
-
-            // Ensure right arrangement.
-            let right_arranged = if let Some(mut trace) =
-                manager.get_keyed_trace(&right, &right_key)
-            {
-                trace.import(scope)
-            } else {
-                let right_key2 = right_key.clone();
-                let right_trace = build_plan(&right_plan, manager, worker_index, scope, buttons)
-                    .map(move |datum| (eval_expr(&right_key2, &datum), datum))
-                    .arrange_by_key();
-
-                // manager.set_keyed_trace(
-                //     &right_plan,
-                //     &right_key,
-                //     right_trace.trace.clone(),
-                //     Box::new(|| ()),
-                // );
-                right_trace
-            };
-
-            let mut flow = left_arranged.join_core(&right_arranged, |_key, left, right| {
-                let mut tuple = left.clone().unwrap_tuple();
-                tuple.extend(right.clone().unwrap_tuple());
-                Some(Datum::Tuple(tuple))
-            });
-
-            if let Some(num_cols) = include_left_outer {
-                let num_cols = *num_cols;
-
-                let right_keys = right_arranged.as_collection(|k, _v| k.clone()).distinct();
-
-                flow = left_arranged
-                    .antijoin(&right_keys)
-                    .map(move |(_key, left)| {
-                        let mut tuple = left.unwrap_tuple();
-                        tuple.extend((0..num_cols).map(|_| Datum::Null));
-                        Datum::Tuple(tuple)
-                    })
-                    .concat(&flow);
+            RelationExpr::Get { name, typ: _ } => {
+                // TODO: something more tasteful.
+                // perhaps load an empty collection, warn?
+                panic!("Collection {} not pre-loaded", name);
             }
-
-            if let Some(num_cols) = include_right_outer {
-                let num_cols = *num_cols;
-
-                let left_keys = left_arranged.as_collection(|k, _v| k.clone()).distinct();
-
-                flow = right_arranged
-                    .antijoin(&left_keys)
-                    .map(move |(_key, right)| {
-                        let mut tuple = (0..num_cols).map(|_| Datum::Null).collect::<Vec<_>>();
-                        tuple.extend(right.unwrap_tuple());
-                        Datum::Tuple(tuple)
-                    })
-                    .concat(&flow);
-            }
-
-            flow
-        }
-
-        Plan::MultiwayJoin {
-            plans,
-            arities,
-            equalities,
-        } => {
-            // We are required to produce as output records formatted as if we
-            // cross-joined the plans in order, and then applied the equalties
-            // as a filter.
-            //
-            // Instead, we are likely to re-order plans and the order we perform
-            // joins, but we must still permute the final tuple order to reflect
-            // the order as promised above, as downstream logic relies on it.
-
-            // Step 1: determine a plan order.
-            let mut plan_order = vec![0];
-            while plan_order.len() < plans.len() {
-                let mut candidates = (0..plans.len())
-                    .filter(|i| !plan_order.contains(i))
-                    .map(|i| {
-                        (
-                            equalities
-                                .iter()
-                                .filter(|((r1, _), (r2, _))| {
-                                    (plan_order.contains(r1) && r2 == &i)
-                                        || (plan_order.contains(r2) && r1 == &i)
-                                })
-                                .count(),
-                            i,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-
-                candidates.sort();
-                plan_order.push(candidates.pop().expect("Candidate expected").1);
-            }
-
-            // Step 2: populate information about offsets and keys.
-            let mut positions = vec![0; plan_order.len()];
-            for (index, input) in plan_order.iter().enumerate() {
-                positions[*input] = index;
-            }
-
-            let mut offset = 0;
-            let mut offsets = vec![0; plan_order.len()];
-            for input in plan_order.iter() {
-                offsets[*input] = offset;
-                offset += arities[*input];
-            }
-
-            // println!("plan_order: {:?}", plan_order);
-            // println!("offsets: {:?}", offsets);
-
-            let mut join_keys = vec![Vec::new(); plan_order.len()];
-            for (rc1, rc2) in equalities.iter() {
-                if positions[rc1.0] < positions[rc2.0] {
-                    join_keys[rc2.0].push((rc1, rc2));
+            RelationExpr::Let { name, value, body } => {
+                let typ = value.typ();
+                let bind = RelationExpr::Get { name, typ };
+                if context.collection(&bind).is_some() {
+                    panic!("Inappropriate to re-bind name: {:?}", bind);
                 } else {
-                    join_keys[rc1.0].push((rc2, rc1));
+                    let value = build_relation_expr(*value, scope, context, worker_index);
+                    context.collections.insert(bind.clone(), value);
+                    build_relation_expr(*body, scope, context, worker_index)
                 }
             }
-
-            // Step 3: build the sequence of joins.
-            let mut plan = build_plan(&plans[plan_order[0]], manager, worker_index, scope, buttons);
-            let mut schema = Vec::new();
-            for pos in 0..arities[plan_order[0]] {
-                schema.push((plan_order[0], pos));
+            RelationExpr::Project { input, outputs } => {
+                let input = build_relation_expr(*input, scope, context, worker_index);
+                input.map(move |tuple| outputs.iter().map(|i| tuple[*i].clone()).collect())
             }
+            RelationExpr::Map { input, scalars } => {
+                let input = build_relation_expr(*input, scope, context, worker_index);
+                input.map(move |mut tuple| {
+                    let len = tuple.len();
+                    for s in scalars.iter() {
+                        let to_push = s.0.eval(&tuple[..len]);
+                        tuple.push(to_push);
+                    }
+                    tuple
+                })
+            }
+            RelationExpr::Filter { input, predicates } => {
+                let input = build_relation_expr(*input, scope, context, worker_index);
+                input.filter(move |x| {
+                    predicates.iter().all(|predicate| match predicate.eval(x) {
+                        Datum::True => true,
+                        Datum::False | Datum::Null => false,
+                        _ => unreachable!(),
+                    })
+                })
+            }
+            RelationExpr::Join { inputs, variables } => {
+                // For the moment, assert that each relation participates at most
+                // once in each equivalence class. If not, we should be able to
+                // push a filter upwards, and if we can't do that it means a bit
+                // more filter logic in this operator which doesn't exist yet.
+                assert!(variables.iter().all(|h| {
+                    let len = h.len();
+                    let mut list = h.iter().map(|(i, _)| i).collect::<Vec<_>>();
+                    list.sort();
+                    list.dedup();
+                    len == list.len()
+                }));
 
-            use crate::repr::Datum;
+                let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
-            for &index in plan_order[1..].iter() {
-                for pos in 0..arities[index] {
-                    schema.push((index, pos));
+                // The relation_expr is to implement join as a `fold` over `inputs`.
+                let mut input_iter = inputs.into_iter().enumerate();
+                if let Some((index, input)) = input_iter.next() {
+                    let mut joined = build_relation_expr(input, scope, context, worker_index);
+
+                    // Maintain sources of each in-progress column.
+                    let mut columns = (0..arities[index]).map(|c| (index, c)).collect::<Vec<_>>();
+
+                    // The intent is to maintain `joined` as the full cross
+                    // product of all input relations so far, subject to all
+                    // of the equality constraints in `variables`. This means
+                    for (index, input) in input_iter {
+                        // Determine keys. there is at most one key for each
+                        // equivalence class, and an equivalence class is only
+                        // engaged if it contains both a new and an old column.
+                        // If the class contains *more than one* new column we
+                        // may need to put a `filter` in, or perhaps await a
+                        // later join (and ensure that one exists).
+
+                        let mut old_keys = Vec::new();
+                        let mut new_keys = Vec::new();
+
+                        for sets in variables.iter() {
+                            let new_pos = sets
+                                .iter()
+                                .filter(|(i, _)| i == &index)
+                                .map(|(_, c)| *c)
+                                .next();
+                            let old_pos = columns.iter().position(|i| sets.contains(i));
+
+                            // If we have both a new and an old column in the constraint ...
+                            if let (Some(new_pos), Some(old_pos)) = (new_pos, old_pos) {
+                                old_keys.push(old_pos);
+                                new_keys.push(new_pos);
+                            }
+                        }
+
+                        let old_keyed = joined
+                            .map(move |tuple| {
+                                (
+                                    old_keys
+                                        .iter()
+                                        .map(|i| tuple[*i].clone())
+                                        .collect::<Vec<_>>(),
+                                    tuple,
+                                )
+                            })
+                            .arrange_by_key();
+
+                        // TODO: easier idioms for detecting, re-using, and stashing.
+                        if context.arrangement(&input, &new_keys[..]).is_none() {
+                            let built =
+                                build_relation_expr(input.clone(), scope, context, worker_index);
+                            let new_keys2 = new_keys.clone();
+                            let new_keyed = built
+                                .map(move |tuple| {
+                                    (
+                                        new_keys2
+                                            .iter()
+                                            .map(|i| tuple[*i].clone())
+                                            .collect::<Vec<_>>(),
+                                        tuple,
+                                    )
+                                })
+                                .arrange_by_key();
+                            context.set_local(input.clone(), &new_keys[..], new_keyed);
+                        }
+
+                        joined = match context.arrangement(&input, &new_keys[..]) {
+                            Some(ArrangementFlavor::Local(local)) => {
+                                old_keyed.join_core(&local, |_keys, old, new| {
+                                    Some(old.iter().chain(new).cloned().collect::<Vec<_>>())
+                                })
+                            }
+                            Some(ArrangementFlavor::Trace(trace)) => {
+                                old_keyed.join_core(&trace, |_keys, old, new| {
+                                    Some(old.iter().chain(new).cloned().collect::<Vec<_>>())
+                                })
+                            }
+                            None => {
+                                panic!("Arrangement alarmingly absent!");
+                            }
+                        };
+
+                        columns.extend((0..arities[index]).map(|c| (index, c)));
+                    }
+
+                    joined
+                } else {
+                    panic!("Empty join; why?");
                 }
+            }
+            RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => {
+                use differential_dataflow::operators::reduce::ReduceCore;
+                use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
-                let l_keys = join_keys[index]
-                    .iter()
-                    .map(|((rel, col), _)| offsets[*rel] + *col)
-                    .collect::<Vec<_>>();
-                let r_keys = join_keys[index]
-                    .iter()
-                    .map(|(_, (_, col))| *col)
-                    .collect::<Vec<_>>();
+                let self_clone = relation_expr.clone();
+                let keys_clone = group_key.clone();
+                let input = build_relation_expr(*input, scope, context, worker_index);
 
-                assert_eq!(l_keys.len(), r_keys.len());
-
-                // println!("l_keys: {:?}", l_keys);
-                // println!("r_keys: {:?}", r_keys);
-
-                let right_plan = build_plan(&plans[index], manager, worker_index, scope, buttons)
+                let arrangement = input
                     .map(move |tuple| {
-                        // TODO: Hoist `.asref_tuple()`?
                         (
-                            r_keys
+                            group_key
                                 .iter()
-                                .map(|i| tuple.asref_tuple()[*i].clone())
-                                .collect::<Vec<_>>(),
-                            tuple,
-                        )
-                    });
-
-                //
-                plan = plan
-                    .map(move |tuple| {
-                        // TODO: Hoist `.asref_tuple()`?
-                        (
-                            l_keys
-                                .iter()
-                                .map(|i| tuple.asref_tuple()[*i].clone())
+                                .map(|i| tuple[*i].clone())
                                 .collect::<Vec<_>>(),
                             tuple,
                         )
                     })
-                    .join_map(&right_plan, |_k, l, r| {
-                        let l = l.asref_tuple();
-                        let r = r.asref_tuple();
-                        Datum::Tuple(
-                            l.iter()
-                                .cloned()
-                                .chain(r.iter().cloned())
-                                .collect::<Vec<_>>(),
-                        )
+                    // .reduce_abelian::<>(move |_key, source, target| {
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |key, source, target| {
+                        let mut result = Vec::with_capacity(key.len() + aggregates.len());
+                        result.extend(key.iter().cloned());
+                        for (_idx, (agg, _typ)) in aggregates.iter().enumerate() {
+                            if agg.distinct {
+                                let iter =
+                                    source
+                                        .iter()
+                                        .flat_map(|(v, w)| {
+                                            if *w > 0 {
+                                                Some(agg.expr.eval(v))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect::<HashSet<_>>();
+                                result.push((agg.func.func())(iter));
+                            } else {
+                                let iter = source.iter().flat_map(|(v, w)| {
+                                    let eval = agg.expr.eval(v);
+                                    std::iter::repeat(eval).take(std::cmp::max(*w, 0) as usize)
+                                });
+                                result.push((agg.func.func())(iter));
+                            }
+                        }
+                        target.push((result, 1));
                     });
+
+                context.set_local(self_clone, &keys_clone[..], arrangement.clone());
+                arrangement.as_collection(|_key, tuple| tuple.clone())
             }
 
-            // Step 4: de-permute everything
-            let mut look_up = Vec::new();
-            for index in 0..plans.len() {
-                for col in 0..arities[index] {
-                    let position = schema
-                        .iter()
-                        .position(|x| x == &(index, col))
-                        .expect("Reverse look-up failed");
-                    look_up.push(position);
+            RelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+            } => {
+                use differential_dataflow::operators::reduce::ReduceCore;
+                use differential_dataflow::trace::implementations::ord::OrdValSpine;
+
+                let self_clone = relation_expr.clone();
+                let group_clone = group_key.clone();
+                let order_clone = order_key.clone();
+                let input = build_relation_expr(*input, scope, context, worker_index);
+
+                let arrangement = input
+                    .map(move |tuple| {
+                        (
+                            group_clone
+                                .iter()
+                                .map(|i| tuple[*i].clone())
+                                .collect::<Vec<_>>(),
+                            (
+                                order_clone
+                                    .iter()
+                                    .map(|i| tuple[*i].clone())
+                                    .collect::<Vec<_>>(),
+                                tuple,
+                            ),
+                        )
+                    })
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_key, source, target| {
+                        let mut output = 0;
+                        let mut cursor = 0;
+                        while output < limit {
+                            if cursor < source.len() {
+                                let current = &(source[cursor].0).0;
+                                while cursor < source.len() && &(source[cursor].0).0 == current {
+                                    if source[0].1 > 0 {
+                                        target.push(((source[0].0).1.clone(), source[0].1));
+                                        output += source[0].1 as usize;
+                                    }
+                                }
+                                cursor += 1;
+                            }
+                        }
+                    });
+
+                context.set_local(self_clone, &group_key[..], arrangement.clone());
+                arrangement.as_collection(|_key, tuple| tuple.clone())
+            }
+
+            RelationExpr::OrDefault { input, default } => {
+                use differential_dataflow::collection::AsCollection;
+                use differential_dataflow::operators::reduce::Threshold;
+                use differential_dataflow::operators::Join;
+                use timely::dataflow::operators::to_stream::ToStream;
+
+                let input = build_relation_expr(*input, scope, context, worker_index);
+                let present = input.map(|_| ()).distinct();
+                let value = if worker_index == 0 {
+                    vec![(((), default), Default::default(), 1isize)]
+                } else {
+                    vec![]
+                };
+                let default = value
+                    .to_stream(scope)
+                    .as_collection()
+                    .antijoin(&present)
+                    .map(|((), default)| default);
+
+                input.concat(&default)
+            }
+            RelationExpr::Negate { input } => {
+                let input = build_relation_expr(*input, scope, context, worker_index);
+                input.negate()
+            }
+            RelationExpr::Distinct { input } => {
+                // TODO: re-use and publish arrangement here.
+                let arity = input.arity();
+                let keys = (0..arity).collect::<Vec<_>>();
+
+                // TODO: easier idioms for detecting, re-using, and stashing.
+                if context.arrangement(&input, &keys[..]).is_none() {
+                    let built = build_relation_expr((*input).clone(), scope, context, worker_index);
+                    let keys2 = keys.clone();
+                    let keyed = built
+                        .map(move |tuple| {
+                            (
+                                keys2.iter().map(|i| tuple[*i].clone()).collect::<Vec<_>>(),
+                                tuple,
+                            )
+                        })
+                        .arrange_by_key();
+                    context.set_local((*input).clone(), &keys[..], keyed);
                 }
+
+                use differential_dataflow::operators::reduce::ReduceCore;
+                use differential_dataflow::trace::implementations::ord::OrdValSpine;
+
+                let arranged = match context.arrangement(&input, &keys[..]) {
+                    Some(ArrangementFlavor::Local(local)) => local
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |k, _s, t| {
+                            t.push((k.to_vec(), 1))
+                        }),
+                    Some(ArrangementFlavor::Trace(trace)) => trace
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |k, _s, t| {
+                            t.push((k.to_vec(), 1))
+                        }),
+                    None => {
+                        panic!("Arrangement alarmingly absent!");
+                    }
+                };
+
+                context.set_local(*input, &keys[..], arranged.clone());
+                arranged.as_collection(|_k, v| v.clone())
             }
+            RelationExpr::Union { left, right } => {
+                let input1 = build_relation_expr(*left, scope, context, worker_index);
+                let input2 = build_relation_expr(*right, scope, context, worker_index);
+                input1.concat(&input2)
+            }
+        };
 
-            plan.map(move |tuple| {
-                let as_ref = tuple.asref_tuple();
-                Datum::Tuple(
-                    look_up
-                        .iter()
-                        .map(|i| as_ref[*i].clone())
-                        .collect::<Vec<_>>(),
-                )
-            })
-        }
-
-        Plan::Distinct(plan) => {
-            build_plan(plan, manager, worker_index, scope, buttons).distinct_total()
-        }
-        Plan::UnionAll(plans) => {
-            assert!(!plans.is_empty());
-            let mut plans = plans
-                .iter()
-                .map(|plan| build_plan(plan, manager, worker_index, scope, buttons));
-            let plan = plans.next().unwrap();
-            plans.fold(plan, |p1, p2| p1.concat(&p2))
-        }
+        context
+            .collections
+            .insert(relation_expr.clone(), collection);
     }
+
+    context
+        .collection(&relation_expr)
+        .expect("Collection surprisingly absent")
+        .clone()
 }
 
-fn eval_expr(expr: &Expr, datum: &Datum) -> Datum {
-    match expr {
-        Expr::Ambient => datum.clone(),
-        Expr::Column(index, expr) => match eval_expr(expr, datum) {
-            Datum::Tuple(tuple) => tuple[*index].clone(),
-            _ => unreachable!(),
-        },
-        Expr::Tuple(exprs) => {
-            let exprs = exprs.iter().map(|e| eval_expr(e, datum)).collect();
-            Datum::Tuple(exprs)
+impl ScalarExpr {
+    pub fn eval(&self, data: &[Datum]) -> Datum {
+        match self {
+            ScalarExpr::Column(index) => data[*index].clone(),
+            ScalarExpr::Literal(datum) => datum.clone(),
+            ScalarExpr::CallUnary { func, expr } => {
+                let eval = expr.eval(data);
+                (func.func())(eval)
+            }
+            ScalarExpr::CallBinary { func, expr1, expr2 } => {
+                let eval1 = expr1.eval(data);
+                let eval2 = expr2.eval(data);
+                (func.func())(eval1, eval2)
+            }
+            ScalarExpr::CallVariadic { func, exprs } => {
+                let evals = exprs.iter().map(|e| e.eval(data)).collect();
+                (func.func())(evals)
+            }
+            ScalarExpr::If { cond, then, els } => match cond.eval(data) {
+                Datum::True => then.eval(data),
+                Datum::False | Datum::Null => els.eval(data),
+                d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
+            },
         }
-        Expr::Literal(datum) => datum.clone(),
-        Expr::CallUnary { func, expr } => {
-            let datum = eval_expr(expr, datum);
-            (func.func())(datum)
-        }
-        Expr::CallBinary { func, expr1, expr2 } => {
-            let datum1 = eval_expr(expr1, datum);
-            let datum2 = eval_expr(expr2, datum);
-            (func.func())(datum1, datum2)
-        }
-        Expr::CallVariadic { func, exprs } => {
-            let datums = exprs.iter().map(|e| eval_expr(e, datum)).collect();
-            (func.func())(datums)
-        }
-        Expr::If { cond, then, els } => match eval_expr(cond, datum) {
-            Datum::True => eval_expr(then, datum),
-            Datum::False | Datum::Null => eval_expr(els, datum),
-            d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
-        },
     }
 }

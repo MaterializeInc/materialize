@@ -18,10 +18,9 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
-use materialize::clock::Clock;
 use materialize::dataflow;
 use materialize::glue::*;
-use materialize::repr::{Datum, FType};
+use materialize::repr::{ColumnType, Datum};
 use materialize::sql::Planner;
 use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlparser::Parser;
@@ -232,11 +231,11 @@ pub enum Outcome<'a> {
     },
     InferenceFailure {
         expected_types: &'a [Type],
-        inferred_types: Vec<FType>,
+        inferred_types: Vec<ColumnType>,
     },
     OutputFailure {
         expected_output: &'a Output<'a>,
-        actual_output: Vec<Datum>,
+        actual_output: Vec<Vec<Datum>>,
     },
     Bail {
         cause: Box<Outcome<'a>>,
@@ -323,50 +322,49 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
-    clock: Clock,
+    // clock: Clock,
+    timer: std::time::Instant,
     planner: Planner,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
+    threads: Vec<std::thread::Thread>,
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<Drop>,
     peek_results_mux: PeekResultsMux,
 }
 
-fn format_datum(datum: &Datum, types: &[Type]) -> Vec<String> {
-    match datum {
-        Datum::Tuple(datums) => types
-            .iter()
-            .zip(datums.iter())
-            .map(|(typ, datum)| match (typ, datum) {
-                (_, Datum::Null) => "NULL".to_owned(),
+fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
+    types
+        .iter()
+        .zip(row.iter())
+        .map(|(typ, datum)| match (typ, datum) {
+            (_, Datum::Null) => "NULL".to_owned(),
 
-                (Type::Integer, Datum::Int64(i)) => format!("{}", i),
-                (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
-                // sqllogictest does some weird type coercions in practice
-                (Type::Integer, Datum::String(_)) => "0".to_owned(),
-                (Type::Integer, Datum::False) => "0".to_owned(),
-                (Type::Integer, Datum::True) => "1".to_owned(),
+            (Type::Integer, Datum::Int64(i)) => format!("{}", i),
+            (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
+            // sqllogictest does some weird type coercions in practice
+            (Type::Integer, Datum::String(_)) => "0".to_owned(),
+            (Type::Integer, Datum::False) => "0".to_owned(),
+            (Type::Integer, Datum::True) => "1".to_owned(),
 
-                (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
+            (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
 
-                (Type::Text, Datum::String(string)) => {
-                    if string.is_empty() {
-                        "(empty)".to_owned()
-                    } else {
-                        string.to_owned()
-                    }
+            (Type::Text, Datum::String(string)) => {
+                if string.is_empty() {
+                    "(empty)".to_owned()
+                } else {
+                    string.to_owned()
                 }
-                (Type::Text, Datum::Int64(i)) => format!("{}", i),
-                (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
-                other => panic!("Don't know how to format {:?}", other),
-            })
-            .collect(),
-        _ => panic!("Non-datum tuple in select output: {:?}", datum),
-    }
+            }
+            (Type::Text, Datum::Int64(i)) => format!("{}", i),
+            (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
+            other => panic!("Don't know how to format {:?}", other),
+        })
+        .collect()
 }
 
 impl FullState {
     fn start() -> Self {
-        let clock = Clock::new();
+        // let clock = Clock::new();
         let planner = Planner::default();
         let (dataflow_command_senders, dataflow_command_receivers) =
             (0..NUM_TIMELY_WORKERS).map(|_| unbounded()).unzip();
@@ -374,16 +372,25 @@ impl FullState {
         let dataflow_workers = dataflow::serve(
             dataflow_command_receivers,
             dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
-            clock.clone(),
+            // clock.clone(),
             NUM_TIMELY_WORKERS,
         )
         .unwrap();
+
+        let threads = dataflow_workers
+            .guards()
+            .iter()
+            .map(|jh| jh.thread().clone())
+            .collect::<Vec<_>>();
+
         FullState {
-            clock,
+            // clock,
+            timer: std::time::Instant::now(),
             planner,
             dataflow_command_senders,
             _dataflow_workers: Box::new(dataflow_workers),
             peek_results_mux,
+            threads,
         }
     }
 
@@ -391,7 +398,8 @@ impl FullState {
         &self,
         dataflow_command: DataflowCommand,
     ) -> UnboundedReceiver<PeekResults> {
-        let timestamp = self.clock.now();
+        // let timestamp = self.clock.now();
+        let timestamp = self.timer.elapsed().as_millis() as u64;
         let uuid = Uuid::new_v4();
         let receiver = self
             .peek_results_mux
@@ -399,7 +407,7 @@ impl FullState {
             .unwrap()
             .channel(uuid)
             .unwrap();
-        for dataflow_command_sender in &self.dataflow_command_senders {
+        for (index, dataflow_command_sender) in self.dataflow_command_senders.iter().enumerate() {
             dataflow_command_sender
                 .unbounded_send((
                     dataflow_command.clone(),
@@ -409,11 +417,13 @@ impl FullState {
                     },
                 ))
                 .unwrap();
+
+            self.threads[index].unpark();
         }
         receiver
     }
 
-    fn receive_peek_results(&self, receiver: UnboundedReceiver<PeekResults>) -> Vec<Datum> {
+    fn receive_peek_results(&self, receiver: UnboundedReceiver<PeekResults>) -> Vec<Vec<Datum>> {
         let mut results = vec![];
         let mut receiver = receiver.wait();
         for _ in 0..NUM_TIMELY_WORKERS {
@@ -493,17 +503,14 @@ impl RecordRunner for FullState {
                     }
                 };
 
-                let inferred_types = match &typ.ftype {
-                    FType::Tuple(types) => types.iter().map(|typ| &typ.ftype).collect::<Vec<_>>(),
-                    other => panic!("Query with non-tuple type: {:?}", other),
-                };
+                let inferred_types = &typ.column_types;
 
                 // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
                 // but at least it will be the correct length
                 if inferred_types.len() != expected_types.len() {
                     return Ok(Outcome::InferenceFailure {
                         expected_types,
-                        inferred_types: inferred_types.into_iter().cloned().collect(),
+                        inferred_types: inferred_types.to_vec(),
                     });
                 }
 
@@ -512,7 +519,7 @@ impl RecordRunner for FullState {
 
                 let mut rows = results
                     .iter()
-                    .map(|datum| format_datum(datum, &**expected_types))
+                    .map(|row| format_row(row, &**expected_types))
                     .collect::<Vec<_>>();
                 if let Sort::Row = sort {
                     rows.sort();
@@ -559,7 +566,7 @@ impl RecordRunner for FullState {
 
 impl Drop for FullState {
     fn drop(&mut self) {
-        for dataflow_command_sender in &self.dataflow_command_senders {
+        for (index, dataflow_command_sender) in self.dataflow_command_senders.iter().enumerate() {
             drop(dataflow_command_sender.unbounded_send((
                 DataflowCommand::Shutdown,
                 CommandMeta {
@@ -567,6 +574,8 @@ impl Drop for FullState {
                     timestamp: None,
                 },
             )));
+
+            self.threads[index].unpark();
         }
     }
 }
@@ -633,7 +642,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
         if !only_parse {
             if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record)
             {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
 
@@ -716,24 +725,15 @@ pub fn fuzz(sqls: &str) {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);
                 if let SqlResponse::Peeking { typ } = sql_response {
-                    let types = match typ.ftype {
-                        FType::Tuple(types) => types,
-                        _ => panic!(),
-                    };
-                    for datum in state.receive_peek_results(receiver) {
-                        match datum {
-                            Datum::Tuple(datums) => {
-                                for (typ, datum) in types.iter().zip(datums.into_iter()) {
-                                    assert!(
-                                        (typ.ftype == datum.ftype())
-                                            || (typ.nullable && datum.is_null()),
-                                        "{:?} was inferred to have type {:?}",
-                                        typ.ftype,
-                                        datum.ftype(),
-                                    );
-                                }
-                            }
-                            _ => panic!(),
+                    for row in state.receive_peek_results(receiver) {
+                        for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
+                            assert!(
+                                (typ.scalar_type == datum.scalar_type())
+                                    || (typ.nullable && datum.is_null()),
+                                "{:?} was inferred to have type {:?}",
+                                typ.scalar_type,
+                                datum.scalar_type(),
+                            );
                         }
                     }
                 }

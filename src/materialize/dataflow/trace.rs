@@ -12,29 +12,36 @@ use std::collections::HashMap;
 // use timely::dataflow::operators::probe::Probe;
 // use timely::dataflow::Scope;
 
-use super::types::{Diff, Expr, Plan};
+use super::types::{Diff, RelationExpr, ScalarExpr};
 use crate::clock::Timestamp;
 use crate::repr::Datum;
 
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-pub type KeysOnlyHandle = TraceKeyHandle<Datum, Timestamp, Diff>;
-pub type KeysValsHandle = TraceValHandle<Datum, Datum, Timestamp, Diff>;
+pub type KeysOnlyHandle = TraceKeyHandle<Vec<Datum>, Timestamp, Diff>;
+pub type KeysValsHandle = TraceValHandle<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
 
 // This should be Box<FnOnce>, but requires Rust 1.35 (maybe):
 // https://github.com/rust-lang/rust/issues/28796
 pub type DeleteCallback = Box<FnMut()>;
 
-/// A map from plans to cached arrangements.
+/// A map from relation_exprs to cached arrangements.
 ///
-/// A `TraceManager` stores maps from plans to various arranged representations
-/// of the collection the plan computes. These arrangements can either be unkeyed,
+/// A `TraceManager` stores maps from relation_exprs to various arranged representations
+/// of the collection the relation_expr computes. These arrangements can either be unkeyed,
 /// or keyed by some expression.
 pub struct TraceManager {
-    traces: HashMap<Plan, (Option<TraceInfoUnkeyed>, HashMap<Expr, TraceInfoKeyed>)>,
+    traces: HashMap<
+        RelationExpr,
+        (
+            Option<TraceInfoUnkeyed>,
+            HashMap<Vec<ScalarExpr>, TraceInfoKeyed>,
+        ),
+    >,
 }
 
 struct TraceInfoKeyed {
+    #[allow(dead_code)]
     trace: KeysValsHandle,
     delete_callback: DeleteCallback,
 }
@@ -71,21 +78,15 @@ impl TraceManager {
 
     // }
 
-    pub fn get_trace(&self, plan: &Plan) -> Option<KeysOnlyHandle> {
+    pub fn get_trace(&self, relation_expr: &RelationExpr) -> Option<KeysOnlyHandle> {
         self.traces
-            .get(plan)
+            .get(relation_expr)
             .and_then(|x| x.0.as_ref().map(|ti| ti.trace.clone()))
-    }
-
-    pub fn get_keyed_trace(&self, plan: &Plan, key: &Expr) -> Option<KeysValsHandle> {
-        self.traces
-            .get(plan)
-            .and_then(|x| x.1.get(key).map(|ti| ti.trace.clone()))
     }
 
     pub fn set_trace(
         &mut self,
-        plan: &Plan,
+        relation_expr: &RelationExpr,
         trace: KeysOnlyHandle,
         delete_callback: DeleteCallback,
     ) {
@@ -94,14 +95,14 @@ impl TraceManager {
             delete_callback,
         };
         self.traces
-            .insert(plan.clone(), (Some(trace_info), HashMap::new()));
+            .insert(relation_expr.clone(), (Some(trace_info), HashMap::new()));
     }
 
     #[allow(dead_code)]
     pub fn set_keyed_trace(
         &mut self,
-        plan: &Plan,
-        key: &Expr,
+        relation_expr: &RelationExpr,
+        key: &[ScalarExpr],
         trace: KeysValsHandle,
         delete_callback: DeleteCallback,
     ) {
@@ -110,14 +111,14 @@ impl TraceManager {
             delete_callback,
         };
         self.traces
-            .entry(plan.clone())
+            .entry(relation_expr.clone())
             .or_insert((None, HashMap::new()))
             .1
-            .insert(key.clone(), trace_info);
+            .insert(key.to_vec(), trace_info);
     }
 
-    pub fn del_trace(&mut self, plan: &Plan) {
-        if let Some((unkeyed, maps)) = self.traces.remove(plan) {
+    pub fn del_trace(&mut self, relation_expr: &RelationExpr) {
+        if let Some((unkeyed, maps)) = self.traces.remove(relation_expr) {
             if let Some(mut unkeyed) = unkeyed {
                 (unkeyed.delete_callback)();
             }

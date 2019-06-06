@@ -48,8 +48,6 @@ pub enum Datum {
     Bytes(Vec<u8>),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(String),
-    /// A [`Tuple`].
-    Tuple(Tuple),
 }
 
 impl Datum {
@@ -110,41 +108,17 @@ impl Datum {
         }
     }
 
-    pub fn unwrap_tuple(self) -> Tuple {
+    pub fn scalar_type(&self) -> ScalarType {
         match self {
-            Datum::Tuple(tuple) => tuple,
-            _ => panic!("Datum::unwrap_tuple called on {:?}", self),
-        }
-    }
-
-    pub fn asref_tuple(&self) -> &Tuple {
-        match self {
-            Datum::Tuple(tuple) => &tuple,
-            _ => panic!("Datum::unwrap_tuple called on {:?}", self),
-        }
-    }
-
-    pub fn ftype(&self) -> FType {
-        match self {
-            Datum::Null => FType::Null,
-            Datum::False => FType::Bool,
-            Datum::True => FType::Bool,
-            Datum::Int32(_) => FType::Int32,
-            Datum::Int64(_) => FType::Int64,
-            Datum::Float32(_) => FType::Float32,
-            Datum::Float64(_) => FType::Float64,
-            Datum::Bytes(_) => FType::Bytes,
-            Datum::String(_) => FType::String,
-            Datum::Tuple(datums) => FType::Tuple(
-                datums
-                    .iter()
-                    .map(|datum| Type {
-                        name: None,
-                        nullable: true,
-                        ftype: datum.ftype(),
-                    })
-                    .collect(),
-            ),
+            Datum::Null => ScalarType::Null,
+            Datum::False => ScalarType::Bool,
+            Datum::True => ScalarType::Bool,
+            Datum::Int32(_) => ScalarType::Int32,
+            Datum::Int64(_) => ScalarType::Int64,
+            Datum::Float32(_) => ScalarType::Float32,
+            Datum::Float64(_) => ScalarType::Float64,
+            Datum::Bytes(_) => ScalarType::Bytes,
+            Datum::String(_) => ScalarType::String,
         }
     }
 }
@@ -208,39 +182,15 @@ where
     }
 }
 
-/// An ordered, unnamed collection of heterogeneous [`Datum`]s.
-pub type Tuple = Vec<Datum>;
-
-/// The type of a [`Datum`].
-///
-/// [`Type`] bundles information about the fundamental type of a datum (e.g.,
-/// Int32 or String) with additional attributes, like its default value and its
-/// nullability.
-///
-/// It is not possible to construct a `Type` directly from a `Datum`, as it is
-/// impossible to determine anything but the type's `ftype`. Consider: a naked
-/// `Datum` provides no information about its name, default value, or
-/// nullability.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Type {
-    /// The name of this datum. Perhaps surprisingly, expressions in SQL can
-    /// have names, as in `SELECT 1 AS blah`.
-    pub name: Option<String>,
-    /// Whether this datum can be null.
-    pub nullable: bool,
-    /// The fundamental type (e.g., Int32 or String) of this datum.
-    pub ftype: FType,
-}
-
 /// The fundamental type of a [`Datum`].
 ///
 /// A fundamental type is what is typically thought of as a type, like "Int32"
-/// or "String." The full [`Type`] struct bundles additional information, like
+/// or "String." The full [`ColumnType`] struct bundles additional information, like
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum FType {
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum ScalarType {
     /// The type of a datum that can only be null.
     ///
     /// This is uncommon. Most [`Datum:Null`]s appear with a different type.
@@ -256,7 +206,90 @@ pub enum FType {
     Timestamp,
     Bytes,
     String,
-    Tuple(Vec<Type>),
-    Array(Box<Type>),
-    OneOf(Vec<Type>),
+}
+
+/// The type of a [`Datum`].
+///
+/// [`ColumnType`] bundles information about the fundamental type of a datum (e.g.,
+/// Int32 or String) with additional attributes, like its default value and its
+/// nullability.
+///
+/// It is not possible to construct a `ColumnType` directly from a `Datum`, as it is
+/// impossible to determine anything but the type's `scalar_type`. Consider: a naked
+/// `Datum` provides no information about its name, default value, or
+/// nullability.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct ColumnType {
+    /// The name of this datum. Perhaps surprisingly, expressions in SQL can
+    /// have names, as in `SELECT 1 AS blah`.
+    pub name: Option<String>,
+    /// Whether this datum can be null.
+    pub nullable: bool,
+    /// The fundamental type (e.g., Int32 or String) of this datum.
+    pub scalar_type: ScalarType,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct RelationType {
+    pub column_types: Vec<ColumnType>,
+}
+
+impl RelationType {
+    pub fn new(column_types: Vec<ColumnType>) -> Self {
+        RelationType { column_types }
+    }
+}
+
+impl Datum {
+    pub fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
+        self.scalar_type().is_instance_of(column_typ)
+    }
+}
+
+impl ScalarType {
+    pub fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
+        self == &column_typ.scalar_type || (self == &ScalarType::Null && column_typ.nullable)
+    }
+}
+
+impl ColumnType {
+    pub fn new(scalar_type: ScalarType) -> Self {
+        ColumnType {
+            name: None,
+            nullable: false,
+            scalar_type,
+        }
+    }
+
+    pub fn union(&self, other: &Self) -> Self {
+        let scalar_type = match (&self.scalar_type, &other.scalar_type) {
+            (ScalarType::Null, s) | (s, ScalarType::Null) => s,
+            (s1, s2) if s1 == s2 => s1,
+            (s1, s2) => panic!("Can't union types: {:?} and {:?}", s1, s2),
+        };
+        // TODO(jamii) does sql union require same column names?
+        let name = match (&self.name, &other.name) {
+            (Some(name), None) | (None, Some(name)) => Some(name.to_owned()),
+            (Some(name1), Some(name2)) if name1 == name2 => Some(name1.to_owned()),
+            _ => None,
+        };
+        ColumnType {
+            name,
+            scalar_type: scalar_type.clone(),
+            nullable: self.nullable
+                || other.nullable
+                || self.scalar_type == ScalarType::Null
+                || other.scalar_type == ScalarType::Null,
+        }
+    }
+
+    pub fn name(mut self, name: String) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn nullable(mut self) -> Self {
+        self.nullable = true;
+        self
+    }
 }

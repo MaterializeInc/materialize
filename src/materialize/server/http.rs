@@ -92,7 +92,7 @@ fn handle_peek_result(
         })
         .and_then(move |(uuid, req)| {
             req.into_body().concat2().from_err().and_then(move |body| {
-                let rows: Vec<crate::repr::Datum> = bincode::deserialize(&body).unwrap();
+                let rows: Vec<Vec<crate::repr::Datum>> = bincode::deserialize(&body).unwrap();
                 // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
                 if let Ok(sender) = peek_results_mux.read().unwrap().sender(&uuid) {
                     drop(sender.unbounded_send(rows))

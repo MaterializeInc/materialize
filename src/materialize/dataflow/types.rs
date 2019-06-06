@@ -5,9 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 use url::Url;
+use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::repr::{Datum, Type};
+use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -32,11 +33,14 @@ impl Dataflow {
     }
 
     /// Reports the type of the datums produced by this dataflow.
-    pub fn typ(&self) -> Option<&Type> {
+    pub fn typ(&self) -> &RelationType {
         match self {
-            Dataflow::Source(src) => Some(&src.typ),
-            Dataflow::Sink(_) => None,
-            Dataflow::View(view) => Some(&view.typ),
+            Dataflow::Source(src) => &src.typ,
+            Dataflow::Sink(_) => panic!(
+                "programming error: Dataflow.typ called on Sink variant, \
+                 but sinks don't have a type"
+            ),
+            Dataflow::View(view) => &view.typ,
         }
     }
 
@@ -45,8 +49,8 @@ impl Dataflow {
         let mut out = Vec::new();
         match self {
             Dataflow::Source(_) => (),
-            Dataflow::Sink(sink) => out.push(sink.from.as_str()),
-            Dataflow::View(view) => view.plan.uses_inner(&mut out),
+            Dataflow::Sink(sink) => out.push(sink.from.0.as_str()),
+            Dataflow::View(view) => view.relation_expr.uses_inner(&mut out),
         }
         out
     }
@@ -61,14 +65,14 @@ impl metastore::Dataflow for Dataflow {}
 pub struct Source {
     pub name: String,
     pub connector: SourceConnector,
-    pub typ: Type,
+    pub typ: RelationType,
 }
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Sink {
     pub name: String,
-    pub from: String,
+    pub from: (String, RelationType),
     pub connector: SinkConnector,
 }
 
@@ -107,143 +111,391 @@ pub struct KafkaSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub name: String,
-    pub plan: Plan,
-    pub typ: Type,
+    pub relation_expr: RelationExpr,
+    pub typ: RelationType,
 }
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum Plan {
-    /// Source data from another dataflow.
-    Source(String),
-    /// Project or permute the columns in a dataflow.
+pub enum RelationExpr {
+    /// Always return the same value
+    Constant {
+        rows: Vec<Vec<Datum>>,
+        typ: RelationType,
+    },
+    /// Get an existing dataflow
+    Get { name: String, typ: RelationType },
+    /// Introduce a temporary dataflow
+    Let {
+        name: String,
+        value: Box<RelationExpr>,
+        body: Box<RelationExpr>,
+    },
+    /// Project out some columns from a dataflow
     Project {
-        outputs: Vec<Expr>,
-        /// Plan for the input.
-        input: Box<Plan>,
+        input: Box<RelationExpr>,
+        outputs: Vec<usize>,
     },
-    /// Suppress duplicate tuples.
-    Distinct(Box<Plan>),
-    /// Union several dataflows of the same type.
-    UnionAll(Vec<Plan>),
-    /// Join two dataflows.
+    /// Append new columns to a dataflow
+    Map {
+        input: Box<RelationExpr>,
+        // these are appended to output in addition to all the columns of input
+        scalars: Vec<(ScalarExpr, ColumnType)>,
+    },
+    /// Keep rows from a dataflow where all the predicates are true
+    Filter {
+        input: Box<RelationExpr>,
+        predicates: Vec<ScalarExpr>,
+    },
+    /// Join several dataflows together at once
     Join {
-        /// Expression to compute the key from the left input.
-        left_key: Expr,
-        /// Expression to compute the key from the right input.
-        right_key: Expr,
-        /// Plan for the left input.
-        left: Box<Plan>,
-        /// Plan for the right input.
-        right: Box<Plan>,
-        /// Include keys on the left that are not joined (for left/full outer join). The usize value is the number of columns on the right.
-        include_left_outer: Option<usize>,
-        /// Include keys on the right that are not joined (for right/full outer join). The usize value is the number of columns on the left.
-        include_right_outer: Option<usize>,
+        inputs: Vec<RelationExpr>,
+        // each Vec<(usize, usize)> is an equivalence class of (input_index, column_index)
+        variables: Vec<Vec<(usize, usize)>>,
     },
-    MultiwayJoin {
-        /// A list of participating plans.
-        plans: Vec<Plan>,
-        /// A list of the number of columns in the corresponding plan.
-        arities: Vec<usize>,
-        /// A list of (r1,c1) and (r2,c2) required equalities.
-        equalities: Vec<((usize, usize), (usize, usize))>,
+    /// Group a dataflow by some columns and aggregate over each group
+    Reduce {
+        input: Box<RelationExpr>,
+        group_key: Vec<usize>,
+        // these are appended to output in addition to all the columns of input that are in group_key
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
     },
-    /// Filter records based on predicate.
-    Filter { predicate: Expr, input: Box<Plan> },
-    /// Aggregate records that share a key.
-    Aggregate {
-        key: Expr,
-        aggs: Vec<Aggregate>,
-        input: Box<Plan>,
+    /// Groups and orders within each group, limiting output.
+    TopK {
+        input: Box<RelationExpr>,
+        group_key: Vec<usize>,
+        order_key: Vec<usize>,
+        limit: usize,
     },
+    /// If the input is empty, return a default row
+    // Used only for some SQL aggregate edge cases
+    OrDefault {
+        input: Box<RelationExpr>,
+        default: Vec<Datum>,
+    },
+    /// Return a dataflow where the row counts are negated
+    Negate { input: Box<RelationExpr> },
+    /// Return a dataflow where the row counts are all set to 1
+    Distinct { input: Box<RelationExpr> },
+    /// Return the union of two dataflows
+    Union {
+        left: Box<RelationExpr>,
+        right: Box<RelationExpr>,
+    },
+    // TODO Lookup/Arrange
 }
 
-impl Plan {
-    /// Collects the names of the dataflows that this plan depends upon.
-    // Intentionally match on all field names to force changes to the AST to
-    // be reflected in this function.
-    fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
+impl RelationExpr {
+    pub fn typ(&self) -> RelationType {
         match self {
-            Plan::Source(name) => out.push(&name),
-            Plan::Project { outputs: _, input } => input.uses_inner(out),
-            Plan::Distinct(p) => p.uses_inner(out),
-            Plan::UnionAll(ps) => ps.iter().for_each(|p| p.uses_inner(out)),
-            Plan::Join {
-                left_key: _,
-                right_key: _,
-                left,
-                right,
-                include_left_outer: _,
-                include_right_outer: _,
-            } => {
-                left.uses_inner(out);
-                right.uses_inner(out);
+            RelationExpr::Constant { rows, typ } => {
+                for row in rows {
+                    for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
+                        assert!(datum.is_instance_of(column_typ));
+                    }
+                }
+                typ.clone()
             }
-            Plan::MultiwayJoin { plans, .. } => {
-                for plan in plans {
-                    plan.uses_inner(out);
+            RelationExpr::Get { typ, .. } => typ.clone(),
+            RelationExpr::Let { body, .. } => body.typ(),
+            RelationExpr::Project { input, outputs } => {
+                let input_typ = input.typ();
+                RelationType {
+                    column_types: outputs
+                        .iter()
+                        .map(|&i| input_typ.column_types[i].clone())
+                        .collect(),
                 }
             }
-            Plan::Filter {
-                predicate: _,
+            RelationExpr::Map { input, scalars } => {
+                let mut typ = input.typ();
+                for (_, column_typ) in scalars {
+                    typ.column_types.push(column_typ.clone());
+                }
+                typ
+            }
+            RelationExpr::Filter { input, .. } => input.typ(),
+            RelationExpr::Join { inputs, .. } => {
+                let mut column_types = vec![];
+                for input in inputs {
+                    column_types.append(&mut input.typ().column_types);
+                }
+                RelationType { column_types }
+            }
+            RelationExpr::Reduce {
                 input,
-            } => input.uses_inner(out),
-            Plan::Aggregate {
-                key: _,
-                aggs: _,
-                input,
-            } => input.uses_inner(out),
+                group_key,
+                aggregates,
+            } => {
+                let input_typ = input.typ();
+                let mut column_types = group_key
+                    .iter()
+                    .map(|&i| input_typ.column_types[i].clone())
+                    .collect::<Vec<_>>();
+                for (_, column_typ) in aggregates {
+                    column_types.push(column_typ.clone());
+                }
+                RelationType { column_types }
+            }
+            RelationExpr::TopK { input, .. } => input.typ(),
+            RelationExpr::OrDefault { input, default } => {
+                let typ = input.typ();
+                for (column_typ, datum) in typ.column_types.iter().zip(default.iter()) {
+                    assert!(datum.scalar_type().is_instance_of(column_typ));
+                }
+                typ
+            }
+            RelationExpr::Negate { input } => input.typ(),
+            RelationExpr::Distinct { input } => input.typ(),
+            RelationExpr::Union { left, right } => {
+                let left_typ = left.typ();
+                let right_typ = right.typ();
+                assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
+                RelationType {
+                    column_types: left_typ
+                        .column_types
+                        .iter()
+                        .zip(right_typ.column_types.iter())
+                        .map(|(l, r)| l.union(r))
+                        .collect(),
+                }
+            }
         }
+    }
+
+    pub fn arity(&self) -> usize {
+        self.typ().column_types.len()
+    }
+}
+
+impl RelationExpr {
+    pub fn let_<F>(value: RelationExpr, f: F) -> Result<Self, failure::Error>
+    where
+        F: FnOnce(Self) -> Result<Self, failure::Error>,
+    {
+        let name = format!("tmp_{}", Uuid::new_v4());
+        let typ = value.typ();
+        Ok(RelationExpr::Let {
+            name: name.clone(),
+            value: Box::new(value),
+            body: Box::new(f(RelationExpr::Get { name, typ })?),
+        })
+    }
+
+    pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
+        RelationExpr::Constant { rows, typ }
+    }
+
+    pub fn project(self, outputs: Vec<usize>) -> Self {
+        RelationExpr::Project {
+            input: Box::new(self),
+            outputs,
+        }
+    }
+
+    pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
+        RelationExpr::Map {
+            input: Box::new(self),
+            scalars,
+        }
+    }
+
+    pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
+        RelationExpr::Filter {
+            input: Box::new(self),
+            predicates,
+        }
+    }
+
+    pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
+        RelationExpr::Join { inputs, variables }
+    }
+
+    pub fn reduce(
+        self,
+        group_key: Vec<usize>,
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
+    ) -> Self {
+        RelationExpr::Reduce {
+            input: Box::new(self),
+            group_key,
+            aggregates,
+        }
+    }
+
+    pub fn or_default(self, default: Vec<Datum>) -> Self {
+        RelationExpr::OrDefault {
+            input: Box::new(self),
+            default,
+        }
+    }
+
+    pub fn negate(self) -> Self {
+        RelationExpr::Negate {
+            input: Box::new(self),
+        }
+    }
+
+    pub fn distinct(self) -> Self {
+        RelationExpr::Distinct {
+            input: Box::new(self),
+        }
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        RelationExpr::Union {
+            left: Box::new(self),
+            right: Box::new(other),
+        }
+    }
+
+    pub fn left_outer(self, left: Self) -> Self {
+        let both = self;
+        let both_arity = both.arity();
+        let left_arity = left.arity();
+        assert!(both_arity >= left_arity);
+
+        RelationExpr::Join {
+            inputs: vec![
+                left.union(both.project((0..left_arity).collect()).distinct().negate()),
+                RelationExpr::Constant {
+                    rows: vec![vec![Datum::Null; both_arity - left_arity]],
+                    typ: RelationType {
+                        column_types: vec![
+                            ColumnType {
+                                name: None,
+                                nullable: true,
+                                scalar_type: ScalarType::Null
+                            };
+                            both_arity - left_arity
+                        ],
+                    },
+                },
+            ],
+            variables: vec![],
+        }
+    }
+
+    pub fn right_outer(self, right: Self) -> Self {
+        let both = self;
+        let both_arity = both.arity();
+        let right_arity = right.arity();
+        assert!(both_arity >= right_arity);
+
+        RelationExpr::Join {
+            inputs: vec![
+                RelationExpr::Constant {
+                    rows: vec![vec![Datum::Null; both_arity - right_arity]],
+                    typ: RelationType {
+                        column_types: vec![
+                            ColumnType {
+                                name: None,
+                                nullable: true,
+                                scalar_type: ScalarType::Null
+                            };
+                            both_arity - right_arity
+                        ],
+                    },
+                },
+                right.union(
+                    both.project(((both_arity - right_arity)..both_arity).collect())
+                        .distinct()
+                        .negate(),
+                ),
+            ],
+            variables: vec![],
+        }
+    }
+}
+
+impl RelationExpr {
+    /// Collects the names of the dataflows that this relation_expr depends upon.
+    #[allow(clippy::unneeded_field_pattern)]
+    fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
+        self.visit(|e| match e {
+            RelationExpr::Get { name, .. } => {
+                out.push(&name);
+            }
+            RelationExpr::Let { name, .. } => {
+                out.retain(|n| n != name);
+            }
+            _ => (),
+        });
     }
 }
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct Aggregate {
+pub struct AggregateExpr {
     pub func: AggregateFunc,
-    pub expr: Expr,
+    pub expr: ScalarExpr,
     pub distinct: bool,
 }
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum Expr {
-    /// The ambient value.
-    Ambient,
-    /// Tuple element selector.
-    Column(usize, Box<Expr>),
-    /// Tuple constructor.
-    Tuple(Vec<Expr>),
+pub enum ScalarExpr {
+    /// A column of the input row
+    Column(usize),
     /// A literal value.
     Literal(Datum),
     /// A function call that takes one expression as an argument.
-    CallUnary { func: UnaryFunc, expr: Box<Expr> },
+    CallUnary {
+        func: UnaryFunc,
+        expr: Box<ScalarExpr>,
+    },
     /// A function call that takes two expressions as arguments.
     CallBinary {
         func: BinaryFunc,
-        expr1: Box<Expr>,
-        expr2: Box<Expr>,
-    },
-    If {
-        cond: Box<Expr>,
-        then: Box<Expr>,
-        els: Box<Expr>,
+        expr1: Box<ScalarExpr>,
+        expr2: Box<ScalarExpr>,
     },
     /// A function call that takes an arbitrary number of arguments.
     CallVariadic {
         func: VariadicFunc,
-        exprs: Vec<Expr>,
+        exprs: Vec<ScalarExpr>,
+    },
+    If {
+        cond: Box<ScalarExpr>,
+        then: Box<ScalarExpr>,
+        els: Box<ScalarExpr>,
     },
 }
 
-impl Expr {
-    pub fn columns(is: &[usize], input: &Expr) -> Self {
-        Expr::Tuple(
-            is.iter()
-                .map(|i| Expr::Column(*i, Box::new(input.clone())))
-                .collect(),
-        )
+impl ScalarExpr {
+    pub fn columns(is: &[usize]) -> Vec<ScalarExpr> {
+        is.iter().map(|i| ScalarExpr::Column(*i)).collect()
+    }
+
+    pub fn column(column: usize) -> Self {
+        ScalarExpr::Column(column)
+    }
+
+    pub fn literal(datum: Datum) -> Self {
+        ScalarExpr::Literal(datum)
+    }
+
+    pub fn call_unary(self, func: UnaryFunc) -> Self {
+        ScalarExpr::CallUnary {
+            func,
+            expr: Box::new(self),
+        }
+    }
+
+    pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
+        ScalarExpr::CallBinary {
+            func,
+            expr1: Box::new(self),
+            expr2: Box::new(other),
+        }
+    }
+
+    pub fn if_then_else(self, t: Self, f: Self) -> Self {
+        ScalarExpr::If {
+            cond: Box::new(self),
+            then: Box::new(t),
+            els: Box::new(f),
+        }
     }
 }
 
@@ -253,45 +505,68 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use crate::repr::{FType, Type};
+    use crate::repr::{ColumnType, ScalarType};
 
-    /// Verify that a basic plan serializes and deserializes to JSON sensibly.
+    /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
         let dataflow = Dataflow::View(View {
             name: "report".into(),
-            plan: Plan::Project {
-                outputs: vec![
-                    Expr::Column(1, Box::new(Expr::Ambient)),
-                    Expr::Column(2, Box::new(Expr::Ambient)),
-                ],
-                input: Box::new(Plan::Join {
-                    left_key: Expr::Column(0, Box::new(Expr::Ambient)),
-                    right_key: Expr::Column(0, Box::new(Expr::Ambient)),
-                    left: Box::new(Plan::Source("orders".into())),
-                    right: Box::new(Plan::Distinct(Box::new(Plan::UnionAll(vec![
-                        Plan::Source("customers2018".into()),
-                        Plan::Source("customers2019".into()),
-                    ])))),
-                    include_left_outer: None,
-                    include_right_outer: None,
+            relation_expr: RelationExpr::Project {
+                outputs: vec![1, 2],
+                input: Box::new(RelationExpr::Join {
+                    inputs: vec![
+                        RelationExpr::Get {
+                            name: "orders".into(),
+                            typ: RelationType {
+                                column_types: vec![ColumnType {
+                                    name: Some("id".into()),
+                                    nullable: false,
+                                    scalar_type: ScalarType::Int64,
+                                }],
+                            },
+                        },
+                        RelationExpr::Distinct {
+                            input: Box::new(RelationExpr::Union {
+                                left: Box::new(RelationExpr::Get {
+                                    name: "customers2018".into(),
+                                    typ: RelationType {
+                                        column_types: vec![ColumnType {
+                                            name: Some("id".into()),
+                                            nullable: false,
+                                            scalar_type: ScalarType::Int64,
+                                        }],
+                                    },
+                                }),
+                                right: Box::new(RelationExpr::Get {
+                                    name: "customers2019".into(),
+                                    typ: RelationType {
+                                        column_types: vec![ColumnType {
+                                            name: Some("id".into()),
+                                            nullable: false,
+                                            scalar_type: ScalarType::Int64,
+                                        }],
+                                    },
+                                }),
+                            }),
+                        },
+                    ],
+                    variables: vec![vec![(0, 0), (1, 0)]],
                 }),
             },
-            typ: Type {
-                name: None,
-                nullable: false,
-                ftype: FType::Tuple(vec![
-                    Type {
+            typ: RelationType {
+                column_types: vec![
+                    ColumnType {
                         name: Some("name".into()),
                         nullable: false,
-                        ftype: FType::String,
+                        scalar_type: ScalarType::String,
                     },
-                    Type {
+                    ColumnType {
                         name: Some("quantity".into()),
                         nullable: false,
-                        ftype: FType::Int32,
+                        scalar_type: ScalarType::Int32,
                     },
-                ]),
+                ],
             },
         });
 

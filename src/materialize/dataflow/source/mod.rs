@@ -4,7 +4,5 @@
 // distributed without the express permission of Materialize, Inc.
 
 mod kafka;
-mod local;
 
 pub use kafka::kafka;
-pub use local::{local, InsertMux};

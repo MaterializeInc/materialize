@@ -3,13 +3,13 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use failure::{bail, format_err};
+use failure::bail;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
 use crate::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
-use crate::repr::{FType, Type};
+use crate::repr::{ColumnType, RelationType, ScalarType};
 
 #[derive(Debug)]
 pub struct DataflowStore {
@@ -30,10 +30,13 @@ impl DataflowStore {
         }
     }
 
-    pub fn get_type(&self, name: &str) -> Result<&Type, failure::Error> {
-        self.get(name)?
-            .typ()
-            .ok_or_else(|| format_err!("dataflow {} is a sink and cannot be depended upon", name))
+    pub fn get_type(&self, name: &str) -> Result<&RelationType, failure::Error> {
+        match self.get(name)? {
+            Dataflow::Sink { .. } => {
+                bail!("dataflow {} is a sink and cannot be depended upon", name)
+            }
+            dataflow => Ok(dataflow.typ()),
+        }
     }
 
     pub fn insert(&mut self, dataflow: Dataflow) -> Result<(), failure::Error> {
@@ -59,7 +62,12 @@ impl DataflowStore {
         Ok(())
     }
 
-    pub fn remove(&mut self, name: &str, mode: RemoveMode) -> Result<(), failure::Error> {
+    pub fn remove(
+        &mut self,
+        name: &str,
+        mode: RemoveMode,
+        removed: &mut Vec<Dataflow>,
+    ) -> Result<(), failure::Error> {
         let metadata = match self.inner.get(name) {
             Some(metadata) => metadata,
             None => return Ok(()),
@@ -82,7 +90,7 @@ impl DataflowStore {
                     // turn of the loop, so cascading removes must not fail, or
                     // we'll have violated atomicity. Therefore unwrap instead
                     // of propagating the error.
-                    self.remove(&u, RemoveMode::Cascade).unwrap();
+                    self.remove(&u, RemoveMode::Cascade, removed).unwrap();
                 }
             }
         }
@@ -100,6 +108,8 @@ impl DataflowStore {
             }
         }
 
+        removed.push(metadata.inner);
+
         Ok(())
     }
 }
@@ -114,14 +124,12 @@ impl Default for DataflowStore {
         let dual_dataflow = Dataflow::Source(Source {
             name: "dual".into(),
             connector: SourceConnector::Local(LocalSourceConnector {}),
-            typ: Type {
-                name: None,
-                nullable: false,
-                ftype: FType::Tuple(vec![Type {
+            typ: RelationType {
+                column_types: vec![ColumnType {
                     name: Some("x".into()),
                     nullable: false,
-                    ftype: FType::String,
-                }]),
+                    scalar_type: ScalarType::String,
+                }],
             },
         });
         store.insert(dual_dataflow).unwrap();

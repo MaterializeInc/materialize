@@ -128,7 +128,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(WaitForRows, SendRows, Error))]
     WaitForRows {
         conn: A,
-        peek_results: Vec<Datum>,
+        peek_results: Vec<Vec<Datum>>,
         remaining_peek_results: usize,
     },
 
@@ -331,10 +331,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 state.remaining_peek_results -= 1;
                 if state.remaining_peek_results == 0 {
                     let stream: MessageStream = Box::new(futures::stream::iter_ok(
-                        state.peek_results.into_iter().map(|datum| match datum {
-                            Datum::Tuple(t) => BackendMessage::DataRow(t),
-                            _ => unimplemented!(),
-                        }),
+                        state.peek_results.into_iter().map(BackendMessage::DataRow),
                     ));
                     transition!(SendRows {
                         send: Box::new(stream.forward(state.conn)),

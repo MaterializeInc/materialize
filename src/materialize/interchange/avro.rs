@@ -11,52 +11,41 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use url::Url;
 
-use crate::repr::{Datum, FType, Type};
+use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
 
-/// Converts an Apache Avro schema into a [`repr::Type`].
-pub fn parse_schema(schema: &str) -> Result<Type, Error> {
+/// Converts an Apache Avro schema into a [`repr::RelationType`].
+pub fn parse_schema(schema: &str) -> Result<RelationType, Error> {
     let schema = Schema::parse_str(schema)?;
-    Ok(Type {
-        name: None,
-        nullable: is_nullable(&schema),
-        ftype: parse_schema_1(&schema),
-    })
+    match schema {
+        Schema::Record { fields, .. } => {
+            let column_types = fields
+                .iter()
+                .map(|f| {
+                    Ok(ColumnType {
+                        name: Some(f.name.clone()),
+                        nullable: is_nullable(&f.schema),
+                        scalar_type: parse_schema_1(&f.schema)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+
+            Ok(RelationType { column_types })
+        }
+        _ => bail!("Top-level schemas must be records, got: {:?}", schema),
+    }
 }
 
-fn parse_schema_1(schema: &Schema) -> FType {
-    match schema {
-        Schema::Null => FType::Null,
-        Schema::Boolean => FType::Bool,
-        Schema::Int => FType::Int32,
-        Schema::Long => FType::Int64,
-        Schema::Float => FType::Float32,
-        Schema::Double => FType::Float64,
-        Schema::Bytes | Schema::Fixed { .. } => FType::Bytes,
-        Schema::String | Schema::Enum { .. } => FType::String,
-
-        Schema::Array(schema) => {
-            let el_type = Type {
-                name: None,
-                nullable: is_nullable(schema),
-                ftype: parse_schema_1(schema),
-            };
-
-            FType::Array(Box::new(el_type))
-        }
-
-        Schema::Map(s) => FType::Tuple(vec![
-            Type {
-                name: Some("key".into()),
-                nullable: false,
-                ftype: FType::String,
-            },
-            Type {
-                name: Some("value".into()),
-                nullable: is_nullable(s),
-                ftype: parse_schema_1(s),
-            },
-        ]),
+fn parse_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
+    Ok(match schema {
+        Schema::Null => ScalarType::Null,
+        Schema::Boolean => ScalarType::Bool,
+        Schema::Int => ScalarType::Int32,
+        Schema::Long => ScalarType::Int64,
+        Schema::Float => ScalarType::Float32,
+        Schema::Double => ScalarType::Float64,
+        Schema::Bytes | Schema::Fixed { .. } => ScalarType::Bytes,
+        Schema::String | Schema::Enum { .. } => ScalarType::String,
 
         Schema::Union(us) => {
             let utypes: Vec<_> = us
@@ -66,33 +55,60 @@ fn parse_schema_1(schema: &Schema) -> FType {
                 // the entire union nullable in the presence of a null
                 // variant.
                 .filter(|s| !is_null(s))
-                .map(|s| Type {
-                    name: None,
-                    nullable: is_nullable(s),
-                    ftype: parse_schema_1(s),
+                .map(|s| {
+                    Ok(ColumnType {
+                        name: None,
+                        nullable: is_nullable(s),
+                        scalar_type: parse_schema_1(s)?,
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, Error>>()?;
 
             if utypes.len() == 1 {
-                utypes.into_element().ftype
+                utypes.into_element().scalar_type
             } else {
-                FType::Tuple(utypes)
+                bail!("Unsupported union type: {:?}", schema)
             }
         }
 
-        Schema::Record { fields, .. } => {
-            let ftypes = fields
-                .iter()
-                .map(|f| Type {
-                    name: Some(f.name.clone()),
-                    nullable: is_nullable(&f.schema),
-                    ftype: parse_schema_1(&f.schema),
-                })
-                .collect();
+        // Schema::Array(schema) => {
+        //     let el_type = ColumnType {
+        //         name: None,
+        //         nullable: is_nullable(schema),
+        //         scalar_type: parse_schema_1(schema),
+        //     };
 
-            FType::Tuple(ftypes)
-        }
-    }
+        //     ScalarType::Array(Box::new(el_type))
+        // }
+
+        // Schema::Map(s) => ScalarType::Tuple(vec![
+        //     ColumnType {
+        //         name: Some("key".into()),
+        //         nullable: false,
+        //         scalar_type: ScalarType::String,
+        //     },
+        //     ColumnType {
+        //         name: Some("value".into()),
+        //         nullable: is_nullable(s),
+        //         scalar_type: parse_schema_1(s),
+        //     },
+        // ]),
+
+        // Schema::Record { fields, .. } => {
+        //     let scalar_types = fields
+        //         .iter()
+        //         .map(|f| ColumnType {
+        //             name: Some(f.name.clone()),
+        //             nullable: is_nullable(&f.schema),
+        //             scalar_type: parse_schema_1(&f.schema),
+        //         })
+        //         .collect();
+
+        //     ScalarType::Tuple(scalar_types)
+        // }
+        //
+        _ => bail!("Unsupported scalar type in schema: {:?}", schema),
+    })
 }
 
 fn is_nullable(schema: &Schema) -> bool {
@@ -132,7 +148,7 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `Datum`.
-    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<Datum, failure::Error> {
+    pub fn decode(&mut self, mut bytes: &[u8]) -> Result<Vec<Datum>, failure::Error> {
         // The first byte is a magic byte (0) that indicates the Confluent
         // serialization format version, and the next four bytes are a big
         // endian 32-bit schema ID.
@@ -188,7 +204,7 @@ impl Decoder {
             }
             _ => bail!("unsupported avro value: {:?}", val),
         }
-        Ok(Datum::Tuple(row))
+        Ok(row)
     }
 }
 
@@ -226,13 +242,13 @@ mod tests {
     use serde::Deserialize;
     use std::fs::File;
 
-    use crate::repr::Type;
+    use crate::repr::RelationType;
 
     #[derive(Deserialize)]
     struct TestCase {
         name: String,
         input: serde_json::Value,
-        expected: Type,
+        expected: RelationType,
     }
 
     #[test]

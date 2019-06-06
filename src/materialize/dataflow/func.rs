@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
 use crate::repr::Datum;
-use crate::repr::FType;
+use crate::repr::ScalarType;
 
 pub fn and(a: Datum, b: Datum) -> Datum {
     match (&a, &b) {
@@ -772,33 +772,36 @@ impl AggregateFunc {
         }
     }
 
-    pub fn from_name_and_ftype(name: &str, ftype: &FType) -> Result<(Self, FType), failure::Error> {
-        let func = match (name, ftype) {
-            ("avg", FType::Int32) => AggregateFunc::AvgInt32,
-            ("avg", FType::Int64) => AggregateFunc::AvgInt64,
-            ("avg", FType::Float32) => AggregateFunc::AvgFloat32,
-            ("avg", FType::Float64) => AggregateFunc::AvgFloat64,
-            ("max", FType::Int32) => AggregateFunc::MaxInt32,
-            ("max", FType::Int64) => AggregateFunc::MaxInt64,
-            ("max", FType::Float32) => AggregateFunc::MaxFloat32,
-            ("max", FType::Float64) => AggregateFunc::MaxFloat64,
-            ("min", FType::Int32) => AggregateFunc::MinInt32,
-            ("min", FType::Int64) => AggregateFunc::MinInt64,
-            ("min", FType::Float32) => AggregateFunc::MinFloat32,
-            ("min", FType::Float64) => AggregateFunc::MinFloat64,
-            ("sum", FType::Int32) => AggregateFunc::SumInt32,
-            ("sum", FType::Int64) => AggregateFunc::SumInt64,
-            ("sum", FType::Float32) => AggregateFunc::SumFloat32,
-            ("sum", FType::Float64) => AggregateFunc::SumFloat64,
+    pub fn from_name_and_scalar_type(
+        name: &str,
+        scalar_type: &ScalarType,
+    ) -> Result<(Self, ScalarType), failure::Error> {
+        let func = match (name, scalar_type) {
+            ("avg", ScalarType::Int32) => AggregateFunc::AvgInt32,
+            ("avg", ScalarType::Int64) => AggregateFunc::AvgInt64,
+            ("avg", ScalarType::Float32) => AggregateFunc::AvgFloat32,
+            ("avg", ScalarType::Float64) => AggregateFunc::AvgFloat64,
+            ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
+            ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
+            ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
+            ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
+            ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
+            ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
+            ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
+            ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
+            ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
+            ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
+            ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
+            ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
             ("count", _) => AggregateFunc::Count,
             other => bail!("Unimplemented function/type combo: {:?}", other),
         };
-        let ftype = match name {
-            "count" => FType::Int64,
-            "avg" | "max" | "min" | "sum" => ftype.clone(),
+        let scalar_type = match name {
+            "count" => ScalarType::Int64,
+            "avg" | "max" | "min" | "sum" => scalar_type.clone(),
             other => bail!("Unknown aggregate function: {:?}", other),
         };
-        Ok((func, ftype))
+        Ok((func, scalar_type))
     }
 
     pub fn func<I>(self) -> fn(I) -> Datum
@@ -832,6 +835,13 @@ impl AggregateFunc {
             AggregateFunc::Count => false,
             // avg/max/min/sum return null on empty sets
             _ => true,
+        }
+    }
+
+    pub fn default(self) -> Datum {
+        match self {
+            AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
+            _ => Datum::Null,
         }
     }
 }

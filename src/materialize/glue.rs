@@ -6,8 +6,8 @@
 //! Types and data-structures used to glue all the various components of materialize together
 
 use crate::clock::Timestamp;
-use crate::dataflow::Dataflow;
-use crate::repr::{Datum, Type};
+use crate::dataflow::{Dataflow, View};
+use crate::repr::{Datum, RelationType};
 use failure::{ensure, format_err};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -45,7 +45,7 @@ pub enum SqlResponse {
     DroppedTable,
     EmptyQuery,
     Inserted(usize),
-    Peeking { typ: Type },
+    Peeking { typ: RelationType },
 }
 
 pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Error>>>>;
@@ -55,15 +55,15 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {
     CreateDataflow(Dataflow),
-    DropDataflows(Vec<String>),
-    PeekExisting(String),
-    PeekTransient(Dataflow),
+    DropDataflows(Vec<Dataflow>),
+    PeekExisting(Dataflow),
+    PeekTransient(View),
     Tail(String),
-    Insert(String, Vec<Datum>),
+    Insert(String, Vec<(Vec<Datum>, Timestamp, isize)>),
     Shutdown,
 }
 
-pub type PeekResults = Vec<Datum>;
+pub type PeekResults = Vec<Vec<Datum>>;
 pub type PeekResultsMux = Arc<RwLock<Mux<Uuid, PeekResults>>>;
 
 /// A multiple-sender, multiple-receiver channel where receivers are keyed by K

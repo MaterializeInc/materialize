@@ -23,6 +23,21 @@ run() {
 # along with the lint. The goal is to ever-so-slightly increase the barrier to
 # turning off a lint.
 disabled_lints=(
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#block_in_if_condition_stmt
+    #
+    # clippy::block-in-if-condition-stmt prohibits complicated blocks in `if`
+    # statements, like:
+    #
+    #     if { let difficult_answer = big_computation(); difficult_answer == 42 } { .. }
+    #
+    # Unfortunately it also fires incorrectly on perfectly readable
+    # constructions, like:
+    #
+    #    assert!(vec.iter().all(|item| {
+    #        // ...
+    #    }))
+    clippy::block-in-if-condition-stmt
+
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#let_and_return
     #
     # clippy::let_and_return protects against creating a let binding that is
@@ -81,6 +96,14 @@ disabled_lints=(
     # to the inner function directly. Besides, the needless closure will be
     # trivially optimized away by LLVM.
     clippy::redundant_closure
+
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#type_complexity
+    #
+    # clippy::type_complexity disallows types that are excessively nested.
+    # Unfortunately Frank McSherry loves highly nested types, and, indeed,
+    # sometimes extracting the type alias that Clippy demands makes the types
+    # less readable.
+    clippy::type_complexity
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#unneeded_field_pattern
     #

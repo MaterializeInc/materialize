@@ -7,7 +7,6 @@
 
 use futures::Stream;
 
-use crate::clock::Clock;
 use crate::glue::*;
 use crate::sql;
 
@@ -15,13 +14,14 @@ pub fn serve(
     sql_command_receiver: UnboundedReceiver<(SqlCommand, CommandMeta)>,
     sql_response_mux: SqlResponseMux,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
-    clock: Clock,
+    threads: Vec<std::thread::Thread>,
 ) {
+    let timer = std::time::Instant::now();
     std::thread::spawn(move || {
         let mut planner = sql::Planner::default();
         for msg in sql_command_receiver.wait() {
             let (sql_command, mut command_meta) = msg.unwrap();
-            command_meta.timestamp = Some(clock.now());
+            command_meta.timestamp = Some(timer.elapsed().as_millis() as u64);
             let connection_uuid = command_meta.connection_uuid;
 
             let (sql_response, dataflow_command) = match planner.handle_command(sql_command) {
@@ -30,11 +30,14 @@ pub fn serve(
             };
 
             if let Some(dataflow_command) = dataflow_command {
-                for dataflow_command_sender in &dataflow_command_senders {
+                for (index, dataflow_command_sender) in dataflow_command_senders.iter().enumerate()
+                {
                     dataflow_command_sender
                         .unbounded_send((dataflow_command.clone(), command_meta.clone()))
                         // if the dataflow server has gone down, just explode
                         .unwrap();
+
+                    threads[index].unpark();
                 }
             }
 

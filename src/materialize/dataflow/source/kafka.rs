@@ -13,7 +13,7 @@ use std::time::Duration;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::{Scope, Stream};
 
-use crate::clock::{Clock, Timestamp};
+use crate::clock::Timestamp;
 use crate::dataflow::types::{Diff, KafkaSourceConnector};
 use crate::interchange::avro;
 use crate::repr::Datum;
@@ -23,8 +23,9 @@ pub fn kafka<G>(
     name: &str,
     connector: &KafkaSourceConnector,
     done: Rc<Cell<bool>>,
-    clock: &Clock,
-) -> Stream<G, (Datum, Timestamp, Diff)>
+    // clock: &Clock,
+    timer: std::time::Instant,
+) -> Stream<G, (Vec<Datum>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -39,7 +40,7 @@ where
         let name = name.to_owned();
         let activator = scope.activator_for(&info.address[..]);
         let mut maybe_cap = Some(cap);
-        let clock = clock.clone();
+        // let clock = clock.clone();
 
         let mut decoder =
             avro::Decoder::new(&connector.raw_schema, connector.schema_registry_url.clone());
@@ -68,7 +69,7 @@ where
             // Indicate that we should run again.
             activator.activate();
 
-            let ts = clock.now();
+            let ts = timer.elapsed().as_millis() as u64;
 
             // Repeatedly interrogate Kafka for messages. Cease only when
             // Kafka stops returning new data. We could cease earlier, if we
@@ -87,7 +88,7 @@ where
                         };
                         let cap = cap.delayed(&ts);
                         match decoder.decode(payload) {
-                            Ok(d) => output.session(&cap).give((d, *cap.time(), 1)),
+                            Ok(data) => output.session(&cap).give((data, *cap.time(), 1)),
                             Err(err) => error!("avro deserialization error: {}", err),
                         }
                     }
