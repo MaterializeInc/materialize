@@ -113,8 +113,8 @@ where
         while !shutdown {
             // Ask Timely to execute a unit of work.
             // Can either yield tastefully, or busy-wait.
-            self.inner.step_or_park(None);
-            // self.inner.step();
+            // self.inner.step_or_park(None);
+            self.inner.step();
 
             self.process_peeks();
 
