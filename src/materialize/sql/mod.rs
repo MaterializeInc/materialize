@@ -968,7 +968,7 @@ impl Planner {
             exprs.push(ScalarExpr::CallBinary {
                 func: BinaryFunc::Eq,
                 expr1: Box::new(ScalarExpr::Column(l)),
-                expr2: Box::new(ScalarExpr::Column(r)),
+                expr2: Box::new(ScalarExpr::Column(left.columns.len() + r)),
             });
             dropped_columns.insert(r);
         }
