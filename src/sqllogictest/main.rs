@@ -69,7 +69,7 @@ fn main() {
                         if entry.file_type().is_file() {
                             let local_outcomes = sqllogictest::run_file(entry.path(), verbosity, only_parse);
                             if local_outcomes.any_failed() && verbosity >= 1 {
-                                println!("{}", outcomes);
+                                println!("{}", local_outcomes);
                             }
                             outcomes += local_outcomes;
                         } else {
