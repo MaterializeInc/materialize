@@ -1,4 +1,3 @@
-
 // Copyright 2019 Materialize, Inc. All rights reserved.
 //
 // This file is part of Materialize. Materialize may not be used or
@@ -584,7 +583,7 @@ pub mod reduction {
 
 pub mod aggregation {
 
-    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use crate::dataflow::types::RelationExpr;
     use crate::repr::RelationType;
 
     pub struct FractureReduce;
@@ -650,14 +649,12 @@ pub mod aggregation {
                         .map(|k| (0..to_join.len()).map(|a| (a, k)).collect::<Vec<_>>())
                         .collect::<Vec<_>>();
 
-                    let mut projection = (0 .. keys).collect::<Vec<_>>();
-                    for i in 0 .. aggregates_len {
+                    let mut projection = (0..keys).collect::<Vec<_>>();
+                    for i in 0..aggregates_len {
                         projection.push((keys + 1) * i + keys);
                     }
 
-                    *relation =
-                    RelationExpr::join(to_join, variables)
-                        .project(projection);
+                    *relation = RelationExpr::join(to_join, variables).project(projection);
                 }
             }
         }
@@ -677,16 +674,7 @@ pub mod aggregation {
                 self.action(e, &e.typ());
             });
         }
-        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            if let RelationExpr::Reduce {
-                input,
-                group_key,
-                aggregates,
-            } = relation
-            {
-
-            }
-        }
+        pub fn action(&self, _relation: &mut RelationExpr, _metadata: &RelationType) {}
     }
 
     #[cfg(test)]

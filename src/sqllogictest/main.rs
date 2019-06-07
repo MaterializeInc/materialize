@@ -67,7 +67,8 @@ fn main() {
                 match entry {
                     Ok(entry) => {
                         if entry.file_type().is_file() {
-                            let local_outcomes = sqllogictest::run_file(entry.path(), verbosity, only_parse);
+                            let local_outcomes =
+                                sqllogictest::run_file(entry.path(), verbosity, only_parse);
                             if local_outcomes.any_failed() && verbosity >= 1 {
                                 println!("{}", local_outcomes);
                             }
