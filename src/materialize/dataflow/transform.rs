@@ -1,3 +1,4 @@
+
 // Copyright 2019 Materialize, Inc. All rights reserved.
 //
 // This file is part of Materialize. Materialize may not be used or
@@ -613,11 +614,13 @@ pub mod aggregation {
                     projection.push(input.arity());
 
                     let mut to_join = Vec::new();
+                    let aggregates_len = aggregates.len();
                     for (agg, typ) in aggregates.drain(..) {
                         let temp = input
                             .clone()
-                            .map(vec![(agg.expr, typ.clone())]) // TODO: correct for Average?
-                            .project(projection.clone());
+                            // .map(vec![(agg.expr, typ.clone())]) // TODO: correct for Average?
+                            // .project(projection.clone())
+                            ;
 
                         // // TODO: this is not always a win, but it seemed like a way to
                         // // elicit more opportunities for re-use.
@@ -627,11 +630,13 @@ pub mod aggregation {
                         // }
 
                         let single_reduce = temp.reduce(
-                            (0..keys).collect(),
+                            // (0..keys).collect(),
+                            group_key.clone(),
                             vec![(
                                 crate::dataflow::types::AggregateExpr {
                                     func: agg.func,
-                                    expr: ScalarExpr::Column(keys),
+                                    // expr: ScalarExpr::Column(keys),
+                                    expr: agg.expr,
                                     distinct: agg.distinct,
                                 },
                                 typ,
@@ -645,8 +650,41 @@ pub mod aggregation {
                         .map(|k| (0..to_join.len()).map(|a| (a, k)).collect::<Vec<_>>())
                         .collect::<Vec<_>>();
 
-                    *relation = RelationExpr::join(to_join, variables);
+                    let mut projection = (0 .. keys).collect::<Vec<_>>();
+                    for i in 0 .. aggregates_len {
+                        projection.push((keys + 1) * i + keys);
+                    }
+
+                    *relation =
+                    RelationExpr::join(to_join, variables)
+                        .project(projection);
                 }
+            }
+        }
+    }
+
+    pub struct AbelianReduce;
+
+    impl super::Transform for AbelianReduce {
+        fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+            self.transform(relation, metadata)
+        }
+    }
+
+    impl AbelianReduce {
+        pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            relation.visit_mut_inner_pre(&mut |e| {
+                self.action(e, &e.typ());
+            });
+        }
+        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            if let RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } = relation
+            {
+
             }
         }
     }
