@@ -32,7 +32,7 @@ metastore = { path = "../metastore" }
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 rand = "0.6"
-reqwest = "0.9.17"
+reqwest = "0.9.18"
 rdkafka = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
