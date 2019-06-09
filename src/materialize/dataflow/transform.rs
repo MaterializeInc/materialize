@@ -674,7 +674,14 @@ pub mod aggregation {
                 self.action(e, &e.typ());
             });
         }
-        pub fn action(&self, _relation: &mut RelationExpr, _metadata: &RelationType) {}
+        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+            if let RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } = relation
+            {}
+        }
     }
 
     #[cfg(test)]

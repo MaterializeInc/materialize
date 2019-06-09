@@ -348,47 +348,124 @@ where
                 let keys_clone = group_key.clone();
                 let input = build_relation_expr(*input, scope, context, worker_index);
 
-                let arrangement = input
-                    .map(move |tuple| {
+                use crate::dataflow::func::AggregateFunc;
+
+                if aggregates.len() == 1
+                    && ((aggregates[0].0).func == AggregateFunc::SumInt32
+                        || (aggregates[0].0).func == AggregateFunc::SumInt64
+                        || (aggregates[0].0).func == AggregateFunc::Count
+                        || (aggregates[0].0).func == AggregateFunc::CountAll)
+                {
+                    use differential_dataflow::operators::reduce::{Count, Threshold};
+
+                    let expr = (aggregates[0].0).expr.clone();
+                    let mut data = input.map(move |tuple| {
                         (
                             group_key
                                 .iter()
                                 .map(|i| tuple[*i].clone())
                                 .collect::<Vec<_>>(),
-                            tuple,
+                            expr.eval(&tuple[..]),
                         )
-                    })
-                    // .reduce_abelian::<>(move |_key, source, target| {
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |key, source, target| {
-                        let mut result = Vec::with_capacity(key.len() + aggregates.len());
-                        result.extend(key.iter().cloned());
-                        for (_idx, (agg, _typ)) in aggregates.iter().enumerate() {
-                            if agg.distinct {
-                                let iter =
-                                    source
-                                        .iter()
-                                        .flat_map(|(v, w)| {
-                                            if *w > 0 {
-                                                Some(agg.expr.eval(v))
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect::<HashSet<_>>();
-                                result.push((agg.func.func())(iter));
-                            } else {
-                                let iter = source.iter().flat_map(|(v, w)| {
-                                    let eval = agg.expr.eval(v);
-                                    std::iter::repeat(eval).take(std::cmp::max(*w, 0) as usize)
-                                });
-                                result.push((agg.func.func())(iter));
-                            }
-                        }
-                        target.push((result, 1));
                     });
 
-                context.set_local(self_clone, &keys_clone[..], arrangement.clone());
-                arrangement.as_collection(|_key, tuple| tuple.clone())
+                    if (aggregates[0].0).distinct {
+                        data = data.distinct();
+                    }
+
+                    match (aggregates[0].0).func {
+                        AggregateFunc::SumInt32 => data
+                            .explode(|(key, val)| match val {
+                                Datum::Int32(x) => Some((key, x as isize)),
+                                Datum::Null => None,
+                                _ => unreachable!(),
+                            })
+                            .count()
+                            .map(|(mut key, sum)| {
+                                key.push(Datum::Int32(sum as i32));
+                                key
+                            }),
+                        AggregateFunc::SumInt64 => data
+                            .explode(|(key, val)| match val {
+                                Datum::Int64(x) => Some((key, x as isize)),
+                                Datum::Null => None,
+                                _ => unreachable!(),
+                            })
+                            .count()
+                            .map(|(mut key, sum)| {
+                                key.push(Datum::Int64(sum as i64));
+                                key
+                            }),
+                        AggregateFunc::Count => {
+                            use differential_dataflow::operators::reduce::Reduce;
+
+                            data.map(|(key, val)| (key, val.is_null()))
+                                .reduce(|_key, src, tgt| {
+                                    let mut sum = 0;
+                                    for (nul, wgt) in src.iter() {
+                                        if !(**nul) {
+                                            sum += wgt;
+                                        }
+                                    }
+                                    tgt.push((sum, 1));
+                                })
+                                .map(|(mut key, sum)| {
+                                    key.push(Datum::Int64(sum as i64));
+                                    key
+                                })
+                        }
+                        AggregateFunc::CountAll => {
+                            data.map(|(key, val)| key).count().map(|(mut key, sum)| {
+                                key.push(Datum::Int64(sum as i64));
+                                key
+                            })
+                        }
+                        _ => unreachable!(),
+                    }
+                } else {
+                    let arrangement = input
+                        .map(move |tuple| {
+                            (
+                                group_key
+                                    .iter()
+                                    .map(|i| tuple[*i].clone())
+                                    .collect::<Vec<_>>(),
+                                tuple,
+                            )
+                        })
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            move |key, source, target| {
+                                let mut result = Vec::with_capacity(key.len() + aggregates.len());
+                                result.extend(key.iter().cloned());
+                                for (_idx, (agg, _typ)) in aggregates.iter().enumerate() {
+                                    if agg.distinct {
+                                        let iter = source
+                                            .iter()
+                                            .flat_map(|(v, w)| {
+                                                if *w > 0 {
+                                                    Some(agg.expr.eval(v))
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect::<HashSet<_>>();
+                                        result.push((agg.func.func())(iter));
+                                    } else {
+                                        let iter = source.iter().flat_map(|(v, w)| {
+                                            let eval = agg.expr.eval(v);
+                                            std::iter::repeat(eval)
+                                                .take(std::cmp::max(*w, 0) as usize)
+                                        });
+                                        result.push((agg.func.func())(iter));
+                                    }
+                                }
+                                target.push((result, 1));
+                            },
+                        );
+
+                    context.set_local(self_clone, &keys_clone[..], arrangement.clone());
+                    arrangement.as_collection(|_key, tuple| tuple.clone())
+                }
             }
 
             RelationExpr::TopK {
