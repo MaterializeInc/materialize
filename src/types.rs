@@ -481,7 +481,7 @@ impl Value {
         let (_, inner) = schema
             .find_schema(&v)
             .ok_or_else(|| SchemaResolutionError::new("Could not find matching type in union"))?;
-        v.resolve(inner)
+        Ok(Value::Union(Box::new(v.resolve(inner)?)))
     }
 
     fn resolve_array(self, schema: &Schema) -> Result<Self, Error> {
@@ -746,5 +746,22 @@ mod tests {
     fn resolve_bytes_failure() {
         let value = Value::Array(vec![Value::Int(2000), Value::Int(-42)]);
         assert!(value.resolve(&Schema::Bytes).is_err());
+    }
+
+    #[test]
+    fn resolve_union_ok() {
+        let value = Value::Long(0);
+        let reader_schema = Schema::parse_str(r#"["string", "long"]"#).unwrap();
+        assert_eq!(
+            value.resolve(&reader_schema).unwrap(),
+            Value::Union(Box::new(Value::Long(0))),
+        )
+    }
+
+    #[test]
+    fn resolve_union_err() {
+        let value = Value::Double(0.0);
+        let reader_schema = Schema::parse_str(r#"["string", "long"]"#).unwrap();
+        assert!(value.resolve(&reader_schema).is_err());
     }
 }
