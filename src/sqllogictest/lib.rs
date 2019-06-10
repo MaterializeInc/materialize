@@ -193,7 +193,12 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                         Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
                 }
                 let column_names = if check_column_names {
-                    Some(split_at(&mut input, &LINE_REGEX)?.split(' ').collect())
+                    Some(
+                        split_at(&mut input, &LINE_REGEX)?
+                            .split(' ')
+                            .filter(|s| !s.is_empty())
+                            .collect(),
+                    )
                 } else {
                     None
                 };
@@ -202,7 +207,12 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                         num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
                         md5: captures.get(2).unwrap().as_str(),
                     },
-                    None => Output::Values(input.trim().lines().collect()),
+                    None => {
+                        lazy_static! {
+                            static ref WHITESPACE_REGEX: Regex = Regex::new(r"\s+").unwrap();
+                        }
+                        Output::Values(WHITESPACE_REGEX.split(input.trim()).collect())
+                    }
                 };
                 Ok(Some(Record::Query {
                     sql,
