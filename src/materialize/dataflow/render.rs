@@ -363,13 +363,12 @@ where
                 // Track whether aggregations are Abelian (and so accumulable) or not.
                 let mut abelian = Vec::new();
                 for (aggregate, _type) in aggregates.iter() {
-                    let accumulable =
-                    match aggregate.func {
+                    let accumulable = match aggregate.func {
                         AggregateFunc::SumInt32 => !aggregate.distinct,
                         AggregateFunc::SumInt64 => !aggregate.distinct,
                         AggregateFunc::AvgInt32 => !aggregate.distinct,
                         AggregateFunc::AvgInt64 => !aggregate.distinct,
-                        AggregateFunc::Count    => !aggregate.distinct,
+                        AggregateFunc::Count => !aggregate.distinct,
                         AggregateFunc::CountAll => !aggregate.distinct,
                         _ => false,
                     };
@@ -382,12 +381,9 @@ where
 
                 // Our first action is to take our input from a collection of `tuple`
                 // to one structured as `((keys, vals), time, aggs)`
-                let exploded =
-                input
+                let exploded = input
                     .map(move |tuple| {
-
-                        let keys =
-                        group_key
+                        let keys = group_key
                             .iter()
                             .map(|i| tuple[*i].clone())
                             .collect::<Vec<_>>();
@@ -396,7 +392,6 @@ where
                         let mut aggs = vec![1isize];
 
                         for (index, (aggregate, _type)) in aggregates_clone.iter().enumerate() {
-
                             // Presently, we can accumulate in the difference field only
                             // if the aggregation has a known type and does not require
                             // us to accumulate only distinct elements.
@@ -411,8 +406,7 @@ where
                             // be passed along.
                             if !abelian2[index] {
                                 vals.push(eval);
-                            }
-                            else {
+                            } else {
                                 // We can promote the content of `eval` into the difference,
                                 // but we need to retain the NULL-ness somewhere so that we
                                 // can distinguish zero accumulations from those that are
@@ -423,11 +417,11 @@ where
                                 match aggregate.func {
                                     AggregateFunc::CountAll => {
                                         // Nothing beyond the accumulated count is needed.
-                                    },
+                                    }
                                     AggregateFunc::Count => {
                                         // Count needs to distinguish nulls from zero.
                                         aggs.push(if eval.is_null() { 0 } else { 1 });
-                                    },
+                                    }
                                     _ => {
                                         // Other accumulations need to disentangle the accumulable
                                         // value from its NULL-ness, which is not quite as easily
@@ -441,135 +435,128 @@ where
                                         aggs.push(value);
                                         aggs.push(non_null);
                                     }
-// <<<<<<< HEAD
-//                                     tgt.push((sum, 1));
-//                                 })
-//                                 .map(|(mut key, sum)| {
-//                                     key.push(Datum::Int64(sum as i64));
-//                                     key
-//                                 })
-//                         }
-//                         AggregateFunc::CountAll => {
-//                             data.map(|(key, _val)| key).count().map(|(mut key, sum)| {
-//                                 key.push(Datum::Int64(sum as i64));
-//                                 key
-//                             })
-// =======
                                 }
                             }
-// >>>>>>> reduce_tests
                         }
 
                         // A DiffVector holds multiple monoidal accumulations.
-                        (keys, vals, differential_dataflow::difference::DiffVector::new(aggs))
+                        (
+                            keys,
+                            vals,
+                            differential_dataflow::difference::DiffVector::new(aggs),
+                        )
                     })
                     .explode(|(keys, vals, aggs)| Some(((keys, vals), aggs)));
 
-                    // We now reduce by `keys`, performing both Abelian and non-Abelian aggregations.
-                    let arrangement =
-                    exploded
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-                            move |key, source, target| {
-                                // Our output will be [keys; aggregates].
-                                let mut result = Vec::with_capacity(key.len() + aggregates.len());
-                                result.extend(key.iter().cloned());
+                // We now reduce by `keys`, performing both Abelian and non-Abelian aggregations.
+                let arrangement = exploded.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                    move |key, source, target| {
+                        // Our output will be [keys; aggregates].
+                        let mut result = Vec::with_capacity(key.len() + aggregates.len());
+                        result.extend(key.iter().cloned());
 
-                                let mut abelian_pos = 1;        // <- advance past the count
-                                let mut non_abelian_pos = 0;
+                        let mut abelian_pos = 1; // <- advance past the count
+                        let mut non_abelian_pos = 0;
 
-                                let record_count: isize = source.iter().map(|(_,w)| w[0]).sum();
+                        let record_count: isize = source.iter().map(|(_, w)| w[0]).sum();
 
-                                for ((agg,_typ),abl) in aggregates.iter().zip(abelian.iter()) {
-                                    if *abl {
-                                        let value =
-                                        match agg.func {
-                                            AggregateFunc::SumInt32 => {
-                                                let total = source.iter().map(|(_,w)| w[abelian_pos] as i32).sum();
-                                                let non_nulls: isize = source.iter().map(|(_,w)| w[abelian_pos+1]).sum();
-                                                abelian_pos += 2;
-                                                if non_nulls > 0 {
-                                                    Datum::Int32(total)
-                                                }
-                                                else {
-                                                    Datum::Null
-                                                }
-                                            }
-                                            AggregateFunc::SumInt64 => {
-                                                let total = source.iter().map(|(_,w)| w[abelian_pos] as i64).sum();
-                                                let non_nulls: isize = source.iter().map(|(_,w)| w[abelian_pos+1]).sum();
-                                                abelian_pos += 2;
-                                                if non_nulls > 0 {
-                                                    Datum::Int64(total)
-                                                }
-                                                else {
-                                                    Datum::Null
-                                                }
-                                            }
-                                            AggregateFunc::AvgInt32 => {
-                                                let total: i32 = source.iter().map(|(_,w)| w[abelian_pos] as i32).sum();
-                                                let non_nulls: i32 = source.iter().map(|(_,w)| w[abelian_pos+1] as i32).sum();
-                                                abelian_pos += 2;
-                                                if non_nulls > 0 {
-                                                    Datum::Int32(total / non_nulls)
-                                                }
-                                                else {
-                                                    Datum::Null
-                                                }
-                                            }
-                                            AggregateFunc::AvgInt64 => {
-                                                let total: i64 = source.iter().map(|(_,w)| w[abelian_pos] as i64).sum();
-                                                let non_nulls: i64 = source.iter().map(|(_,w)| w[abelian_pos+1] as i64).sum();
-                                                abelian_pos += 2;
-                                                if non_nulls > 0 {
-                                                    Datum::Int64(total / non_nulls)
-                                                }
-                                                else {
-                                                    Datum::Null
-                                                }
-                                            }
-                                            AggregateFunc::Count => {
-                                                // Does not count NULLs.
-                                                let total = source.iter().map(|(_,w)| w[abelian_pos] as i64).sum();
-                                                abelian_pos += 1;
-                                                Datum::Int64(total)
-                                            }
-                                            AggregateFunc::CountAll => {
-                                                Datum::Int64(record_count as i64)
-                                            }
-                                            x => panic!("Surprising Abelian aggregation: {:?}", x),
-                                        };
-                                        result.push(value);
-                                    }
-                                    else {
-                                        if agg.distinct {
-                                            let iter = source
-                                                .iter()
-                                                .flat_map(|(v, w)| {
-                                                    if w[0] > 0 {   // <-- really should be true
-                                                        Some(v[non_abelian_pos].clone())
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
-                                                .collect::<HashSet<_>>();
-                                            result.push((agg.func.func())(iter));
+                        for ((agg, _typ), abl) in aggregates.iter().zip(abelian.iter()) {
+                            if *abl {
+                                let value = match agg.func {
+                                    AggregateFunc::SumInt32 => {
+                                        let total =
+                                            source.iter().map(|(_, w)| w[abelian_pos] as i32).sum();
+                                        let non_nulls: isize =
+                                            source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
+                                        abelian_pos += 2;
+                                        if non_nulls > 0 {
+                                            Datum::Int32(total)
                                         } else {
-                                            let iter = source.iter().flat_map(|(v, w)| {
-                                                // let eval = agg.expr.eval(v);
-                                                std::iter::repeat(v[non_abelian_pos].clone())
-                                                    .take(std::cmp::max(w[0], 0) as usize)
-                                            });
-                                            result.push((agg.func.func())(iter));
+                                            Datum::Null
                                         }
-                                        non_abelian_pos += 1;
                                     }
+                                    AggregateFunc::SumInt64 => {
+                                        let total =
+                                            source.iter().map(|(_, w)| w[abelian_pos] as i64).sum();
+                                        let non_nulls: isize =
+                                            source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
+                                        abelian_pos += 2;
+                                        if non_nulls > 0 {
+                                            Datum::Int64(total)
+                                        } else {
+                                            Datum::Null
+                                        }
+                                    }
+                                    AggregateFunc::AvgInt32 => {
+                                        let total: i32 =
+                                            source.iter().map(|(_, w)| w[abelian_pos] as i32).sum();
+                                        let non_nulls: i32 = source
+                                            .iter()
+                                            .map(|(_, w)| w[abelian_pos + 1] as i32)
+                                            .sum();
+                                        abelian_pos += 2;
+                                        if non_nulls > 0 {
+                                            Datum::Int32(total / non_nulls)
+                                        } else {
+                                            Datum::Null
+                                        }
+                                    }
+                                    AggregateFunc::AvgInt64 => {
+                                        let total: i64 =
+                                            source.iter().map(|(_, w)| w[abelian_pos] as i64).sum();
+                                        let non_nulls: i64 = source
+                                            .iter()
+                                            .map(|(_, w)| w[abelian_pos + 1] as i64)
+                                            .sum();
+                                        abelian_pos += 2;
+                                        if non_nulls > 0 {
+                                            Datum::Int64(total / non_nulls)
+                                        } else {
+                                            Datum::Null
+                                        }
+                                    }
+                                    AggregateFunc::Count => {
+                                        // Does not count NULLs.
+                                        let total =
+                                            source.iter().map(|(_, w)| w[abelian_pos] as i64).sum();
+                                        abelian_pos += 1;
+                                        Datum::Int64(total)
+                                    }
+                                    AggregateFunc::CountAll => Datum::Int64(record_count as i64),
+                                    x => panic!("Surprising Abelian aggregation: {:?}", x),
+                                };
+                                result.push(value);
+                            } else {
+                                if agg.distinct {
+                                    let iter = source
+                                        .iter()
+                                        .flat_map(|(v, w)| {
+                                            if w[0] > 0 {
+                                                // <-- really should be true
+                                                Some(v[non_abelian_pos].clone())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect::<HashSet<_>>();
+                                    result.push((agg.func.func())(iter));
+                                } else {
+                                    let iter = source.iter().flat_map(|(v, w)| {
+                                        // let eval = agg.expr.eval(v);
+                                        std::iter::repeat(v[non_abelian_pos].clone())
+                                            .take(std::cmp::max(w[0], 0) as usize)
+                                    });
+                                    result.push((agg.func.func())(iter));
                                 }
-                                target.push((result, 1));
-                            },
-                        );
+                                non_abelian_pos += 1;
+                            }
+                        }
+                        target.push((result, 1));
+                    },
+                );
 
-                    context.set_local(self_clone, &keys_clone[..], arrangement.clone());
-                    arrangement.as_collection(|_key, tuple| tuple.clone())
+                context.set_local(self_clone, &keys_clone[..], arrangement.clone());
+                arrangement.as_collection(|_key, tuple| tuple.clone())
             }
 
             RelationExpr::TopK {
