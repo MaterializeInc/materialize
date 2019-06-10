@@ -7,7 +7,10 @@
 # table also contains the pair 44/42 so that a test with a non-trivial
 # ON condition can be written.
 statement ok
-CREATE TABLE onecolumn (x INT); INSERT INTO onecolumn(x) VALUES (44), (NULL), (42)
+CREATE TABLE onecolumn (x INT)
+
+statement ok
+INSERT INTO onecolumn(x) VALUES (44), (NULL), (42)
 
 query II colnames,rowsort
 SELECT * FROM onecolumn AS a(x) CROSS JOIN onecolumn AS b(y)
@@ -102,7 +105,10 @@ SELECT * FROM onecolumn AS a NATURAL RIGHT OUTER JOIN onecolumn AS b
 NULL
 
 statement ok
-CREATE TABLE onecolumn_w(w INT); INSERT INTO onecolumn_w(w) VALUES (42),(43)
+CREATE TABLE onecolumn_w(w INT)
+
+statement ok
+INSERT INTO onecolumn_w(w) VALUES (42),(43)
 
 query II colnames,rowsort
 SELECT * FROM onecolumn AS a NATURAL JOIN onecolumn_w as b
@@ -116,7 +122,10 @@ NULL  43
   42  43
 
 statement ok
-CREATE TABLE othercolumn (x INT); INSERT INTO othercolumn(x) VALUES (43),(42),(16)
+CREATE TABLE othercolumn (x INT)
+
+statement ok
+INSERT INTO othercolumn(x) VALUES (43),(42),(16)
 
 query II colnames
 SELECT * FROM onecolumn AS a FULL OUTER JOIN othercolumn AS b ON a.x = b.x ORDER BY a.x,b.x
@@ -276,7 +285,10 @@ NULL
 44
 
 statement ok
-CREATE TABLE twocolumn (x INT, y INT); INSERT INTO twocolumn(x, y) VALUES (44,51), (NULL,52), (42,53), (45,45)
+CREATE TABLE twocolumn (x INT, y INT)
+
+statement ok
+INSERT INTO twocolumn(x, y) VALUES (44,51), (NULL,52), (42,53), (45,45)
 
 # Natural joins with partial match
 query II colnames,rowsort
@@ -335,10 +347,16 @@ NULL  2     NULL
 ## Simple test cases for inner, left, right, and outer joins
 
 statement ok
-CREATE TABLE a (i int); INSERT INTO a VALUES (1), (2), (3)
+CREATE TABLE a (i int)
 
 statement ok
-CREATE TABLE b (i int, b bool); INSERT INTO b VALUES (2, true), (3, true), (4, false)
+INSERT INTO a VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE b (i int, b bool)
+
+statement ok
+INSERT INTO b VALUES (2, true), (3, true), (4, false)
 
 query IIB rowsort
 SELECT * FROM a INNER JOIN b ON a.i = b.i
@@ -491,11 +509,17 @@ query error column "a.y" does not exist
 SELECT * FROM (onecolumn AS a JOIN onecolumn AS b ON a.y > y)
 
 statement ok
-CREATE TABLE s(x INT); INSERT INTO s(x) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10)
+CREATE TABLE s(x INT)
+
+statement ok
+INSERT INTO s(x) VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10)
 
 # Ensure that large cross-joins are optimized somehow (#10633)
 statement ok
-CREATE TABLE customers(id INT PRIMARY KEY NOT NULL); CREATE TABLE orders(id INT, cust INT REFERENCES customers(id))
+CREATE TABLE customers(id INT PRIMARY KEY NOT NULL)
+
+statement ok
+CREATE TABLE orders(id INT, cust INT REFERENCES customers(id))
 
 query TTTTTTTTIIITTI
 SELECT     NULL::text  AS pktable_cat,

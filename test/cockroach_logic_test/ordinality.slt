@@ -15,7 +15,10 @@ ordinality
 2
 
 statement ok
-CREATE TABLE foo (x CHAR PRIMARY KEY); INSERT INTO foo(x) VALUES ('a'), ('b')
+CREATE TABLE foo (x CHAR PRIMARY KEY)
+
+statement ok
+INSERT INTO foo(x) VALUES ('a'), ('b')
 
 query TI
 SELECT * FROM foo WITH ORDINALITY

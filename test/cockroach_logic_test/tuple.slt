@@ -1,7 +1,10 @@
 # LogicTest: local local-opt fakedist fakedist-opt fakedist-metadata fakedist-disk
 
 statement ok
-CREATE TABLE tb(unused INT); INSERT INTO tb VALUES (1)
+CREATE TABLE tb(unused INT)
+
+statement ok
+INSERT INTO tb VALUES (1)
 
 subtest empty_tuple
 

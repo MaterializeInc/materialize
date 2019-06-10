@@ -2,10 +2,20 @@
 
 statement ok
 CREATE TABLE t (k INT PRIMARY KEY, str STRING);
+
+statement ok
 CREATE TABLE u (l INT PRIMARY KEY, str2 STRING);
+
+statement ok
 CREATE TABLE v (m INT PRIMARY KEY, str3 STRING);
+
+statement ok
 INSERT INTO t SELECT i, to_english(i) FROM generate_series(1, 5) AS g(i);
+
+statement ok
 INSERT INTO u SELECT i, to_english(i) FROM generate_series(1, 5) AS g(i);
+
+statement ok
 INSERT INTO v SELECT i, to_english(i) FROM generate_series(1, 5) AS g(i);
 
 statement ok

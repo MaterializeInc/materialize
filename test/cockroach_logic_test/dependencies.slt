@@ -2,17 +2,39 @@
 
 statement ok
 CREATE TABLE test_kv(k INT PRIMARY KEY, v INT, w DECIMAL);
-  CREATE UNIQUE INDEX test_v_idx ON test_kv(v);
-  CREATE INDEX test_v_idx2 ON test_kv(v DESC) STORING(w);
-  CREATE INDEX test_v_idx3 ON test_kv(w) STORING(v);
-  CREATE TABLE test_kvr1(k INT PRIMARY KEY REFERENCES test_kv(k));
-  CREATE TABLE test_kvr2(k INT, v INT UNIQUE REFERENCES test_kv(k));
-  CREATE TABLE test_kvr3(k INT, v INT UNIQUE REFERENCES test_kv(v));
-  CREATE TABLE test_kvi1(k INT PRIMARY KEY) INTERLEAVE IN PARENT test_kv(k);
-  CREATE TABLE test_kvi2(k INT PRIMARY KEY, v INT);
-  CREATE UNIQUE INDEX test_kvi2_idx ON test_kvi2(v) INTERLEAVE IN PARENT test_kv(v);
-  CREATE VIEW test_v1 AS SELECT v FROM test_kv;
-  CREATE VIEW test_v2 AS SELECT v FROM test_v1;
+
+statement ok
+CREATE UNIQUE INDEX test_v_idx ON test_kv(v);
+
+statement ok
+CREATE INDEX test_v_idx2 ON test_kv(v DESC) STORING(w);
+
+statement ok
+CREATE INDEX test_v_idx3 ON test_kv(w) STORING(v);
+
+statement ok
+CREATE TABLE test_kvr1(k INT PRIMARY KEY REFERENCES test_kv(k));
+
+statement ok
+CREATE TABLE test_kvr2(k INT, v INT UNIQUE REFERENCES test_kv(k));
+
+statement ok
+CREATE TABLE test_kvr3(k INT, v INT UNIQUE REFERENCES test_kv(v));
+
+statement ok
+CREATE TABLE test_kvi1(k INT PRIMARY KEY) INTERLEAVE IN PARENT test_kv(k);
+
+statement ok
+CREATE TABLE test_kvi2(k INT PRIMARY KEY, v INT);
+
+statement ok
+CREATE UNIQUE INDEX test_kvi2_idx ON test_kvi2(v) INTERLEAVE IN PARENT test_kv(v);
+
+statement ok
+CREATE VIEW test_v1 AS SELECT v FROM test_kv;
+
+statement ok
+CREATE VIEW test_v2 AS SELECT v FROM test_v1;
 
 query ITITTBTB colnames
 SELECT * FROM crdb_internal.table_columns WHERE descriptor_name LIKE 'test_%' ORDER BY descriptor_id, column_id

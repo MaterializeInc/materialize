@@ -8,20 +8,26 @@
 # enough to provide many interesting correlated subquery variations.
 # ------------------------------------------------------------------------------
 statement ok
-CREATE TABLE c (c_id INT PRIMARY KEY, bill TEXT);
-CREATE TABLE o (o_id INT PRIMARY KEY, c_id INT, ship TEXT);
+CREATE TABLE c (c_id INT PRIMARY KEY, bill TEXT)
+
+statement ok
+CREATE TABLE o (o_id INT PRIMARY KEY, c_id INT, ship TEXT)
+
+statement ok
 INSERT INTO c VALUES
     (1, 'CA'),
     (2, 'TX'),
     (3, 'MA'),
     (4, 'TX'),
     (5, NULL),
-    (6, 'FL');
+    (6, 'FL')
+
+statement ok
 INSERT INTO o VALUES
     (10, 1, 'CA'), (20, 1, 'CA'), (30, 1, 'CA'),
     (40, 2, 'CA'), (50, 2, 'TX'), (60, 2, NULL),
     (70, 4, 'WY'), (80, 4, NULL),
-    (90, 6, 'WA');
+    (90, 6, 'WA')
 
 # ------------------------------------------------------------------------------
 # Subqueries in select filters.
@@ -1008,9 +1014,13 @@ statement ok
 CREATE TABLE groups(
   id SERIAL PRIMARY KEY,
   data JSONB
-);
-INSERT INTO groups(data) VALUES('{"name": "Group 1", "members": [{"name": "admin", "type": "USER"}, {"name": "user", "type": "USER"}]}');
-INSERT INTO groups(data) VALUES('{"name": "Group 2", "members": [{"name": "admin2", "type": "USER"}]}');
+)
+
+statement ok
+INSERT INTO groups(data) VALUES('{"name": "Group 1", "members": [{"name": "admin", "type": "USER"}, {"name": "user", "type": "USER"}]}')
+
+statement ok
+INSERT INTO groups(data) VALUES('{"name": "Group 2", "members": [{"name": "admin2", "type": "USER"}]}')
 
 query TT
 SELECT
@@ -1095,10 +1105,16 @@ CREATE TABLE users (
     id INT8 NOT NULL DEFAULT unique_rowid(),
     name VARCHAR(50),
     PRIMARY KEY (id)
-);
-INSERT INTO users(id, name) VALUES (1, 'user1');
-INSERT INTO users(id, name) VALUES (2, 'user2');
-INSERT INTO users(id, name) VALUES (3, 'user3');
+)
+
+statement ok
+INSERT INTO users(id, name) VALUES (1, 'user1')
+
+statement ok
+INSERT INTO users(id, name) VALUES (2, 'user2')
+
+statement ok
+INSERT INTO users(id, name) VALUES (3, 'user3')
 
 statement ok
 CREATE TABLE stuff (
@@ -1107,13 +1123,25 @@ CREATE TABLE stuff (
     user_id INT8,
     PRIMARY KEY (id),
     FOREIGN KEY (user_id) REFERENCES users (id)
-);
-INSERT INTO stuff(id, date, user_id) VALUES (1, '2007-10-15'::DATE, 1);
-INSERT INTO stuff(id, date, user_id) VALUES (2, '2007-12-15'::DATE, 1);
-INSERT INTO stuff(id, date, user_id) VALUES (3, '2007-11-15'::DATE, 1);
-INSERT INTO stuff(id, date, user_id) VALUES (4, '2008-01-15'::DATE, 2);
-INSERT INTO stuff(id, date, user_id) VALUES (5, '2007-06-15'::DATE, 3);
-INSERT INTO stuff(id, date, user_id) VALUES (6, '2007-03-15'::DATE, 3);
+)
+
+statement ok
+INSERT INTO stuff(id, date, user_id) VALUES (1, '2007-10-15'::DATE, 1)
+
+statement ok
+INSERT INTO stuff(id, date, user_id) VALUES (2, '2007-12-15'::DATE, 1)
+
+statement ok
+INSERT INTO stuff(id, date, user_id) VALUES (3, '2007-11-15'::DATE, 1)
+
+statement ok
+INSERT INTO stuff(id, date, user_id) VALUES (4, '2008-01-15'::DATE, 2)
+
+statement ok
+INSERT INTO stuff(id, date, user_id) VALUES (5, '2007-06-15'::DATE, 3)
+
+statement ok
+INSERT INTO stuff(id, date, user_id) VALUES (6, '2007-03-15'::DATE, 3)
 
 query ITITI
 SELECT
