@@ -1,0 +1,21 @@
+# LogicTest: local local-opt
+
+# CCL-only statements error out trying to handle the parsed statements.
+
+statement error pgcode XXC01 a CCL binary is required to use this statement type: \*tree\.Backup
+BACKUP foo TO "bar"
+
+statement error pgcode XXC01 a CCL binary is required to use this statement type: \*tree\.Restore
+RESTORE foo FROM "bar"
+
+statement error pgcode XXC01 a CCL binary is required to use this statement type: \*tree\.CreateRole
+CREATE ROLE foo
+
+statement error pgcode XXC01 a CCL binary is required to use this statement type: \*tree\.DropRole
+DROP ROLE foo
+
+statement error pgcode XXC01 a CCL binary is required to use this statement type: \*tree\.GrantRole
+GRANT foo TO testuser
+
+statement error pgcode XXC01 a CCL binary is required to use this statement type: \*tree\.RevokeRole
+REVOKE foo FROM testuser

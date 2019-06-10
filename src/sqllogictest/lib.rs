@@ -30,6 +30,8 @@ pub enum Type {
     Text,
     Integer,
     Real,
+    Bytes,
+    Oid,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,17 +48,24 @@ pub enum Output<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueryOutput<'a> {
+    types: Vec<Type>,
+    sort: Sort,
+    label: Option<&'a str>,
+    column_names: Option<Vec<&'a str>>,
+    output: Output<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record<'a> {
     Statement {
         should_run: bool,
+        rows_inserted: Option<usize>,
         sql: &'a str,
     },
     Query {
-        types: Vec<Type>,
-        sort: Sort,
-        label: Option<&'a str>,
         sql: &'a str,
-        output: Output<'a>,
+        output: Result<QueryOutput<'a>, &'a str>,
     },
     HashThreshold {
         threshold: u64,
@@ -84,6 +93,8 @@ fn parse_types(input: &str) -> Result<Vec<Type>, failure::Error> {
                 'T' => Type::Text,
                 'I' => Type::Integer,
                 'R' => Type::Real,
+                'B' => Type::Bytes,
+                'O' => Type::Oid,
                 _ => bail!("Unexpected type char {} in: {}", char, input),
             })
         })
@@ -113,58 +124,97 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
         return parse_record(input);
     }
 
-    let mut words = first_line.split(' ');
+    let mut words = first_line.split(' ').peekable();
     match words.next().unwrap() {
         "statement" => {
-            let should_run = match words
-                .next()
-                .ok_or_else(|| format_err!("missing should_run in: {}", first_line))?
-            {
-                "ok" => true,
-                "error" => false,
-                other => bail!("invalid should_run in: {}", other),
+            let (should_run, rows_inserted) = match words.next() {
+                Some("count") => (
+                    true,
+                    Some(
+                        words
+                            .next()
+                            .ok_or_else(|| format_err!("missing insert count"))?
+                            .parse::<usize>()
+                            .map_err(|err| format_err!("parsing insert count: {}", err))?,
+                    ),
+                ),
+                Some("ok") | Some("OK") => (true, None),
+                Some("error") => (false, None),
+                Some(other) => bail!("invalid should_run in: {}", other),
+                None => (true, None),
             };
             let sql = parse_sql(&mut input)?;
             if input != "" {
                 bail!("leftover input: {}", input)
             }
-            Ok(Some(Record::Statement { should_run, sql }))
+            Ok(Some(Record::Statement {
+                should_run,
+                rows_inserted,
+                sql,
+            }))
         }
         "query" => {
-            let types = parse_types(
-                words
-                    .next()
-                    .ok_or_else(|| format_err!("missing types in: {}", first_line))?,
-            )?;
-            let sort = match words
-                .next()
-                .ok_or_else(|| format_err!("missing sort in: {}", first_line))?
-            {
-                "nosort" => Sort::No,
-                "rowsort" => Sort::Row,
-                "valuesort" => Sort::Value,
-                other => bail!("Unknown sort option: {}", other),
-            };
-            let label = words.next();
-            let sql = parse_sql(&mut input)?;
-            lazy_static! {
-                static ref HASH_REGEX: Regex =
-                    Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
+            if words.peek() == Some(&"error") {
+                let error = &first_line[12..]; // everything after "query error "
+                let sql = input;
+                Ok(Some(Record::Query {
+                    sql,
+                    output: Err(error),
+                }))
+            } else {
+                let types = parse_types(
+                    words
+                        .next()
+                        .ok_or_else(|| format_err!("missing types in: {}", first_line))?,
+                )?;
+                let mut sort = Sort::No;
+                let mut check_column_names = false;
+                let mut label = None;
+                for word in words {
+                    match word {
+                        "nosort" => sort = Sort::No,
+                        "rowsort" => sort = Sort::Row,
+                        "valuesort" => sort = Sort::Value,
+                        "colnames" => check_column_names = true,
+                        other => {
+                            if other.starts_with("partialsort") {
+                                // TODO(jamii) https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/logic.go#L153
+                                sort = Sort::Row
+                            } else {
+                                label = Some(other);
+                            }
+                        }
+                    };
+                }
+                let sql = parse_sql(&mut input)?;
+                lazy_static! {
+                    static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
+                    static ref HASH_REGEX: Regex =
+                        Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
+                }
+                let column_names = if check_column_names {
+                    Some(split_at(&mut input, &LINE_REGEX)?.split(' ').collect())
+                } else {
+                    None
+                };
+                let output = match HASH_REGEX.captures(input) {
+                    Some(captures) => Output::Hashed {
+                        num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
+                        md5: captures.get(2).unwrap().as_str(),
+                    },
+                    None => Output::Values(input.trim().lines().collect()),
+                };
+                Ok(Some(Record::Query {
+                    sql,
+                    output: Ok(QueryOutput {
+                        types,
+                        sort,
+                        label,
+                        column_names,
+                        output,
+                    }),
+                }))
             }
-            let output = match HASH_REGEX.captures(input) {
-                Some(captures) => Output::Hashed {
-                    num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
-                    md5: captures.get(2).unwrap().as_str(),
-                },
-                None => Output::Values(input.trim().lines().collect()),
-            };
-            Ok(Some(Record::Query {
-                types,
-                sort,
-                label,
-                sql,
-                output,
-            }))
         }
         "hash-threshold" => {
             let threshold = words
@@ -199,6 +249,10 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
         }
 
         "halt" => Ok(Some(Record::Halt)),
+
+        // this is some cockroach-specific thing, we don't care
+        "subtest" | "user" | "kv-batch-size" => Ok(None),
+
         other => bail!("Unexpected start of record: {}", other),
     }
 }
@@ -229,9 +283,20 @@ pub enum Outcome<'a> {
     PlanFailure {
         error: failure::Error,
     },
+    UnexpectedPlanSuccess {
+        expected_error: &'a str,
+    },
+    WrongNumberOfRowsInserted {
+        expected_rows_inserted: usize,
+        actual_response: SqlResponse,
+    },
     InferenceFailure {
         expected_types: &'a [Type],
         inferred_types: Vec<ColumnType>,
+    },
+    WrongColumnNames {
+        expected_column_names: &'a Vec<&'a str>,
+        inferred_column_names: Vec<Option<String>>,
     },
     OutputFailure {
         expected_output: &'a Output<'a>,
@@ -243,7 +308,7 @@ pub enum Outcome<'a> {
     Success,
 }
 
-const NUM_OUTCOMES: usize = 7;
+const NUM_OUTCOMES: usize = 10;
 
 impl<'a> Outcome<'a> {
     fn code(&self) -> usize {
@@ -251,10 +316,13 @@ impl<'a> Outcome<'a> {
             Outcome::Unsupported { .. } => 0,
             Outcome::ParseFailure { .. } => 1,
             Outcome::PlanFailure { .. } => 2,
-            Outcome::InferenceFailure { .. } => 3,
-            Outcome::OutputFailure { .. } => 4,
-            Outcome::Bail { .. } => 5,
-            Outcome::Success => 6,
+            Outcome::UnexpectedPlanSuccess { .. } => 3,
+            Outcome::WrongNumberOfRowsInserted { .. } => 4,
+            Outcome::InferenceFailure { .. } => 5,
+            Outcome::WrongColumnNames { .. } => 6,
+            Outcome::OutputFailure { .. } => 7,
+            Outcome::Bail { .. } => 8,
+            Outcome::Success => 9,
         }
     }
 }
@@ -288,6 +356,9 @@ impl FromStr for Outcomes {
             pieces[4].parse()?,
             pieces[5].parse()?,
             pieces[6].parse()?,
+            pieces[7].parse()?,
+            pieces[8].parse()?,
+            pieces[9].parse()?,
         ]))
     }
 }
@@ -296,7 +367,7 @@ impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "unsupported={} parse-failure={} plan-failure={} inference-failure={} output-failure={} bail={} success={} total={}",
+            "unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
             self.0[0],
             self.0[1],
             self.0[2],
@@ -304,6 +375,9 @@ impl fmt::Display for Outcomes {
             self.0[4],
             self.0[5],
             self.0[6],
+            self.0[7],
+            self.0[8],
+            self.0[9],
             self.0.iter().sum::<usize>(),
         )
     }
@@ -337,17 +411,10 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
         .iter()
         .zip(row.iter())
         .map(|(typ, datum)| match (typ, datum) {
+            // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
             (_, Datum::Null) => "NULL".to_owned(),
-
             (Type::Integer, Datum::Int64(i)) => format!("{}", i),
-            (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
-            // sqllogictest does some weird type coercions in practice
-            (Type::Integer, Datum::String(_)) => "0".to_owned(),
-            (Type::Integer, Datum::False) => "0".to_owned(),
-            (Type::Integer, Datum::True) => "1".to_owned(),
-
             (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
-
             (Type::Text, Datum::String(string)) => {
                 if string.is_empty() {
                     "(empty)".to_owned()
@@ -355,8 +422,15 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
                     string.to_owned()
                 }
             }
+
+            // weird type coercions that sqllogictest doesn't document
+            (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
+            (Type::Integer, Datum::String(_)) => "0".to_owned(),
+            (Type::Integer, Datum::False) => "0".to_owned(),
+            (Type::Integer, Datum::True) => "1".to_owned(),
             (Type::Text, Datum::Int64(i)) => format!("{}", i),
             (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
+
             other => panic!("Don't know how to format {:?}", other),
         })
         .collect()
@@ -364,7 +438,6 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
 
 impl FullState {
     fn start() -> Self {
-        // let clock = Clock::new();
         let planner = Planner::default();
         let (dataflow_command_senders, dataflow_command_receivers) =
             (0..NUM_TIMELY_WORKERS).map(|_| unbounded()).unzip();
@@ -372,7 +445,6 @@ impl FullState {
         let dataflow_workers = dataflow::serve(
             dataflow_command_receivers,
             dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
-            // clock.clone(),
             NUM_TIMELY_WORKERS,
         )
         .unwrap();
@@ -398,7 +470,6 @@ impl FullState {
         &self,
         dataflow_command: DataflowCommand,
     ) -> UnboundedReceiver<PeekResults> {
-        // let timestamp = self.clock.now();
         let timestamp = self.timer.elapsed().as_millis() as u64;
         let uuid = Uuid::new_v4();
         let receiver = self
@@ -436,7 +507,11 @@ impl FullState {
 impl RecordRunner for FullState {
     fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
         match &record {
-            Record::Statement { should_run, sql } => {
+            Record::Statement {
+                should_run,
+                rows_inserted: expected_rows_inserted,
+                sql,
+            } => {
                 lazy_static! {
                     static ref INDEX_STATEMENT_REGEX: Regex =
                         Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
@@ -458,7 +533,24 @@ impl RecordRunner for FullState {
                 }
 
                 let dataflow_command = match self.planner.handle_command(sql.to_string()) {
-                    Ok((_, dataflow_command)) => dataflow_command,
+                    Ok((response, dataflow_command)) => {
+                        if let Some(expected_rows_inserted) = *expected_rows_inserted {
+                            match response {
+                                SqlResponse::Inserted(actual_rows_inserted)
+                                    if actual_rows_inserted == expected_rows_inserted =>
+                                {
+                                    ()
+                                }
+                                _ => {
+                                    return Ok(Outcome::WrongNumberOfRowsInserted {
+                                        expected_rows_inserted,
+                                        actual_response: response,
+                                    });
+                                }
+                            }
+                        }
+                        dataflow_command
+                    }
                     Err(error) => {
                         if *should_run {
                             return Ok(Outcome::PlanFailure { error });
@@ -471,13 +563,7 @@ impl RecordRunner for FullState {
 
                 Ok(Outcome::Success)
             }
-            Record::Query {
-                sql,
-                sort,
-                types: expected_types,
-                output: expected_output,
-                ..
-            } => {
+            Record::Query { sql, output } => {
                 if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
                     return Ok(Outcome::ParseFailure { error });
                 }
@@ -493,71 +579,112 @@ impl RecordRunner for FullState {
                         });
                     }
                     Err(error) => {
-                        let error_string = format!("{}", error);
-                        if error_string.contains("supported") || error_string.contains("overload") {
-                            // this is a failure, but it's caused by lack of support rather than by bugs
-                            return Ok(Outcome::Unsupported { error });
+                        // TODO(jamii) check error messages, once ours stabilize
+                        if let Err(_) = output {
+                            return Ok(Outcome::Success);
                         } else {
-                            return Ok(Outcome::PlanFailure { error });
+                            let error_string = format!("{}", error);
+                            if error_string.contains("supported")
+                                || error_string.contains("overload")
+                            {
+                                // this is a failure, but it's caused by lack of support rather than by bugs
+                                return Ok(Outcome::Unsupported { error });
+                            } else {
+                                return Ok(Outcome::PlanFailure { error });
+                            }
                         }
                     }
                 };
 
-                let inferred_types = &typ.column_types;
-
-                // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
-                // but at least it will be the correct length
-                if inferred_types.len() != expected_types.len() {
-                    return Ok(Outcome::InferenceFailure {
-                        expected_types,
-                        inferred_types: inferred_types.to_vec(),
-                    });
-                }
-
-                let receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                let results = self.receive_peek_results(receiver);
-
-                let mut rows = results
-                    .iter()
-                    .map(|row| format_row(row, &**expected_types))
-                    .collect::<Vec<_>>();
-                if let Sort::Row = sort {
-                    rows.sort();
-                }
-                let mut values = rows.into_iter().flat_map(|row| row).collect::<Vec<_>>();
-                if let Sort::Value = sort {
-                    values.sort();
-                }
-
-                match expected_output {
-                    Output::Values(expected_values) => {
-                        if values != *expected_values {
-                            return Ok(Outcome::OutputFailure {
-                                expected_output,
-                                actual_output: results,
+                match output {
+                    Err(expected_error) => {
+                        return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
+                    }
+                    Ok(QueryOutput {
+                        sort,
+                        types: expected_types,
+                        column_names: expected_column_names,
+                        output: expected_output,
+                        ..
+                    }) => {
+                        let inferred_types = &typ.column_types;
+                        // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
+                        // but at least it will be the correct length
+                        if inferred_types.len() != expected_types.len() {
+                            return Ok(Outcome::InferenceFailure {
+                                expected_types,
+                                inferred_types: inferred_types.to_vec(),
                             });
                         }
-                    }
-                    Output::Hashed {
-                        num_values,
-                        md5: expected_md5,
-                    } => {
-                        let mut md5_context = md5::Context::new();
-                        for value in &values {
-                            md5_context.consume(value);
-                            md5_context.consume("\n");
+
+                        if let Some(expected_column_names) = expected_column_names {
+                            let inferred_column_names = typ
+                                .column_types
+                                .iter()
+                                .map(|t| t.name.clone())
+                                .collect::<Vec<_>>();
+                            if expected_column_names
+                                .iter()
+                                .map(|s| Some(&**s))
+                                .collect::<Vec<_>>()
+                                != inferred_column_names
+                                    .iter()
+                                    .map(|n| n.as_ref().map(|s| &**s))
+                                    .collect::<Vec<_>>()
+                            {
+                                return Ok(Outcome::WrongColumnNames {
+                                    expected_column_names,
+                                    inferred_column_names,
+                                });
+                            }
                         }
-                        let md5 = format!("{:x}", md5_context.compute());
-                        if values.len() != *num_values || md5 != *expected_md5 {
-                            return Ok(Outcome::OutputFailure {
-                                expected_output,
-                                actual_output: results,
-                            });
+
+                        let receiver = self.send_dataflow_command(dataflow_command.unwrap());
+                        let results = self.receive_peek_results(receiver);
+
+                        let mut rows = results
+                            .iter()
+                            .map(|row| format_row(row, &**expected_types))
+                            .collect::<Vec<_>>();
+                        if let Sort::Row = sort {
+                            rows.sort();
                         }
+                        let mut values = rows.into_iter().flat_map(|row| row).collect::<Vec<_>>();
+                        if let Sort::Value = sort {
+                            values.sort();
+                        }
+
+                        match expected_output {
+                            Output::Values(expected_values) => {
+                                if values != *expected_values {
+                                    return Ok(Outcome::OutputFailure {
+                                        expected_output,
+                                        actual_output: results,
+                                    });
+                                }
+                            }
+                            Output::Hashed {
+                                num_values,
+                                md5: expected_md5,
+                            } => {
+                                let mut md5_context = md5::Context::new();
+                                for value in &values {
+                                    md5_context.consume(value);
+                                    md5_context.consume("\n");
+                                }
+                                let md5 = format!("{:x}", md5_context.compute());
+                                if values.len() != *num_values || md5 != *expected_md5 {
+                                    return Ok(Outcome::OutputFailure {
+                                        expected_output,
+                                        actual_output: results,
+                                    });
+                                }
+                            }
+                        }
+
+                        return Ok(Outcome::Success);
                     }
                 }
-
-                Ok(Outcome::Success)
             }
             _ => Ok(Outcome::Success),
         }
@@ -591,7 +718,9 @@ impl OnlyParseState {
 impl RecordRunner for OnlyParseState {
     fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
         match &record {
-            Record::Statement { should_run, sql } => {
+            Record::Statement {
+                should_run, sql, ..
+            } => {
                 lazy_static! {
                     static ref INDEX_STATEMENT_REGEX: Regex =
                         Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
@@ -634,17 +763,8 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
     if verbosity >= 1 {
         println!("==> {}", source);
     }
-    let mut last_record = None;
     for record in parse_records(&input) {
         let record = record.unwrap();
-
-        // TODO(jamii) this is a hack to workaround an issue where the first query after a bout of statements returns no output
-        if !only_parse {
-            if let (Some(Record::Statement { .. }), Record::Query { .. }) = (&last_record, &record)
-            {
-                // std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
 
         if verbosity >= 3 {
             match &record {
@@ -693,7 +813,6 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
         if let Outcome::Bail { .. } = outcome {
             break;
         }
-        last_record = Some(record);
     }
     outcomes
 }

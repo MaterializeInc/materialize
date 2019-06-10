@@ -1,0 +1,373 @@
+# LogicTest: local local-vec
+
+# Disable automatic stats.
+statement ok
+SET CLUSTER SETTING sql.stats.automatic_collection.enabled = false
+
+statement ok
+CREATE TABLE a (a INT, b INT, PRIMARY KEY (a, b))
+
+statement ok
+INSERT INTO a SELECT g//2, g FROM generate_series(0,2000) g(g)
+
+statement ok
+CREATE TABLE bools (b BOOL, i INT, PRIMARY KEY (b, i)); INSERT INTO bools VALUES (true, 0), (false, 1), (true, 2), (false, 3);
+
+statement ok
+CREATE TABLE nulls (a INT, b INT)
+
+statement ok
+INSERT INTO nulls VALUES (NULL, NULL), (NULL, 1), (1, NULL), (1, 1)
+
+query I
+SELECT count(*) FROM a
+----
+2001
+
+query I
+SELECT count(*) FROM (SELECT DISTINCT a FROM a)
+----
+1001
+
+query II
+SELECT * FROM a LIMIT 10
+----
+0  0
+0  1
+1  2
+1  3
+2  4
+2  5
+3  6
+3  7
+4  8
+4  9
+
+query II
+SELECT DISTINCT(a), b FROM a LIMIT 10
+----
+0  0
+0  1
+1  2
+1  3
+2  4
+2  5
+3  6
+3  7
+4  8
+4  9
+
+# Simple filter.
+query I
+SELECT b FROM a WHERE b < 3
+----
+0
+1
+2
+
+# Simple filter with nulls.
+query I
+SELECT a FROM nulls WHERE a < 2
+----
+1
+1
+
+query II
+SELECT a, b FROM nulls WHERE a <= b
+----
+1 1
+
+
+# Filter on the result of a projection.
+query II
+SELECT a, b FROM a WHERE a * 2 < b LIMIT 5
+----
+0  1
+1  3
+2  5
+3  7
+4  9
+
+# Simple projection.
+query I
+SELECT b + 1 FROM a WHERE b < 3
+----
+1
+2
+3
+
+# Simple projection with nulls.
+query I rowsort
+SELECT b + 1 FROM nulls
+----
+NULL
+NULL
+2
+2
+
+query III rowsort
+SELECT a, b, a + b FROM nulls
+----
+NULL NULL NULL
+NULL 1    NULL
+1    NULL NULL
+1    1    2
+
+# Multiple step projection.
+query III
+SELECT a, b, (a + 1) * (b + 2) FROM a WHERE a < 3
+----
+0  0  2
+0  1  3
+1  2  8
+1  3  10
+2  4  18
+2  5  21
+
+# Mismatched constant type in projection. Not handled yet but should fall back
+# gracefully.
+query I
+SELECT (a + 1.0::DECIMAL)::INT FROM a LIMIT 1
+----
+1
+
+# Operations with constants on the left work.
+query I
+SELECT 5 - a FROM a LIMIT 3
+----
+5
+5
+4
+
+# Constant projections.
+query II
+SELECT 5, a FROM a LIMIT 3
+----
+5  0
+5  0
+5  1
+
+# Filter on a boolean column.
+
+query BI
+SELECT * FROM bools WHERE b
+----
+true 0
+true 2
+
+# Mismatched column types in projection. Not handled yet but should fall back
+# gracefully.
+statement ok
+CREATE TABLE intdec (a INT, b DECIMAL)
+
+statement ok
+INSERT INTO intdec VALUES (1, 2.0)
+
+query I
+SELECT (a + b)::INT FROM intdec
+----
+3
+
+# AND expressions.
+query II
+SELECT a, b FROM a WHERE a < 2 AND b > 0 AND a * b != 3
+----
+0  1
+1  2
+
+statement ok
+CREATE TABLE b (a INT, b STRING, PRIMARY KEY (b,a))
+
+statement ok
+INSERT INTO b VALUES
+  (0, 'a'),
+  (1, 'a'),
+  (0, 'b'),
+  (1, 'b')
+
+query IT
+SELECT sum_int(a), b from b group by b
+----
+1 a
+1 b
+
+# Test that lookup joins run fine through columnar execution.
+
+statement ok
+CREATE TABLE c (a INT, b INT, c INT, d INT, PRIMARY KEY (a, c), INDEX sec (b))
+
+statement ok
+CREATE TABLE d (a INT, b INT, PRIMARY KEY (b, a))
+
+statement ok
+INSERT INTO c VALUES (1, 1, 1, 0), (2, 1, 2, 0)
+
+statement ok
+INSERT INTO d VALUES (1, 1), (1, 2)
+
+statement ok
+ALTER TABLE c INJECT STATISTICS '[
+  {
+    "columns": ["a"],
+    "created_at": "2018-01-01 1:00:00.00000+00:00",
+    "row_count": 1,
+    "distinct_count": 1
+  }
+]'
+
+statement ok
+SET optimizer = on
+
+# Ensure that a lookup join is used.
+query I
+SELECT count(*) FROM [EXPLAIN SELECT c.a FROM c JOIN d ON d.b = c.b] WHERE tree LIKE '%lookup-join%'
+----
+1
+
+statement ok
+SET experimental_vectorize = always
+
+# Simple lookup join.
+query I
+SELECT c.a FROM c JOIN d ON d.b = c.b
+----
+1
+2
+
+# Index join.
+query I
+SELECT c.d FROM c@sec
+----
+0
+0
+
+# Lookup join on secondary index, requires an index join into the primary
+# index. Both of these should be wrapped and work fine.
+query I
+SELECT c.d FROM c@sec JOIN d ON d.b = c.b
+----
+0
+0
+
+# Ensure that lookup joins properly get their postprocessing to select needed
+# columns.
+
+query I
+SELECT c.a FROM c INNER LOOKUP JOIN c@sec AS s ON c.b=s.b
+----
+1
+1
+2
+2
+
+# Test that LIKE expressions are properly handled by vectorized execution.
+statement ok
+RESET experimental_vectorize
+
+statement ok
+CREATE TABLE e (x TEXT)
+
+statement ok
+INSERT INTO e VALUES ('abc'), ('xyz')
+
+statement ok
+SET experimental_vectorize = always
+
+query T
+SELECT * FROM e WHERE x LIKE ''
+----
+
+query T
+SELECT * FROM e WHERE x NOT LIKE '' ORDER BY 1
+----
+abc
+xyz
+
+query T
+SELECT * FROM e WHERE x LIKE '%' ORDER BY 1
+----
+abc
+xyz
+
+query T
+SELECT * FROM e WHERE x NOT LIKE '%'
+----
+
+query T
+SELECT * FROM e WHERE x LIKE 'ab%'
+----
+abc
+
+query T
+SELECT * FROM e WHERE x NOT LIKE 'ab%'
+----
+xyz
+
+query T
+SELECT * FROM e WHERE x LIKE '%bc'
+----
+abc
+
+query T
+SELECT * FROM e WHERE x NOT LIKE '%bc'
+----
+xyz
+
+query T
+SELECT * FROM e WHERE x LIKE 'a%c'
+----
+abc
+
+query T
+SELECT * FROM e WHERE x NOT LIKE 'a%c'
+----
+xyz
+
+# Test that vectorized stats are collected correctly.
+statement ok
+SET experimental_vectorize = on
+
+statement ok
+SET distsql = on
+
+query T
+SELECT url FROM [EXPLAIN ANALYZE SELECT a FROM a]
+----
+https://cockroachdb.github.io/distsqlplan/decode.html#eJyMkLFO9DAQhPv_KaKp9weHClxdew2HDjqUwmevDktObHk3iNMp744SU0CBRLnfzow9e8WUAz-6kQX2FT0GQqnZs0iuK2qCffiANYQ4lVlXPBB8rgx7hUZNDIsXd0p8ZBe43hoQAquLaYstNY6uXnYOhOfiJrHdfxAOs9pu14NwcurfWLo8a1nhHQg6l_QdGbMqhRN7je9RL7YzNw_3K1OXUqdxZNsZwbAQmuvrp6LuzLD9Qn9vc2QpeRL-UeS3ZLMMBA5nbheTPFfPTzX77Zk2HjbfBgKLtm3fhv3UVsuw_PsMAAD__9Tug2M=
+
+query T
+SELECT url FROM [EXPLAIN ANALYZE SELECT c.a FROM c JOIN d ON d.b = c.b]
+----
+https://cockroachdb.github.io/distsqlplan/decode.html#eJykkj9P8zAQxvf3U1jP7BeSjp6yFiGKChvK4DqnYkhty3dBrap8d5S4Q4vEPzH6ufvd3U_yESF2dGd3xDBPqNFqpBwdMcc8RaVh2e1hKg0f0iBT3Gq4mAnmCPHSEwwe7aanNdmO8nUFjY7E-n4ey-QaB42HZAMb9R8aq0GMamrdLKCxseKeiVUcJE15DQ0ZUn8WTW1MPTnxb14ORlVX1bSFxfa9Er8joypGO2oU5HQli90STD3qn5vcRB9OIvWlSMp-Z_Oh6aBxG-PrkNRL9EHFYNRsctL6mxPtyQ3iY_jea_EbrzVxioHpwumzydXYalC3pfILOA7Z0X2Obl5TnquZm4OOWEq1Lo9lKKXpwHO4_hJefIDb8d97AAAA__8MFtxW
+
+query T
+SELECT url FROM [EXPLAIN ANALYZE SELECT c.a FROM c INNER MERGE JOIN d ON c.a = d.b]
+----
+https://cockroachdb.github.io/distsqlplan/decode.html#eJy8kkFr4zAQhe_7K8ycdlm1sZ2boJBrCm1K2lvxQZGmjkCRjDQqCcH_vcgqNAluQ0rpzXrSNzPvjfdgncJ7scEA_BkqaBh03kkMwfkk5QdztQVeMtC2i5TkhoF0HoHvgTQZBA5PYmVwiUKhn5TAQCEJbYayndcb4XczCQweO2EDL66AwSISL2YVMFgJkmsMhYvUJTFpFDtzINXAIKBBSfpV044X5XWZ2gQSxhSkN8iLMkDTM8jI-5iBRIvAq559z0o1bkWNWal_xUr9qZUPB9E6r9CjOpq-SeS5JyN53KFv8dZpi35SH-dh8IX-zqr__268btf586dWi1uUkbSz5zOZXrLeJYbO2YCn2YxWLlMgqFrMAQcXvcQH7-TQJh8XAzcICgPl2zof5na4Gv6_Q7i6AK5P4fpLeHoEl33T_3kLAAD__6RFR6I=
+
+statement ok
+RESET optimizer; RESET experimental_vectorize; RESET distsql
+
+# Regression test for composite null handling
+# https://github.com/cockroachdb/cockroach/issues/37358
+statement ok
+CREATE TABLE composite (d DECIMAL, INDEX d_idx (d))
+
+statement ok
+INSERT INTO composite VALUES (NULL), (1), (1.0), (1.00)
+
+query T rowsort
+SELECT d FROM composite@primary
+----
+NULL
+1
+1.0
+1.00
+
+query T rowsort
+SELECT d FROM composite@d_idx
+----
+NULL
+1
+1.0
+1.00
