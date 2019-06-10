@@ -458,8 +458,6 @@ where
                         let mut abelian_pos = 1; // <- advance past the count
                         let mut non_abelian_pos = 0;
 
-                        let record_count: isize = source.iter().map(|(_, w)| w[0]).sum();
-
                         for ((agg, _typ), abl) in aggregates.iter().zip(abelian.iter()) {
                             if *abl {
                                 let value = match agg.func {
@@ -522,7 +520,10 @@ where
                                         abelian_pos += 1;
                                         Datum::Int64(total)
                                     }
-                                    AggregateFunc::CountAll => Datum::Int64(record_count as i64),
+                                    AggregateFunc::CountAll => {
+                                        let total = source.iter().map(|(_, w)| w[0] as i64).sum();
+                                        Datum::Int64(total)
+                                    }
                                     x => panic!("Surprising Abelian aggregation: {:?}", x),
                                 };
                                 result.push(value);
