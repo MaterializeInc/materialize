@@ -688,9 +688,9 @@ pub mod aggregation {
         }
         pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
             if let RelationExpr::Reduce {
-                input,
-                group_key,
-                aggregates,
+                input: _,
+                group_key: _,
+                aggregates: _,
             } = relation
             {}
         }
@@ -698,10 +698,9 @@ pub mod aggregation {
 
     #[cfg(test)]
     mod tests {
-
         use crate::dataflow::func::AggregateFunc;
         use crate::dataflow::types::{RelationExpr, ScalarExpr};
-        use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
+        use crate::repr::{ColumnType, RelationType, ScalarType};
 
         #[test]
         fn transform() {

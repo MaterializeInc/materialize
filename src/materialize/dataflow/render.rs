@@ -415,7 +415,7 @@ where
                                 })
                         }
                         AggregateFunc::CountAll => {
-                            data.map(|(key, val)| key).count().map(|(mut key, sum)| {
+                            data.map(|(key, _val)| key).count().map(|(mut key, sum)| {
                                 key.push(Datum::Int64(sum as i64));
                                 key
                             })

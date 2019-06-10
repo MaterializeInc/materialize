@@ -103,7 +103,9 @@ impl Action for IngestAction {
             let val = json_to_avro(
                 serde_json::from_str(row)
                     .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
-            ).resolve(&schema).map_err(|e| format!("resolving avro schema: {}", e))?;
+            )
+            .resolve(&schema)
+            .map_err(|e| format!("resolving avro schema: {}", e))?;
 
             // The first byte is a magic byte (0) that indicates the Confluent
             // serialization format version, and the next four bytes are a
