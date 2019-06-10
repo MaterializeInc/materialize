@@ -282,6 +282,7 @@ pub mod predicate_pushdown {
                             }
                             _ => {
                                 use crate::dataflow::func::BinaryFunc;
+                                use crate::dataflow::func::UnaryFunc;
                                 if let ScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq,
                                     expr1,
@@ -319,6 +320,17 @@ pub mod predicate_pushdown {
                                                 }
                                             }
                                         }
+                                        // null != anything, so joined columns musn't be null
+                                        push_downs[relation1].push(
+                                            ScalarExpr::Column(*c1 - prior_arities[relation1])
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
+                                        push_downs[relation2].push(
+                                            ScalarExpr::Column(*c2 - prior_arities[relation2])
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
                                     } else {
                                         retain.push(predicate);
                                     }
