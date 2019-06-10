@@ -179,27 +179,27 @@ impl Decoder {
             None => &self.reader_schema,
         };
 
+        fn value_to_datum(v: Value) -> Result<Datum, failure::Error> {
+            match v {
+                Value::Null => Ok(Datum::Null),
+                Value::Boolean(true) => Ok(Datum::True),
+                Value::Boolean(false) => Ok(Datum::False),
+                Value::Long(i) => Ok(Datum::Int64(i)),
+                Value::Float(f) => Ok(Datum::Float32(f.into())),
+                Value::Double(f) => Ok(Datum::Float64(f.into())),
+                Value::Bytes(b) => Ok(Datum::Bytes(b)),
+                Value::String(s) => Ok(Datum::String(s)),
+                Value::Union(v) => value_to_datum(*v),
+                other => bail!("unsupported avro value: {:?}", other),
+            }
+        };
+
         let val = avro_rs::from_avro_datum(&writer_schema, &mut bytes, Some(&self.reader_schema))?;
         let mut row = Vec::new();
         match val {
             Value::Record(cols) => {
                 for (_field_name, col) in cols {
-                    row.push(match col {
-                        Value::Null => Datum::Null,
-                        Value::Boolean(b) => {
-                            if b {
-                                Datum::True
-                            } else {
-                                Datum::False
-                            }
-                        }
-                        Value::Long(i) => Datum::Int64(i),
-                        Value::Float(f) => Datum::Float32(f.into()),
-                        Value::Double(f) => Datum::Float64(f.into()),
-                        Value::Bytes(b) => Datum::Bytes(b),
-                        Value::String(s) => Datum::String(s),
-                        other => bail!("unsupported avro value: {:?}", other),
-                    })
+                    row.push(value_to_datum(col)?);
                 }
             }
             _ => bail!("unsupported avro value: {:?}", val),
