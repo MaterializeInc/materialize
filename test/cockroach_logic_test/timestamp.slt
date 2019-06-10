@@ -6,7 +6,10 @@ SELECT '2000-05-05 10:00:00+03':::TIMESTAMP
 2000-05-05 10:00:00 +0000 +0000
 
 statement ok
-CREATE TABLE a (a int); INSERT INTO a VALUES(1)
+CREATE TABLE a (a int);
+
+statement ok
+INSERT INTO a VALUES(1)
 
 # Ensure that timestamp serialization doesn't break even if the computation is
 # distributed: #28110.

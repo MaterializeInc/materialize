@@ -1,15 +1,21 @@
 # LogicTest: fakedist-opt local-opt
 
 statement ok
-CREATE TABLE abc (a INT, b INT, c INT, PRIMARY KEY (a, c));
+CREATE TABLE abc (a INT, b INT, c INT, PRIMARY KEY (a, c))
+
+statement ok
 INSERT INTO abc VALUES (1, 1, 2), (2, 1, 1), (2, NULL, 2)
 
 statement ok
-CREATE TABLE def (d INT, e INT, f INT, PRIMARY KEY (f, e));
+CREATE TABLE def (d INT, e INT, f INT, PRIMARY KEY (f, e))
+
+statement ok
 INSERT INTO def VALUES (1, 1, 2), (2, 1, 1), (NULL, 2, 1)
 
 statement ok
-CREATE TABLE gh (g INT, h INT, INDEX g_idx (g));
+CREATE TABLE gh (g INT, h INT, INDEX g_idx (g))
+
+statement ok
 INSERT INTO gh VALUES (NULL, 1)
 
 # Set up the statistics as if the first table is much smaller than the second.
@@ -118,10 +124,14 @@ SELECT count(*) FROM (SELECT * FROM data WHERE c = 1) AS l NATURAL JOIN data AS 
 1000
 
 statement ok
-CREATE TABLE foo (a int, b int); INSERT INTO foo VALUES (0, 1), (0, 2), (1, 1)
+CREATE TABLE foo (a int, b int)
+
+statement okINSERT INTO foo VALUES (0, 1), (0, 2), (1, 1)
 
 statement ok
-CREATE TABLE bar (a int PRIMARY KEY, c int); INSERT INTO bar VALUES (0, 1), (1, 2), (2, 1)
+CREATE TABLE bar (a int PRIMARY KEY, c int)
+
+statement okINSERT INTO bar VALUES (0, 1), (1, 2), (2, 1)
 
 query III rowsort
 SELECT * FROM foo NATURAL JOIN bar
@@ -131,7 +141,9 @@ SELECT * FROM foo NATURAL JOIN bar
 1  1  2
 
 statement ok
-CREATE TABLE books (title STRING, edition INT, shelf INT, PRIMARY KEY (title, edition));
+CREATE TABLE books (title STRING, edition INT, shelf INT, PRIMARY KEY (title, edition))
+
+statement ok
 INSERT INTO books VALUES
   ('SICP', 1, 2),
   ('Intro to Algo', 1, 1),
@@ -141,7 +153,9 @@ INSERT INTO books VALUES
   ('Art of Computer Programming', 2, 2)
 
 statement ok
-CREATE TABLE books2 (title STRING, edition INT, shelf INT, PRIMARY KEY (title, edition));
+CREATE TABLE books2 (title STRING, edition INT, shelf INT, PRIMARY KEY (title, edition))
+
+statement ok
 INSERT INTO books2 VALUES
   ('SICP', 1, 2),
   ('Intro to Algo', 1, 1),
@@ -171,7 +185,9 @@ ALTER TABLE books2 INJECT STATISTICS '[
 ]'
 
 statement ok
-CREATE TABLE authors (name STRING, book STRING);
+CREATE TABLE authors (name STRING, book STRING)
+
+statement ok
 INSERT INTO authors VALUES
   ('Hal Abelson', 'SICP'),
   ('Geral Jay Sussman', 'SICP'),

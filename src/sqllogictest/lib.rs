@@ -169,23 +169,28 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                 )?;
                 let mut sort = Sort::No;
                 let mut check_column_names = false;
-                let mut label = None;
-                for word in words {
-                    match word {
-                        "nosort" => sort = Sort::No,
-                        "rowsort" => sort = Sort::Row,
-                        "valuesort" => sort = Sort::Value,
-                        "colnames" => check_column_names = true,
-                        other => {
-                            if other.starts_with("partialsort") {
-                                // TODO(jamii) https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/logic.go#L153
-                                sort = Sort::Row
-                            } else {
-                                label = Some(other);
+                if let Some(options) = words.next() {
+                    for option in options.split(',') {
+                        match option {
+                            "nosort" => sort = Sort::No,
+                            "rowsort" => sort = Sort::Row,
+                            "valuesort" => sort = Sort::Value,
+                            "colnames" => check_column_names = true,
+                            other => {
+                                if other.starts_with("partialsort") {
+                                    // TODO(jamii) https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/logic.go#L153
+                                    // partialsort has comma-separated arguments so our parsing is totally broken
+                                    // luckily it always comes last in the existing tests, so we can just bail out for now
+                                    sort = Sort::Row;
+                                    break;
+                                } else {
+                                    bail!("Unrecognized option {:?} in {:?}", other, options);
+                                }
                             }
-                        }
-                    };
+                        };
+                    }
                 }
+                let label = words.next();
                 let sql = parse_sql(&mut input)?;
                 lazy_static! {
                     static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
@@ -667,6 +672,7 @@ impl RecordRunner for FullState {
                         match expected_output {
                             Output::Values(expected_values) => {
                                 if values != *expected_values {
+                                    dbg!(&record);
                                     return Ok(Outcome::OutputFailure {
                                         expected_output,
                                         actual_output: results,
