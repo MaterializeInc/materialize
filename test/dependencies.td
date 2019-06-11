@@ -60,11 +60,11 @@ dataflow test2 does not exist
 
 > DROP VIEW IF EXISTS test1;
 
-# Test that data sinks cannot be depended upon.
+# Test that sinks cannot be depended upon.
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT 1;
 
-> CREATE DATA SINK s1 FROM v1 INTO 'kafka://${testdrive.kafka-addr}/v'
+> CREATE SINK s1 FROM v1 INTO 'kafka://${testdrive.kafka-addr}/v'
 
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
 dataflow s1 is a sink and cannot be depended upon

@@ -37,9 +37,9 @@ pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, String> {
 impl Action for SqlAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
         match &self.stmt {
-            SQLStatement::SQLCreateDataSource { name, .. } => self.try_drop(
+            SQLStatement::SQLCreateSource { name, .. } => self.try_drop(
                 &mut state.pgconn,
-                &format!("DROP DATA SOURCE IF EXISTS {} CASCADE", name.to_string()),
+                &format!("DROP SOURCE IF EXISTS {} CASCADE", name.to_string()),
             ),
             SQLStatement::SQLCreateView { name, .. } => self.try_drop(
                 &mut state.pgconn,

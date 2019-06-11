@@ -11,9 +11,10 @@ use sqlparser::dialect::AnsiSqlDialect;
 use sqlparser::sqlast::visit;
 use sqlparser::sqlast::visit::Visit;
 use sqlparser::sqlast::{
-    ASTNode, DataSourceSchema, JoinConstraint, JoinOperator, SQLFunction, SQLIdent, SQLObjectName,
-    SQLObjectType, SQLOperator, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator,
-    SQLStatement, SQLType, SQLValues, TableAlias, TableConstraint, TableFactor, Value,
+    ASTNode, JoinConstraint, JoinOperator, SQLBinaryOperator, SQLFunction, SQLIdent, SQLObjectName,
+    SQLObjectType, SQLQuery, SQLSelect, SQLSelectItem, SQLSetExpr, SQLSetOperator, SQLStatement,
+    SQLType, SQLUnaryOperator, SQLValues, SourceSchema, TableAlias, TableConstraint, TableFactor,
+    TableWithJoins, Value,
 };
 use sqlparser::sqlparser::Parser as SQLParser;
 use std::collections::HashSet;
@@ -31,6 +32,7 @@ use crate::glue::*;
 use crate::interchange::avro;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
+use ore::iter::{FallibleIteratorExt, IteratorExt};
 use plan::SQLRelationExpr;
 use store::{DataflowStore, RemoveMode};
 
@@ -58,8 +60,8 @@ impl Planner {
         match stmt {
             SQLStatement::SQLPeek { name } => self.handle_peek(name),
             SQLStatement::SQLTail { .. } => bail!("TAIL is not implemented yet"),
-            SQLStatement::SQLCreateDataSource { .. }
-            | SQLStatement::SQLCreateDataSink { .. }
+            SQLStatement::SQLCreateSource { .. }
+            | SQLStatement::SQLCreateSink { .. }
             | SQLStatement::SQLCreateView { .. }
             | SQLStatement::SQLCreateTable { .. } => self.handle_create_dataflow(stmt),
             SQLStatement::SQLDrop { .. } => self.handle_drop_dataflow(stmt),
@@ -79,8 +81,8 @@ impl Planner {
     fn handle_create_dataflow(&mut self, stmt: SQLStatement) -> PlannerResult {
         let dataflow = self.plan_statement(&stmt)?;
         let sql_response = match stmt {
-            SQLStatement::SQLCreateDataSource { .. } => SqlResponse::CreatedDataSource,
-            SQLStatement::SQLCreateDataSink { .. } => SqlResponse::CreatedDataSink,
+            SQLStatement::SQLCreateSource { .. } => SqlResponse::CreatedSource,
+            SQLStatement::SQLCreateSink { .. } => SqlResponse::CreatedSink,
             SQLStatement::SQLCreateView { .. } => SqlResponse::CreatedView,
             SQLStatement::SQLCreateTable { .. } => SqlResponse::CreatedTable,
             _ => unreachable!(),
@@ -120,7 +122,7 @@ impl Planner {
             self.dataflows.remove(name, mode, &mut removed)?;
         }
         let sql_response = match object_type {
-            SQLObjectType::DataSource => SqlResponse::DroppedDataSource,
+            SQLObjectType::Source => SqlResponse::DroppedSource,
             SQLObjectType::Table => SqlResponse::DroppedTable,
             SQLObjectType::View => SqlResponse::DroppedView,
             _ => unreachable!(),
@@ -386,7 +388,7 @@ impl Planner {
                     typ,
                 }))
             }
-            SQLStatement::SQLCreateDataSource {
+            SQLStatement::SQLCreateSource {
                 name,
                 url,
                 schema,
@@ -398,8 +400,8 @@ impl Planner {
                 let name = extract_sql_object_name(name)?;
                 let (addr, topic) = parse_kafka_url(url)?;
                 let (raw_schema, schema_registry_url) = match schema {
-                    DataSourceSchema::Raw(schema) => (schema.to_owned(), None),
-                    DataSourceSchema::Registry(url) => {
+                    SourceSchema::Raw(schema) => (schema.to_owned(), None),
+                    SourceSchema::Registry(url) => {
                         // TODO(benesch): we need to fetch this schema
                         // asynchronously to avoid blocking the command
                         // processing thread.
@@ -421,7 +423,7 @@ impl Planner {
                     typ,
                 }))
             }
-            SQLStatement::SQLCreateDataSink {
+            SQLStatement::SQLCreateSink {
                 name,
                 from,
                 url,
@@ -611,11 +613,20 @@ impl Planner {
         s: &SQLSelect,
     ) -> Result<(RelationExpr, RelationType), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
-        let mut relation_expr = self.plan_table_factor(s.relation.as_ref())?;
-        for join in &s.joins {
-            let right = self.plan_table_factor(Some(&join.relation))?;
-            relation_expr = self.plan_join_operator(&join.join_operator, relation_expr, right)?;
-        }
+        let mut relation_expr = s
+            .from
+            .iter()
+            .map(|twj| self.plan_table_with_joins(twj))
+            .fallible()
+            .fold1(|left, right| self.plan_join_operator(&JoinOperator::Cross, left, right))
+            .unwrap_or_else(|| {
+                let name = "dual";
+                let typ = self.dataflows.get_type(&name)?;
+                Ok(SQLRelationExpr::from_source(
+                    &name,
+                    typ.column_types.clone(),
+                ))
+            })?;
 
         // Step 2. Handle WHERE clause.
         if let Some(selection) = &s.selection {
@@ -745,6 +756,18 @@ impl Planner {
         Ok(relation_expr.finish())
     }
 
+    fn plan_table_with_joins<'a>(
+        &self,
+        table_with_joins: &'a TableWithJoins,
+    ) -> Result<SQLRelationExpr, failure::Error> {
+        let mut relation_expr = self.plan_table_factor(&table_with_joins.relation)?;
+        for join in &table_with_joins.joins {
+            let right = self.plan_table_factor(&join.relation)?;
+            relation_expr = self.plan_join_operator(&join.join_operator, relation_expr, right)?;
+        }
+        Ok(relation_expr)
+    }
+
     fn plan_select_item<'a>(
         &self,
         s: &'a SQLSelectItem,
@@ -787,17 +810,17 @@ impl Planner {
         }
     }
 
-    fn plan_table_factor(
+    fn plan_table_factor<'a>(
         &self,
-        table_factor: Option<&TableFactor>,
+        table_factor: &'a TableFactor,
     ) -> Result<SQLRelationExpr, failure::Error> {
         let (from_name, from_alias) = match table_factor {
-            Some(TableFactor::Table {
+            TableFactor::Table {
                 name,
                 alias,
                 args,
                 with_hints,
-            }) => {
+            } => {
                 if !args.is_empty() {
                     bail!("table arguments are not supported");
                 }
@@ -806,13 +829,12 @@ impl Planner {
                 }
                 (extract_sql_object_name(name)?, alias.as_ref())
             }
-            Some(TableFactor::Derived { .. }) => {
+            TableFactor::Derived { .. } => {
                 bail!("subqueries are not yet supported");
             }
-            Some(TableFactor::NestedJoin { .. }) => {
+            TableFactor::NestedJoin { .. } => {
                 bail!("nested joins are not yet supported");
             }
-            None => ("dual".into(), None),
         };
         let typ = self.dataflows.get_type(&from_name)?;
         let mut relation_expr = SQLRelationExpr::from_source(&from_name, typ.column_types.clone());
@@ -924,7 +946,7 @@ impl Planner {
                         .collect(),
                 })
             }
-            JoinOperator::Implicit | JoinOperator::Cross => Ok(left.product(right)),
+            JoinOperator::Cross => Ok(left.product(right)),
         }
     }
 
@@ -1025,12 +1047,9 @@ impl Planner {
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
             ASTNode::SQLIsNull(expr) => self.plan_is_null_expr(ctx, expr, false, relation_expr),
             ASTNode::SQLIsNotNull(expr) => self.plan_is_null_expr(ctx, expr, true, relation_expr),
-            // TODO(benesch): "SQLUnary" but "SQLBinaryExpr"?
-            ASTNode::SQLUnary { operator, expr } => {
-                self.plan_unary_expr(ctx, operator, expr, relation_expr)
-            }
-            ASTNode::SQLBinaryExpr { op, left, right } => {
-                self.plan_binary_expr(ctx, op, left, right, relation_expr)
+            ASTNode::SQLUnaryOp { op, expr } => self.plan_unary_op(ctx, op, expr, relation_expr),
+            ASTNode::SQLBinaryOp { op, left, right } => {
+                self.plan_binary_op(ctx, op, left, right, relation_expr)
             }
             ASTNode::SQLBetween {
                 expr,
@@ -1178,9 +1197,9 @@ impl Planner {
                 if func.args.len() != 2 {
                     bail!("nullif requires exactly two arguments");
                 }
-                let cond = ASTNode::SQLBinaryExpr {
+                let cond = ASTNode::SQLBinaryOp {
                     left: Box::new(func.args[0].clone()),
-                    op: SQLOperator::Eq,
+                    op: SQLBinaryOperator::Eq,
                     right: Box::new(func.args[1].clone()),
                 };
                 let (cond_expr, _) = self.plan_expr(ctx, &cond, relation_expr)?;
@@ -1228,30 +1247,24 @@ impl Planner {
         Ok((expr, typ))
     }
 
-    fn plan_unary_expr<'a>(
+    fn plan_unary_op<'a>(
         &self,
         ctx: &ExprContext,
-        op: &'a SQLOperator,
+        op: &'a SQLUnaryOperator,
         expr: &'a ASTNode,
         relation_expr: &SQLRelationExpr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (expr, typ) = self.plan_expr(ctx, expr, relation_expr)?;
         let (func, scalar_type) = match op {
-            SQLOperator::Not => (UnaryFunc::Not, ScalarType::Bool),
-            SQLOperator::Plus => return Ok((expr, typ)), // no-op
-            SQLOperator::Minus => match typ.scalar_type {
+            SQLUnaryOperator::Not => (UnaryFunc::Not, ScalarType::Bool),
+            SQLUnaryOperator::Plus => return Ok((expr, typ)), // no-op
+            SQLUnaryOperator::Minus => match typ.scalar_type {
                 ScalarType::Int32 => (UnaryFunc::NegInt32, ScalarType::Int32),
                 ScalarType::Int64 => (UnaryFunc::NegInt64, ScalarType::Int64),
                 ScalarType::Float32 => (UnaryFunc::NegFloat32, ScalarType::Float32),
                 ScalarType::Float64 => (UnaryFunc::NegFloat64, ScalarType::Float64),
                 _ => bail!("cannot negate {:?}", typ.scalar_type),
             },
-            // These are the only unary operators.
-            //
-            // TODO(benesch): SQLOperator should be split into UnarySQLOperator
-            // and BinarySQLOperator so that the compiler can check
-            // exhaustiveness.
-            _ => unreachable!(),
         };
         let expr = ScalarExpr::CallUnary {
             func,
@@ -1265,10 +1278,10 @@ impl Planner {
         Ok((expr, typ))
     }
 
-    fn plan_binary_expr<'a>(
+    fn plan_binary_op<'a>(
         &self,
         ctx: &ExprContext,
-        op: &'a SQLOperator,
+        op: &'a SQLBinaryOperator,
         left: &'a ASTNode,
         right: &'a ASTNode,
         relation_expr: &SQLRelationExpr,
@@ -1276,16 +1289,16 @@ impl Planner {
         let (mut lexpr, mut ltype) = self.plan_expr(ctx, left, relation_expr)?;
         let (mut rexpr, mut rtype) = self.plan_expr(ctx, right, relation_expr)?;
 
-        if op == &SQLOperator::Plus
-            || op == &SQLOperator::Minus
-            || op == &SQLOperator::Multiply
-            || op == &SQLOperator::Divide
-            || op == &SQLOperator::Lt
-            || op == &SQLOperator::LtEq
-            || op == &SQLOperator::Gt
-            || op == &SQLOperator::GtEq
-            || op == &SQLOperator::Eq
-            || op == &SQLOperator::NotEq
+        if op == &SQLBinaryOperator::Plus
+            || op == &SQLBinaryOperator::Minus
+            || op == &SQLBinaryOperator::Multiply
+            || op == &SQLBinaryOperator::Divide
+            || op == &SQLBinaryOperator::Lt
+            || op == &SQLBinaryOperator::LtEq
+            || op == &SQLBinaryOperator::Gt
+            || op == &SQLBinaryOperator::GtEq
+            || op == &SQLBinaryOperator::Eq
+            || op == &SQLBinaryOperator::NotEq
         {
             let ctx = op.to_string();
             let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], ctx)?;
@@ -1297,7 +1310,7 @@ impl Planner {
         }
 
         let (func, scalar_type) = match op {
-            SQLOperator::And | SQLOperator::Or => {
+            SQLBinaryOperator::And | SQLBinaryOperator::Or => {
                 if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Null {
                     bail!(
                         "Cannot apply operator {:?} to non-boolean type {:?}",
@@ -1313,13 +1326,13 @@ impl Planner {
                     )
                 }
                 let func = match op {
-                    SQLOperator::And => BinaryFunc::And,
-                    SQLOperator::Or => BinaryFunc::Or,
+                    SQLBinaryOperator::And => BinaryFunc::And,
+                    SQLBinaryOperator::Or => BinaryFunc::Or,
                     _ => unreachable!(),
                 };
                 (func, ScalarType::Bool)
             }
-            SQLOperator::Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
+            SQLBinaryOperator::Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
                 (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::AddInt32, ScalarType::Int32),
                 (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::AddInt64, ScalarType::Int64),
                 (ScalarType::Float32, ScalarType::Float32) => {
@@ -1334,7 +1347,7 @@ impl Planner {
                     rtype.scalar_type
                 ),
             },
-            SQLOperator::Minus => match (&ltype.scalar_type, &rtype.scalar_type) {
+            SQLBinaryOperator::Minus => match (&ltype.scalar_type, &rtype.scalar_type) {
                 (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::SubInt32, ScalarType::Int32),
                 (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::SubInt64, ScalarType::Int64),
                 (ScalarType::Float32, ScalarType::Float32) => {
@@ -1349,7 +1362,7 @@ impl Planner {
                     rtype.scalar_type
                 ),
             },
-            SQLOperator::Multiply => match (&ltype.scalar_type, &rtype.scalar_type) {
+            SQLBinaryOperator::Multiply => match (&ltype.scalar_type, &rtype.scalar_type) {
                 (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::MulInt32, ScalarType::Int32),
                 (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::MulInt64, ScalarType::Int64),
                 (ScalarType::Float32, ScalarType::Float32) => {
@@ -1364,7 +1377,7 @@ impl Planner {
                     rtype.scalar_type
                 ),
             },
-            SQLOperator::Divide => match (&ltype.scalar_type, &rtype.scalar_type) {
+            SQLBinaryOperator::Divide => match (&ltype.scalar_type, &rtype.scalar_type) {
                 (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::DivInt32, ScalarType::Int32),
                 (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::DivInt64, ScalarType::Int64),
                 (ScalarType::Float32, ScalarType::Float32) => {
@@ -1379,7 +1392,7 @@ impl Planner {
                     rtype.scalar_type
                 ),
             },
-            SQLOperator::Modulus => match (&ltype.scalar_type, &rtype.scalar_type) {
+            SQLBinaryOperator::Modulus => match (&ltype.scalar_type, &rtype.scalar_type) {
                 (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::ModInt32, ScalarType::Int32),
                 (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::ModInt64, ScalarType::Int64),
                 (ScalarType::Float32, ScalarType::Float32) => {
@@ -1394,12 +1407,12 @@ impl Planner {
                     rtype.scalar_type
                 ),
             },
-            SQLOperator::Lt
-            | SQLOperator::LtEq
-            | SQLOperator::Gt
-            | SQLOperator::GtEq
-            | SQLOperator::Eq
-            | SQLOperator::NotEq => {
+            SQLBinaryOperator::Lt
+            | SQLBinaryOperator::LtEq
+            | SQLBinaryOperator::Gt
+            | SQLBinaryOperator::GtEq
+            | SQLBinaryOperator::Eq
+            | SQLBinaryOperator::NotEq => {
                 if ltype.scalar_type != rtype.scalar_type
                     && ltype.scalar_type != ScalarType::Null
                     && rtype.scalar_type != ScalarType::Null
@@ -1411,12 +1424,12 @@ impl Planner {
                     )
                 }
                 let func = match op {
-                    SQLOperator::Lt => BinaryFunc::Lt,
-                    SQLOperator::LtEq => BinaryFunc::Lte,
-                    SQLOperator::Gt => BinaryFunc::Gt,
-                    SQLOperator::GtEq => BinaryFunc::Gte,
-                    SQLOperator::Eq => BinaryFunc::Eq,
-                    SQLOperator::NotEq => BinaryFunc::NotEq,
+                    SQLBinaryOperator::Lt => BinaryFunc::Lt,
+                    SQLBinaryOperator::LtEq => BinaryFunc::Lte,
+                    SQLBinaryOperator::Gt => BinaryFunc::Gt,
+                    SQLBinaryOperator::GtEq => BinaryFunc::Gte,
+                    SQLBinaryOperator::Eq => BinaryFunc::Eq,
+                    SQLBinaryOperator::NotEq => BinaryFunc::NotEq,
                     _ => unreachable!(),
                 };
                 (func, ScalarType::Bool)
@@ -1449,30 +1462,30 @@ impl Planner {
         negated: bool,
         relation_expr: &SQLRelationExpr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let low = ASTNode::SQLBinaryExpr {
+        let low = ASTNode::SQLBinaryOp {
             left: Box::new(expr.clone()),
             op: if negated {
-                SQLOperator::Lt
+                SQLBinaryOperator::Lt
             } else {
-                SQLOperator::GtEq
+                SQLBinaryOperator::GtEq
             },
             right: Box::new(low.clone()),
         };
-        let high = ASTNode::SQLBinaryExpr {
+        let high = ASTNode::SQLBinaryOp {
             left: Box::new(expr.clone()),
             op: if negated {
-                SQLOperator::Gt
+                SQLBinaryOperator::Gt
             } else {
-                SQLOperator::LtEq
+                SQLBinaryOperator::LtEq
             },
             right: Box::new(high.clone()),
         };
-        let both = ASTNode::SQLBinaryExpr {
+        let both = ASTNode::SQLBinaryOp {
             left: Box::new(low),
             op: if negated {
-                SQLOperator::Or
+                SQLBinaryOperator::Or
             } else {
-                SQLOperator::And
+                SQLBinaryOperator::And
             },
             right: Box::new(high),
         };
@@ -1489,19 +1502,19 @@ impl Planner {
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let mut cond = ASTNode::SQLValue(Value::Boolean(false));
         for l in list {
-            cond = ASTNode::SQLBinaryExpr {
+            cond = ASTNode::SQLBinaryOp {
                 left: Box::new(cond),
-                op: SQLOperator::Or,
-                right: Box::new(ASTNode::SQLBinaryExpr {
+                op: SQLBinaryOperator::Or,
+                right: Box::new(ASTNode::SQLBinaryOp {
                     left: Box::new(expr.clone()),
-                    op: SQLOperator::Eq,
+                    op: SQLBinaryOperator::Eq,
                     right: Box::new(l.clone()),
                 }),
             }
         }
         if negated {
-            cond = ASTNode::SQLUnary {
-                operator: SQLOperator::Not,
+            cond = ASTNode::SQLUnaryOp {
+                op: SQLUnaryOperator::Not,
                 expr: Box::new(cond),
             }
         }
@@ -1521,9 +1534,9 @@ impl Planner {
         let mut result_exprs = Vec::new();
         for (c, r) in conditions.iter().zip(results) {
             let c = match operand {
-                Some(operand) => ASTNode::SQLBinaryExpr {
+                Some(operand) => ASTNode::SQLBinaryOp {
                     left: operand.clone(),
-                    op: SQLOperator::Eq,
+                    op: SQLBinaryOperator::Eq,
                     right: Box::new(c.clone()),
                 },
                 None => c.clone(),
@@ -1682,19 +1695,16 @@ where
 fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
     let url: Url = url.parse()?;
     if url.scheme() != "kafka" {
-        bail!("only kafka:// data sources are supported: {}", url);
+        bail!("only kafka:// sources are supported: {}", url);
     } else if !url.has_host() {
-        bail!("data source URL missing hostname: {}", url)
+        bail!("source URL missing hostname: {}", url)
     }
     let topic = match url.path_segments() {
-        None => bail!("data source URL missing topic path: {}"),
+        None => bail!("source URL missing topic path: {}"),
         Some(segments) => {
             let segments: Vec<_> = segments.collect();
             if segments.len() != 1 {
-                bail!(
-                    "data source URL should have exactly one path segment: {}",
-                    url
-                );
+                bail!("source URL should have exactly one path segment: {}", url);
             }
             segments[0].to_owned()
         }

@@ -16,7 +16,7 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema}
 {"a": 2}
 {"a": null}
 
-> CREATE DATA SOURCE foo FROM 'kafka://${testdrive.kafka-addr}/foo' USING SCHEMA '${foo-schema}'
+> CREATE SOURCE foo FROM 'kafka://${testdrive.kafka-addr}/foo' USING SCHEMA '${foo-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);

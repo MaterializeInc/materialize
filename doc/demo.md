@@ -22,7 +22,7 @@ Then, in another shell:
 
 ```bash
 psql -h localhost -p 6875 sslmode=disable
-> CREATE DATA SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "quote", "type": "string"}]}';
+> CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "quote", "type": "string"}]}';
 > PEEK quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
 > PEEK business_insights;
@@ -38,7 +38,7 @@ kafka-avro-console-producer --topic aggdata --broker-list localhost:9092 --prope
 # {"a": 1, "b": 2}
 
 psql -h localhost -p 6875 sslmode=disable
-> CREATE DATA SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}';
+> CREATE SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}';
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
 > PEEK aggtest;
 ```
@@ -59,8 +59,8 @@ kafka-avro-console-producer --topic src2 --broker-list localhost:9092 --property
 # {"c": 3, "d": 1}
 
 psql -h localhost -p 6875 sslmode=disable
-> CREATE DATA SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}';
-> CREATE DATA SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "c", "type": "long"}, {"name": "d", "type": "long"}]}';
+> CREATE SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "a", "type": "long"}, {"name": "b", "type": "long"}]}';
+> CREATE SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA '{"type": "record", "name": "na", "fields": [{"name": "c", "type": "long"}, {"name": "d", "type": "long"}]}';
 > CREATE MATERIALIZED VIEW jointest AS SELECT a, b, d FROM src1 JOIN src2 ON c = b;
 > PEEK jointest;
 ```

@@ -17,7 +17,7 @@ $ kafka-ingest format=avro topic=names schema=${names-schema}
 {"num": 2, "name": "two"}
 {"num": 3, "name": "three"}
 
-> CREATE DATA SOURCE names FROM 'kafka://${testdrive.kafka-addr}/names' USING SCHEMA '${names-schema}'
+> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/names' USING SCHEMA '${names-schema}'
 
 $ set mods-schema={
     "type": "record",
@@ -33,7 +33,7 @@ $ kafka-ingest format=avro topic=mods schema=${mods-schema}
 {"num": 1, "mod": "odd"}
 {"num": 2, "mod": "even"}
 
-> CREATE DATA SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/mods' USING SCHEMA '${mods-schema}'
+> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/mods' USING SCHEMA '${mods-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names JOIN mods USING (num);

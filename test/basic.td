@@ -18,7 +18,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 {"a": 3, "b": 1}
 {"a": 1, "b": 2}
 
-> CREATE DATA SOURCE data FROM 'kafka://${testdrive.kafka-addr}/data' USING SCHEMA '${schema}'
+> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/data' USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b;

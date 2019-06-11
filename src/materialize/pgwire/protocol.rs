@@ -264,11 +264,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 }
 
                 match response {
-                    SqlResponse::CreatedDataSource => command_complete!("CREATE DATA SOURCE"),
-                    SqlResponse::CreatedDataSink => command_complete!("CREATE DATA SINK"),
+                    SqlResponse::CreatedSource => command_complete!("CREATE SOURCE"),
+                    SqlResponse::CreatedSink => command_complete!("CREATE SINK"),
                     SqlResponse::CreatedView => command_complete!("CREATE VIEW"),
                     SqlResponse::CreatedTable => command_complete!("CREATE TABLE"),
-                    SqlResponse::DroppedDataSource => command_complete!("DROP DATA SOURCE"),
+                    SqlResponse::DroppedSource => command_complete!("DROP SOURCE"),
                     SqlResponse::DroppedView => command_complete!("DROP VIEW"),
                     SqlResponse::DroppedTable => command_complete!("DROP TABLE"),
                     SqlResponse::EmptyQuery => transition!(SendCommandComplete {

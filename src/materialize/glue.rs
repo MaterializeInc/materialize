@@ -36,11 +36,11 @@ pub type SqlCommand = String;
 /// Responses from the planner to sql commands
 #[derive(Debug)]
 pub enum SqlResponse {
-    CreatedDataSink,
-    CreatedDataSource,
+    CreatedSink,
+    CreatedSource,
     CreatedView,
     CreatedTable,
-    DroppedDataSource,
+    DroppedSource,
     DroppedView,
     DroppedTable,
     EmptyQuery,

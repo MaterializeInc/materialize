@@ -23,7 +23,7 @@ $ set schema_v2={
 $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true
 {"a": 1}
 
-> CREATE DATA SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/data'
+> CREATE SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/data'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > PEEK data_v1
@@ -34,7 +34,7 @@ a
 $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true
 {"a": 2, "b": -1}
 
-> CREATE DATA SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/data'
+> CREATE SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/data'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > PEEK data_v1
