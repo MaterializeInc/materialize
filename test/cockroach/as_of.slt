@@ -13,6 +13,9 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+# Unlikely to support the SELECT ... AS OF SYSTEM TIME syntax exactly.
+halt
+
 statement ok
 CREATE TABLE t (i INT)
 

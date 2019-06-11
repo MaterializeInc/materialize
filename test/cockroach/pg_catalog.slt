@@ -13,6 +13,9 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+# We are not currently trying to be this PostgreSQL compatible. Perhaps someday.
+halt
+
 statement ok
 SET CLUSTER SETTING sql.stats.automatic_collection.enabled = false
 
