@@ -12,8 +12,7 @@ use std::collections::HashMap;
 // use timely::dataflow::operators::probe::Probe;
 // use timely::dataflow::Scope;
 
-use super::types::{Diff, RelationExpr, ScalarExpr};
-use crate::clock::Timestamp;
+use super::types::{Diff, RelationExpr, ScalarExpr, Timestamp};
 use crate::repr::Datum;
 
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;

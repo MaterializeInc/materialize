@@ -411,7 +411,6 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
-    // clock: Clock,
     timer: std::time::Instant,
     planner: Planner,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
@@ -471,7 +470,6 @@ impl FullState {
             .collect::<Vec<_>>();
 
         FullState {
-            // clock,
             timer: std::time::Instant::now(),
             planner,
             dataflow_command_senders,

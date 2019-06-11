@@ -108,7 +108,6 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     let dd_workers = dataflow::serve(
         dataflow_command_receivers,
         peek_results_handler,
-        // clock.clone(),
         config.num_timely_workers,
     )?;
 
@@ -126,7 +125,6 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
                 sql_response_mux.clone(),
                 dataflow_command_senders,
                 threads,
-                // clock.clone(),
             );
         }
     }

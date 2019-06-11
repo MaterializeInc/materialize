@@ -19,8 +19,7 @@ use std::sync::{Arc, Mutex};
 use super::render;
 use super::trace::{KeysOnlyHandle, TraceManager};
 use super::RelationExpr;
-use crate::clock::Timestamp;
-use crate::dataflow::Dataflow;
+use crate::dataflow::{Dataflow, Timestamp};
 use crate::glue::*;
 use crate::repr::Datum;
 
@@ -49,7 +48,6 @@ pub fn serve(
             worker,
             dataflow_command_receiver,
             peek_results_handler.clone(),
-            // clock.clone(),
             // insert_mux.clone(),
         )
         .run()

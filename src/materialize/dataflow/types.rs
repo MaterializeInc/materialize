@@ -13,6 +13,9 @@ use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 /// System-wide update type.
 pub type Diff = isize;
 
+/// System-wide timestamp type.
+pub type Timestamp = u64;
+
 /// A named stream of data.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

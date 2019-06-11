@@ -13,8 +13,7 @@ use std::time::Duration;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::{Scope, Stream};
 
-use crate::clock::Timestamp;
-use crate::dataflow::types::{Diff, KafkaSourceConnector};
+use crate::dataflow::types::{Diff, KafkaSourceConnector, Timestamp};
 use crate::interchange::avro;
 use crate::repr::Datum;
 
@@ -23,7 +22,6 @@ pub fn kafka<G>(
     name: &str,
     connector: &KafkaSourceConnector,
     done: Rc<Cell<bool>>,
-    // clock: &Clock,
     timer: std::time::Instant,
 ) -> Stream<G, (Vec<Datum>, Timestamp, Diff)>
 where

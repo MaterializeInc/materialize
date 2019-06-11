@@ -13,8 +13,7 @@ use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-use crate::clock::Timestamp;
-use crate::dataflow::types::{Diff, KafkaSinkConnector};
+use crate::dataflow::types::{Diff, KafkaSinkConnector, Timestamp};
 
 pub fn kafka<G, B, K, V>(
     stream: &Stream<G, B>,

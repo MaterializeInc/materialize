@@ -5,8 +5,7 @@
 
 //! Types and data-structures used to glue all the various components of materialize together
 
-use crate::clock::Timestamp;
-use crate::dataflow::{Dataflow, View};
+use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::repr::{Datum, RelationType};
 use failure::{ensure, format_err};
 use serde::{Deserialize, Serialize};

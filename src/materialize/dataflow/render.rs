@@ -23,7 +23,6 @@ use super::sink;
 use super::source;
 use super::trace::TraceManager;
 use super::types::*;
-use crate::clock::Timestamp;
 use crate::dataflow::context::{ArrangementFlavor, Context};
 use crate::dataflow::types::RelationExpr;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -62,7 +61,6 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    // clock: &Clock,
     // insert_mux: &source::InsertMux,
     inputs: &mut HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
 ) {
@@ -170,12 +168,12 @@ pub fn build_dataflow<A: Allocate>(
 pub fn build_relation_expr<G>(
     relation_expr: RelationExpr,
     scope: &mut G,
-    context: &mut Context<G, RelationExpr, Datum, crate::clock::Timestamp>,
+    context: &mut Context<G, RelationExpr, Datum, Timestamp>,
     worker_index: usize,
 ) -> Collection<G, Vec<Datum>, isize>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<crate::clock::Timestamp>,
+    G::Timestamp: Lattice + Refines<Timestamp>,
     // S: BuildHasher + Clone,
 {
     if context.collection(&relation_expr).is_none() {
