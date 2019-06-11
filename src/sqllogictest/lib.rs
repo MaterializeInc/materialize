@@ -552,10 +552,7 @@ impl RecordRunner for FullState {
                         if let Some(expected_rows_inserted) = *expected_rows_inserted {
                             match response {
                                 SqlResponse::Inserted(actual_rows_inserted)
-                                    if actual_rows_inserted == expected_rows_inserted =>
-                                {
-                                    ()
-                                }
+                                    if actual_rows_inserted == expected_rows_inserted => {}
                                 _ => {
                                     return Ok(Outcome::WrongNumberOfRowsInserted {
                                         expected_rows_inserted,
@@ -595,7 +592,7 @@ impl RecordRunner for FullState {
                     }
                     Err(error) => {
                         // TODO(jamii) check error messages, once ours stabilize
-                        if let Err(_) = output {
+                        if output.is_err() {
                             return Ok(Outcome::Success);
                         } else {
                             let error_string = format!("{}", error);
@@ -612,9 +609,7 @@ impl RecordRunner for FullState {
                 };
 
                 match output {
-                    Err(expected_error) => {
-                        return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
-                    }
+                    Err(expected_error) => Ok(Outcome::UnexpectedPlanSuccess { expected_error }),
                     Ok(QueryOutput {
                         sort,
                         types: expected_types,
@@ -698,7 +693,7 @@ impl RecordRunner for FullState {
                             }
                         }
 
-                        return Ok(Outcome::Success);
+                        Ok(Outcome::Success)
                     }
                 }
             }
