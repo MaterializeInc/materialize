@@ -1,4 +1,17 @@
-# LogicTest: 5node-local 5node-dist-opt
+# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/ranges
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
 
 statement ok
 CREATE TABLE t (k1 INT, k2 INT, v INT, w INT, PRIMARY KEY (k1, k2))
@@ -275,9 +288,9 @@ query TTTTTTTTI colnames
 SELECT  start_key, start_pretty, end_key, end_pretty, database_name, table_name, index_name, replicas, crdb_internal.lease_holder(start_key) FROM crdb_internal.ranges_no_leases;
 ----
 start_key                          start_pretty                   end_key                            end_pretty                     database_name  table_name        index_name  replicas  crdb_internal.lease_holder
-·                                  /Min                            liveness-                        /System/NodeLiveness           ·              ·                 ·           {1}       1
- liveness-                        /System/NodeLiveness            liveness.                        /System/NodeLivenessMax        ·              ·                 ·           {1}       1
- liveness.                        /System/NodeLivenessMax        tsd                               /System/tsd                    ·              ·                 ·           {1}       1
+·                                  /Min                           liveness-                        /System/NodeLiveness           ·              ·                 ·           {1}       1
+liveness-                        /System/NodeLiveness           liveness.                        /System/NodeLivenessMax        ·              ·                 ·           {1}       1
+liveness.                        /System/NodeLivenessMax        tsd                               /System/tsd                    ·              ·                 ·           {1}       1
 tsd                               /System/tsd                    tse                               /System/"tse"                  ·              ·                 ·           {1}       1
 tse                               /System/"tse"                  [136]                              /Table/SystemConfigSpan/Start  ·              ·                 ·           {1}       1
 [136]                              /Table/SystemConfigSpan/Start  [147]                              /Table/11                      ·              ·                 ·           {1}       1
@@ -318,9 +331,9 @@ query TTTTTTTTI colnames
 SELECT start_key, start_pretty, end_key, end_pretty, database_name, table_name, index_name, replicas, lease_holder FROM crdb_internal.ranges
 ----
 start_key                          start_pretty                   end_key                            end_pretty                     database_name  table_name        index_name  replicas  lease_holder
-·                                  /Min                            liveness-                        /System/NodeLiveness           ·              ·                 ·           {1}       1
- liveness-                        /System/NodeLiveness            liveness.                        /System/NodeLivenessMax        ·              ·                 ·           {1}       1
- liveness.                        /System/NodeLivenessMax        tsd                               /System/tsd                    ·              ·                 ·           {1}       1
+·                                  /Min                           liveness-                        /System/NodeLiveness           ·              ·                 ·           {1}       1
+liveness-                        /System/NodeLiveness           liveness.                        /System/NodeLivenessMax        ·              ·                 ·           {1}       1
+liveness.                        /System/NodeLivenessMax        tsd                               /System/tsd                    ·              ·                 ·           {1}       1
 tsd                               /System/tsd                    tse                               /System/"tse"                  ·              ·                 ·           {1}       1
 tse                               /System/"tse"                  [136]                              /Table/SystemConfigSpan/Start  ·              ·                 ·           {1}       1
 [136]                              /Table/SystemConfigSpan/Start  [147]                              /Table/11                      ·              ·                 ·           {1}       1

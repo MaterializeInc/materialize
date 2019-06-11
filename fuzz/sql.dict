@@ -10,8 +10,8 @@
 #     http://lcamtuf.coredump.cx/afl/releases/afl-2.52b.tgz
 #
 # The original source code is subject to the terms of the Apache
-# license, a copy of which can be found in the LICENSE file at the root
-# of this repository.
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
 
 # AFL dictionary for SQL
 # ----------------------

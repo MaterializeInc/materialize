@@ -1,4 +1,17 @@
-# LogicTest: local local-opt fakedist fakedist-opt fakedist-metadata
+# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/parallel_stmts_compat
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
 
 # Parallel statement execution was removed in 19.2. See #34789.
 # The RETURNING NOTHING syntax was retained to ensure backward compatibility,
@@ -147,7 +160,7 @@ UPSERT INTO kv VALUES (4, 500) RETURNING NOTHING
 statement error current transaction is aborted, commands ignored until end of transaction block
 UPSERT INTO kv VALUES (3, 10) RETURNING NOTHING
 
-statement ok 
+statement ok
 COMMIT
 
 query II
