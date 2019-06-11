@@ -679,7 +679,6 @@ impl RecordRunner for FullState {
                         match expected_output {
                             Output::Values(expected_values) => {
                                 if values != *expected_values {
-                                    dbg!(&record);
                                     return Ok(Outcome::OutputFailure {
                                         expected_output,
                                         actual_raw_output: results,
