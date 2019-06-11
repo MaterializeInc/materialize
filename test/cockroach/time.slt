@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # Note that the odd '0000-01-01 hh:mi:ss +0000 UTC' result format is an
 # artifact of how pq displays TIMEs.
 

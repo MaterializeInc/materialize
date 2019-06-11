@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # First, we set up two data tables:
 #   - NumToSquare maps integers from 1 to 100 to their squares
 #   - NumToStr maps integers from 1 to 100*100 to strings; this table is

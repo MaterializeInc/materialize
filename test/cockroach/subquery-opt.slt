@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # Regression test for #37263. This test is broken in the heuristic planner
 # because it does not correctly type check subqueries.
 query B

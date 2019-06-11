@@ -59,6 +59,7 @@ pub struct QueryOutput<'a> {
     sort: Sort,
     label: Option<&'a str>,
     column_names: Option<Vec<&'a str>>,
+    mode: Mode,
     output: Output<'a>,
 }
 
@@ -78,6 +79,43 @@ pub enum Record<'a> {
     },
     Skip,
     Halt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// In `Standard` mode, expected query output is formatted so that every
+    /// value is always on its own line, like so:
+    ///
+    ///
+    ///    query II
+    ///    SELECT * FROM VALUES (1, 2), (3, 4)
+    ///    ----
+    ///    1
+    ///    2
+    ///    3
+    ///    4
+    ///
+    /// Row boundaries are not visually represented, but they can be inferred
+    /// because the number of columns per row is specified by the `query`
+    /// directive.
+    Standard,
+    /// In `Cockroach` mode, expected query output is formatted so that rows
+    /// can contain multiple whitespace-separated columns:
+    ///
+    ///    query II
+    ///    SELECT * FROM VALUES (1, 2), (3, 4)
+    ///    ----
+    ///    1 2
+    ///    3 4
+    ///
+    /// This formatting, while easier to parse visually, is thoroughly
+    /// frustrating when column values contain whitespace, e.g., strings like
+    /// "one two", as there is no way to know where the column boundaries are.
+    /// We jump through some hoops to make this work. You might want to
+    /// refer to this upstream Cockroach commit [0] for additional details.
+    ///
+    /// [0]: https://github.com/cockroachdb/cockroach/commit/75c3023ec86a76fe6fb60fe1c6f00752b9784801
+    Cockroach,
 }
 
 fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> Result<&'a str, failure::Error> {
@@ -118,7 +156,10 @@ lazy_static! {
     static ref WHITESPACE_REGEX: Regex = Regex::new(r"\s+").unwrap();
 }
 
-pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
+pub fn parse_record<'a>(
+    mode: &mut Mode,
+    mut input: &'a str,
+) -> Result<Option<Record<'a>>, failure::Error> {
     if input == "" {
         // must have just been a bunch of comments
         return Ok(None);
@@ -131,7 +172,7 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
 
     if first_line == "" {
         // query starts on the next line
-        return parse_record(input);
+        return parse_record(mode, input);
     }
 
     let mut words = first_line.split(' ').peekable();
@@ -222,7 +263,40 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                         num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
                         md5: captures.get(2).unwrap().as_str(),
                     },
-                    None => Output::Values(WHITESPACE_REGEX.split(input.trim()).collect()),
+                    None => {
+                        let mut vals: Vec<_> = input.trim().lines().collect();
+                        if *mode == Mode::Cockroach {
+                            let mut rows = vec![];
+                            for line in vals {
+                                // Split on whitespace to normalize multiple
+                                // spaces to one space. This happens
+                                // unconditionally in Cockroach mode, regardless
+                                // of the sort option.
+                                let cols: Vec<_> = line.split_whitespace().collect();
+                                if sort != Sort::No && cols.len() != types.len() {
+                                    // We can't check this condition for
+                                    // Sort::No, because some tests use strings
+                                    // with whitespace that look like extra
+                                    // columns. (Note that these tests never
+                                    // use any of the sorting options.)
+                                    bail!(
+                                        "col len ({}) did not match declared col len ({})",
+                                        cols.len(),
+                                        types.len()
+                                    );
+                                }
+                                rows.push(cols);
+                            }
+                            if sort == Sort::Row {
+                                rows.sort();
+                            }
+                            vals = rows.into_iter().flat_map(|row| row).collect();
+                            if sort == Sort::Value {
+                                vals.sort();
+                            }
+                        }
+                        Output::Values(vals)
+                    }
                 };
                 Ok(Some(Record::Query {
                     sql,
@@ -231,6 +305,7 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                         sort,
                         label,
                         column_names,
+                        mode: *mode,
                         output,
                     }),
                 }))
@@ -254,7 +329,7 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                 "postgresql" => Ok(None),
                 _ => {
                     // query starts on the next line
-                    parse_record(input)
+                    parse_record(mode, input)
                 }
             }
         }
@@ -262,7 +337,7 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
             match words.next().unwrap() {
                 "postgresql" => {
                     // query starts on the next line
-                    parse_record(input)
+                    parse_record(mode, input)
                 }
                 _ => Ok(None),
             }
@@ -273,6 +348,15 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
         // this is some cockroach-specific thing, we don't care
         "subtest" | "user" | "kv-batch-size" => Ok(None),
 
+        "mode" => {
+            *mode = match words.next() {
+                Some("cockroach") => Mode::Cockroach,
+                Some("standard") | Some("sqlite") => Mode::Standard,
+                other => bail!("unknown parse mode: {:?}", other),
+            };
+            Ok(None)
+        }
+
         other => bail!("Unexpected start of record: {}", other),
     }
 }
@@ -281,11 +365,12 @@ pub fn parse_records(input: &str) -> impl Iterator<Item = Result<Record, failure
     lazy_static! {
         static ref DOUBLE_LINE_REGEX: Regex = Regex::new("(\n|\r\n)(\n|\r\n)").unwrap();
     }
+    let mut mode = Mode::Standard;
     DOUBLE_LINE_REGEX
         .split(input)
         .map(str::trim)
         .filter(|lines| *lines != "")
-        .filter_map(|lines| parse_record(lines).transpose())
+        .filter_map(move |lines| parse_record(&mut mode, lines).transpose())
         .take_while(|record| match record {
             Ok(Record::Halt) => false,
             _ => true,
@@ -453,14 +538,6 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
 
             other => panic!("Don't know how to format {:?}", other),
         })
-        // Strings with spaces get split up as if they were multiple columns.
-        // This is horrible, but required for parity with CockroachDB tests.
-        .flat_map(|s| {
-            WHITESPACE_REGEX
-                .split(&s)
-                .map(|s| s.to_owned())
-                .collect::<Vec<_>>()
-        })
         .collect()
 }
 
@@ -627,6 +704,7 @@ impl RecordRunner for FullState {
                         types: expected_types,
                         column_names: expected_column_names,
                         output: expected_output,
+                        mode,
                         ..
                     }) => {
                         let inferred_types = &typ.column_types;
@@ -666,7 +744,20 @@ impl RecordRunner for FullState {
 
                         let mut rows = results
                             .iter()
-                            .map(|row| format_row(row, &**expected_types))
+                            .map(|row| {
+                                let mut row = format_row(row, &**expected_types);
+                                if *mode == Mode::Cockroach && *sort != Sort::No {
+                                    row = row
+                                        .into_iter()
+                                        .flat_map(|s| {
+                                            s.split_whitespace()
+                                                .map(|s| s.to_owned())
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .collect();
+                                }
+                                row
+                            })
                             .collect::<Vec<_>>();
                         if let Sort::Row = sort {
                             rows.sort();

@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # ------------------------------------------------------------------------------
 # Create a simple schema that models customers and orders. Each customer has an
 # id (c_id), and has zero or more orders that are related via a foreign key of

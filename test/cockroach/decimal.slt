@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # The following tests have results equivalent to Postgres (differences
 # in string representation and number of decimals returned, but otherwise
 # the same). These do not pass using the inf package. The inf package

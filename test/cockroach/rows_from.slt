@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 query II colnames
 SELECT * FROM ROWS FROM (generate_series(1,2), generate_series(4,8))
 ----

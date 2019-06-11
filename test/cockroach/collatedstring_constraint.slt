@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # English collation chart: http://www.unicode.org/cldr/charts/30/collation/en_US_POSIX.html
 
 statement ok

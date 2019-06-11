@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # TODO(radu): re-add 5node-dist-opt when #32648 is fixed.
 
 # Regression test for #32652: make sure subqueries that have extra columns for

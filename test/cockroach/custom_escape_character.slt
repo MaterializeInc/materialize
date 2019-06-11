@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 query B
 SELECT '%' LIKE 't%' ESCAPE CASE WHEN (SELECT '-A' SIMILAR TO '--A' ESCAPE '-') THEN 't' ELSE 'f' END
 ----

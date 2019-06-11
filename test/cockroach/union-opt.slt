@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # This test is broken in the heuristic planner. It pushes down the filter when
 # it shouldn't because of the composite type in the filter condition.
 query R

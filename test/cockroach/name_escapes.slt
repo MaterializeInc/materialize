@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # Check that the various things in a table definition are properly escaped when
 # printed out.
 statement ok

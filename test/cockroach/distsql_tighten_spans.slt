@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # This test verifies that we correctly tighten spans during index selection as
 # well as after partitioning spans in distsql.
 

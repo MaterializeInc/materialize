@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # These are postgres regress sql join test suite
 # https://github.com/postgres/postgres/blob/master/src/test/regress/sql/join.sql
 # Adapted to sqllogictest format

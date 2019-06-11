@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 query TTT
 SELECT B'1000101'::BIT(4)::STRING,
        B'1000101'::BIT(4),

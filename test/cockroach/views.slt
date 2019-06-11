@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # NOTE: Keep this table at the beginning of the file to ensure that its numeric
 #       reference is 53 (the numeric reference of the first table). If the
 #       numbering scheme in cockroach changes, this test will break.

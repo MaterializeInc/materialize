@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # Test that the exec HashJoiner follows SQL NULL semantics for ON predicate
 # equivalence. The use of sorts here force the planning of merge join.
 

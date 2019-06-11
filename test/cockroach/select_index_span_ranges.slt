@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # This test verifies that we correctly perform an index join when the KV
 # batches span ranges. This is testing that SQL disables batch limits for index
 # join; otherwise it can get out of order results from KV that it can't handle.

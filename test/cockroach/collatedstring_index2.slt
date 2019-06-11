@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 ##
 # Test a primary key with a collated string in second position (cannot get a key range).
 #

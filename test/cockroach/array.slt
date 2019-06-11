@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 # pg arrays must preserve control characters when converted to string,
 # but their direct representation as string does not escape the
 # control characters. In order for the test file to remain valid

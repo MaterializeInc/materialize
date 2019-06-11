@@ -13,6 +13,8 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
+mode cockroach
+
 ## This test file contains various complex queries that ORMs issue during
 ## startup or general use, that pre-CBO code can't handle. This file should be
 ## merged with the orms test file once the heuristic planner is gone.
