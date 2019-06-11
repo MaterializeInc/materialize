@@ -48,6 +48,12 @@ pub enum Output<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedOutput {
+    Values(Vec<String>),
+    Hashed { num_values: usize, md5: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryOutput<'a> {
     types: Vec<Type>,
     sort: Sort,
@@ -106,6 +112,10 @@ fn parse_sql<'a>(input: &mut &'a str) -> Result<&'a str, failure::Error> {
         static ref QUERY_OUTPUT_REGEX: Regex = Regex::new("(\r?\n----\r?\n?)|$").unwrap();
     }
     split_at(input, &QUERY_OUTPUT_REGEX)
+}
+
+lazy_static! {
+    static ref WHITESPACE_REGEX: Regex = Regex::new(r"\s+").unwrap();
 }
 
 pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
@@ -212,12 +222,7 @@ pub fn parse_record(mut input: &str) -> Result<Option<Record>, failure::Error> {
                         num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
                         md5: captures.get(2).unwrap().as_str(),
                     },
-                    None => {
-                        lazy_static! {
-                            static ref WHITESPACE_REGEX: Regex = Regex::new(r"\s+").unwrap();
-                        }
-                        Output::Values(WHITESPACE_REGEX.split(input.trim()).collect())
-                    }
+                    None => Output::Values(WHITESPACE_REGEX.split(input.trim()).collect()),
                 };
                 Ok(Some(Record::Query {
                     sql,
@@ -315,7 +320,8 @@ pub enum Outcome<'a> {
     },
     OutputFailure {
         expected_output: &'a Output<'a>,
-        actual_output: Vec<Vec<Datum>>,
+        actual_raw_output: Vec<Vec<Datum>>,
+        actual_output: OwnedOutput,
     },
     Bail {
         cause: Box<Outcome<'a>>,
@@ -446,6 +452,14 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
             (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
 
             other => panic!("Don't know how to format {:?}", other),
+        })
+        // Strings with spaces get split up as if they were multiple columns.
+        // This is horrible, but required for parity with CockroachDB tests.
+        .flat_map(|s| {
+            WHITESPACE_REGEX
+                .split(&s)
+                .map(|s| s.to_owned())
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -668,7 +682,8 @@ impl RecordRunner for FullState {
                                     dbg!(&record);
                                     return Ok(Outcome::OutputFailure {
                                         expected_output,
-                                        actual_output: results,
+                                        actual_raw_output: results,
+                                        actual_output: OwnedOutput::Values(values),
                                     });
                                 }
                             }
@@ -685,7 +700,11 @@ impl RecordRunner for FullState {
                                 if values.len() != *num_values || md5 != *expected_md5 {
                                     return Ok(Outcome::OutputFailure {
                                         expected_output,
-                                        actual_output: results,
+                                        actual_raw_output: results,
+                                        actual_output: OwnedOutput::Hashed {
+                                            num_values: values.len(),
+                                            md5,
+                                        },
                                     });
                                 }
                             }
