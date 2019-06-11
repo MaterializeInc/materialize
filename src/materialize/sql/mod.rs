@@ -814,7 +814,7 @@ impl Planner {
         &self,
         table_factor: &'a TableFactor,
     ) -> Result<SQLRelationExpr, failure::Error> {
-        let (from_name, from_alias) = match table_factor {
+        match table_factor {
             TableFactor::Table {
                 name,
                 alias,
@@ -827,24 +827,24 @@ impl Planner {
                 if !with_hints.is_empty() {
                     bail!("WITH hints are not supported");
                 }
-                (extract_sql_object_name(name)?, alias.as_ref())
+                let name = extract_sql_object_name(name)?;
+                let typ = self.dataflows.get_type(&name)?;
+                let mut expr = SQLRelationExpr::from_source(&name, typ.column_types.clone());
+                if let Some(TableAlias { name, columns }) = alias {
+                    if !columns.is_empty() {
+                        bail!("aliasing columns is not yet supported");
+                    }
+                    expr = expr.alias_table(&name);
+                }
+                Ok(expr)
             }
             TableFactor::Derived { .. } => {
                 bail!("subqueries are not yet supported");
             }
-            TableFactor::NestedJoin { .. } => {
-                bail!("nested joins are not yet supported");
+            TableFactor::NestedJoin(table_with_joins) => {
+                self.plan_table_with_joins(table_with_joins)
             }
-        };
-        let typ = self.dataflows.get_type(&from_name)?;
-        let mut relation_expr = SQLRelationExpr::from_source(&from_name, typ.column_types.clone());
-        if let Some(TableAlias { name, columns }) = from_alias {
-            if !columns.is_empty() {
-                bail!("aliasing columns is not yet supported");
-            }
-            relation_expr = relation_expr.alias_table(name);
         }
-        Ok(relation_expr)
     }
 
     fn plan_join_operator(
