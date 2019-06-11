@@ -19,28 +19,30 @@ try() {
     fi
 }
 
-files=$(
-    git ls-files \
-        | sed 's,^.\/,,' \
-        | grep -vE \
-            -e '.gitignore' \
-            -e '.gitmodules' \
-            -e '(^|/)Cargo\.lock$' \
-            -e '(^|/)Cargo\.toml$' \
-            -e '^LICENSE$' \
-            -e '^rust-toolchain$' \
-            -e '^rustfmt.toml$' \
-            -e '\.md$' \
-            -e '\.json$' \
-            -e '^sqllogictest$'
+# This Git incantation lists the source files in this repository. If you change
+# it, please preserve the following properties:
+#
+#     1. files matched by a gitignore rule are excluded, and
+#     2. deleted but unstaged files are excluded.
+#
+empty_tree=$(git hash-object -t tree /dev/null)
+files=$(git diff --ignore-submodules=all --name-only "$empty_tree")
+
+copyright_files=$(grep -vE \
+    -e '.gitignore' \
+    -e '.gitmodules' \
+    -e '(^|/)Cargo\.lock$' \
+    -e '(^|/)Cargo\.toml$' \
+    -e '^LICENSE$' \
+    -e '^rust-toolchain$' \
+    -e '^rustfmt.toml$' \
+    -e '\.md$' \
+    -e '\.json$' \
+    <<< "$files"
 )
 
-run() {
-    xargs "$@" <<< "$files"
-}
-
-try run -n1 awk -f misc/lint/copyright.awk
-try run -n1 misc/lint/trailing-newline.sh
+try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
+try xargs -n1 misc/lint/trailing-newline.sh <<< "$files"
 
 if $failed; then
     exit 1

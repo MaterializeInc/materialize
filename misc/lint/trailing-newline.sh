@@ -19,7 +19,8 @@ if [[ ! -f "$1" ]]; then
     exit 1
 fi
 
-if ! echo | cmp <(tail -c1 $1) - &> /dev/null; then
+last_byte=$(tail -c1 "$1")
+if [[ "$last_byte" != $'\n' && "$last_byte" != "" ]] &> /dev/null; then
     echo "lint: trailing-newline: $1 is missing a trailing newline" >&2
     exit 1
 fi
