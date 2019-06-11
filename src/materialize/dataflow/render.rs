@@ -75,11 +75,7 @@ pub fn build_dataflow<A: Allocate>(
                 }
                 SourceConnector::Local(_) => {
                     let (handle, stream) = scope.new_input();
-                    if worker_index == 0 {
-                        // Only insert if we're worker 0, to avoid duplicating
-                        // the insert.
-                        inputs.insert(src.name.clone(), handle);
-                    }
+                    inputs.insert(src.name.clone(), handle);
                     stream
                 }
             };

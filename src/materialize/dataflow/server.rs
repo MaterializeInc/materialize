@@ -192,7 +192,8 @@ where
                 }
             }
             DataflowCommand::Insert(name, mut datums) => {
-                // Only the first worker actually broadcasts the insert to the sources, otherwise we would get multiple copies
+                // Only broadcast the input on the first worker. Otherwise we'd
+                // insert multiple copies.
                 if self.inner.index() == 0 {
                     let handle = self.inputs.get_mut(&name).expect("Failed to find input");
 
