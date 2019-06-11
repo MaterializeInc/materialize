@@ -48,7 +48,6 @@ pub fn serve(
             worker,
             dataflow_command_receiver,
             peek_results_handler.clone(),
-            // insert_mux.clone(),
         )
         .run()
     })

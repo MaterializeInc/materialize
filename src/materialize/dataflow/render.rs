@@ -61,7 +61,6 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    // insert_mux: &source::InsertMux,
     inputs: &mut HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
 ) {
     let worker_timer = worker.timer();

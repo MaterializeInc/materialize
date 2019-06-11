@@ -20,7 +20,6 @@ pub fn kafka<G, B, K, V>(
     name: &str,
     _connector: &KafkaSinkConnector,
     _done: Rc<Cell<bool>>,
-    // _clock: &Clock,
     _timer: std::time::Instant,
 ) where
     G: Scope<Timestamp = Timestamp>,
