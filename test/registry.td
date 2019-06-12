@@ -5,23 +5,77 @@
 
 $ set schema_v1={
     "type": "record",
-    "name": "na",
+    "name": "envelope",
     "fields": [
-        {"name": "a", "type": "long"}
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "RowBefore",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      {
+        "name": "after",
+        "type": [
+          {
+            "name": "RowAfter",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      }
     ]
   }
 
 $ set schema_v2={
     "type": "record",
-    "name": "na",
+    "name": "envelope",
     "fields": [
-        {"name": "a", "type": "long"},
-        {"name": "b", "type": "long", "default": 42}
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "RowBefore",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long", "default": 42}
+            ]
+          },
+          "null"
+        ]
+      },
+      {
+        "name": "after",
+        "type": [
+          {
+            "name": "RowAfter",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long", "default": 42}
+            ]
+          },
+          "null"
+        ]
+      }
     ]
   }
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true
-{"a": 1}
+$ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=1
+{"before": null, "after": {"a": 1}}
+
+$ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=2
+{"before": null, "after": null}
 
 > CREATE SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/data'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
@@ -31,8 +85,11 @@ a
 ---
 1
 
-$ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true
-{"a": 2, "b": -1}
+$ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=3
+{"before": null, "after": {"a": 2, "b": -1}}
+
+$ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=4
+{"before": null, "after": null}
 
 > CREATE SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/data'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'

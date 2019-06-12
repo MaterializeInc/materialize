@@ -5,16 +5,44 @@
 
 $ set foo-schema={
     "type": "record",
-    "name": "na",
+    "name": "envelope",
     "fields": [
-        {"name": "a", "type": ["null", "long"]}
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": ["null", "long"]}
+            ]
+          },
+          "null"
+        ]
+      },
+      {
+        "name": "after",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": ["null", "long"]}
+            ]
+          },
+          "null"
+        ]
+      }
     ]
   }
 
-$ kafka-ingest format=avro topic=foo schema=${foo-schema}
-{"a": 1}
-{"a": 2}
-{"a": null}
+$ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
+{"before": null, "after": {"a": 1}}
+{"before": null, "after": {"a": 2}}
+{"before": null, "after": {"a": null}}
+
+$ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=2
+{"before": null, "after": null}
 
 > CREATE SOURCE foo FROM 'kafka://${testdrive.kafka-addr}/foo' USING SCHEMA '${foo-schema}'
 

@@ -10,18 +10,21 @@ use differential_dataflow::trace::TraceReader;
 
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
-use timely::dataflow::InputHandle;
+use timely::progress::frontier::Antichain;
+use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::render;
+use super::render::InputCapability;
 use super::trace::{KeysOnlyHandle, TraceManager};
 use super::RelationExpr;
 use crate::dataflow::{Dataflow, Timestamp};
 use crate::glue::*;
-use crate::repr::Datum;
 
 pub fn serve(
     dataflow_command_receivers: Vec<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
@@ -59,13 +62,15 @@ pub enum PeekResultsHandler {
     Remote,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 struct PendingPeek {
+    /// The expr that identifies the dataflow to peek.
+    expr: RelationExpr,
     /// Identifies intended recipient of the peek.
     connection_uuid: uuid::Uuid,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Handle to trace.
-    trace: KeysOnlyHandle,
     drop_after_peek: Option<Dataflow>,
 }
 
@@ -76,10 +81,12 @@ where
     inner: &'w mut TimelyWorker<A>,
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
     peek_results_handler: PeekResultsHandler,
-    pending_peeks: Vec<PendingPeek>,
+    pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
-    inputs: HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
+    inputs: HashMap<String, InputCapability>,
+    dataflows: HashMap<String, Dataflow>,
+    sequencer: Sequencer<PendingPeek>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -93,6 +100,7 @@ where
     ) -> Worker<'w, A> {
         let mut traces = TraceManager::new();
         render::add_builtin_dataflows(&mut traces, w);
+        let sequencer = Sequencer::new(w, Instant::now());
         Worker {
             inner: w,
             dataflow_command_receiver,
@@ -101,6 +109,8 @@ where
             traces,
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
+            dataflows: HashMap::new(),
+            sequencer,
         }
     }
 
@@ -129,10 +139,13 @@ where
         match cmd {
             DataflowCommand::CreateDataflow(dataflow) => {
                 render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
+                self.dataflows.insert(dataflow.name().to_owned(), dataflow);
             }
+
             DataflowCommand::DropDataflows(dataflows) => {
                 for dataflow in dataflows {
                     self.inputs.remove(dataflow.name());
+                    self.dataflows.remove(dataflow.name());
                     if let Dataflow::Sink { .. } = dataflow {
                         // TODO(jamii) it's not clear how we're supposed to drop a Sink
                     } else {
@@ -143,72 +156,45 @@ where
                     }
                 }
             }
-            DataflowCommand::PeekExisting(dataflow) => {
-                if let Some(time) = cmd_meta.timestamp {
-                    for handle in self.inputs.values_mut() {
-                        handle.advance_to(time + 1);
-                    }
-                }
 
-                if let Some(trace) = self.traces.get_trace(&RelationExpr::Get {
-                    name: dataflow.name().to_owned(),
-                    typ: dataflow.typ().clone(),
-                }) {
-                    self.pending_peeks.push(PendingPeek {
-                        connection_uuid: cmd_meta.connection_uuid,
-                        timestamp: cmd_meta.timestamp.unwrap(),
-                        trace,
-                        drop_after_peek: None,
-                    });
-                } else {
-                    panic!(format!(
-                        "Failed to find arrangement for Peek({:?})",
-                        dataflow
-                    ));
-                }
+            DataflowCommand::PeekExisting { dataflow, when } => {
+                self.sequence_peek(cmd_meta, dataflow, when, false /* drop */)
             }
-            DataflowCommand::PeekTransient(view) => {
-                if let Some(time) = cmd_meta.timestamp {
-                    for handle in self.inputs.values_mut() {
-                        handle.advance_to(time + 1);
-                    }
-                };
-                let name = view.name.to_owned();
-                let get = RelationExpr::Get {
-                    name: view.name.to_owned(),
-                    typ: view.typ.clone(),
-                };
+
+            DataflowCommand::PeekTransient { view, when } => {
                 let dataflow = Dataflow::View(view);
                 render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
-                if let Some(trace) = self.traces.get_trace(&get) {
-                    self.pending_peeks.push(PendingPeek {
-                        connection_uuid: cmd_meta.connection_uuid,
-                        timestamp: cmd_meta.timestamp.unwrap(),
-                        trace,
-                        drop_after_peek: Some(dataflow),
-                    });
-                } else {
-                    panic!(format!("Failed to find arrangement for Peek({})", name));
-                }
+                self.dataflows
+                    .insert(dataflow.name().to_owned(), dataflow.clone());
+                self.sequence_peek(cmd_meta, dataflow, when, true /* drop */)
             }
-            DataflowCommand::Insert(name, mut datums) => {
+
+            DataflowCommand::Insert(name, datums) => {
                 // Only broadcast the input on the first worker. Otherwise we'd
                 // insert multiple copies.
                 if self.inner.index() == 0 {
-                    let handle = self.inputs.get_mut(&name).expect("Failed to find input");
-
-                    let now = handle.time();
-                    for (_, time, _) in datums.iter_mut() {
-                        if *time < *now {
-                            *time = *now;
-                            println!("Forced to fast-forward input timestamps");
-                        }
+                    let handle = match self.inputs.get_mut(&name).expect("Failed to find input") {
+                        InputCapability::Handle(handle) => handle,
+                        _ => panic!("attempted to insert into external source"),
+                    };
+                    for datum in datums {
+                        handle.send((datum, *handle.time(), 1))
                     }
+                }
 
-                    handle.send_batch(&mut datums);
+                // Unconditionally advance time after an insertion to allow the
+                // computation to make progress. Importantly, this occurs on
+                // *all* internal inputs.
+                for handle in self.inputs.values_mut() {
+                    match handle {
+                        InputCapability::Handle(handle) => handle.advance_to(*handle.time() + 1),
+                        InputCapability::Raw(_) => (),
+                    }
                 }
             }
+
             DataflowCommand::Tail(_) => unimplemented!(),
+
             DataflowCommand::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.inputs.clear();
@@ -217,8 +203,80 @@ where
         }
     }
 
+    fn sequence_peek(
+        &mut self,
+        cmd_meta: CommandMeta,
+        dataflow: Dataflow,
+        when: PeekWhen,
+        drop: bool,
+    ) {
+        if self.inner.index() != 0 {
+            // Only worker 0 sequences peeks. It will broadcast the sequenced
+            // peek to other workers.
+            return;
+        }
+
+        let get = RelationExpr::Get {
+            name: dataflow.name().to_owned(),
+            typ: dataflow.typ().clone(),
+        };
+
+        let timestamp = match when {
+            PeekWhen::Immediately => {
+                let trace = self.traces.get_trace(&get).unwrap_or_else(|| {
+                    panic!("failed to find arrangement for PEEK {}", dataflow.name())
+                });
+
+                // Ask the trace for the latest time it knows about. The latest
+                // "committed" time (i.e., the time at which we know results can
+                // never change) is one less than that.
+                //
+                // TODO(benesch, fms): this approach does not work for arbitrary
+                // timestamp types, where a predecessor operation may not exist.
+                let mut upper = Antichain::new();
+                trace.clone().read_upper(&mut upper);
+                upper.elements()[0].saturating_sub(1)
+            }
+
+            // Compute the lastest time that is committed by all inputs. Peeking
+            // at this time may involve waiting for the outputs to catch up.
+            PeekWhen::AfterFlush => self.root_input_time(dataflow.name()).saturating_sub(1),
+
+            PeekWhen::AtTimestamp(timestamp) => timestamp,
+        };
+
+        self.sequencer.push(PendingPeek {
+            expr: get,
+            connection_uuid: cmd_meta.connection_uuid,
+            timestamp,
+            drop_after_peek: if drop { Some(dataflow) } else { None },
+        })
+    }
+
+    fn root_input_time(&self, name: &str) -> u64 {
+        match &self.dataflows[name] {
+            Dataflow::Source(_) => match &self.inputs[name] {
+                InputCapability::Raw(cap) => *cap.borrow().as_ref().unwrap().time(),
+                InputCapability::Handle(handle) => *handle.time(),
+            },
+            Dataflow::Sink(_) => unreachable!(),
+            v @ Dataflow::View(_) => v
+                .uses()
+                .iter()
+                .map(|n| self.root_input_time(n))
+                .min()
+                .unwrap(),
+        }
+    }
+
     /// Scan pending peeks and attempt to retire each.
     fn process_peeks(&mut self) {
+        // Look for new peeks.
+        while let Some(pending_peek) = self.sequencer.next() {
+            let trace = self.traces.get_trace(&pending_peek.expr).unwrap();
+            self.pending_peeks.push((pending_peek, trace));
+        }
+
         // See if time has advanced enough to handle any of our pending
         // peeks.
         let mut dataflows_to_be_dropped = vec![];
@@ -229,9 +287,9 @@ where
                 rpc_client,
                 ..
             } = self;
-            pending_peeks.retain(|peek| {
+            pending_peeks.retain(|(peek, trace)| {
                 let mut upper = timely::progress::frontier::Antichain::new();
-                let mut trace = peek.trace.clone();
+                let mut trace = trace.clone();
                 trace.read_upper(&mut upper);
 
                 // To produce output at `peek.timestamp`, we must be certain that
@@ -245,7 +303,7 @@ where
                 // not the case that `upper` is less or equal to that timestamp,
                 // and so the result cannot further evolve.
                 if !upper.less_equal(&peek.timestamp) {
-                    let (mut cur, storage) = peek.trace.clone().cursor();
+                    let (mut cur, storage) = trace.cursor();
                     let mut out = Vec::new();
                     while let Some(key) = cur.get_key(&storage) {
                         // TODO: Absent value iteration might be weird (in principle
@@ -304,9 +362,6 @@ where
             DataflowCommand::DropDataflows(dataflows_to_be_dropped),
             CommandMeta {
                 connection_uuid: Uuid::nil(),
-                // timestamp: Some(self.clock.now()),
-                // timestamp: Some(worker.timer().elapsed().as_millis() as u64),
-                timestamp: None,
             },
         );
     }

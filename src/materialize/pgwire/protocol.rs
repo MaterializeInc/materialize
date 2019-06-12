@@ -226,7 +226,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     sql,
                     CommandMeta {
                         connection_uuid: context.uuid,
-                        timestamp: None, // will be assigned by the command queue
                     },
                 ))?;
                 transition!(HandleQuery { conn: conn })

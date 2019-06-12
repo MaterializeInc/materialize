@@ -6,11 +6,12 @@
 use log::error;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, DefaultConsumerContext};
-use rdkafka::Message;
-use std::cell::Cell;
+use rdkafka::{Message, Timestamp as KafkaTimestamp};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 use timely::dataflow::operators::generic::source;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
 use crate::dataflow::types::{Diff, KafkaSourceConnector, Timestamp};
@@ -21,8 +22,8 @@ pub fn kafka<G>(
     scope: &G,
     name: &str,
     connector: &KafkaSourceConnector,
-    done: Rc<Cell<bool>>,
-    timer: std::time::Instant,
+    cap_in: Rc<RefCell<Option<Capability<Timestamp>>>>,
+    _timer: std::time::Instant,
 ) -> Stream<G, (Vec<Datum>, Timestamp, Diff)>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -37,8 +38,7 @@ where
     source(scope, name, move |cap, info| {
         let name = name.to_owned();
         let activator = scope.activator_for(&info.address[..]);
-        let mut maybe_cap = Some(cap);
-        // let clock = clock.clone();
+        *cap_in.borrow_mut() = Some(cap);
 
         let mut decoder =
             avro::Decoder::new(&connector.raw_schema, connector.schema_registry_url.clone());
@@ -58,16 +58,14 @@ where
         consumer.subscribe(&[&connector.topic]).unwrap();
 
         move |output| {
-            if done.get() {
-                maybe_cap = None;
-                return;
-            }
-            let cap = maybe_cap.as_mut().unwrap();
+            let mut cap = cap_in.borrow_mut();
+            let cap = match &mut *cap {
+                Some(cap) => cap,
+                None => return,
+            };
 
             // Indicate that we should run again.
             activator.activate();
-
-            let ts = timer.elapsed().as_millis() as u64;
 
             // Repeatedly interrogate Kafka for messages. Cease only when
             // Kafka stops returning new data. We could cease earlier, if we
@@ -84,17 +82,44 @@ where
                                 continue;
                             }
                         };
-                        let cap = cap.delayed(&ts);
+
+                        let ms = match message.timestamp() {
+                            KafkaTimestamp::NotAvailable => {
+                                // TODO(benesch): do we need to do something
+                                // else?
+                                error!("dropped kafka message with no timestamp");
+                                continue;
+                            }
+                            KafkaTimestamp::CreateTime(ms) | KafkaTimestamp::LogAppendTime(ms) => {
+                                ms as u64
+                            }
+                        };
+                        if ms >= *cap.time() {
+                            cap.downgrade(&ms)
+                        } else {
+                            error!(
+                                "{}: fast-forwarding out-of-order Kafka timestamp from {} to {}",
+                                name,
+                                ms,
+                                *cap.time()
+                            );
+                        };
+
                         match decoder.decode(payload) {
-                            Ok(data) => output.session(&cap).give((data, *cap.time(), 1)),
+                            Ok(diff_pair) => {
+                                if let Some(before) = diff_pair.before {
+                                    output.session(&cap).give((before, *cap.time(), -1));
+                                }
+                                if let Some(after) = diff_pair.after {
+                                    output.session(&cap).give((after, *cap.time(), 1));
+                                }
+                            }
                             Err(err) => error!("avro deserialization error: {}", err),
                         }
                     }
                     Err(err) => error!("kafka error: {}: {}", name, err),
                 }
             }
-
-            cap.downgrade(&ts);
         }
     })
 }

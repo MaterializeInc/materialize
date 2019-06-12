@@ -25,8 +25,6 @@ pub use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 pub struct CommandMeta {
     /// The pgwire connection on which this command originated
     pub connection_uuid: Uuid,
-    /// The time this command was inserted in the command queue
-    pub timestamp: Option<Timestamp>,
 }
 
 /// Incoming sql from users
@@ -55,11 +53,24 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 pub enum DataflowCommand {
     CreateDataflow(Dataflow),
     DropDataflows(Vec<Dataflow>),
-    PeekExisting(Dataflow),
-    PeekTransient(View),
+    PeekExisting { dataflow: Dataflow, when: PeekWhen },
+    PeekTransient { view: View, when: PeekWhen },
     Tail(String),
-    Insert(String, Vec<(Vec<Datum>, Timestamp, isize)>),
+    Insert(String, Vec<Vec<Datum>>),
     Shutdown,
+}
+
+/// Specifies when a `PeekExisting` or a `PeekTransient` should occur.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PeekWhen {
+    /// The peek should occur at the latest possible timestamp that allows the
+    /// peek to complete immediately.
+    Immediately,
+    /// The peek should wait for all in-flight records at the moment of the
+    /// peek to drain from the computation.
+    AfterFlush,
+    /// The peek should occur at the specified timestamp.
+    AtTimestamp(Timestamp),
 }
 
 pub type PeekResults = Vec<Vec<Datum>>;

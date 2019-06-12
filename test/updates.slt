@@ -1,0 +1,27 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+# This test my seem simple, but it is surprisingly good at verifying that
+# logical timestamp handling for internal inputs is sane.
+
+statement ok
+CREATE TABLE t (a INT)
+
+statement ok
+INSERT INTO t VALUES (1)
+
+query I rowsort
+SELECT a FROM t
+----
+1
+
+statement ok
+INSERT INTO t VALUES (2)
+
+query I rowsort
+SELECT a FROM t
+----
+1
+2

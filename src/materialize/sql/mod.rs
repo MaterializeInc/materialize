@@ -135,7 +135,10 @@ impl Planner {
             SqlResponse::Peeking {
                 typ: dataflow.typ().clone(),
             },
-            Some(DataflowCommand::PeekExisting(dataflow)),
+            Some(DataflowCommand::PeekExisting {
+                dataflow,
+                when: PeekWhen::Immediately,
+            }),
         ))
     }
 
@@ -154,7 +157,10 @@ impl Planner {
                 SqlResponse::Peeking {
                     typ: view.typ.clone(),
                 },
-                Some(DataflowCommand::PeekTransient(view)),
+                Some(DataflowCommand::PeekTransient {
+                    view,
+                    when: PeekWhen::AfterFlush,
+                }),
             ))
         } else {
             panic!("Got a non-view dataflow for a SELECT: {:?}", dataflow);
@@ -241,13 +247,7 @@ impl Planner {
 
         Ok((
             SqlResponse::Inserted(datums.len()),
-            Some(DataflowCommand::Insert(
-                name,
-                datums
-                    .into_iter()
-                    .map(|d| (d, Default::default(), 1))
-                    .collect(),
-            )),
+            Some(DataflowCommand::Insert(name, datums)),
         ))
     }
 }

@@ -12,11 +12,49 @@ $ set schema={
     ]
   }
 
-$ kafka-ingest format=avro topic=data schema=${schema}
-{"a": 1, "b": 1}
-{"a": 2, "b": 1}
-{"a": 3, "b": 1}
-{"a": 1, "b": 2}
+$ set schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      {
+        "name": "after",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      }
+    ]
+  }
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
+{"before": null, "after": {"a": 1, "b": 1}}
+{"before": null, "after": {"a": 2, "b": 1}}
+{"before": null, "after": {"a": 3, "b": 1}}
+{"before": null, "after": {"a": 1, "b": 2}}
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
+{"before": null, "after": null}
 
 > CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/data' USING SCHEMA '${schema}'
 

@@ -91,8 +91,6 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
-    // let clock = Clock::default();
-
     let (sql_command_sender, sql_command_receiver) = unbounded::<(SqlCommand, CommandMeta)>();
     let sql_response_mux = SqlResponseMux::default();
     let (dataflow_command_senders, dataflow_command_receivers) = (0..config.num_timely_workers)

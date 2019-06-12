@@ -6,6 +6,8 @@
 use std::borrow::ToOwned;
 use std::collections::hash_map;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::str::FromStr;
 
 use super::error::{InputError, Positioner};
 
@@ -344,14 +346,46 @@ impl ArgMap {
         self.0.values_mut()
     }
 
+    pub fn opt_string(&mut self, name: &str) -> Option<String> {
+        self.0.remove(name)
+    }
+
     pub fn string(&mut self, name: &str) -> Result<String, String> {
-        self.0
-            .remove(name)
-            .ok_or_else(|| format!("missing {} argument", name))
+        self.opt_string(name)
+            .ok_or_else(|| format!("missing {} parameter", name))
+    }
+
+    pub fn opt_parse<T>(&mut self, name: &str) -> Result<Option<T>, String>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        match self.opt_string(name) {
+            Some(val) => {
+                let t = val
+                    .parse()
+                    .map_err(|e| format!("parsing {} parameter: {}", name, e))?;
+                Ok(Some(t))
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn parse<T>(&mut self, name: &str) -> Result<T, String>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        match self.opt_parse(name) {
+            Ok(None) => Err(format!("missing {} parameter", name)),
+            Ok(Some(t)) => Ok(t),
+            Err(err) => Err(err),
+        }
     }
 
     pub fn opt_bool(&mut self, name: &str) -> Result<bool, String> {
-        match self.0.remove(name) {
+        match self.opt_string(name) {
             Some(val) => {
                 if val == "true" {
                     Ok(true)

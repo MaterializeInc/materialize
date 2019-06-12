@@ -16,12 +16,10 @@ pub fn serve(
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
     threads: Vec<std::thread::Thread>,
 ) {
-    let timer = std::time::Instant::now();
     std::thread::spawn(move || {
         let mut planner = sql::Planner::default();
         for msg in sql_command_receiver.wait() {
-            let (sql_command, mut command_meta) = msg.unwrap();
-            command_meta.timestamp = Some(timer.elapsed().as_millis() as u64);
+            let (sql_command, command_meta) = msg.unwrap();
             let connection_uuid = command_meta.connection_uuid;
 
             let (sql_response, dataflow_command) = match planner.handle_command(sql_command) {

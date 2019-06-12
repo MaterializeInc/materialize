@@ -29,6 +29,7 @@ pub struct State {
     kafka_addr: String,
     kafka_admin: rdkafka::admin::AdminClient<rdkafka::client::DefaultClientContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
+    kafka_consumer: rdkafka::consumer::StreamConsumer<rdkafka::consumer::DefaultConsumerContext>,
     kafka_producer: rdkafka::producer::FutureProducer<rdkafka::client::DefaultClientContext>,
 }
 
@@ -145,10 +146,11 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             ],
         })?);
 
-    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer) = {
+    let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_consumer, kafka_producer) = {
         use rdkafka::admin::{AdminClient, AdminOptions};
         use rdkafka::client::DefaultClientContext;
         use rdkafka::config::ClientConfig;
+        use rdkafka::consumer::StreamConsumer;
         use rdkafka::producer::FutureProducer;
 
         let addr = config
@@ -167,13 +169,19 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
 
         let admin_opts = AdminOptions::new().operation_timeout(Duration::from_secs(5));
 
-        let producer: FutureProducer = config.create().map_err(|e| Error::General {
-            ctx: "opening Kafka connection".into(),
+        let consumer: StreamConsumer = config.create().map_err(|e| Error::General {
+            ctx: "opening Kafka consumer connection".into(),
             cause: Box::new(e),
             hints: vec![format!("connection string: {}", addr)],
         })?;
 
-        (addr.to_owned(), admin, admin_opts, producer)
+        let producer: FutureProducer = config.create().map_err(|e| Error::General {
+            ctx: "opening Kafka producer connection".into(),
+            cause: Box::new(e),
+            hints: vec![format!("connection string: {}", addr)],
+        })?;
+
+        (addr.to_owned(), admin, admin_opts, consumer, producer)
     };
 
     Ok(State {
@@ -183,6 +191,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
         kafka_addr,
         kafka_admin,
         kafka_admin_opts,
+        kafka_consumer,
         kafka_producer,
     })
 }

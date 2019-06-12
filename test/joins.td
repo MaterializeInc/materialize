@@ -5,33 +5,91 @@
 
 $ set names-schema={
     "type": "record",
-    "name": "na",
+    "name": "envelope",
     "fields": [
-        {"name": "num", "type": "long"},
-        {"name": "name", "type": "string"}
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "num", "type": "long"},
+              {"name": "name", "type": "string"}
+            ]
+          },
+          "null"
+        ]
+      },
+      {
+        "name": "after",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "num", "type": "long"},
+              {"name": "name", "type": "string"}
+            ]
+          },
+          "null"
+        ]
+      }
     ]
   }
 
-$ kafka-ingest format=avro topic=names schema=${names-schema}
-{"num": 1, "name": "one"}
-{"num": 2, "name": "two"}
-{"num": 3, "name": "three"}
-
-> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/names' USING SCHEMA '${names-schema}'
+$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
+{"before": null, "after": {"num": 1, "name": "one"}}
+{"before": null, "after": {"num": 2, "name": "two"}}
+{"before": null, "after": {"num": 3, "name": "three"}}
 
 $ set mods-schema={
     "type": "record",
-    "name": "na",
+    "name": "envelope",
     "fields": [
-        {"name": "num", "type": "long"},
-        {"name": "mod", "type": "string"}
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "num", "type": "long"},
+              {"name": "mod", "type": "string"}
+            ]
+          },
+          "null"
+        ]
+      },
+      {
+        "name": "after",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "num", "type": "long"},
+              {"name": "mod", "type": "string"}
+            ]
+          },
+          "null"
+        ]
+      }
     ]
   }
 
-$ kafka-ingest format=avro topic=mods schema=${mods-schema}
-{"num": 0, "mod": "even"}
-{"num": 1, "mod": "odd"}
-{"num": 2, "mod": "even"}
+$ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=1
+{"before": null, "after": {"num": 0, "mod": "even"}}
+{"before": null, "after": {"num": 1, "mod": "odd"}}
+{"before": null, "after": {"num": 2, "mod": "even"}}
+
+$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
+{"before": null, "after": null}
+
+$ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=2
+{"before": null, "after": null}
+
+> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/names' USING SCHEMA '${names-schema}'
 
 > CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/mods' USING SCHEMA '${mods-schema}'
 

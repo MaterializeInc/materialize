@@ -15,12 +15,17 @@
 
 use avro_rs::types::Value as AvroValue;
 use avro_rs::Schema;
+use backoff::{ExponentialBackoff, Operation};
 use byteorder::{NetworkEndian, WriteBytesExt};
 use futures::stream::FuturesUnordered;
 use futures::Future;
+use rdkafka::admin::{NewTopic, TopicReplication};
+use rdkafka::consumer::Consumer;
 use rdkafka::error::RDKafkaError;
 use rdkafka::producer::FutureRecord;
 use serde_json::Value as JsonValue;
+use std::thread;
+use std::time::Duration;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -30,6 +35,7 @@ use ore::future::StreamExt;
 pub struct IngestAction {
     topic: String,
     schema: String,
+    timestamp: Option<i64>,
     ccsr_subject: Option<String>,
     rows: Vec<String>,
 }
@@ -38,6 +44,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = cmd.args.string("format")?;
     let topic = cmd.args.string("topic")?;
     let schema = cmd.args.string("schema")?;
+    let timestamp = cmd.args.opt_parse("timestamp")?;
     let publish = cmd.args.opt_bool("publish")?;
     cmd.args.done()?;
     if format != "avro" {
@@ -51,6 +58,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     Ok(IngestAction {
         topic,
         schema,
+        timestamp,
         ccsr_subject,
         rows: cmd.input,
     })
@@ -65,6 +73,18 @@ impl Action for IngestAction {
                 Err(e) => return Err(e.to_string()),
             }
         }
+
+        let metadata = state
+            .kafka_consumer
+            .fetch_metadata(None, Some(Duration::from_secs(1)))
+            .map_err(|e| e.to_string())?;
+        if !metadata.topics().iter().any(|t| t.name() == self.topic) {
+            // The topic is already deleted. Deleting it again will fire off an
+            // asynchronous deletion request that may interfere with our attempt
+            // to create the topic below.
+            return Ok(());
+        }
+
         println!("Deleting Kafka topic {:?}", self.topic);
         let res = state
             .kafka_admin
@@ -81,18 +101,108 @@ impl Action for IngestAction {
             ));
         }
         match res.into_element() {
-            Ok(_) | Err((_, RDKafkaError::UnknownTopicOrPartition)) => Ok(()),
-            Err((_, err)) => Err(err.to_string()),
+            Ok(_) | Err((_, RDKafkaError::UnknownTopicOrPartition)) => (),
+            Err((_, err)) => Err(err.to_string())?,
         }
+
+        let mut backoff = ExponentialBackoff::default();
+        backoff.max_elapsed_time = Some(Duration::from_secs(5));
+        (|| {
+            let metadata = state
+                .kafka_consumer
+                // N.B. It is extremely important not to ask specifically
+                // about the topic here, even though the API supports it!
+                // Asking about the topic will create it automatically...
+                // with the wrong number of partitions. Yes, this is
+                // unbelievably horrible.
+                .fetch_metadata(None, Some(Duration::from_secs(1)))
+                .map_err(|e| e.to_string())?;
+            if metadata.topics().iter().any(|t| t.name() == self.topic) {
+                Err(format!("topic {} not deleted yet", self.topic))?
+            }
+            Ok(())
+        })
+        .retry(&mut backoff)
+        .map_err(|e| e.to_string())?;
+
+        // Apparently Kafka lies about when the deletion is processed. Wait a
+        // bit so the deletion request doesn't nuke us when we create the topic
+        // later.
+        thread::sleep(Duration::from_millis(100));
+
+        Ok(())
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
         println!("Ingesting data into Kafka topic {:?}", self.topic);
+        {
+            let num_partitions = 1;
+            let new_topic = NewTopic::new(&self.topic, num_partitions, TopicReplication::Fixed(1));
+            let res = state
+                .kafka_admin
+                .create_topics(&[new_topic], &state.kafka_admin_opts)
+                .wait();
+            let res = match res {
+                Err(err) => return Err(err.to_string()),
+                Ok(res) => res,
+            };
+            if res.len() != 1 {
+                return Err(format!(
+                    "kafka topic creation returned {} results, but exactly one result was expected",
+                    res.len()
+                ));
+            }
+            match res.into_element() {
+                Ok(_) | Err((_, RDKafkaError::TopicAlreadyExists)) => Ok(()),
+                Err((_, err)) => Err(err.to_string()),
+            }?;
+
+            // Topic creation is asynchronous, and if we don't wait for it to
+            // complete, we might produce a message (below) that causes it to
+            // get automatically created with multiple partitions. (Since
+            // multiple partitions have no ordering guarantees, this violates
+            // many assumptions that our tests make.)
+            let mut backoff = ExponentialBackoff::default();
+            backoff.max_elapsed_time = Some(Duration::from_secs(5));
+            (|| {
+                let metadata = state
+                    .kafka_consumer
+                    // N.B. It is extremely important not to ask specifically
+                    // about the topic here, even though the API supports it!
+                    // Asking about the topic will create it automatically...
+                    // with the wrong number of partitions. Yes, this is
+                    // unbelievably horrible.
+                    .fetch_metadata(None, Some(Duration::from_secs(1)))
+                    .map_err(|e| e.to_string())?;
+                if metadata.topics().is_empty() {
+                    Err("metadata fetch returned no topics".to_string())?
+                }
+                let topic = match metadata.topics().iter().find(|t| t.name() == self.topic) {
+                    Some(topic) => topic,
+                    None => Err(format!(
+                        "metadata fetch did not return topic {}",
+                        self.topic
+                    ))?,
+                };
+                if topic.partitions().is_empty() {
+                    Err("metadata fetch returned a topic with no partitions".to_string())?
+                } else if topic.partitions().len() != 1 {
+                    Err(format!(
+                        "topic {} was created with {} partitions when exactly one was expected",
+                        self.topic,
+                        topic.partitions().len()
+                    ))?
+                }
+                Ok(())
+            })
+            .retry(&mut backoff)
+            .map_err(|e| e.to_string())?
+        }
         let schema_id = if let Some(subject) = &self.ccsr_subject {
             state
                 .ccsr_client
                 .publish_schema(subject, &self.schema)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("schema registry error: {}", e))?
         } else {
             1
         };
@@ -117,7 +227,10 @@ impl Action for IngestAction {
             buf.write_i32::<NetworkEndian>(schema_id).unwrap();
             buf.extend(avro_rs::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
 
-            let record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic).payload(&buf);
+            let mut record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic).payload(&buf);
+            if let Some(timestamp) = self.timestamp {
+                record = record.timestamp(timestamp);
+            }
             futs.push(state.kafka_producer.send(record, 1000 /* block_ms */));
         }
         futs.drain().wait().map_err(|e| e.to_string())

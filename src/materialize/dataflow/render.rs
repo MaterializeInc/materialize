@@ -9,11 +9,12 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::{AsCollection, Collection};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
 use timely::dataflow::operators::input::Input as TimelyInput;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::InputHandle;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
@@ -26,6 +27,11 @@ use super::types::*;
 use crate::dataflow::context::{ArrangementFlavor, Context};
 use crate::dataflow::types::RelationExpr;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
+
+pub enum InputCapability {
+    Handle(InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>),
+    Raw(Rc<RefCell<Option<Capability<Timestamp>>>>),
+}
 
 pub fn add_builtin_dataflows<A: Allocate>(
     manager: &mut TraceManager,
@@ -61,26 +67,28 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: &Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    inputs: &mut HashMap<String, InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>>,
+    inputs: &mut HashMap<String, InputCapability>,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
 
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
-            let done = Rc::new(Cell::new(false));
+            let cap = Rc::new(RefCell::new(None));
             let relation_expr = match &src.connector {
                 SourceConnector::Kafka(c) => {
-                    source::kafka(scope, &src.name, &c, done.clone(), worker_timer)
+                    let stream = source::kafka(scope, &src.name, &c, cap.clone(), worker_timer);
+                    inputs.insert(src.name.clone(), InputCapability::Raw(cap.clone()));
+                    stream
                 }
                 SourceConnector::Local(_) => {
                     let (handle, stream) = scope.new_input();
-                    inputs.insert(src.name.clone(), handle);
+                    inputs.insert(src.name.clone(), InputCapability::Handle(handle));
                     stream
                 }
             };
             let arrangement = relation_expr.as_collection().arrange_by_self();
-            let on_delete = Box::new(move || done.set(true));
+            let on_delete = Box::new(move || *cap.borrow_mut() = None);
             manager.set_trace(
                 &RelationExpr::Get {
                     name: src.name.clone(),

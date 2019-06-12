@@ -5,6 +5,7 @@
 
 //! https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
+use std::borrow::ToOwned;
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
@@ -503,7 +504,6 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
-    timer: std::time::Instant,
     planner: Planner,
     dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
     threads: Vec<std::thread::Thread>,
@@ -562,7 +562,6 @@ impl FullState {
             .collect::<Vec<_>>();
 
         FullState {
-            timer: std::time::Instant::now(),
             planner,
             dataflow_command_senders,
             _dataflow_workers: Box::new(dataflow_workers),
@@ -575,7 +574,6 @@ impl FullState {
         &self,
         dataflow_command: DataflowCommand,
     ) -> UnboundedReceiver<PeekResults> {
-        let timestamp = self.timer.elapsed().as_millis() as u64;
         let uuid = Uuid::new_v4();
         let receiver = self
             .peek_results_mux
@@ -589,7 +587,6 @@ impl FullState {
                     dataflow_command.clone(),
                     CommandMeta {
                         connection_uuid: uuid,
-                        timestamp: Some(timestamp),
                     },
                 ))
                 .unwrap();
@@ -677,10 +674,7 @@ impl RecordRunner for FullState {
                             // insert the results
                             let _receiver = self.send_dataflow_command(DataflowCommand::Insert(
                                 table_name.to_string(),
-                                results
-                                    .into_iter()
-                                    .map(|d| (d, Default::default(), 1))
-                                    .collect(),
+                                results,
                             ));
 
                             return Ok(Outcome::Success);
@@ -713,7 +707,7 @@ impl RecordRunner for FullState {
                     }
                 };
                 let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                return Ok(Outcome::Success);
+                Ok(Outcome::Success)
             }
             Record::Query { sql, output } => {
                 if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
@@ -802,7 +796,7 @@ impl RecordRunner for FullState {
                                         .into_iter()
                                         .flat_map(|s| {
                                             s.split_whitespace()
-                                                .map(|s| s.to_owned())
+                                                .map(ToOwned::to_owned)
                                                 .collect::<Vec<_>>()
                                         })
                                         .collect();
@@ -867,7 +861,6 @@ impl Drop for FullState {
                 DataflowCommand::Shutdown,
                 CommandMeta {
                     connection_uuid: Uuid::nil(),
-                    timestamp: None,
                 },
             )));
 
