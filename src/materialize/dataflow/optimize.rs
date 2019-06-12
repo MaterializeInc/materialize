@@ -80,6 +80,7 @@ impl ScalarExpr {
         f(self);
     }
 
+    #[allow(dead_code)]
     fn permute(&mut self, permutation: &HashMap<usize, usize>) {
         self.visit_mut(&mut |e| {
             if let ScalarExpr::Column(old_i) = e {

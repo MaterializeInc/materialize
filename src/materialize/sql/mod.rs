@@ -593,7 +593,7 @@ impl Planner {
                 group_scope.items.push(ScopeItem {
                     table_name: None,
                     column_name: None,
-                    typ: typ,
+                    typ,
                 });
             }
             if !aggregates.is_empty() || !group_key.is_empty() {
