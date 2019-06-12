@@ -267,14 +267,8 @@ impl ColumnType {
             (s1, s2) if s1 == s2 => s1,
             (s1, s2) => panic!("Can't union types: {:?} and {:?}", s1, s2),
         };
-        // TODO(jamii) does sql union require same column names?
-        let name = match (&self.name, &other.name) {
-            (Some(name), None) | (None, Some(name)) => Some(name.to_owned()),
-            (Some(name1), Some(name2)) if name1 == name2 => Some(name1.to_owned()),
-            _ => None,
-        };
         ColumnType {
-            name,
+            name: self.name.clone(),
             scalar_type: scalar_type.clone(),
             nullable: self.nullable
                 || other.nullable

@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 use url::Url;
-use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -272,19 +271,6 @@ impl RelationExpr {
 }
 
 impl RelationExpr {
-    pub fn let_<F>(value: RelationExpr, f: F) -> Result<Self, failure::Error>
-    where
-        F: FnOnce(Self) -> Result<Self, failure::Error>,
-    {
-        let name = format!("tmp_{}", Uuid::new_v4());
-        let typ = value.typ();
-        Ok(RelationExpr::Let {
-            name: name.clone(),
-            value: Box::new(value),
-            body: Box::new(f(RelationExpr::Get { name, typ })?),
-        })
-    }
-
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
         RelationExpr::Constant { rows, typ }
     }
@@ -307,6 +293,13 @@ impl RelationExpr {
         RelationExpr::Filter {
             input: Box::new(self),
             predicates,
+        }
+    }
+
+    pub fn product(self, right: Self) -> Self {
+        RelationExpr::Join {
+            inputs: vec![self, right],
+            variables: vec![],
         }
     }
 
