@@ -126,6 +126,7 @@ pub fn build_dataflow<A: Allocate>(
 
             use crate::dataflow::transform;
             let transforms: Vec<Box<dyn transform::Transform>> = vec![
+                Box::new(transform::split_predicates::SplitPredicates),
                 Box::new(transform::fusion::join::Join),
                 Box::new(transform::PredicatePushdown),
                 Box::new(transform::fusion::filter::Filter),
@@ -215,11 +216,13 @@ where
             RelationExpr::Filter { input, predicates } => {
                 let input = build_relation_expr(*input, scope, context, worker_index);
                 input.filter(move |x| {
-                    predicates.iter().all(|predicate| match predicate.eval(x) {
-                        Datum::True => true,
-                        Datum::False | Datum::Null => false,
-                        _ => unreachable!(),
-                    })
+                    predicates
+                        .iter()
+                        .all(|predicate| match dbg!(predicate.eval(x)) {
+                            Datum::True => true,
+                            Datum::False | Datum::Null => false,
+                            _ => unreachable!(),
+                        })
                 })
             }
             RelationExpr::Join { inputs, variables } => {
