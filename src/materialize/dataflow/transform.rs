@@ -63,7 +63,7 @@ pub mod join_order {
 
     impl JoinOrder {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            relation.visit_mut_inner(&mut |e| {
+            relation.visit_mut(&mut |e| {
                 self.action(e, &e.typ());
             });
         }
@@ -223,7 +223,7 @@ pub mod predicate_pushdown {
 
     impl PredicatePushdown {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            relation.visit_mut_inner_pre(&mut |e| {
+            relation.visit_mut_pre(&mut |e| {
                 self.action(e, &e.typ());
             });
         }
@@ -255,7 +255,7 @@ pub mod predicate_pushdown {
                     for mut predicate in predicates.drain(..) {
                         // Determine the relation support of each predicate.
                         let mut support = Vec::new();
-                        predicate.visit(|e| {
+                        predicate.visit(&mut |e| {
                             if let ScalarExpr::Column(i) = e {
                                 support.push(input_relation[*i]);
                             }
@@ -272,7 +272,7 @@ pub mod predicate_pushdown {
                             }
                             1 => {
                                 let relation = support[0];
-                                predicate.visit_mut(|e| {
+                                predicate.visit_mut(&mut |e| {
                                     // subtract
                                     if let ScalarExpr::Column(i) = e {
                                         *i -= prior_arities[relation];
@@ -432,7 +432,7 @@ pub mod fusion {
 
         impl Filter {
             pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-                relation.visit_mut_inner_pre(&mut |e| {
+                relation.visit_mut_pre(&mut |e| {
                     self.action(e, &e.typ());
                 });
             }
@@ -480,7 +480,7 @@ pub mod fusion {
 
         impl Join {
             pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-                relation.visit_mut_inner(&mut |e| {
+                relation.visit_mut(&mut |e| {
                     self.action(e, &e.typ());
                 });
             }
@@ -556,7 +556,7 @@ pub mod reduction {
 
     impl FoldConstants {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            relation.visit_mut_inner_pre(&mut |e| {
+            relation.visit_mut_pre(&mut |e| {
                 self.action(e, &e.typ());
             });
         }
@@ -608,7 +608,7 @@ pub mod aggregation {
 
     impl FractureReduce {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            relation.visit_mut_inner_pre(&mut |e| {
+            relation.visit_mut_pre(&mut |e| {
                 self.action(e, &e.typ());
             });
         }
@@ -682,7 +682,7 @@ pub mod aggregation {
 
     impl AbelianReduce {
         pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            relation.visit_mut_inner_pre(&mut |e| {
+            relation.visit_mut_pre(&mut |e| {
                 self.action(e, &e.typ());
             });
         }

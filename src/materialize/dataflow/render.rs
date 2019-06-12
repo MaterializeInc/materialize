@@ -108,7 +108,7 @@ pub fn build_dataflow<A: Allocate>(
         Dataflow::View(view) => {
             let mut buttons = Vec::new();
             let mut context = Context::new();
-            view.relation_expr.visit(|e| {
+            view.relation_expr.visit(&mut |e| {
                 if let RelationExpr::Get { name, typ: _ } = e {
                     if let Some(mut trace) = manager.get_trace(e) {
                         // TODO(frankmcsherry) do the thing

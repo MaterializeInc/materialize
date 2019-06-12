@@ -37,24 +37,17 @@ impl ScalarExpr {
         }
     }
 
-    fn visit_inner<'a, F>(&'a self, f: &mut F)
+    pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
     {
-        self.visit1(|e| e.visit_inner(f));
+        self.visit1(|e| e.visit(f));
         f(self);
     }
 
-    pub fn visit<'a, F>(&'a self, mut f: F)
+    pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
     where
-        F: FnMut(&'a Self),
-    {
-        self.visit_inner(&mut f);
-    }
-
-    pub fn visit1_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Self),
+        F: FnMut(&'a mut Self),
     {
         match self {
             ScalarExpr::Column(_) => (),
@@ -79,23 +72,16 @@ impl ScalarExpr {
         }
     }
 
-    fn visit_mut_inner<F>(&mut self, f: &mut F)
+    pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
-        self.visit1_mut(|e| e.visit_mut_inner(f));
+        self.visit1_mut(|e| e.visit_mut(f));
         f(self);
     }
 
-    pub fn visit_mut<F>(&mut self, mut f: F)
-    where
-        F: FnMut(&mut Self),
-    {
-        self.visit_mut_inner(&mut f);
-    }
-
     fn permute(&mut self, permutation: &HashMap<usize, usize>) {
-        self.visit_mut(|e| {
+        self.visit_mut(&mut |e| {
             if let ScalarExpr::Column(old_i) = e {
                 *old_i = permutation[old_i];
             }
@@ -104,7 +90,7 @@ impl ScalarExpr {
 
     pub fn support(&mut self) -> HashSet<usize> {
         let mut support = HashSet::new();
-        self.visit_mut(|e| {
+        self.visit_mut(&mut |e| {
             if let ScalarExpr::Column(i) = e {
                 support.insert(*i);
             }
@@ -141,7 +127,7 @@ impl ScalarExpr {
     /// assert_eq!(test, expr_t);
     /// ```
     pub fn reduce(&mut self) {
-        self.visit_mut(|e| {
+        self.visit_mut(&mut |e| {
             let should_eval = match e {
                 ScalarExpr::CallUnary { expr, .. } => expr.is_literal(),
                 ScalarExpr::CallBinary { expr1, expr2, .. } => {
@@ -215,19 +201,12 @@ impl RelationExpr {
         }
     }
 
-    fn visit_inner<'a, F>(&'a self, f: &mut F)
+    pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
     {
-        self.visit1(|e| e.visit_inner(f));
+        self.visit1(|e| e.visit(f));
         f(self);
-    }
-
-    pub fn visit<'a, F>(&'a self, mut f: F)
-    where
-        F: FnMut(&'a Self),
-    {
-        self.visit_inner(&mut f)
     }
 
     pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
@@ -272,110 +251,19 @@ impl RelationExpr {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn visit_mut_inner<F>(&mut self, f: &mut F)
+    pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
-        self.visit1_mut(|e| e.visit_mut_inner(f));
-        f(self)
+        self.visit1_mut(|e| e.visit_mut(f));
+        f(self);
     }
 
-    #[allow(dead_code)]
-    pub fn visit_mut_inner_pre<F>(&mut self, f: &mut F)
+    pub fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
     {
         f(self);
-        self.visit1_mut(|e| e.visit_mut_inner_pre(f));
-    }
-
-    #[allow(dead_code)]
-    fn push_down_projects_with(self, outputs: &[usize]) -> Self {
-        match self {
-            RelationExpr::Constant { mut rows, typ } => {
-                for row in rows.iter_mut() {
-                    *row = outputs.iter().map(|&i| row[i].clone()).collect();
-                }
-                let column_types = outputs
-                    .iter()
-                    .map(|&i| typ.column_types[i].clone())
-                    .collect();
-                RelationExpr::Constant {
-                    rows,
-                    typ: RelationType { column_types },
-                }
-            }
-            get @ RelationExpr::Get { .. } => {
-                let input = Box::new(get.push_down_projects());
-                RelationExpr::Project {
-                    input,
-                    outputs: outputs.to_vec(),
-                }
-            }
-            RelationExpr::Let { name, value, body } => {
-                let value = Box::new(value.push_down_projects());
-                let body = Box::new(body.push_down_projects_with(outputs));
-                RelationExpr::Let { name, value, body }
-            }
-            RelationExpr::Project {
-                input,
-                outputs: inner_outputs,
-            } => {
-                let outputs = outputs
-                    .iter()
-                    .map(|&i| inner_outputs[i])
-                    .collect::<Vec<_>>();
-                input.push_down_projects_with(&outputs)
-            }
-            RelationExpr::Map { input, scalars } => {
-                // TODO check for support of scalars - have to keep columns they need and wrap in a new Project
-                let arity = input.arity();
-                let inner_outputs = outputs
-                    .iter()
-                    .cloned()
-                    .filter(|&i| i < arity)
-                    .collect::<Vec<_>>();
-                let input = Box::new(input.push_down_projects_with(&inner_outputs));
-                let permutation = inner_outputs
-                    .into_iter()
-                    .enumerate()
-                    .map(|(new_i, old_i)| (old_i, new_i))
-                    .collect::<HashMap<_, _>>();
-                let scalars = outputs
-                    .iter()
-                    .filter(|&&i| i >= arity)
-                    .map(|&i| {
-                        let (mut scalar, typ) = scalars[i - arity].clone();
-                        scalar.permute(&permutation);
-                        (scalar, typ)
-                    })
-                    .collect();
-                RelationExpr::Map { input, scalars }
-            }
-            _ => unimplemented!(),
-        }
-    }
-
-    fn push_down_projects(self) -> Self {
-        match self {
-            RelationExpr::Project { input, outputs } => input.push_down_projects_with(&outputs),
-            mut other => {
-                other.visit1_mut(|e| {
-                    let owned = std::mem::replace(
-                        e,
-                        // dummy value
-                        RelationExpr::Constant {
-                            rows: vec![],
-                            typ: RelationType {
-                                column_types: vec![],
-                            },
-                        },
-                    );
-                    *e = owned.push_down_projects()
-                });
-                other
-            }
-        }
+        self.visit1_mut(|e| e.visit_mut_pre(f));
     }
 }
