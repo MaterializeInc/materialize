@@ -216,13 +216,11 @@ where
             RelationExpr::Filter { input, predicates } => {
                 let input = build_relation_expr(*input, scope, context, worker_index);
                 input.filter(move |x| {
-                    predicates
-                        .iter()
-                        .all(|predicate| match dbg!(predicate.eval(x)) {
-                            Datum::True => true,
-                            Datum::False | Datum::Null => false,
-                            _ => unreachable!(),
-                        })
+                    predicates.iter().all(|predicate| match predicate.eval(x) {
+                        Datum::True => true,
+                        Datum::False | Datum::Null => false,
+                        _ => unreachable!(),
+                    })
                 })
             }
             RelationExpr::Join { inputs, variables } => {
