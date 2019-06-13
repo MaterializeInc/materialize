@@ -23,6 +23,7 @@ use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
 use materialize::sql::Planner;
 use sqlparser::dialect::AnsiSqlDialect;
+use sqlparser::sqlast::{SQLQuery, SQLSetExpr, SQLStatement};
 use sqlparser::sqlparser::Parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -628,11 +629,62 @@ impl RecordRunner for FullState {
                 // we don't support non-materialized views
                 let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
-                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
-                    if *should_run {
-                        return Ok(Outcome::ParseFailure { error });
-                    } else {
-                        return Ok(Outcome::Success);
+                let parsed = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
+                let statements = match parsed {
+                    Err(error) => {
+                        if *should_run {
+                            return Ok(Outcome::ParseFailure { error });
+                        } else {
+                            return Ok(Outcome::Success);
+                        }
+                    }
+                    Ok(statements) => statements,
+                };
+
+                // total hack for handling statements of the form "INSERT INTO foo SELECT ..."
+                // TODO(jamii) we could potentially move all of the insert handling here
+                if let [SQLStatement::SQLInsert {
+                    table_name,
+                    columns,
+                    source,
+                }] = &*statements
+                {
+                    if columns.is_empty() {
+                        if let SQLQuery {
+                            body: SQLSetExpr::Select(..),
+                            ..
+                        } = &**source
+                        {
+                            // run the query
+                            let (_typ, dataflow_command) =
+                                match self.planner.handle_command(source.to_string()) {
+                                    Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
+                                        (typ, dataflow_command)
+                                    }
+                                    other => {
+                                        if *should_run {
+                                            return Ok(Outcome::PlanFailure {
+                                                error: format_err!("{:?}", other),
+                                            });
+                                        } else {
+                                            return Ok(Outcome::Success);
+                                        }
+                                    }
+                                };
+                            let receiver = self.send_dataflow_command(dataflow_command.unwrap());
+                            let results = self.receive_peek_results(receiver);
+
+                            // insert the results
+                            let _receiver = self.send_dataflow_command(DataflowCommand::Insert(
+                                table_name.to_string(),
+                                results
+                                    .into_iter()
+                                    .map(|d| (d, Default::default(), 1))
+                                    .collect(),
+                            ));
+
+                            return Ok(Outcome::Success);
+                        }
                     }
                 }
 
@@ -661,8 +713,7 @@ impl RecordRunner for FullState {
                     }
                 };
                 let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
-
-                Ok(Outcome::Success)
+                return Ok(Outcome::Success);
             }
             Record::Query { sql, output } => {
                 if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
