@@ -7,13 +7,11 @@ use log::error;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, DefaultConsumerContext};
 use rdkafka::{Message, Timestamp as KafkaTimestamp};
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::time::Duration;
-use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::Capability;
 use timely::dataflow::{Scope, Stream};
 
+use super::util::source;
+use super::SharedCapability;
 use crate::dataflow::types::{Diff, KafkaSourceConnector, Timestamp};
 use crate::interchange::avro;
 use crate::repr::Datum;
@@ -22,23 +20,13 @@ pub fn kafka<G>(
     scope: &G,
     name: &str,
     connector: &KafkaSourceConnector,
-    cap_in: Rc<RefCell<Option<Capability<Timestamp>>>>,
-    _timer: std::time::Instant,
-) -> Stream<G, (Vec<Datum>, Timestamp, Diff)>
+) -> (Stream<G, (Vec<Datum>, Timestamp, Diff)>, SharedCapability)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    if scope.index() != 0 {
-        // Only the first worker reads from Kafka, to ensure it has a complete
-        // view of the topic. The other workers get dummy sources that never
-        // produce any data.
-        return source(scope, name, move |_cap, _info| move |_output| ());
-    }
-
-    source(scope, name, move |cap, info| {
+    source(scope, name, move |info| {
         let name = name.to_owned();
         let activator = scope.activator_for(&info.address[..]);
-        *cap_in.borrow_mut() = Some(cap);
 
         let mut decoder =
             avro::Decoder::new(&connector.raw_schema, connector.schema_registry_url.clone());
@@ -57,13 +45,7 @@ where
         let consumer: BaseConsumer<DefaultConsumerContext> = config.create().unwrap();
         consumer.subscribe(&[&connector.topic]).unwrap();
 
-        move |output| {
-            let mut cap = cap_in.borrow_mut();
-            let cap = match &mut *cap {
-                Some(cap) => cap,
-                None => return,
-            };
-
+        move |cap, output| {
             // Indicate that we should run again.
             activator.activate();
 

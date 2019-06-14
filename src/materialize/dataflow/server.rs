@@ -256,7 +256,7 @@ where
     fn root_input_time(&self, name: &str) -> u64 {
         match &self.dataflows[name] {
             Dataflow::Source(_) => match &self.inputs[name] {
-                InputCapability::Raw(cap) => *cap.borrow().as_ref().unwrap().time(),
+                InputCapability::Raw(cap) => *cap.borrow().time(),
                 InputCapability::Handle(handle) => *handle.time(),
             },
             Dataflow::Sink(_) => unreachable!(),

@@ -6,15 +6,16 @@
 //! Driver for timely/differential dataflow.
 
 mod context;
-pub mod func;
 mod optimize;
 mod render;
-pub mod server;
 mod sink;
 mod source;
 mod trace;
-pub mod transform;
 mod types;
+
+pub mod func;
+pub mod server;
+pub mod transform;
 
 pub use server::{serve, PeekResultsHandler};
 pub use types::*;
