@@ -37,14 +37,25 @@ use store::{DataflowStore, RemoveMode};
 
 mod store;
 
+/// Converts raw SQL queries into dataflow commands.
 #[derive(Debug, Default)]
 pub struct Planner {
     dataflows: DataflowStore,
 }
 
+/// The result of planning a SQL query.
+///
+/// The `Ok` variant bundles a [`SQLResponse`] and an optional
+/// [`DataflowCommand`]. The `SQLResponse` is meant for the end user, while the
+/// `DataflowCommand` is meant to drive a running dataflow server. Typically the
+/// `SQLResponse` can be sent directly to the client, though
+/// [`SQLResponse::Peeking`] requires special handling in order to route results
+/// from the dataflow server to the client.
 pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure::Error>;
 
 impl Planner {
+    /// Parses and plans a raw SQL query. See the documentation for
+    /// [`PlannerResult`] for details about the meaning of the return time.
     pub fn handle_command(&mut self, sql: String) -> PlannerResult {
         let stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, sql)?;
         match stmts.len() {
@@ -286,7 +297,7 @@ impl Datum {
 }
 
 impl Planner {
-    pub fn plan_statement(&self, stmt: &SQLStatement) -> Result<Dataflow, failure::Error> {
+    fn plan_statement(&self, stmt: &SQLStatement) -> Result<Dataflow, failure::Error> {
         match stmt {
             SQLStatement::SQLCreateView {
                 name,
@@ -444,7 +455,7 @@ impl Planner {
         }
     }
 
-    pub fn plan_view_query(&self, q: &SQLQuery) -> Result<RelationExpr, failure::Error> {
+    fn plan_view_query(&self, q: &SQLQuery) -> Result<RelationExpr, failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -1667,14 +1678,14 @@ struct ExprContext<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ScopeItem {
+struct ScopeItem {
     table_name: Option<String>,
     column_name: Option<String>,
     typ: ColumnType,
 }
 
 #[derive(Debug, Clone)]
-pub struct Scope {
+struct Scope {
     items: Vec<ScopeItem>,
 }
 
@@ -1772,25 +1783,5 @@ impl RelationExpr {
             body: Box::new(body),
         };
         Ok((expr, scope))
-    }
-}
-
-impl Planner {
-    pub fn mock<I>(dataflows: I) -> Self
-    where
-        I: IntoIterator<Item = (String, RelationType)>,
-    {
-        Planner {
-            dataflows: dataflows
-                .into_iter()
-                .map(|(name, typ)| {
-                    Dataflow::Source(Source {
-                        name,
-                        connector: SourceConnector::Local(LocalSourceConnector {}),
-                        typ,
-                    })
-                })
-                .collect(),
-        }
     }
 }
