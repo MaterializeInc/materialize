@@ -3,7 +3,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-FROM rust:1.34
+FROM rust:1.35
 
 RUN curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.1.0/autouseradd-1.1.0-amd64.tar.gz \
     | tar xz -C /usr --strip-components 1

@@ -38,6 +38,12 @@ disabled_lints=(
     #    }))
     clippy::block-in-if-condition-stmt
 
+    # This lint is broken in Rust 1.35.
+    # See: https://github.com/rust-lang/rust-clippy/issues/4133
+    #
+    # TODO(benesch): remove when we upgrade to Rust 1.36.
+    clippy::identity_conversion
+
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#let_and_return
     #
     # clippy::let_and_return protects against creating a let binding that is

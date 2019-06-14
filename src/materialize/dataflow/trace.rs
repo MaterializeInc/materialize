@@ -20,9 +20,7 @@ pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysOnlyHandle = TraceKeyHandle<Vec<Datum>, Timestamp, Diff>;
 pub type KeysValsHandle = TraceValHandle<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
 
-// This should be Box<FnOnce>, but requires Rust 1.35 (maybe):
-// https://github.com/rust-lang/rust/issues/28796
-pub type DeleteCallback = Box<FnMut()>;
+pub type DeleteCallback = Box<FnOnce()>;
 
 /// A map from relation_exprs to cached arrangements.
 ///
@@ -118,10 +116,10 @@ impl TraceManager {
 
     pub fn del_trace(&mut self, relation_expr: &RelationExpr) {
         if let Some((unkeyed, maps)) = self.traces.remove(relation_expr) {
-            if let Some(mut unkeyed) = unkeyed {
+            if let Some(unkeyed) = unkeyed {
                 (unkeyed.delete_callback)();
             }
-            for (_, mut keyed) in maps.into_iter() {
+            for (_, keyed) in maps.into_iter() {
                 (keyed.delete_callback)();
             }
         }
@@ -129,10 +127,10 @@ impl TraceManager {
 
     pub fn del_all_traces(&mut self) {
         for (_, (unkeyed, maps)) in self.traces.drain() {
-            if let Some(mut unkeyed) = unkeyed {
+            if let Some(unkeyed) = unkeyed {
                 (unkeyed.delete_callback)();
             }
-            for (_, mut keyed) in maps.into_iter() {
+            for (_, keyed) in maps.into_iter() {
                 (keyed.delete_callback)();
             }
         }
