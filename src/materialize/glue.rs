@@ -3,7 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Types and data-structures used to glue all the various components of materialize together
+//! Types and data structures used to glue the various components of
+//! Materialize together.
 
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::repr::{Datum, RelationType};
@@ -20,17 +21,17 @@ pub use uuid::Uuid;
 // (For sync settings, use `sender.unbounded_send`, `receiver.try_next` and `receiver.wait`)
 pub use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 
-/// Various metadata that gets attached to commands at all stages
+/// Various metadata that gets attached to commands at all stages.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommandMeta {
-    /// The pgwire connection on which this command originated
+    /// The pgwire connection on which this command originated.
     pub connection_uuid: Uuid,
 }
 
-/// Incoming sql from users
+/// Incoming raw SQL from users.
 pub type SqlCommand = String;
 
-/// Responses from the planner to sql commands
+/// Responses from the planner to SQL commands.
 #[derive(Debug)]
 pub enum SqlResponse {
     CreatedSink,
@@ -76,7 +77,8 @@ pub enum PeekWhen {
 pub type PeekResults = Vec<Vec<Datum>>;
 pub type PeekResultsMux = Arc<RwLock<Mux<Uuid, PeekResults>>>;
 
-/// A multiple-sender, multiple-receiver channel where receivers are keyed by K
+/// A multiple-producer, multiple-consumer (mpmc) channel where receivers are
+/// keyed by K.
 #[derive(Debug)]
 pub struct Mux<K, T>
 where
@@ -100,9 +102,10 @@ impl<K, T> Mux<K, T>
 where
     K: Hash + Eq + Debug,
 {
-    /// Register a new channel for uuid
+    /// Registers a new channel for the specified key.
     pub fn channel(&mut self, key: K) -> Result<UnboundedReceiver<T>, failure::Error> {
-        // We might hold onto closed senders for arbitrary amounts of time, but by gc-ing on channel creation we limit the *growth* of wasted memory
+        // We might hold onto closed senders for arbitrary amounts of time, but
+        // by GCing on channel creation we limit the *growth* of wasted memory.
         self.gc();
         ensure!(
             self.senders.get(&key).is_none(),
@@ -114,7 +117,7 @@ where
         Ok(receiver)
     }
 
-    /// Get a sender for uuid
+    /// Gets a sender for the specified key.
     pub fn sender(&self, key: &K) -> Result<&UnboundedSender<T>, failure::Error> {
         self.senders
             .get(key)
@@ -131,7 +134,8 @@ where
         self.senders.remove(key);
     }
 
-    /// Remove references to channels where the receiver has been closed or dropped
+    /// Removes references to channels where the receiver has been closed or
+    /// dropped.
     fn gc(&mut self) {
         self.senders.retain(|_, sender| !sender.is_closed())
     }
