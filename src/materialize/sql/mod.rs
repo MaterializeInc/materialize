@@ -55,7 +55,7 @@ pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure:
 
 impl Planner {
     /// Parses and plans a raw SQL query. See the documentation for
-    /// [`PlannerResult`] for details about the meaning of the return time.
+    /// [`PlannerResult`] for details about the meaning of the return type.
     pub fn handle_command(&mut self, sql: String) -> PlannerResult {
         let stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, sql)?;
         match stmts.len() {

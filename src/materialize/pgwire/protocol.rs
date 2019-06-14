@@ -50,7 +50,7 @@ const VERSIONS: &[u32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_SSL, VERSION
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
-/// To avoid false negative, there must be at least eight bytes in `buf`.
+/// To avoid false negatives, there must be at least eight bytes in `buf`.
 pub fn match_handshake(buf: &[u8]) -> bool {
     // The pgwire StartupMessage looks like this:
     //
