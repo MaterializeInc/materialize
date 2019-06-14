@@ -139,7 +139,7 @@ pub fn build_dataflow<A: Allocate>(
             let transforms: Vec<Box<dyn transform::Transform>> = vec![
                 Box::new(transform::split_predicates::SplitPredicates),
                 Box::new(transform::fusion::join::Join),
-                Box::new(transform::PredicatePushdown),
+                Box::new(transform::predicate_pushdown::PredicatePushdown),
                 Box::new(transform::fusion::filter::Filter),
                 Box::new(transform::join_order::JoinOrder),
                 Box::new(transform::reduction::FoldConstants),
