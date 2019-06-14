@@ -186,7 +186,6 @@ where
     if context.collection(&relation_expr).is_none() {
         let collection = match relation_expr.clone() {
             RelationExpr::Constant { rows, .. } => {
-                use differential_dataflow::collection::AsCollection;
                 use timely::dataflow::operators::{Map, ToStream};
                 let rows = if worker_index == 0 { rows } else { vec![] };
                 rows.to_stream(scope)
@@ -617,7 +616,6 @@ where
             }
 
             RelationExpr::OrDefault { input, default } => {
-                use differential_dataflow::collection::AsCollection;
                 use differential_dataflow::operators::reduce::Threshold;
                 use differential_dataflow::operators::Join;
                 use timely::dataflow::operators::to_stream::ToStream;
