@@ -285,20 +285,6 @@ impl Datum {
     }
 }
 
-pub enum Side {
-    Left,
-    Right,
-}
-
-impl std::fmt::Display for Side {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        match self {
-            Side::Left => write!(f, "left"),
-            Side::Right => write!(f, "right"),
-        }
-    }
-}
-
 impl Planner {
     pub fn plan_statement(&self, stmt: &SQLStatement) -> Result<Dataflow, failure::Error> {
         match stmt {
