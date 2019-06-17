@@ -510,6 +510,61 @@ impl Planner {
                 };
                 Ok(relation_expr)
             }
+            SQLSetExpr::Values(SQLValues(values)) => {
+                assert!(
+                    !values.is_empty(),
+                    "Can't infer a type for empty VALUES expression"
+                );
+                let ctx = &ExprContext {
+                    name: "values",
+                    scope: &Scope::empty(),
+                    aggregate_context: None,
+                };
+                let mut expr: Option<RelationExpr> = None;
+                let mut types: Option<Vec<ColumnType>> = None;
+                for row in values {
+                    let mut value_exprs = vec![];
+                    for value in row.iter() {
+                        value_exprs.push(self.plan_expr(ctx, value)?);
+                    }
+                    types = if let Some(types) = types {
+                        if types.len() != value_exprs.len() {
+                            bail!(
+                                "VALUES expression has varying number of columns: {}",
+                                q.to_string()
+                            );
+                        }
+                        Some(
+                            types
+                                .iter()
+                                .zip(value_exprs.iter())
+                                .map(|(left_typ, (_, right_typ))| left_typ.union(right_typ))
+                                .collect::<Result<Vec<_>, _>>()?,
+                        )
+                    } else {
+                        Some(
+                            value_exprs
+                                .iter()
+                                .map(|(_, right_typ)| right_typ.clone())
+                                .collect(),
+                        )
+                    };
+
+                    let row_expr = RelationExpr::Constant {
+                        rows: vec![vec![]],
+                        typ: RelationType {
+                            column_types: vec![],
+                        },
+                    }
+                    .map(value_exprs);
+                    expr = if let Some(expr) = expr {
+                        Some(expr.union(row_expr))
+                    } else {
+                        Some(row_expr)
+                    };
+                }
+                Ok(expr.unwrap())
+            }
             _ => bail!("set operations are not yet supported"),
         }
     }
@@ -1722,6 +1777,10 @@ pub struct Scope {
 }
 
 impl Scope {
+    fn empty() -> Self {
+        Scope { items: vec![] }
+    }
+
     fn from_source(table_name: &str, typ: RelationType) -> Self {
         Scope {
             items: typ
