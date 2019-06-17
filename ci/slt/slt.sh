@@ -29,6 +29,7 @@ mkdir -p target
 cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/ \
     test/*.slt \
+    test/cockroach/*.slt \
     "$verbosity" "$@" | tee target/slt.out || true
 
 if [[ "${BUILDKITE_BRANCH-}" = master && "${BUILDKITE_COMMIT-}" ]]; then
