@@ -259,7 +259,8 @@ impl RelationExpr {
                         .iter()
                         .zip(right_typ.column_types.iter())
                         .map(|(l, r)| l.union(r))
-                        .collect(),
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap(),
                 }
             }
         }
