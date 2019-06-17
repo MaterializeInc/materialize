@@ -34,14 +34,27 @@ pub enum InputCapability {
 pub fn add_builtin_dataflows<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
+    inputs: &mut HashMap<String, InputCapability>,
+    dataflows: &mut HashMap<String, Dataflow>,
 ) {
     let dual_table_data = if worker.index() == 0 {
         vec![vec![Datum::String("X".into())]]
     } else {
         vec![]
     };
+    dataflows.insert(
+        "dual".into(),
+        Dataflow::Source(Source {
+            name: "dual".into(),
+            connector: SourceConnector::Local(LocalSourceConnector {}),
+            typ: RelationType::new(vec![ColumnType::new(ScalarType::String)]),
+        }),
+    );
     worker.dataflow(|scope| {
-        let (_, collection) = scope.new_collection_from(dual_table_data);
+        let (mut session, collection) = scope.new_collection_from(dual_table_data);
+        session.advance_to(1);
+        session.flush();
+        inputs.insert("dual".into(), InputCapability::Session(session));
         let arrangement = collection.arrange_by_self();
         let on_delete = Box::new(|| ());
         manager.set_trace(

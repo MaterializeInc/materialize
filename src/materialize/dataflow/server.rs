@@ -98,8 +98,12 @@ where
         dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
         peek_results_handler: PeekResultsHandler,
     ) -> Worker<'w, A> {
+        // TODO(benesch): adding built in dataflows is too coupled to the
+        // structure of this Worker object.
         let mut traces = TraceManager::new();
-        render::add_builtin_dataflows(&mut traces, w);
+        let mut inputs = HashMap::new();
+        let mut dataflows = HashMap::new();
+        render::add_builtin_dataflows(&mut traces, w, &mut inputs, &mut dataflows);
         let sequencer = Sequencer::new(w, Instant::now());
         Worker {
             inner: w,
@@ -108,8 +112,8 @@ where
             pending_peeks: Vec::new(),
             traces,
             rpc_client: reqwest::Client::new(),
-            inputs: HashMap::new(),
-            dataflows: HashMap::new(),
+            inputs,
+            dataflows,
             sequencer,
         }
     }
@@ -188,7 +192,8 @@ where
                 for handle in self.inputs.values_mut() {
                     match handle {
                         InputCapability::Session(session) => {
-                            session.advance_to(*session.time() + 1)
+                            session.advance_to(*session.time() + 1);
+                            session.flush();
                         }
                         InputCapability::Raw(_) => (),
                     }
