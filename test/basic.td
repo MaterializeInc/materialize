@@ -58,6 +58,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 
 > CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/data' USING SCHEMA '${schema}'
 
+> PEEK data
+a b
+---
+1 1
+2 1
+3 1
+1 2
+
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b;
 
