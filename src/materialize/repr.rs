@@ -20,6 +20,7 @@
 //! [`Datum`]: repr::Datum
 //! [`Datum::Tuple`]: repr::Datum::Tuple
 
+use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
@@ -261,20 +262,21 @@ impl ColumnType {
         }
     }
 
-    pub fn union(&self, other: &Self) -> Self {
+    pub fn union(&self, other: &Self) -> Result<Self, failure::Error> {
         let scalar_type = match (&self.scalar_type, &other.scalar_type) {
             (ScalarType::Null, s) | (s, ScalarType::Null) => s,
             (s1, s2) if s1 == s2 => s1,
-            (s1, s2) => panic!("Can't union types: {:?} and {:?}", s1, s2),
+            (s1, s2) => bail!("Can't union types: {:?} and {:?}", s1, s2),
         };
-        ColumnType {
+        Ok(ColumnType {
+            // column names are taken from left, as in postgres
             name: self.name.clone(),
             scalar_type: scalar_type.clone(),
             nullable: self.nullable
                 || other.nullable
                 || self.scalar_type == ScalarType::Null
                 || other.scalar_type == ScalarType::Null,
-        }
+        })
     }
 
     pub fn name(mut self, name: String) -> Self {

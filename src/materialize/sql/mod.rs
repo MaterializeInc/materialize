@@ -480,9 +480,26 @@ impl Planner {
                 left,
                 right,
             } => {
+                let left_expr = self.plan_set_expr(left)?;
+                let right_expr = self.plan_set_expr(right)?;
+
+                // TODO(jamii) this type-checking is redundant with RelationExpr::typ, but currently it seems that we need both because RelationExpr::typ is not allowed to return errors
+                let left_types = &left_expr.typ().column_types;
+                let right_types = &right_expr.typ().column_types;
+                if left_types.len() != right_types.len() {
+                    bail!(
+                        "Each UNION should have the same number of columns: {:?} UNION {:?}",
+                        left,
+                        right
+                    );
+                }
+                for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
+                    left_col_type.union(right_col_type)?;
+                }
+
                 let relation_expr = RelationExpr::Union {
-                    left: Box::new(self.plan_set_expr(left)?),
-                    right: Box::new(self.plan_set_expr(right)?),
+                    left: Box::new(left_expr),
+                    right: Box::new(right_expr),
                 };
                 let relation_expr = if *all {
                     relation_expr
