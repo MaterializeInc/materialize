@@ -15,10 +15,11 @@
 
 mode cockroach
 
-query error duplicate column name: "rowid"
-CREATE TABLE t (
-  rowid INT
-)
+# we don't support rowid
+# query error duplicate column name: "rowid"
+# CREATE TABLE t (
+#   rowid INT
+#)
 
 statement ok
 CREATE TABLE t (
