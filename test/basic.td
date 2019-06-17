@@ -6,6 +6,12 @@
 > SELECT 1
 1
 
+> CREATE TABLE empty (a int)
+
+> PEEK empty
+
+> SELECT * FROM empty
+
 $ set schema={
     "type": "record",
     "name": "na",
