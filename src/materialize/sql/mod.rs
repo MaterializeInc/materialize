@@ -795,10 +795,15 @@ impl Planner {
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match operator {
             JoinOperator::Inner(constraint) => {
-                self.plan_join_constraint(&constraint, left, left_scope, right, right_scope)
+                let (both, both_scope, project_key) =
+                    self.plan_join_constraint(&constraint, left, left_scope, right, right_scope)?;
+                Ok((
+                    both.project(project_key.clone()),
+                    both_scope.project(&project_key),
+                ))
             }
             JoinOperator::LeftOuter(constraint) => RelationExpr::let_(left, |left| {
-                let (both, both_scope) = self.plan_join_constraint(
+                let (both, both_scope, project_key) = self.plan_join_constraint(
                     &constraint,
                     left.clone(),
                     left_scope,
@@ -807,11 +812,14 @@ impl Planner {
                 )?;
                 RelationExpr::let_(both, |both| {
                     let both_and_outer = both.clone().union(both.left_outer(left));
-                    Ok((both_and_outer, both_scope))
+                    Ok((
+                        both_and_outer.project(project_key.clone()),
+                        both_scope.project(&project_key),
+                    ))
                 })
             }),
             JoinOperator::RightOuter(constraint) => RelationExpr::let_(right, |right| {
-                let (both, both_scope) = self.plan_join_constraint(
+                let (both, both_scope, project_key) = self.plan_join_constraint(
                     &constraint,
                     left,
                     left_scope,
@@ -820,12 +828,15 @@ impl Planner {
                 )?;
                 RelationExpr::let_(both, |both| {
                     let both_and_outer = both.clone().union(both.right_outer(right));
-                    Ok((both_and_outer, both_scope))
+                    Ok((
+                        both_and_outer.project(project_key.clone()),
+                        both_scope.project(&project_key),
+                    ))
                 })
             }),
             JoinOperator::FullOuter(constraint) => RelationExpr::let_(left, |left| {
                 RelationExpr::let_(right, |right| {
-                    let (both, both_scope) = self.plan_join_constraint(
+                    let (both, both_scope, project_key) = self.plan_join_constraint(
                         &constraint,
                         left.clone(),
                         left_scope,
@@ -837,7 +848,10 @@ impl Planner {
                             .clone()
                             .union(both.clone().left_outer(left))
                             .union(both.clone().right_outer(right));
-                        Ok((both_and_outer, both_scope))
+                        Ok((
+                            both_and_outer.project(project_key.clone()),
+                            both_scope.project(&project_key),
+                        ))
                     })
                 })
             }),
@@ -852,7 +866,7 @@ impl Planner {
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-    ) -> Result<(RelationExpr, Scope), failure::Error> {
+    ) -> Result<(RelationExpr, Scope, Vec<usize>), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
                 let product = left.product(right);
@@ -863,16 +877,15 @@ impl Planner {
                     aggregate_context: None,
                 };
                 let (predicate, _) = self.plan_expr(ctx, expr)?;
-                Ok((product.filter(vec![predicate]), product_scope))
+                Ok((product.filter(vec![predicate]), product_scope, vec![]))
             }
             JoinConstraint::Using(column_names) => {
                 let (predicate, project_key) =
                     self.plan_using_constraint(&column_names, &left_scope, &right_scope)?;
                 Ok((
-                    left.product(right)
-                        .filter(vec![predicate])
-                        .project(project_key.clone()),
-                    left_scope.product(right_scope).project(&project_key),
+                    left.product(right).filter(vec![predicate]),
+                    left_scope.product(right_scope),
+                    project_key,
                 ))
             }
             JoinConstraint::Natural => {
@@ -888,10 +901,9 @@ impl Planner {
                 let (predicate, project_key) =
                     self.plan_using_constraint(&column_names, &left_scope, &right_scope)?;
                 Ok((
-                    left.product(right)
-                        .filter(vec![predicate])
-                        .project(project_key.clone()),
-                    left_scope.product(right_scope).project(&project_key),
+                    left.product(right).filter(vec![predicate]),
+                    left_scope.product(right_scope),
+                    project_key,
                 ))
             }
         }
