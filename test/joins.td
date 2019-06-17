@@ -225,7 +225,7 @@ num name num mod
 <null> <null> 2 even
 
 > CREATE MATERIALIZED VIEW test14 AS
-  SELECT * FROM names OUTER JOIN mods ON 1 = 0;
+  SELECT * FROM names FULL OUTER JOIN mods ON 1 = 0;
 
 > PEEK test14;
 num name num mod
