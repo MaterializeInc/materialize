@@ -169,16 +169,16 @@ where
                 self.sequence_peek(cmd_meta, dataflow, when, true /* drop */)
             }
 
-            DataflowCommand::Insert(name, datums) => {
+            DataflowCommand::Insert(name, rows) => {
                 // Only broadcast the input on the first worker. Otherwise we'd
                 // insert multiple copies.
                 if self.inner.index() == 0 {
-                    let handle = match self.inputs.get_mut(&name).expect("Failed to find input") {
-                        InputCapability::Handle(handle) => handle,
+                    let session = match self.inputs.get_mut(&name).expect("Failed to find input") {
+                        InputCapability::Session(session) => session,
                         _ => panic!("attempted to insert into external source"),
                     };
-                    for datum in datums {
-                        handle.send((datum, *handle.time(), 1))
+                    for row in rows {
+                        session.insert(row)
                     }
                 }
 
@@ -187,7 +187,9 @@ where
                 // *all* internal inputs.
                 for handle in self.inputs.values_mut() {
                     match handle {
-                        InputCapability::Handle(handle) => handle.advance_to(*handle.time() + 1),
+                        InputCapability::Session(session) => {
+                            session.advance_to(*session.time() + 1)
+                        }
                         InputCapability::Raw(_) => (),
                     }
                 }
@@ -235,7 +237,7 @@ where
                 // timestamp types, where a predecessor operation may not exist.
                 let mut upper = Antichain::new();
                 trace.clone().read_upper(&mut upper);
-                if upper.elements().len() == 0 || upper.elements()[0] == 0 {
+                if upper.elements().is_empty() || upper.elements()[0] == 0 {
                     None
                 } else {
                     Some(upper.elements()[0] - 1)
@@ -268,7 +270,7 @@ where
         match &self.dataflows[name] {
             Dataflow::Source(_) => match &self.inputs[name] {
                 InputCapability::Raw(cap) => *cap.borrow().time(),
-                InputCapability::Handle(handle) => *handle.time(),
+                InputCapability::Session(session) => *session.time(),
             },
             Dataflow::Sink(_) => unreachable!(),
             v @ Dataflow::View(_) => v
@@ -340,7 +342,7 @@ where
                         }
                         out
                     }
-                    _ => return true // retain
+                    _ => return true, // retain
                 };
 
                 match peek_results_handler {
@@ -359,10 +361,7 @@ where
                         let encoded = bincode::serialize(&results).unwrap();
                         rpc_client
                             .post("http://localhost:6875/api/peek-results")
-                            .header(
-                                "X-Materialize-Query-UUID",
-                                peek.connection_uuid.to_string(),
-                            )
+                            .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
                             .body(encoded)
                             .send()
                             .unwrap();

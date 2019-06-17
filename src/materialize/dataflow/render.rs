@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use differential_dataflow::input::Input;
+use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -13,8 +13,6 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
-use timely::dataflow::operators::input::Input as TimelyInput;
-use timely::dataflow::InputHandle;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
@@ -29,7 +27,7 @@ use crate::dataflow::types::RelationExpr;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 pub enum InputCapability {
-    Handle(InputHandle<Timestamp, (Vec<Datum>, Timestamp, isize)>),
+    Session(InputSession<Timestamp, Vec<Datum>, isize>),
     Raw(SharedCapability),
 }
 
@@ -85,9 +83,9 @@ pub fn build_dataflow<A: Allocate>(
                     }
                 }
                 SourceConnector::Local(_) => {
-                    let (handle, stream) = scope.new_input();
-                    inputs.insert(src.name.clone(), InputCapability::Handle(handle));
-                    stream
+                    let (session, collection) = scope.new_collection();
+                    inputs.insert(src.name.clone(), InputCapability::Session(session));
+                    collection.inner
                 }
             };
             let arrangement = relation_expr.as_collection().arrange_by_self();
