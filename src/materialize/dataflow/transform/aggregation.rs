@@ -10,7 +10,8 @@ pub struct FractureReduce;
 
 impl super::Transform for FractureReduce {
     fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+        self.transform(relation, metadata);
+        panic!("FractureReduce currently incorrect; do not use");
     }
 }
 
