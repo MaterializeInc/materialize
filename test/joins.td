@@ -203,3 +203,36 @@ num name num mod
 3 three 0 even
 3 three 1 odd
 3 three 2 even
+
+> CREATE MATERIALIZED VIEW test12 AS
+  SELECT * FROM names LEFT JOIN mods ON 1 = 0;
+
+> PEEK test12;
+num name num mod
+----------------
+1 one <null> <null>
+2 two <null> <null>
+3 three <null> <null>
+
+> CREATE MATERIALIZED VIEW test13 AS
+  SELECT * FROM names RIGHT JOIN mods ON 1 = 0;
+
+> PEEK test13;
+num name num mod
+----------------
+<null> <null> 0 even
+<null> <null> 1 odd
+<null> <null> 2 even
+
+> CREATE MATERIALIZED VIEW test14 AS
+  SELECT * FROM names OUTER JOIN mods ON 1 = 0;
+
+> PEEK test14;
+num name num mod
+----------------
+1 one <null> <null>
+2 two <null> <null>
+3 three <null> <null>
+<null> <null> 0 even
+<null> <null> 1 odd
+<null> <null> 2 even
