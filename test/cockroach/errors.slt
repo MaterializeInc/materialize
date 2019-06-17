@@ -30,9 +30,8 @@ DROP TABLE fake4
 statement error pgcode 42P01 relation "fake5" does not exist
 SHOW COLUMNS FROM fake5
 
-# inserts are hacked into slt, so they have less error handling
-# statement error pgcode 42P01 relation "fake6" does not exist
-# INSERT INTO fake6 VALUES (1, 2)
+statement error pgcode 42P01 relation "fake6" does not exist
+INSERT INTO fake6 VALUES (1, 2)
 
 statement error pgcode 42P01 relation "fake7" does not exist
 SELECT * FROM fake7
