@@ -544,7 +544,7 @@ impl Planner {
                 aggregate_context: None,
             };
             let (expr, typ) = self.plan_expr(ctx, &selection)?;
-            if typ.scalar_type != ScalarType::Bool {
+            if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Null {
                 bail!(
                     "WHERE clause must have boolean type, not {:?}",
                     typ.scalar_type
