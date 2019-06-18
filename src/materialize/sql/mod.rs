@@ -980,6 +980,7 @@ impl Planner {
         right: &Scope,
     ) -> Result<(ScalarExpr, Vec<usize>), failure::Error> {
         let mut exprs = vec![];
+        let mut joined_columns = Vec::new();
         let mut dropped_columns = HashSet::new();
         for column_name in column_names {
             let (l, _) = left.resolve_column(column_name)?;
@@ -989,7 +990,9 @@ impl Planner {
                 expr1: Box::new(ScalarExpr::Column(l)),
                 expr2: Box::new(ScalarExpr::Column(left.len() + r)),
             });
-            dropped_columns.insert(r);
+            joined_columns.push(l);
+            dropped_columns.insert(l);
+            dropped_columns.insert(left.len() + r);
         }
         let expr = exprs
             .into_iter()
@@ -1000,12 +1003,12 @@ impl Planner {
                     expr2: Box::new(b),
                 }
             });
-        let project_key = (0..left.len())
+        let project_key = joined_columns
+            .into_iter()
             .chain(
-                (0..right.len())
-                    // drop columns on the right that were joined
-                    .filter(|r| !dropped_columns.contains(r))
-                    .map(|r| left.len() + r),
+                (0..(left.len() + right.len()))
+                    // drop columns that were joined on
+                    .filter(|i| !dropped_columns.contains(i)),
             )
             .collect::<Vec<_>>();
         Ok((expr, project_key))
