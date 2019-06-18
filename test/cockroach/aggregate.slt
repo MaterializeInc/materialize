@@ -641,42 +641,41 @@ statement ok
 CREATE TABLE abc (
   a VARCHAR PRIMARY KEY,
   b FLOAT,
-  c BOOLEAN,
-  d DECIMAL
+  c BOOLEAN
 )
 
 statement ok
-INSERT INTO abc VALUES ('one', 1.5, true, 5::decimal), ('two', 2.0, false, 1.1::decimal)
+INSERT INTO abc VALUES ('one', 1.5, true), ('two', 2.0, false)
 
-query TRBR
-SELECT min(a), min(b), min(c), min(d) FROM abc
+query TRB
+SELECT min(a), min(b), min(c) FROM abc
 ----
-one 1.5 false 1.1
+one 1.5 false
 
-query TRBR
-SELECT max(a), max(b), max(c), max(d) FROM abc
+query TRB
+SELECT max(a), max(b), max(c) FROM abc
 ----
-two 2 true 5
+two 2 true
 
-query RRRR
-SELECT avg(b), sum(b), avg(d), sum(d) FROM abc
+query RRR
+SELECT avg(b), sum(b), avg(d) FROM abc
 ----
-1.75 3.5 3.05 6.1
+1.75 3.5 3.05
 
+# not supported yet
 # Verify summing of intervals
-statement ok
-CREATE TABLE intervals (
-  a INTERVAL PRIMARY KEY
-)
-
-statement ok
-INSERT INTO intervals VALUES (INTERVAL '1 year 2 months 3 days 4 seconds'), (INTERVAL '2 year 3 months 4 days 5 seconds'), (INTERVAL '10000ms')
-
-query T
-SELECT sum(a) FROM intervals
-----
-3 years 5 mons 7 days 00:00:19
-
+# statement ok
+# CREATE TABLE intervals (
+#   a INTERVAL PRIMARY KEY
+# )
+#
+# statement ok
+# INSERT INTO intervals VALUES (INTERVAL '1 year 2 months 3 days 4 seconds'), (INTERVAL '2 year 3 months 4 days 5 seconds'), (INTERVAL '10000ms')
+#
+# query T
+# SELECT sum(a) FROM intervals
+# ----
+# 3 years 5 mons 7 days 00:00:19
 
 query error unknown signature: avg\(varchar\)
 SELECT avg(a) FROM abc
@@ -702,12 +701,6 @@ CREATE TABLE xyz (
   y INT,
   z FLOAT,
   w INT,
-  INDEX xy (x, y),
-  INDEX zyx (z, y, x),
-  INDEX w (w),
-  FAMILY (x),
-  FAMILY (y),
-  FAMILY (z)
 )
 
 statement ok
@@ -808,23 +801,24 @@ CREATE TABLE mnop (
   p BIGINT
 )
 
-statement ok
-INSERT INTO mnop (m, n) SELECT i, (1e9 + i/2e4)::float FROM
-  generate_series(1, 2e4) AS i(i)
-
-statement ok
-UPDATE mnop SET o = n::decimal, p = (n * 10)::bigint
-
-query RRR
-SELECT round(variance(n), 2), round(variance(n), 2), round(variance(p)) FROM mnop
-----
-0.08 0.08 8
-
-
-query RRR
-SELECT round(stddev(n), 2), round(stddev(n), 2), round(stddev(p)) FROM mnop
-----
-0.29 0.29 3
+# not supported yet
+# statement ok
+# INSERT INTO mnop (m, n) SELECT i, (1e9 + i/2e4)::float FROM
+#   generate_series(1, 2e4) AS i(i)
+#
+# statement ok
+# UPDATE mnop SET o = n::decimal, p = (n * 10)::bigint
+#
+# query RRR
+# SELECT round(variance(n), 2), round(variance(n), 2), round(variance(p)) FROM mnop
+# ----
+# 0.08 0.08 8
+#
+#
+# query RRR
+# SELECT round(stddev(n), 2), round(stddev(n), 2), round(stddev(p)) FROM mnop
+# ----
+# 0.29 0.29 3
 
 query RRR
 SELECT avg(1::int)::float, avg(2::float)::float, avg(3::decimal)::float
@@ -881,13 +875,14 @@ SELECT bool_and(b), bool_or(b) FROM bools
 ----
 false true
 
-statement OK
-DELETE FROM bools WHERE b
-
-query BB
-SELECT bool_and(b), bool_or(b) FROM bools
-----
-false false
+# not supported yet
+# statement OK
+# DELETE FROM bools WHERE b
+#
+# query BB
+# SELECT bool_and(b), bool_or(b) FROM bools
+# ----
+# false false
 
 query T
 SELECT concat_agg(s) FROM (SELECT s FROM kv ORDER BY k)
@@ -971,7 +966,7 @@ SELECT sum(abc.d) FROM kv JOIN abc ON kv.k >= abc.d GROUP BY kv.*
 
 # opt_test is used for tests around the single-row optimization for MIN/MAX.
 statement ok
-CREATE TABLE opt_test (k INT PRIMARY KEY, v INT, INDEX v(v))
+CREATE TABLE opt_test (k INT PRIMARY KEY, v INT)
 
 statement ok
 INSERT INTO opt_test VALUES (1, NULL), (2, 10), (3, NULL), (4, 5)
@@ -1012,27 +1007,28 @@ NULL
 5
 10
 
-statement ok
-CREATE TABLE xor_bytes (a bytes, b int, c int)
-
-statement ok
-INSERT INTO xor_bytes VALUES
-  (b'\x01\x01', 1, 3),
-  (b'\x02\x01', 1, 1),
-  (b'\x04\x01', 2, -5),
-  (b'\x08\x01', 2, -1),
-  (b'\x10\x01', 2, 0)
-
-query TI
-SELECT to_hex(xor_agg(a)), xor_agg(c) FROM xor_bytes
-----
-1f01 6
-
-query TII
-SELECT to_hex(xor_agg(a)), b, xor_agg(c) FROM xor_bytes GROUP BY b ORDER BY b
-----
-0300  1   2
-1c01  2   4
+# not supported yet
+# statement ok
+# CREATE TABLE xor_bytes (a bytes, b int, c int)
+#
+# statement ok
+# INSERT INTO xor_bytes VALUES
+#   (b'\x01\x01', 1, 3),
+#   (b'\x02\x01', 1, 1),
+#   (b'\x04\x01', 2, -5),
+#   (b'\x08\x01', 2, -1),
+#   (b'\x10\x01', 2, 0)
+#
+# query TI
+# SELECT to_hex(xor_agg(a)), xor_agg(c) FROM xor_bytes
+# ----
+# 1f01 6
+#
+# query TII
+# SELECT to_hex(xor_agg(a)), b, xor_agg(c) FROM xor_bytes GROUP BY b ORDER BY b
+# ----
+# 0300  1   2
+# 1c01  2   4
 
 statement error arguments to xor must all be the same length
 SELECT xor_agg(i) FROM (VALUES (b'\x01'), (b'\x01\x01')) AS a(i)
@@ -1048,14 +1044,16 @@ statement OK
 CREATE TABLE ab (
   a INT PRIMARY KEY,
   b INT,
-  FAMILY (a),
-  FAMILY (b)
 )
 
 statement ok
 INSERT INTO ab(a,b) VALUES (1,2), (3,4);
-  CREATE TABLE xy(x STRING, y STRING);
-  INSERT INTO xy(x, y) VALUES ('a', 'b'), ('c', 'd')
+
+statement ok
+CREATE TABLE xy(x STRING, y STRING);
+
+statement ok
+INSERT INTO xy(x, y) VALUES ('a', 'b'), ('c', 'd')
 
 # Grouping and rendering tuples.
 query T rowsort
@@ -1079,7 +1077,6 @@ CREATE TABLE group_ord (
   x INT PRIMARY KEY,
   y INT,
   z INT,
-  INDEX foo(z)
 )
 
 statement ok
@@ -1655,10 +1652,14 @@ FROM string_agg_test
 ORDER BY company_id, id;
 
 statement OK
-TRUNCATE string_agg_test
+CREATE TABLE string_agg_test2 (
+  id INT PRIMARY KEY,
+  company_id INT,
+  employee STRING
+)
 
 statement OK
-INSERT INTO string_agg_test VALUES
+INSERT INTO string_agg_test2 VALUES
   (1, 1, 'A'),
   (2, 1, 'B'),
   (3, 1, 'C'),
@@ -1668,7 +1669,7 @@ query IT colnames
 SELECT e.company_id, string_agg(e.employee, ', ')
 FROM (
   SELECT employee, company_id
-  FROM string_agg_test
+  FROM string_agg_test2
   ORDER BY employee
   ) AS e
 GROUP BY e.company_id
@@ -1681,7 +1682,7 @@ query IT colnames
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTES, company_id
-  FROM string_agg_test
+  FROM string_agg_test2
   ORDER BY employee
   ) AS e
 GROUP BY e.company_id
@@ -1694,7 +1695,7 @@ query IT colnames
 SELECT e.company_id, string_agg(e.employee, ', ')
 FROM (
   SELECT employee, company_id
-  FROM string_agg_test
+  FROM string_agg_test2
   ORDER BY employee DESC
   ) AS e
 GROUP BY e.company_id
@@ -1707,7 +1708,7 @@ query IT colnames
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTES, company_id
-  FROM string_agg_test
+  FROM string_agg_test2
   ORDER BY employee DESC
   ) AS e
 GROUP BY e.company_id
@@ -1720,7 +1721,7 @@ query IT colnames
 SELECT e.company_id, string_agg(e.employee, NULL)
 FROM (
   SELECT employee, company_id
-  FROM string_agg_test
+  FROM string_agg_test2
   ORDER BY employee DESC
   ) AS e
 GROUP BY e.company_id
@@ -1733,7 +1734,7 @@ query IT colnames
 SELECT e.company_id, string_agg(e.employee, NULL)
 FROM (
   SELECT employee::BYTES, company_id
-  FROM string_agg_test
+  FROM string_agg_test2
   ORDER BY employee DESC
   ) AS e
 GROUP BY e.company_id
@@ -1743,7 +1744,7 @@ company_id  string_agg
 1           DCBA
 
 statement OK
-DROP TABLE string_agg_test
+DROP TABLE string_agg_test2
 
 # Regression test for #28836.
 
@@ -1761,7 +1762,7 @@ SELECT array_agg(generate_series(1, 2))
 # Regression test for #31882.
 
 statement ok
-CREATE TABLE uvw (u INT, v INT, w INT, INDEX uvw(u, v, w))
+CREATE TABLE uvw (u INT, v INT, w INT)
 
 statement ok
 INSERT INTO uvw VALUES (1, 2, 3), (1, 2, 3), (3, 2, 1), (3, 2, 3)
