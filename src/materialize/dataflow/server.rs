@@ -72,7 +72,7 @@ struct PendingPeek {
     /// Identifies intended recipient of the peek.
     connection_uuid: uuid::Uuid,
     /// Time at which the collection should be materialized.
-    timestamp: Option<Timestamp>,
+    timestamp: Timestamp,
     /// Handle to trace.
     drop_after_peek: Option<Dataflow>,
 }
@@ -131,7 +131,7 @@ where
             traces: TraceManager::new(),
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
-            input_time: 0,
+            input_time: 1,
             dataflows: HashMap::new(),
             sequencer,
         }
@@ -170,7 +170,13 @@ where
     fn handle_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
         match cmd {
             DataflowCommand::CreateDataflow(dataflow) => {
-                render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
+                render::build_dataflow(
+                    &dataflow,
+                    &mut self.traces,
+                    self.inner,
+                    &mut self.inputs,
+                    self.input_time,
+                );
                 self.dataflows.insert(dataflow.name().to_owned(), dataflow);
             }
 
@@ -195,7 +201,13 @@ where
 
             DataflowCommand::PeekTransient { view, when } => {
                 let dataflow = Dataflow::View(view);
-                render::build_dataflow(&dataflow, &mut self.traces, self.inner, &mut self.inputs);
+                render::build_dataflow(
+                    &dataflow,
+                    &mut self.traces,
+                    self.inner,
+                    &mut self.inputs,
+                    self.input_time,
+                );
                 self.dataflows
                     .insert(dataflow.name().to_owned(), dataflow.clone());
                 self.sequence_peek(cmd_meta, dataflow, when, true /* drop */)
@@ -271,25 +283,19 @@ where
                 // timestamp types, where a predecessor operation may not exist.
                 let mut upper = Antichain::new();
                 trace.clone().read_upper(&mut upper);
-                if upper.elements().is_empty() || upper.elements()[0] == 0 {
-                    None
+                if upper.elements().is_empty() {
+                    0
                 } else {
-                    Some(upper.elements()[0] - 1)
+                    assert_eq!(upper.elements().len(), 1);
+                    upper.elements()[0].saturating_sub(1)
                 }
             }
 
             // Compute the lastest time that is committed by all inputs. Peeking
             // at this time may involve waiting for the outputs to catch up.
-            PeekWhen::AfterFlush => {
-                let ts = self.root_input_time(dataflow.name());
-                if ts == 0 {
-                    None
-                } else {
-                    Some(ts - 1)
-                }
-            }
+            PeekWhen::AfterFlush => self.root_input_time(dataflow.name()).saturating_sub(1),
 
-            PeekWhen::AtTimestamp(timestamp) => Some(timestamp),
+            PeekWhen::AtTimestamp(timestamp) => timestamp,
         };
 
         self.sequencer.push(PendingPeek {
@@ -349,36 +355,31 @@ where
                 // then for any time `t` less or equal to `peek.timestamp` it is
                 // not the case that `upper` is less or equal to that timestamp,
                 // and so the result cannot further evolve.
-                let results = match peek.timestamp {
-                    None => Vec::new(),
-                    Some(timestamp) if !upper.less_equal(&timestamp) => {
-                        let (mut cur, storage) = trace.cursor();
-                        let mut out = Vec::new();
-                        while let Some(key) = cur.get_key(&storage) {
-                            // TODO: Absent value iteration might be weird (in principle
-                            // the cursor *could* say no `()` values associated with the
-                            // key, though I can't imagine how that would happen for this
-                            // specific trace implementation).
+                if upper.less_equal(&peek.timestamp) {
+                    return true; // retain
+                }
+                let (mut cur, storage) = trace.cursor();
+                let mut results = Vec::new();
+                while let Some(key) = cur.get_key(&storage) {
+                    // TODO: Absent value iteration might be weird (in principle
+                    // the cursor *could* say no `()` values associated with the
+                    // key, though I can't imagine how that would happen for this
+                    // specific trace implementation).
 
-                            let mut copies = 0;
-                            cur.map_times(&storage, |time, diff| {
-                                use timely::order::PartialOrder;
-                                if time.less_equal(&timestamp) {
-                                    copies += diff;
-                                }
-                            });
-                            assert!(copies >= 0);
-                            for _ in 0..copies {
-                                out.push(key.clone());
-                            }
-
-                            cur.step_key(&storage)
+                    let mut copies = 0;
+                    cur.map_times(&storage, |time, diff| {
+                        use timely::order::PartialOrder;
+                        if time.less_equal(&peek.timestamp) {
+                            copies += diff;
                         }
-                        out
+                    });
+                    assert!(copies >= 0);
+                    for _ in 0..copies {
+                        results.push(key.clone());
                     }
-                    _ => return true, // retain
-                };
 
+                    cur.step_key(&storage)
+                }
                 match peek_results_handler {
                     PeekResultsHandler::Local(peek_results_mux) => {
                         // The sender is allowed disappear at any time, so the

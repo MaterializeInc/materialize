@@ -36,6 +36,7 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
+    input_time: u64,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
@@ -54,7 +55,7 @@ pub fn build_dataflow<A: Allocate>(
                 }
                 SourceConnector::Local(_) => {
                     let (mut session, collection) = scope.new_collection();
-                    session.advance_to(1);
+                    session.advance_to(input_time);
                     session.flush();
                     inputs.insert(src.name.clone(), InputCapability::Session(session));
                     collection.inner
