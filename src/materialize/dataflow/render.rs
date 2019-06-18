@@ -53,7 +53,9 @@ pub fn build_dataflow<A: Allocate>(
                     }
                 }
                 SourceConnector::Local(_) => {
-                    let (session, collection) = scope.new_collection();
+                    let (mut session, collection) = scope.new_collection();
+                    session.advance_to(1);
+                    session.flush();
                     inputs.insert(src.name.clone(), InputCapability::Session(session));
                     collection.inner
                 }
