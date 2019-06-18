@@ -14,6 +14,7 @@ use timely::progress::frontier::Antichain;
 use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -23,8 +24,10 @@ use super::render;
 use super::render::InputCapability;
 use super::trace::{KeysOnlyHandle, TraceManager};
 use super::RelationExpr;
+use super::{LocalSourceConnector, Source, SourceConnector};
 use crate::dataflow::{Dataflow, Timestamp};
 use crate::glue::*;
+use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 pub fn serve(
     dataflow_command_receivers: Vec<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
@@ -74,6 +77,26 @@ struct PendingPeek {
     drop_after_peek: Option<Dataflow>,
 }
 
+lazy_static! {
+    // Bootstrapping adds a dummy table, "dual", with one row, which the SQL
+    // planner depends upon.
+    //
+    // TODO(benesch): perhaps the SQL layer should be responsible for installing
+    // it, then? It's not fundamental to this module.
+    static ref BOOTSTRAP_COMMANDS: Vec<DataflowCommand> = vec![
+        DataflowCommand::CreateDataflow(Dataflow::Source(Source {
+            name: "dual".into(),
+            connector: SourceConnector::Local(LocalSourceConnector {}),
+            typ: RelationType::new(vec![ColumnType {
+                name: Some("x".into()),
+                nullable: false,
+                scalar_type: ScalarType::String,
+            }]),
+        })),
+        DataflowCommand::Insert("dual".into(), vec![vec![Datum::String("X".into())]]),
+    ];
+}
+
 struct Worker<'w, A>
 where
     A: Allocate,
@@ -98,28 +121,31 @@ where
         dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
         peek_results_handler: PeekResultsHandler,
     ) -> Worker<'w, A> {
-        // TODO(benesch): adding built in dataflows is too coupled to the
-        // structure of this Worker object.
-        let mut traces = TraceManager::new();
-        let mut inputs = HashMap::new();
-        let mut dataflows = HashMap::new();
-        render::add_builtin_dataflows(&mut traces, w, &mut inputs, &mut dataflows);
         let sequencer = Sequencer::new(w, Instant::now());
         Worker {
             inner: w,
             dataflow_command_receiver,
             peek_results_handler,
             pending_peeks: Vec::new(),
-            traces,
+            traces: TraceManager::new(),
             rpc_client: reqwest::Client::new(),
-            inputs,
-            dataflows,
+            inputs: HashMap::new(),
+            dataflows: HashMap::new(),
             sequencer,
         }
     }
 
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
+        for cmd in BOOTSTRAP_COMMANDS.iter() {
+            self.handle_command(
+                cmd.clone(),
+                CommandMeta {
+                    connection_uuid: Uuid::nil(),
+                },
+            );
+        }
+
         let mut shutdown = false;
         while !shutdown {
             // Ask Timely to execute a unit of work.
