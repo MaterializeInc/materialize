@@ -7,7 +7,7 @@ steps:
   - command: ci/deploy/deploy.sh
     plugins:
       - docker#v3.1.0:
-          image: materialize/deploy:20190418-160350
+          image: materialize/deploy:20190617-233706
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:

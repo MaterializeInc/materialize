@@ -26,13 +26,17 @@ gid=$(id -g)
 [[ "$uid" -lt 500 ]] && uid=501
 [[ "$gid" -lt 500 ]] && gid=$uid
 
+build() {
+    docker build --pull --tag "$full_img" "$@" ci/"$img"
+}
+
 case "$cmd" in
     build)
-        docker build --tag "$full_img" ci/"$img"
+        build
         ;;
     push)
         tag=$(date +%Y%m%d-%H%M%S)
-        docker build --tag "$full_img:$tag" --tag "$full_img" ci/"$img"
+        build --tag "$full_img:$tag"
         docker push "$full_img:$tag"
         ;;
     run)
