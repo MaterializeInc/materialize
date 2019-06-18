@@ -537,7 +537,8 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
             (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
             (Type::Text, Datum::Int64(i)) => format!("{}", i),
             (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
-
+            (Type::Bytes, Datum::False) => "false".to_owned(),
+            (Type::Bytes, Datum::True) => "true".to_owned(),
             other => panic!("Don't know how to format {:?}", other),
         })
         .collect()
