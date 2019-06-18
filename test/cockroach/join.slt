@@ -801,52 +801,53 @@ CREATE TABLE pkBAC (a INT, b INT, c INT, d INT, PRIMARY KEY(b,a,c))
 statement ok
 CREATE TABLE pkBAD (a INT, b INT, c INT, d INT, PRIMARY KEY(b,a,d))
 
-# Tests with joins with merged columns of collated string type.
-statement ok
-CREATE TABLE str1 (a INT PRIMARY KEY, s STRING COLLATE en_u_ks_level1)
-
-statement ok
-INSERT INTO str1 VALUES (1, 'a' COLLATE en_u_ks_level1), (2, 'A' COLLATE en_u_ks_level1), (3, 'c' COLLATE en_u_ks_level1), (4, 'D' COLLATE en_u_ks_level1)
-
-statement ok
-CREATE TABLE str2 (a INT PRIMARY KEY, s STRING COLLATE en_u_ks_level1)
-
-statement ok
-INSERT INTO str2 VALUES (1, 'A' COLLATE en_u_ks_level1), (2, 'B' COLLATE en_u_ks_level1), (3, 'C' COLLATE en_u_ks_level1), (4, 'E' COLLATE en_u_ks_level1)
-
-query TTT rowsort
-SELECT s, str1.s, str2.s FROM str1 INNER JOIN str2 USING(s)
-----
-a  a  A
-A  A  A
-c  c  C
-
-query TTT rowsort
-SELECT s, str1.s, str2.s FROM str1 LEFT OUTER JOIN str2 USING(s)
-----
-a  a  A
-A  A  A
-c  c  C
-D  D  NULL
-
-query TTT rowsort
-SELECT s, str1.s, str2.s FROM str1 RIGHT OUTER JOIN str2 USING(s)
-----
-a  a     A
-A  A     A
-c  c     C
-B  NULL  B
-E  NULL  E
-
-query TTT rowsort
-SELECT s, str1.s, str2.s FROM str1 FULL OUTER JOIN str2 USING(s)
-----
-a  a     A
-A  A     A
-c  c     C
-D  D     NULL
-E  NULL  E
-B  NULL  B
+# not supported yet
+# # Tests with joins with merged columns of collated string type.
+# statement ok
+# CREATE TABLE str1 (a INT PRIMARY KEY, s STRING COLLATE en_u_ks_level1)
+#
+# statement ok
+# INSERT INTO str1 VALUES (1, 'a' COLLATE en_u_ks_level1), (2, 'A' COLLATE en_u_ks_level1), (3, 'c' COLLATE en_u_ks_level1), (4, 'D' COLLATE en_u_ks_level1)
+#
+# statement ok
+# CREATE TABLE str2 (a INT PRIMARY KEY, s STRING COLLATE en_u_ks_level1)
+#
+# statement ok
+# INSERT INTO str2 VALUES (1, 'A' COLLATE en_u_ks_level1), (2, 'B' COLLATE en_u_ks_level1), (3, 'C' COLLATE en_u_ks_level1), (4, 'E' COLLATE en_u_ks_level1)
+#
+# query TTT rowsort
+# SELECT s, str1.s, str2.s FROM str1 INNER JOIN str2 USING(s)
+# ----
+# a  a  A
+# A  A  A
+# c  c  C
+#
+# query TTT rowsort
+# SELECT s, str1.s, str2.s FROM str1 LEFT OUTER JOIN str2 USING(s)
+# ----
+# a  a  A
+# A  A  A
+# c  c  C
+# D  D  NULL
+#
+# query TTT rowsort
+# SELECT s, str1.s, str2.s FROM str1 RIGHT OUTER JOIN str2 USING(s)
+# ----
+# a  a     A
+# A  A     A
+# c  c     C
+# B  NULL  B
+# E  NULL  E
+#
+# query TTT rowsort
+# SELECT s, str1.s, str2.s FROM str1 FULL OUTER JOIN str2 USING(s)
+# ----
+# a  a     A
+# A  A     A
+# c  c     C
+# D  D     NULL
+# E  NULL  E
+# B  NULL  B
 
 
 statement ok
@@ -1008,9 +1009,9 @@ CREATE TABLE foo (
 
 statement ok
 INSERT INTO foo VALUES
-  (1, 1, 1, 1),
-  (2, 2, 2, 2),
-  (3, 3, 3, 3)
+  (1, 1, 1.0, 1.0),
+  (2, 2, 2.0, 2.0),
+  (3, 3, 3.0, 3.0)
 
 statement ok
 CREATE TABLE bar (
@@ -1022,9 +1023,9 @@ CREATE TABLE bar (
 
 statement ok
 INSERT INTO bar VALUES
-  (1, 1, 1, 1),
-  (2, 2, 2, 2),
-  (3, 3, 3, 3)
+  (1, 1.0, 1.0, 1),
+  (2, 2.0, 2.0, 2),
+  (3, 3.0, 3.0, 3)
 
 query IIRR rowsort
 SELECT * FROM foo NATURAL JOIN bar
