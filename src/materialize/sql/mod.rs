@@ -935,7 +935,8 @@ impl Planner {
                     aggregate_context: None,
                 };
                 let (predicate, _) = self.plan_expr(ctx, expr)?;
-                Ok((product.filter(vec![predicate]), product_scope, vec![]))
+                let project_key = (0..product_scope.len()).collect();
+                Ok((product.filter(vec![predicate]), product_scope, project_key))
             }
             JoinConstraint::Using(column_names) => {
                 let (predicate, project_key) =
