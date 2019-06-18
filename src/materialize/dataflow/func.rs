@@ -578,6 +578,13 @@ where
     }
 }
 
+pub fn avg_null<I>(_datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    Datum::Null
+}
+
 pub fn max_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -626,6 +633,13 @@ where
     Datum::from(x)
 }
 
+pub fn max_null<I>(_datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    Datum::Null
+}
+
 pub fn min_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -672,6 +686,13 @@ where
         .map(|d| d.unwrap_ordered_float64())
         .min();
     Datum::from(x)
+}
+
+pub fn min_null<I>(_datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    Datum::Null
 }
 
 pub fn sum_int32<I>(datums: I) -> Datum
@@ -726,6 +747,13 @@ where
     }
 }
 
+pub fn sum_null<I>(_datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    Datum::Null
+}
+
 pub fn count<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -748,18 +776,22 @@ pub enum AggregateFunc {
     AvgInt64,
     AvgFloat32,
     AvgFloat64,
+    AvgNull,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
     MaxFloat64,
+    MaxNull,
     MinInt32,
     MinInt64,
     MinFloat32,
     MinFloat64,
+    MinNull,
     SumInt32,
     SumInt64,
     SumFloat32,
     SumFloat64,
+    SumNull,
     Count,
     CountAll, // COUNT(*) counts nulls too
 }
@@ -781,18 +813,22 @@ impl AggregateFunc {
             ("avg", ScalarType::Int64) => AggregateFunc::AvgInt64,
             ("avg", ScalarType::Float32) => AggregateFunc::AvgFloat32,
             ("avg", ScalarType::Float64) => AggregateFunc::AvgFloat64,
+            ("avg", ScalarType::Null) => AggregateFunc::AvgNull,
             ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
             ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
             ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
             ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
+            ("max", ScalarType::Null) => AggregateFunc::MaxNull,
             ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
             ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
             ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
             ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
+            ("min", ScalarType::Null) => AggregateFunc::MinNull,
             ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
             ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
             ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
             ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
+            ("sum", ScalarType::Null) => AggregateFunc::SumNull,
             ("count", _) => AggregateFunc::Count,
             other => bail!("Unimplemented function/type combo: {:?}", other),
         };
@@ -813,18 +849,22 @@ impl AggregateFunc {
             AggregateFunc::AvgInt64 => avg_int64,
             AggregateFunc::AvgFloat32 => avg_float32,
             AggregateFunc::AvgFloat64 => avg_float64,
+            AggregateFunc::AvgNull => avg_null,
             AggregateFunc::MaxInt32 => max_int32,
             AggregateFunc::MaxInt64 => max_int64,
             AggregateFunc::MaxFloat32 => max_float32,
             AggregateFunc::MaxFloat64 => max_float64,
+            AggregateFunc::MaxNull => max_null,
             AggregateFunc::MinInt32 => min_int32,
             AggregateFunc::MinInt64 => min_int64,
             AggregateFunc::MinFloat32 => min_float32,
             AggregateFunc::MinFloat64 => min_float64,
+            AggregateFunc::MinNull => min_null,
             AggregateFunc::SumInt32 => sum_int32,
             AggregateFunc::SumInt64 => sum_int64,
             AggregateFunc::SumFloat32 => sum_float32,
             AggregateFunc::SumFloat64 => sum_float64,
+            AggregateFunc::SumNull => sum_null,
             AggregateFunc::Count => count,
             AggregateFunc::CountAll => count_all,
         }
