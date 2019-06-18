@@ -12,6 +12,9 @@
 
 > SELECT * FROM empty
 
+> VALUES (1)
+1
+
 $ set schema={
     "type": "record",
     "name": "na",

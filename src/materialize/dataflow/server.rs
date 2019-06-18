@@ -318,7 +318,7 @@ where
                 .iter()
                 .map(|n| self.root_input_time(n))
                 .min()
-                .unwrap(),
+                .unwrap_or(self.input_time),
         }
     }
 
