@@ -109,6 +109,20 @@ impl Datum {
         }
     }
 
+    pub fn unwrap_str(&self) -> &str {
+        match self {
+            Datum::String(s) => s,
+            _ => panic!("Datum::unwrap_string called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_string(self) -> String {
+        match self {
+            Datum::String(s) => s,
+            _ => panic!("Datum::unwrap_string called on {:?}", self),
+        }
+    }
+
     pub fn scalar_type(&self) -> ScalarType {
         match self {
             Datum::Null => ScalarType::Null,
@@ -167,6 +181,12 @@ impl From<f32> for Datum {
 impl From<f64> for Datum {
     fn from(f: f64) -> Datum {
         Datum::Float64(OrderedFloat(f))
+    }
+}
+
+impl From<String> for Datum {
+    fn from(s: String) -> Datum {
+        Datum::String(s)
     }
 }
 
