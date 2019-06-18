@@ -27,9 +27,9 @@ CREATE TABLE kv (
 
 # Aggregate functions return NULL if there are no rows.
 query IIIIRRRRBBT
-SELECT min(1), max(1), count(1), sum_int(1), avg(1), sum(1), stddev(1), variance(1), bool_and(true), bool_and(false), xor_agg(b'\x01') FROM kv
+SELECT min(1), max(1), count(1), sum_int(1), avg(1), sum(1), stddev(1), variance(1), bool_and(true), bool_and(false) FROM kv
 ----
-NULL NULL 0 NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL 0 NULL NULL NULL NULL NULL NULL NULL
 
 # Regression test for #29695
 query T
@@ -54,9 +54,9 @@ SELECT jsonb_agg(1) FROM kv
 NULL
 
 query IIIIRRRRBBT
-SELECT min(v), max(v), count(v), sum_int(1), avg(v), sum(v), stddev(v), variance(v), bool_and(v = 1), bool_and(v = 1), xor_agg(s::bytes) FROM kv
+SELECT min(v), max(v), count(v), sum_int(1), avg(v), sum(v), stddev(v), variance(v), bool_and(v = 1), bool_and(v = 1) FROM kv
 ----
-NULL NULL 0 NULL NULL NULL NULL NULL NULL NULL NULL
+NULL NULL 0 NULL NULL NULL NULL NULL NULL NULL
 
 query T
 SELECT array_agg(v) FROM kv
@@ -75,7 +75,7 @@ NULL
 
 # Aggregate functions triggers aggregation and computation when there is no source.
 query IIIIRRRRBBT
-SELECT min(1), count(1), max(1), sum_int(1), avg(1)::float, sum(1), stddev(1), variance(1), bool_and(true), bool_or(true), to_hex(xor_agg(b'\x01'))
+SELECT min(1), count(1), max(1), sum_int(1), avg(1)::float, sum(1), stddev(1), variance(1), bool_and(true), bool_or(true)
 ----
 1 1 1 1 1 1 NULL NULL true true 01
 
@@ -172,11 +172,10 @@ INSERT INTO kv VALUES
 (8, 4, 2, 'A')
 
 # Aggregate functions triggers aggregation and computation for every row even when applied to a constant.
-# NB: The XOR result is 00 because \x01 is XOR'd an even number of times.
 query IIIIRRRRBBT
-SELECT min(1), count(1), max(1), sum_int(1), avg(1)::float, sum(1), stddev(1), variance(1)::float, bool_and(true), bool_or(true), to_hex(xor_agg(b'\x01')) FROM kv
+SELECT min(1), count(1), max(1), sum_int(1), avg(1)::float, sum(1), stddev(1), variance(1)::float, bool_and(true), bool_or(true) FROM kv
 ----
-1 6 1 6 1 6 0 0 true true 00
+1 6 1 6 1 6 0 0 true true
 
 # Aggregate functions triggers aggregation and computation for every row even when applied to a constant.
 query T
@@ -663,7 +662,7 @@ SELECT max(a), max(b), max(c) FROM abc
 ----
 two 2 true
 
-query RRR
+query RR
 SELECT avg(b), sum(b) FROM abc
 ----
 1.75 3.5
@@ -1035,9 +1034,9 @@ NULL
 # ----
 # 0300  1   2
 # 1c01  2   4
-
-statement error arguments to xor must all be the same length
-SELECT xor_agg(i) FROM (VALUES (b'\x01'), (b'\x01\x01')) AS a(i)
+#
+# statement error arguments to xor must all be the same length
+# SELECT xor_agg(i) FROM (VALUES (b'\x01'), (b'\x01\x01')) AS a(i)
 
 query BB
 SELECT max(true), min(true)
