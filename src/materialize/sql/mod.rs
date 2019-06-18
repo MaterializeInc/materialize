@@ -421,7 +421,13 @@ impl Planner {
                         Ok(ColumnType {
                             name: Some(column.name.clone()),
                             scalar_type: match &column.data_type {
+                                SQLType::Boolean => ScalarType::Bool,
                                 SQLType::Char(_) | SQLType::Varchar(_) | SQLType::Text => {
+                                    ScalarType::String
+                                }
+                                SQLType::Custom(name)
+                                    if name.to_string().to_lowercase() == "string" =>
+                                {
                                     ScalarType::String
                                 }
                                 SQLType::SmallInt | SQLType::Int | SQLType::BigInt => {
