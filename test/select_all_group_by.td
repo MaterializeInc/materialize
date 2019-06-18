@@ -31,6 +31,13 @@ no column named bar.b in scope
 37 42
 
 > create table quux(a integer);
+
+> select count(a) from quux where a < 0;
+0
+
+> select count(*) from quux where a < 0;
+0
+
 > insert into quux values (37);
 > insert into quux values (null);
 
