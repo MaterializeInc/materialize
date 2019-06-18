@@ -671,7 +671,7 @@ impl Planner {
                     typ,
                 });
             }
-            if !aggregates.is_empty() || !group_key.is_empty() {
+            if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
                 // apply GROUP BY / aggregates
                 relation_expr = relation_expr
                     .map(group_exprs)
