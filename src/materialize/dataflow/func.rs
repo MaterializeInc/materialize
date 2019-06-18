@@ -633,6 +633,30 @@ where
     Datum::from(x)
 }
 
+pub fn max_bool<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<bool> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_bool())
+        .max();
+    Datum::from(x)
+}
+
+pub fn max_string<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<String> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_string())
+        .max();
+    Datum::from(x)
+}
+
 pub fn max_null<I>(_datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -684,6 +708,30 @@ where
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_ordered_float64())
+        .min();
+    Datum::from(x)
+}
+
+pub fn min_bool<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<bool> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_bool())
+        .min();
+    Datum::from(x)
+}
+
+pub fn min_string<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<String> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_string())
         .min();
     Datum::from(x)
 }
@@ -781,11 +829,15 @@ pub enum AggregateFunc {
     MaxInt64,
     MaxFloat32,
     MaxFloat64,
+    MaxBool,
+    MaxString,
     MaxNull,
     MinInt32,
     MinInt64,
     MinFloat32,
     MinFloat64,
+    MinBool,
+    MinString,
     MinNull,
     SumInt32,
     SumInt64,
@@ -818,11 +870,15 @@ impl AggregateFunc {
             ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
             ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
             ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
+            ("max", ScalarType::Bool) => AggregateFunc::MaxBool,
+            ("max", ScalarType::String) => AggregateFunc::MaxString,
             ("max", ScalarType::Null) => AggregateFunc::MaxNull,
             ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
             ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
             ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
             ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
+            ("min", ScalarType::Bool) => AggregateFunc::MinBool,
+            ("min", ScalarType::String) => AggregateFunc::MinString,
             ("min", ScalarType::Null) => AggregateFunc::MinNull,
             ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
             ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
@@ -854,11 +910,15 @@ impl AggregateFunc {
             AggregateFunc::MaxInt64 => max_int64,
             AggregateFunc::MaxFloat32 => max_float32,
             AggregateFunc::MaxFloat64 => max_float64,
+            AggregateFunc::MaxBool => max_bool,
+            AggregateFunc::MaxString => max_string,
             AggregateFunc::MaxNull => max_null,
             AggregateFunc::MinInt32 => min_int32,
             AggregateFunc::MinInt64 => min_int64,
             AggregateFunc::MinFloat32 => min_float32,
             AggregateFunc::MinFloat64 => min_float64,
+            AggregateFunc::MinBool => min_bool,
+            AggregateFunc::MinString => min_string,
             AggregateFunc::MinNull => min_null,
             AggregateFunc::SumInt32 => sum_int32,
             AggregateFunc::SumInt64 => sum_int64,

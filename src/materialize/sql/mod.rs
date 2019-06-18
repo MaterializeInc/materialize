@@ -422,6 +422,11 @@ impl Planner {
                             name: Some(column.name.clone()),
                             scalar_type: match &column.data_type {
                                 SQLType::Boolean => ScalarType::Bool,
+                                SQLType::Custom(name)
+                                    if name.to_string().to_lowercase() == "bool" =>
+                                {
+                                    ScalarType::Bool
+                                }
                                 SQLType::Char(_) | SQLType::Varchar(_) | SQLType::Text => {
                                     ScalarType::String
                                 }
@@ -671,7 +676,7 @@ impl Planner {
                     typ,
                 });
             }
-            if !aggregates.is_empty() || !group_key.is_empty() {
+            if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
                 // apply GROUP BY / aggregates
                 relation_expr = relation_expr
                     .map(group_exprs)
@@ -1139,7 +1144,7 @@ impl Planner {
             }
         };
         let typ = ColumnType {
-            name: None,
+            name: Some(ident.clone()),
             nullable: func.is_nullable(),
             scalar_type,
         };
