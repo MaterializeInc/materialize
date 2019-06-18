@@ -1144,7 +1144,7 @@ impl Planner {
             }
         };
         let typ = ColumnType {
-            name: None,
+            name: Some(ident.clone()),
             nullable: func.is_nullable(),
             scalar_type,
         };
