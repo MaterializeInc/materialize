@@ -25,3 +25,23 @@ SELECT a FROM t
 ----
 1
 2
+
+statement ok
+CREATE TABLE t2 (a INT)
+
+statement ok
+INSERT INTO t2 VALUES (1), (3)
+
+query I
+SELECT a FROM t NATURAL JOIN t2
+----
+1
+
+statement ok
+INSERT INTO t VALUES (3)
+
+query I
+SELECT a FROM t NATURAL JOIN t2
+----
+1
+3

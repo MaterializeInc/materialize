@@ -108,6 +108,7 @@ where
     traces: TraceManager,
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputCapability>,
+    input_time: u64,
     dataflows: HashMap<String, Dataflow>,
     sequencer: Sequencer<PendingPeek>,
 }
@@ -130,6 +131,7 @@ where
             traces: TraceManager::new(),
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
+            input_time: 0,
             dataflows: HashMap::new(),
             sequencer,
         }
@@ -215,10 +217,11 @@ where
                 // Unconditionally advance time after an insertion to allow the
                 // computation to make progress. Importantly, this occurs on
                 // *all* internal inputs.
+                self.input_time += 1;
                 for handle in self.inputs.values_mut() {
                     match handle {
                         InputCapability::Session(session) => {
-                            session.advance_to(*session.time() + 1);
+                            session.advance_to(self.input_time);
                             session.flush();
                         }
                         InputCapability::Raw(_) => (),
