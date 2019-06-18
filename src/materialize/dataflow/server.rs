@@ -318,7 +318,7 @@ where
                 .iter()
                 .map(|n| self.root_input_time(n))
                 .min()
-                .unwrap_or(self.input_time),
+                .unwrap_or(u64::max_value()),
         }
     }
 
