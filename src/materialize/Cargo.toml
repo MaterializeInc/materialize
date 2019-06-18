@@ -37,7 +37,7 @@ rdkafka = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_json = "1.0.39"
-simplelog = "0.5"
+simplelog = "0.6"
 smallvec = "0.6"
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 state_machine_future = { git = "https://github.com/benesch/state_machine_future.git", branch = "context-generic-bounds" }
