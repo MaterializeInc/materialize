@@ -15,8 +15,8 @@ use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
 
 /// Converts an Apache Avro schema into a [`repr::RelationType`].
-pub fn parse_schema(schema: &str) -> Result<RelationType, Error> {
-    let schema = Schema::parse_str(schema)?;
+pub fn validate_schema(schema: &str) -> Result<RelationType, Error> {
+    let schema = parse_schema(schema)?;
 
     // The top-level record needs to be a diff "envelope" that contains
     // `before` and `after` fields, where the `before` and `after` fields
@@ -157,6 +157,63 @@ fn parse_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
     })
 }
 
+fn parse_schema(schema: &str) -> Result<Schema, Error> {
+    // munge resolves named types in Avro schemas, which are not currently
+    // supported by our Avro library. Follow [0] for details.
+    //
+    // [0]: https://github.com/flavray/avro-rs/pull/53
+    //
+    // TODO(benesch): fix this upstream.
+    fn munge(
+        schema: serde_json::Value,
+        types: &mut HashMap<String, serde_json::Value>,
+    ) -> serde_json::Value {
+        use serde_json::Value::*;
+        match schema {
+            Null | Bool(_) | Number(_) => schema,
+
+            String(s) => match s.as_ref() {
+                "null" | "boolean" | "int" | "long" | "float" | "double" | "bytes" | "string" => {
+                    String(s)
+                }
+                other => types.get(other).cloned().unwrap_or_else(|| String(s)),
+            },
+
+            Array(vs) => Array(vs.into_iter().map(|v| munge(v, types)).collect()),
+
+            Object(mut map) => {
+                if let Some(String(name)) = map.get("name") {
+                    types.insert(name.clone(), Object(map.clone()));
+                }
+                if let Some(fields) = map.remove("fields") {
+                    let fields = match fields {
+                        Array(fields) => Array(
+                            fields
+                                .into_iter()
+                                .map(|f| match f {
+                                    Object(mut fmap) => {
+                                        if let Some(typ) = fmap.remove("type") {
+                                            fmap.insert("type".into(), munge(typ, types));
+                                        }
+                                        Object(fmap)
+                                    }
+                                    other => other,
+                                })
+                                .collect(),
+                        ),
+                        other => other,
+                    };
+                    map.insert("fields".into(), fields);
+                }
+                Object(map)
+            }
+        }
+    }
+    let schema = serde_json::from_str(schema)?;
+    let schema = munge(schema, &mut HashMap::new());
+    Schema::parse(&schema)
+}
+
 fn is_nullable(schema: &Schema) -> bool {
     match schema {
         Schema::Null => true,
@@ -221,7 +278,7 @@ impl Decoder {
         Decoder {
             // It is assumed that the reader schema has already been verified
             // to be a valid Avro schema.
-            reader_schema: Schema::parse_str(reader_schema).unwrap(),
+            reader_schema: parse_schema(reader_schema).unwrap(),
             writer_schemas: schema_registry_url.map(SchemaCache::new),
         }
     }
@@ -263,6 +320,7 @@ impl Decoder {
                 Value::Null => Ok(Datum::Null),
                 Value::Boolean(true) => Ok(Datum::True),
                 Value::Boolean(false) => Ok(Datum::False),
+                Value::Int(i) => Ok(Datum::Int32(i)),
                 Value::Long(i) => Ok(Datum::Int64(i)),
                 Value::Float(f) => Ok(Datum::Float32(f.into())),
                 Value::Double(f) => Ok(Datum::Float64(f.into())),
@@ -332,7 +390,7 @@ impl SchemaCache {
                 // TODO(benesch): make this asynchronous, to avoid blocking the
                 // Timely thread on this network request.
                 let res = self.ccsr_client.get_schema_by_id(id)?;
-                let schema = Schema::parse_str(&res.raw)?;
+                let schema = parse_schema(&res.raw)?;
                 Ok(v.insert(schema))
             }
         }
@@ -368,7 +426,7 @@ mod tests {
             // avoids embedding JSON strings inside of JSON, which is hard on
             // the eyes.
             let schema = serde_json::to_string(&tc.input)?;
-            let output = super::parse_schema(&schema)?;
+            let output = super::validate_schema(&schema)?;
             assert_eq!(output, tc.expected, "failed test case name: {}", tc.name)
         }
 

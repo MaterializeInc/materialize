@@ -352,7 +352,7 @@ impl Planner {
                         (res.raw, Some(url))
                     }
                 };
-                let typ = avro::parse_schema(&raw_schema)?;
+                let typ = avro::validate_schema(&raw_schema)?;
                 Ok(Dataflow::Source(Source {
                     name,
                     connector: SourceConnector::Kafka(KafkaSourceConnector {
