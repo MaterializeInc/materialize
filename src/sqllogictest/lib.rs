@@ -512,7 +512,7 @@ struct FullState {
     peek_results_mux: PeekResultsMux,
 }
 
-fn format_row(row: &[Datum], types: &[Type], mode: &Mode) -> Vec<String> {
+fn format_row(row: &[Datum], types: &[Type], mode: Mode) -> Vec<String> {
     types
         .iter()
         .zip(row.iter())
@@ -799,7 +799,7 @@ impl RecordRunner for FullState {
                         let mut rows = results
                             .iter()
                             .map(|row| {
-                                let mut row = format_row(row, &**expected_types, mode);
+                                let mut row = format_row(row, &**expected_types, *mode);
                                 if *mode == Mode::Cockroach && *sort != Sort::No {
                                     row = row
                                         .into_iter()
