@@ -407,11 +407,13 @@ where
                 false // don't retain
             });
         }
-        self.handle_command(
-            DataflowCommand::DropDataflows(dataflows_to_be_dropped),
-            CommandMeta {
-                connection_uuid: Uuid::nil(),
-            },
-        );
+        if !dataflows_to_be_dropped.is_empty() {
+            self.handle_command(
+                DataflowCommand::DropDataflows(dataflows_to_be_dropped),
+                CommandMeta {
+                    connection_uuid: Uuid::nil(),
+                },
+            );
+        }
     }
 }
