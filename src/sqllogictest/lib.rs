@@ -713,7 +713,11 @@ impl RecordRunner for FullState {
             }
             Record::Query { sql, output } => {
                 if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
-                    return Ok(Outcome::ParseFailure { error });
+                    if output.is_err() {
+                        return Ok(Outcome::Success);
+                    } else {
+                        return Ok(Outcome::ParseFailure { error });
+                    }
                 }
 
                 let (typ, dataflow_command) = match self.planner.handle_command(sql.to_string()) {
