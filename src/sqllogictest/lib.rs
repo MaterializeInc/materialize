@@ -32,7 +32,7 @@ pub enum Type {
     Text,
     Integer,
     Real,
-    Bytes,
+    Bool,
     Oid,
 }
 
@@ -139,7 +139,7 @@ fn parse_types(input: &str) -> Result<Vec<Type>, failure::Error> {
                 'T' => Type::Text,
                 'I' => Type::Integer,
                 'R' => Type::Real,
-                'B' => Type::Bytes,
+                'B' => Type::Bool,
                 'O' => Type::Oid,
                 _ => bail!("Unexpected type char {} in: {}", char, input),
             })
@@ -512,7 +512,7 @@ struct FullState {
     peek_results_mux: PeekResultsMux,
 }
 
-fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
+fn format_row(row: &[Datum], types: &[Type], mode: &Mode) -> Vec<String> {
     types
         .iter()
         .zip(row.iter())
@@ -520,7 +520,10 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
             // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
             (_, Datum::Null) => "NULL".to_owned(),
             (Type::Integer, Datum::Int64(i)) => format!("{}", i),
-            (Type::Real, Datum::Float64(f)) => format!("{:.3}", f),
+            (Type::Real, Datum::Float64(f)) => match mode {
+                Mode::Standard => format!("{:.3}", f),
+                Mode::Cockroach => format!("{}", f),
+            },
             (Type::Text, Datum::String(string)) => {
                 if string.is_empty() {
                     "(empty)".to_owned()
@@ -528,6 +531,8 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
                     string.to_owned()
                 }
             }
+            (Type::Bool, Datum::False) => "false".to_owned(),
+            (Type::Bool, Datum::True) => "true".to_owned(),
 
             // weird type coercions that sqllogictest doesn't document
             (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
@@ -537,8 +542,6 @@ fn format_row(row: &[Datum], types: &[Type]) -> Vec<String> {
             (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
             (Type::Text, Datum::Int64(i)) => format!("{}", i),
             (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
-            (Type::Bytes, Datum::False) => "false".to_owned(),
-            (Type::Bytes, Datum::True) => "true".to_owned(),
             other => panic!("Don't know how to format {:?}", other),
         })
         .collect()
@@ -796,7 +799,7 @@ impl RecordRunner for FullState {
                         let mut rows = results
                             .iter()
                             .map(|row| {
-                                let mut row = format_row(row, &**expected_types);
+                                let mut row = format_row(row, &**expected_types, mode);
                                 if *mode == Mode::Cockroach && *sort != Sort::No {
                                     row = row
                                         .into_iter()
