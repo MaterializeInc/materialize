@@ -12,6 +12,7 @@ pub mod join_order;
 pub mod predicate_pushdown;
 pub mod reduction;
 pub mod split_predicates;
+pub mod empty_map;
 
 pub trait Transform {
     /// Transform a relation into a functionally equivalent relation.
