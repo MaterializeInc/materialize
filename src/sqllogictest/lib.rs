@@ -24,7 +24,7 @@ use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
 use materialize::sql::Planner;
 use sqlparser::dialect::AnsiSqlDialect;
-use sqlparser::sqlast::{SQLQuery, SQLSetExpr, SQLStatement};
+use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,11 +245,6 @@ pub fn parse_record<'a>(
                 }
                 let label = words.next();
                 let sql = parse_sql(&mut input)?;
-                lazy_static! {
-                    static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
-                    static ref HASH_REGEX: Regex =
-                        Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
-                }
                 let column_names = if check_column_names {
                     Some(
                         split_at(&mut input, &LINE_REGEX)?
@@ -260,6 +255,11 @@ pub fn parse_record<'a>(
                 } else {
                     None
                 };
+                lazy_static! {
+                    static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
+                    static ref HASH_REGEX: Regex =
+                        Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
+                }
                 let output = match HASH_REGEX.captures(input) {
                     Some(captures) => Output::Hashed {
                         num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
@@ -643,8 +643,7 @@ impl RecordRunner for FullState {
                     Ok(statements) => statements,
                 };
 
-                // total hack for handling statements of the form "INSERT INTO foo SELECT ..."
-                // TODO(jamii) we could potentially move all of the insert handling here
+                // total hack for handling INSERT statements
                 if let [SQLStatement::SQLInsert {
                     table_name,
                     columns,
@@ -652,38 +651,32 @@ impl RecordRunner for FullState {
                 }] = &*statements
                 {
                     if columns.is_empty() {
-                        if let SQLQuery {
-                            body: SQLSetExpr::Select(..),
-                            ..
-                        } = &**source
-                        {
-                            // run the query
-                            let (_typ, dataflow_command) =
-                                match self.planner.handle_command(source.to_string()) {
-                                    Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
-                                        (typ, dataflow_command)
+                        // run the query
+                        let (_typ, dataflow_command) =
+                            match self.planner.handle_select(*source.clone()) {
+                                Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
+                                    (typ, dataflow_command)
+                                }
+                                other => {
+                                    if *should_run {
+                                        return Ok(Outcome::PlanFailure {
+                                            error: format_err!("{:?}", other),
+                                        });
+                                    } else {
+                                        return Ok(Outcome::Success);
                                     }
-                                    other => {
-                                        if *should_run {
-                                            return Ok(Outcome::PlanFailure {
-                                                error: format_err!("{:?}", other),
-                                            });
-                                        } else {
-                                            return Ok(Outcome::Success);
-                                        }
-                                    }
-                                };
-                            let receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                            let results = self.receive_peek_results(receiver);
+                                }
+                            };
+                        let receiver = self.send_dataflow_command(dataflow_command.unwrap());
+                        let results = self.receive_peek_results(receiver);
 
-                            // insert the results
-                            let _receiver = self.send_dataflow_command(DataflowCommand::Insert(
-                                table_name.to_string(),
-                                results,
-                            ));
+                        // insert the results
+                        let _receiver = self.send_dataflow_command(DataflowCommand::Insert(
+                            table_name.to_string(),
+                            results,
+                        ));
 
-                            return Ok(Outcome::Success);
-                        }
+                        return Ok(Outcome::Success);
                     }
                 }
 

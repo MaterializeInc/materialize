@@ -153,7 +153,7 @@ impl Planner {
         ))
     }
 
-    fn handle_select(&mut self, query: SQLQuery) -> PlannerResult {
+    pub fn handle_select(&mut self, query: SQLQuery) -> PlannerResult {
         let id: u64 = rand::random();
         let name = format!("<temp_{}>", id);
         let dataflow = self.plan_statement(&SQLStatement::SQLCreateView {
