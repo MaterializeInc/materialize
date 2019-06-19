@@ -795,7 +795,7 @@ impl Planner {
                             item.table_name
                                 .as_deref()
                                 .map(|s| format!("{}.", s))
-                                .unwrap_or("".to_owned()),
+                                .unwrap_or_else(|| "".to_owned()),
                             item.column_name.as_deref().unwrap_or("")
                         )
                     })?;
@@ -816,7 +816,7 @@ impl Planner {
                                 item.table_name
                                     .as_deref()
                                     .map(|s| format!("{}.", s))
-                                    .unwrap_or("".to_owned()),
+                                    .unwrap_or_else(|| "".to_owned()),
                                 item.column_name.as_deref().unwrap_or("")
                             )
                         })?;
