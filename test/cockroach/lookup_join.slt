@@ -33,39 +33,39 @@ CREATE TABLE gh (g INT, h INT, INDEX g_idx (g))
 statement ok
 INSERT INTO gh VALUES (NULL, 1)
 
-# Set up the statistics as if the first table is much smaller than the second.
-# This will make lookup join into the second table be the best plan.
-# TODO(radu): we have to use very small row counts because of the poor row
-# count estimation for joins (left-rows * right-rows / 10).
-statement ok
-ALTER TABLE abc INJECT STATISTICS '[
-  {
-    "columns": ["a"],
-    "created_at": "2018-01-01 1:00:00.00000+00:00",
-    "row_count": 100,
-    "distinct_count": 100
-  }
-]'
+# # Set up the statistics as if the first table is much smaller than the second.
+# # This will make lookup join into the second table be the best plan.
+# # TODO(radu): we have to use very small row counts because of the poor row
+# # count estimation for joins (left-rows * right-rows / 10).
+# statement ok
+# ALTER TABLE abc INJECT STATISTICS '[
+#   {
+#     "columns": ["a"],
+#     "created_at": "2018-01-01 1:00:00.00000+00:00",
+#     "row_count": 100,
+#     "distinct_count": 100
+#   }
+# ]'
 
-statement ok
-ALTER TABLE def INJECT STATISTICS '[
-  {
-    "columns": ["f"],
-    "created_at": "2018-01-01 1:00:00.00000+00:00",
-    "row_count": 10000,
-    "distinct_count": 10000
-  }
-]'
+# statement ok
+# ALTER TABLE def INJECT STATISTICS '[
+#   {
+#     "columns": ["f"],
+#     "created_at": "2018-01-01 1:00:00.00000+00:00",
+#     "row_count": 10000,
+#     "distinct_count": 10000
+#   }
+# ]'
 
-statement ok
-ALTER TABLE gh INJECT STATISTICS '[
-  {
-    "columns": ["g"],
-    "created_at": "2018-01-01 1:00:00.00000+00:00",
-    "row_count": 10000,
-    "distinct_count": 10000
-  }
-]'
+# statement ok
+# ALTER TABLE gh INJECT STATISTICS '[
+#   {
+#     "columns": ["g"],
+#     "created_at": "2018-01-01 1:00:00.00000+00:00",
+#     "row_count": 10000,
+#     "distinct_count": 10000
+#   }
+# ]'
 
 query IIIIII rowsort
 SELECT * FROM abc JOIN def ON f = b

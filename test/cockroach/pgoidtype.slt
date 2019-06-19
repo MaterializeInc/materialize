@@ -13,10 +13,10 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-mode cockroach
-
-# We are not currently trying to be this PostgreSQL compatible. Perhaps someday.
+# not supported yet
 halt
+
+mode cockroach
 
 query OO
 SELECT 3::OID, '3'::OID

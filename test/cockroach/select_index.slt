@@ -20,8 +20,6 @@ CREATE TABLE t (
   a INT PRIMARY KEY,
   b INT,
   c INT,
-  INDEX b_desc (b DESC),
-  INDEX bc (b, c)
 )
 
 statement ok
@@ -78,7 +76,6 @@ statement ok
 CREATE TABLE t12022 (
   c1 INT,
   c2 BOOL,
-  UNIQUE INDEX i (c1, c2)
 );
 
 statement ok
@@ -144,11 +141,6 @@ CREATE TABLE favorites (
   created_ts TIMESTAMP NULL,
   guid_id STRING(100) NOT NULL,
   locale STRING(10) NOT NULL DEFAULT NULL,
-  CONSTRAINT "primary" PRIMARY KEY (id ASC),
-  UNIQUE INDEX favorites_idx (resource_type ASC, device_group ASC, resource_key ASC, customerid ASC),
-  INDEX favorites_guid_idx (guid_id ASC),
-  INDEX favorites_glob_fav_idx (resource_type ASC, device_group ASC, jurisdiction ASC, brand ASC, locale ASC, resource_key ASC),
-  FAMILY "primary" (id, resource_type, resource_key, device_group, customerid, jurisdiction, brand, created_ts, guid_id, locale)
 )
 
 statement ok
@@ -184,8 +176,6 @@ CREATE TABLE abcd (
   b INT,
   c INT,
   d INT,
-  INDEX adb (a, d, b),
-  INDEX abcd (a, b, c, d)
 )
 
 # Regression tests for #20362 (IS NULL handling).
@@ -268,7 +258,7 @@ SELECT * FROM abcd@abcd WHERE a = 1 AND b IS NULL AND c > 0 AND c < 10 ORDER BY 
 
 # Regression test for #21831.
 statement ok
-CREATE TABLE str (k INT PRIMARY KEY, v STRING, INDEX(v))
+CREATE TABLE str (k INT PRIMARY KEY, v STRING)
 
 statement ok
 INSERT INTO str VALUES (1, 'A'), (4, 'AB'), (2, 'ABC'), (5, 'ABCD'), (3, 'ABCDEZ'), (9, 'ABD')
@@ -294,7 +284,7 @@ SELECT k, v FROM str WHERE v SIMILAR TO 'ABC_*'
 
 # Regression tests for #22670.
 statement ok
-CREATE TABLE xy (x INT, y INT, INDEX (y))
+CREATE TABLE xy (x INT, y INT)
 
 statement ok
 CREATE INDEX xy_idx ON xy (x, y)
@@ -309,7 +299,7 @@ SELECT * FROM xy WHERE x IN (NULL, 1, 2)
 1  1
 
 statement ok
-CREATE TABLE ef (e INT, f INT, INDEX(f))
+CREATE TABLE ef (e INT, f INT)
 
 statement ok
 INSERT INTO ef VALUES (NULL, 1), (1, 1)
@@ -329,7 +319,6 @@ SELECT * FROM xy WHERE (x, y) IN ((NULL, NULL), (1, NULL), (NULL, 1), (1, 1), (1
 statement ok
 CREATE TABLE bool1 (
   a BOOL,
-  INDEX (a)
 );
 INSERT INTO bool1 VALUES (NULL), (TRUE), (FALSE)
 
@@ -369,7 +358,6 @@ true
 statement ok
 CREATE TABLE bool2 (
   a BOOL NOT NULL,
-  INDEX (a)
 );
 INSERT INTO bool2 VALUES (TRUE), (FALSE)
 
@@ -407,7 +395,6 @@ true
 statement ok
 CREATE TABLE int (
   a INT,
-  INDEX (a)
 );
 INSERT INTO int VALUES (NULL), (0), (1), (2)
 
@@ -432,12 +419,6 @@ CREATE TABLE noncover (
   b INT,
   c INT,
   d INT,
-  INDEX b (b),
-  UNIQUE INDEX c (c),
-  FAMILY (a),
-  FAMILY (b),
-  FAMILY (c),
-  FAMILY (d)
 )
 
 statement ok
