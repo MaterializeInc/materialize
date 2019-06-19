@@ -617,7 +617,7 @@ impl Planner {
         }
 
         // Step 3. Handle GROUP BY clause.
-        let (group_scope, aggregate_context) = {
+        let (group_scope, aggregate_context, select_all_mapping) = {
             // gather group columns
             let ctx = &ExprContext {
                 name: "GROUP BY clause",
@@ -627,6 +627,7 @@ impl Planner {
             let mut group_key = vec![];
             let mut group_exprs = vec![];
             let mut group_scope = Scope { items: vec![] };
+            let mut select_all_mapping = HashMap::new();
             for expr in &s.group_by {
                 let (expr, typ) = self.plan_expr(ctx, &expr)?;
                 match &expr {
@@ -634,6 +635,7 @@ impl Planner {
                         // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
                         if !group_key.contains(i) {
                             group_key.push(*i);
+                            select_all_mapping.insert(*i, group_scope.len());
                             group_scope.items.push(from_scope.items[*i].clone());
                         }
                     }
@@ -690,10 +692,14 @@ impl Planner {
                             .collect(),
                     }
                 }
-                (group_scope, aggregate_context)
+                (group_scope, aggregate_context, select_all_mapping)
             } else {
-                // if no GROUP BY or aggregates, all columns remain in scope
-                (from_scope.clone(), aggregate_context)
+                // if no GROUP BY, aggregates or having then all columns remain in scope
+                (
+                    from_scope.clone(),
+                    aggregate_context,
+                    (0..from_scope.len()).map(|i| (i, i)).collect(),
+                )
             }
         };
 
@@ -724,7 +730,9 @@ impl Planner {
                     scope: &group_scope,
                     aggregate_context: Some(&aggregate_context),
                 };
-                for (expr, typ) in self.plan_select_item(ctx, p, &from_scope)? {
+                for (expr, typ) in
+                    self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
+                {
                     match &expr {
                         ScalarExpr::Column(i) => {
                             project_key.push(*i);
@@ -767,6 +775,7 @@ impl Planner {
         ctx: &ExprContext,
         s: &'a SQLSelectItem,
         select_all_scope: &Scope,
+        select_all_mapping: &HashMap<usize, usize>,
     ) -> Result<Vec<(ScalarExpr, ColumnType)>, failure::Error> {
         match s {
             SQLSelectItem::UnnamedExpression(e) => Ok(vec![self.plan_expr(ctx, e)?]),
@@ -778,9 +787,19 @@ impl Planner {
             SQLSelectItem::Wildcard => select_all_scope
                 .items
                 .iter()
-                .map(|item| {
-                    let (pos, item) = ctx.scope.resolve_item(item)?;
-                    Ok((ScalarExpr::Column(pos), item.typ.clone()))
+                .enumerate()
+                .map(|(i, item)| {
+                    let j = select_all_mapping.get(&i).ok_or_else(|| {
+                        format_err!(
+                            "no column named {}{} in scope",
+                            item.table_name
+                                .as_deref()
+                                .map(|s| format!("{}.", s))
+                                .unwrap_or("".to_owned()),
+                            item.column_name.as_deref().unwrap_or("")
+                        )
+                    })?;
+                    Ok((ScalarExpr::Column(*j), item.typ.clone()))
                 })
                 .collect::<Result<Vec<_>, _>>(),
             SQLSelectItem::QualifiedWildcard(table_name) => {
@@ -788,10 +807,20 @@ impl Planner {
                 select_all_scope
                     .items
                     .iter()
-                    .filter(|item| item.table_name.as_ref() == Some(&table_name))
-                    .map(|item| {
-                        let (pos, item) = ctx.scope.resolve_item(item)?;
-                        Ok((ScalarExpr::Column(pos), item.typ.clone()))
+                    .enumerate()
+                    .filter(|(_, item)| item.table_name.as_ref() == Some(&table_name))
+                    .map(|(i, item)| {
+                        let j = select_all_mapping.get(&i).ok_or_else(|| {
+                            format_err!(
+                                "no column named {}{} in scope",
+                                item.table_name
+                                    .as_deref()
+                                    .map(|s| format!("{}.", s))
+                                    .unwrap_or("".to_owned()),
+                                item.column_name.as_deref().unwrap_or("")
+                            )
+                        })?;
+                        Ok((ScalarExpr::Column(*j), item.typ.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>()
             }
@@ -1789,7 +1818,7 @@ struct ExprContext<'a> {
     aggregate_context: Option<&'a HashMap<&'a SQLFunction, (usize, ColumnType)>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeItem {
     table_name: Option<String>,
     column_name: Option<String>,
@@ -1862,19 +1891,6 @@ impl Scope {
             (Some((i, item)), None) => Ok((i, item)),
             (Some(_), Some(_)) => bail!("column name {}.{} is ambiguous", table_name, column_name),
             _ => unreachable!(),
-        }
-    }
-
-    fn resolve_item<'a>(
-        &'a self,
-        item: &ScopeItem,
-    ) -> Result<(usize, &'a ScopeItem), failure::Error> {
-        match (item.table_name.as_ref(), item.column_name.as_ref()) {
-            (Some(table_name), Some(column_name)) => {
-                self.resolve_table_column(table_name, column_name)
-            }
-            (None, Some(column_name)) => self.resolve_column(column_name),
-            _ => bail!("Cannot resolve unnamed item {:?}", item),
         }
     }
 
