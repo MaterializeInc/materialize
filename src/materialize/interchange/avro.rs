@@ -338,7 +338,7 @@ impl Decoder {
             };
             match v {
                 Value::Record(fields) => {
-                    let mut row = Vec::new();
+                    let mut row = Vec::with_capacity(fields.len());
                     for (_, col) in fields {
                         row.push(value_to_datum(col)?);
                     }
