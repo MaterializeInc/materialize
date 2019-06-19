@@ -778,12 +778,8 @@ impl Planner {
             SQLSelectItem::Wildcard => select_all_scope
                 .items
                 .iter()
-                .filter(|item| item.table_name.is_some() && item.column_name.is_some())
                 .map(|item| {
-                    let (pos, item) = ctx.scope.resolve_table_column(
-                        item.table_name.as_ref().unwrap(),
-                        item.column_name.as_ref().unwrap(),
-                    )?;
+                    let (pos, item) = ctx.scope.resolve_item(item)?;
                     Ok((ScalarExpr::Column(pos), item.typ.clone()))
                 })
                 .collect::<Result<Vec<_>, _>>(),
@@ -792,14 +788,9 @@ impl Planner {
                 select_all_scope
                     .items
                     .iter()
-                    .filter(|item| {
-                        item.table_name.as_ref() == Some(&table_name) && item.column_name.is_some()
-                    })
+                    .filter(|item| item.table_name.as_ref() == Some(&table_name))
                     .map(|item| {
-                        let (pos, item) = ctx.scope.resolve_table_column(
-                            item.table_name.as_ref().unwrap(),
-                            item.column_name.as_ref().unwrap(),
-                        )?;
+                        let (pos, item) = ctx.scope.resolve_item(item)?;
                         Ok((ScalarExpr::Column(pos), item.typ.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>()
@@ -857,79 +848,79 @@ impl Planner {
         right_scope: Scope,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match operator {
-            JoinOperator::Inner(constraint) => {
-                let (both, both_scope, project_key) =
-                    self.plan_join_constraint(&constraint, left, left_scope, right, right_scope)?;
-                Ok((
-                    both.project(project_key.clone()),
-                    both_scope.project(&project_key),
-                ))
-            }
+            JoinOperator::Inner(constraint) => self.plan_join_constraint(
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                |both, both_scope| Ok((both, both_scope)),
+            ),
             JoinOperator::LeftOuter(constraint) => RelationExpr::let_(left, |left| {
-                let (both, both_scope, project_key) = self.plan_join_constraint(
+                self.plan_join_constraint(
                     &constraint,
                     left.clone(),
                     left_scope,
                     right,
                     right_scope,
-                )?;
-                RelationExpr::let_(both, |both| {
-                    let both_and_outer = both.clone().union(both.left_outer(left));
-                    Ok((
-                        both_and_outer.project(project_key.clone()),
-                        both_scope.project(&project_key),
-                    ))
-                })
+                    |both, both_scope| {
+                        RelationExpr::let_(both, |both| {
+                            Ok((both.clone().union(both.left_outer(left)), both_scope))
+                        })
+                    },
+                )
             }),
             JoinOperator::RightOuter(constraint) => RelationExpr::let_(right, |right| {
-                let (both, both_scope, project_key) = self.plan_join_constraint(
+                self.plan_join_constraint(
                     &constraint,
                     left,
                     left_scope,
                     right.clone(),
                     right_scope,
-                )?;
-                RelationExpr::let_(both, |both| {
-                    let both_and_outer = both.clone().union(both.right_outer(right));
-                    Ok((
-                        both_and_outer.project(project_key.clone()),
-                        both_scope.project(&project_key),
-                    ))
-                })
+                    |both, both_scope| {
+                        RelationExpr::let_(both, |both| {
+                            Ok((both.clone().union(both.right_outer(right)), both_scope))
+                        })
+                    },
+                )
             }),
             JoinOperator::FullOuter(constraint) => RelationExpr::let_(left, |left| {
                 RelationExpr::let_(right, |right| {
-                    let (both, both_scope, project_key) = self.plan_join_constraint(
+                    self.plan_join_constraint(
                         &constraint,
                         left.clone(),
                         left_scope,
                         right.clone(),
                         right_scope,
-                    )?;
-                    RelationExpr::let_(both, |both| {
-                        let both_and_outer = both
-                            .clone()
-                            .union(both.clone().left_outer(left))
-                            .union(both.clone().right_outer(right));
-                        Ok((
-                            both_and_outer.project(project_key.clone()),
-                            both_scope.project(&project_key),
-                        ))
-                    })
+                        |both, both_scope| {
+                            RelationExpr::let_(both, |both| {
+                                Ok((
+                                    both.clone()
+                                        .union(both.clone().left_outer(left))
+                                        .union(both.clone().right_outer(right)),
+                                    both_scope,
+                                ))
+                            })
+                        },
+                    )
                 })
             }),
             JoinOperator::Cross => Ok((left.product(right), left_scope.product(right_scope))),
         }
     }
 
-    fn plan_join_constraint<'a>(
+    fn plan_join_constraint<'a, F>(
         &self,
         constraint: &'a JoinConstraint,
         left: RelationExpr,
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-    ) -> Result<(RelationExpr, Scope, Vec<usize>), failure::Error> {
+        with_both: F,
+    ) -> Result<(RelationExpr, Scope), failure::Error>
+    where
+        F: FnOnce(RelationExpr, Scope) -> Result<(RelationExpr, Scope), failure::Error>,
+    {
         match constraint {
             JoinConstraint::On(expr) => {
                 let product = left.product(right);
@@ -940,78 +931,100 @@ impl Planner {
                     aggregate_context: None,
                 };
                 let (predicate, _) = self.plan_expr(ctx, expr)?;
-                let project_key = (0..product_scope.len()).collect();
-                Ok((product.filter(vec![predicate]), product_scope, project_key))
+                with_both(product.filter(vec![predicate]), product_scope)
             }
-            JoinConstraint::Using(column_names) => {
-                let (predicate, project_key) =
-                    self.plan_using_constraint(&column_names, &left_scope, &right_scope)?;
-                Ok((
-                    left.product(right).filter(vec![predicate]),
-                    left_scope.product(right_scope),
-                    project_key,
-                ))
-            }
+            JoinConstraint::Using(column_names) => self.plan_using_constraint(
+                &column_names,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                with_both,
+            ),
             JoinConstraint::Natural => {
-                let mut column_names = HashSet::new();
-                for item in right_scope.items.iter() {
+                let mut column_names = vec![];
+                for item in left_scope.items.iter() {
                     if let Some(column_name) = &item.column_name {
-                        if left_scope.resolve_column(column_name).is_ok() {
-                            column_names.insert(column_name.clone());
+                        if left_scope.resolve_column(column_name).is_ok()
+                            && right_scope.resolve_column(column_name).is_ok()
+                        {
+                            column_names.push(column_name.clone());
                         }
                     }
                 }
-                let column_names = column_names.into_iter().collect::<Vec<_>>();
-                let (predicate, project_key) =
-                    self.plan_using_constraint(&column_names, &left_scope, &right_scope)?;
-                Ok((
-                    left.product(right).filter(vec![predicate]),
-                    left_scope.product(right_scope),
-                    project_key,
-                ))
+                self.plan_using_constraint(
+                    &column_names,
+                    left,
+                    left_scope,
+                    right,
+                    right_scope,
+                    with_both,
+                )
             }
         }
     }
 
-    fn plan_using_constraint(
+    // See page 440 of ANSI SQL 2016 spec for details on scoping of using/natural joins
+    fn plan_using_constraint<F>(
         &self,
         column_names: &[String],
-        left: &Scope,
-        right: &Scope,
-    ) -> Result<(ScalarExpr, Vec<usize>), failure::Error> {
-        let mut exprs = vec![];
-        let mut joined_columns = Vec::new();
+        left: RelationExpr,
+        left_scope: Scope,
+        right: RelationExpr,
+        right_scope: Scope,
+        with_both: F,
+    ) -> Result<(RelationExpr, Scope), failure::Error>
+    where
+        F: FnOnce(RelationExpr, Scope) -> Result<(RelationExpr, Scope), failure::Error>,
+    {
+        let mut join_exprs = vec![];
+        let mut map_exprs = vec![];
+        let mut new_items = vec![];
         let mut dropped_columns = HashSet::new();
         for column_name in column_names {
-            let (l, _) = left.resolve_column(column_name)?;
-            let (r, _) = right.resolve_column(column_name)?;
-            exprs.push(ScalarExpr::CallBinary {
+            let (l, l_item) = left_scope.resolve_column(column_name)?;
+            let (r, r_item) = right_scope.resolve_column(column_name)?;
+            let typ = l_item.typ.union(&r_item.typ)?;
+            join_exprs.push(ScalarExpr::CallBinary {
                 func: BinaryFunc::Eq,
                 expr1: Box::new(ScalarExpr::Column(l)),
-                expr2: Box::new(ScalarExpr::Column(left.len() + r)),
+                expr2: Box::new(ScalarExpr::Column(left_scope.len() + r)),
             });
-            joined_columns.push(l);
+            map_exprs.push((
+                ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Coalesce,
+                    exprs: vec![
+                        ScalarExpr::Column(l),
+                        ScalarExpr::Column(left_scope.len() + r),
+                    ],
+                },
+                typ.clone(),
+            ));
+            new_items.push(ScopeItem {
+                table_name: None,
+                column_name: typ.name.clone(),
+                typ,
+            });
             dropped_columns.insert(l);
-            dropped_columns.insert(left.len() + r);
+            dropped_columns.insert(left_scope.len() + r);
         }
-        let expr = exprs
-            .into_iter()
-            .fold(ScalarExpr::Literal(Datum::True), |a, b| {
-                ScalarExpr::CallBinary {
-                    func: BinaryFunc::And,
-                    expr1: Box::new(a),
-                    expr2: Box::new(b),
-                }
-            });
-        let project_key = joined_columns
-            .into_iter()
+        let project_key =
+            // coalesced join columns
+            (0..map_exprs.len())
+            .map(|i| left_scope.len() + right_scope.len() + i)
+            // other columns that weren't joined
             .chain(
-                (0..(left.len() + right.len()))
-                    // drop columns that were joined on
+                (0..(left_scope.len() + right_scope.len()))
                     .filter(|i| !dropped_columns.contains(i)),
             )
             .collect::<Vec<_>>();
-        Ok((expr, project_key))
+        let both = left.product(right).filter(join_exprs);
+        let both_scope = left_scope.product(right_scope);
+        let (both, mut both_scope) = with_both(both, both_scope)?;
+        both_scope.items.extend(new_items);
+        let both_scope = both_scope.project(&project_key);
+        let both = both.map(map_exprs).project(project_key);
+        Ok((both, both_scope))
     }
 
     fn plan_expr<'a>(
@@ -1849,6 +1862,19 @@ impl Scope {
             (Some((i, item)), None) => Ok((i, item)),
             (Some(_), Some(_)) => bail!("column name {}.{} is ambiguous", table_name, column_name),
             _ => unreachable!(),
+        }
+    }
+
+    fn resolve_item<'a>(
+        &'a self,
+        item: &ScopeItem,
+    ) -> Result<(usize, &'a ScopeItem), failure::Error> {
+        match (item.table_name.as_ref(), item.column_name.as_ref()) {
+            (Some(table_name), Some(column_name)) => {
+                self.resolve_table_column(table_name, column_name)
+            }
+            (None, Some(column_name)) => self.resolve_column(column_name),
+            _ => bail!("Cannot resolve unnamed item {:?}", item),
         }
     }
 
