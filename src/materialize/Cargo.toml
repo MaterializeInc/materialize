@@ -12,6 +12,11 @@ path = "bin/materialized.rs"
 [lib]
 path = "lib.rs"
 
+[[bench]]
+name = "interchange-avro"
+path = "interchange/benches/avro.rs"
+harness = false
+
 [dependencies]
 avro-rs = "0.6.5"
 backtrace = "0.3.30"
@@ -50,3 +55,4 @@ uuid = { version = "0.7.4", features = ["serde", "v4"] }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"
+criterion = "0.2"

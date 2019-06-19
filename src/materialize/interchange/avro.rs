@@ -157,7 +157,7 @@ fn parse_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
     })
 }
 
-fn parse_schema(schema: &str) -> Result<Schema, Error> {
+pub fn parse_schema(schema: &str) -> Result<Schema, Error> {
     // munge resolves named types in Avro schemas, which are not currently
     // supported by our Avro library. Follow [0] for details.
     //
@@ -314,6 +314,9 @@ impl Decoder {
             Some(cache) => cache.get(schema_id)?,
             None => &self.reader_schema,
         };
+
+        // println!("writer schema\n{:#?}\nreader schema{:#?}", writer_schema, self.reader_schema);
+        // assert_eq!(writer_schema, &self.reader_schema);
 
         fn value_to_datum(v: Value) -> Result<Datum, failure::Error> {
             match v {
