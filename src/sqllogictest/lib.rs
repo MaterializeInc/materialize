@@ -957,7 +957,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
         // if we failed to execute a statement, running the rest of the tests in this file will probably cause false positives
         match (&record, &outcome) {
             (_, Outcome::Success) => (),
-            (Record::Statement { sql, .. }, _) if !sql.contains("CREATE VIEW") => {
+            (Record::Statement { sql, .. }, _) if !sql.to_lowercase().contains("create view") => {
                 outcome = Outcome::Bail {
                     cause: Box::new(outcome),
                 };
