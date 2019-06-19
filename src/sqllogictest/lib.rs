@@ -708,12 +708,23 @@ impl RecordRunner for FullState {
                 Ok(Outcome::Success)
             }
             Record::Query { sql, output } => {
-                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
-                    if output.is_err() {
-                        return Ok(Outcome::Success);
-                    } else {
-                        return Ok(Outcome::ParseFailure { error });
+                let statements = match Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
+                    Ok(statements) => statements,
+                    Err(error) => {
+                        if output.is_err() {
+                            return Ok(Outcome::Success);
+                        } else {
+                            return Ok(Outcome::ParseFailure { error });
+                        }
                     }
+                };
+                match &*statements {
+                    [SQLStatement::SQLCreateView { .. }] | [SQLStatement::SQLQuery { .. }] => (),
+                    [_] if output.is_err() => {
+                        // We're not interested in testing our hacky handling of INSERT etc
+                        return Ok(Outcome::Success);
+                    }
+                    _ => bail!("Got multiple statements: {:?}", statements),
                 }
 
                 let (typ, dataflow_command) = match self.planner.handle_command(sql.to_string()) {
