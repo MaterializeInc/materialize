@@ -231,6 +231,7 @@ pub struct DiffPair {
 pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
+    fast_row_schema: Option<Schema>,
 }
 
 impl Decoder {
@@ -245,9 +246,25 @@ impl Decoder {
         let reader_schema = parse_schema(reader_schema).unwrap();
         let writer_schemas = schema_registry_url
             .map(|url| SchemaCache::new(url, reader_schema.fingerprint::<Sha256>()));
+
+        let fast_row_schema = match &reader_schema {
+            // If the first two fields in the record are `before` and `after`,
+            // we don't need to decode the whole record. This can yield a
+            // substantial performance win when there is additional heavyweight
+            // metadata at the end of each record which would be immediately
+            // discarded.
+            Schema::Record { fields, .. }
+                if fields[0].name == "before" && fields[1].name == "after" =>
+            {
+                Some(fields[0].schema.clone())
+            }
+            _ => None,
+        };
+
         Decoder {
             reader_schema,
             writer_schemas,
+            fast_row_schema,
         }
     }
 
@@ -323,22 +340,29 @@ impl Decoder {
             }
         }
 
-        let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
         let mut before = None;
         let mut after = None;
-        match val {
-            Value::Record(fields) => {
-                for (name, val) in fields {
-                    if name == "before" {
-                        before = extract_row(val)?;
-                    } else if name == "after" {
-                        after = extract_row(val)?;
-                    } else {
-                        // Intentionally ignore other fields.
+        if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
+            // The record is laid out such that we can extract the `before` and
+            // `after` fields without decoding the entire record.
+            before = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
+            after = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
+        } else {
+            let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
+            match val {
+                Value::Record(fields) => {
+                    for (name, val) in fields {
+                        if name == "before" {
+                            before = extract_row(val)?;
+                        } else if name == "after" {
+                            after = extract_row(val)?;
+                        } else {
+                            // Intentionally ignore other fields.
+                        }
                     }
                 }
+                _ => bail!("avro envelope had unexpected type: {:?}", val),
             }
-            _ => bail!("avro envelope had unexpected type: {:?}", val),
         }
         Ok(DiffPair { before, after })
     }
