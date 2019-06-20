@@ -71,7 +71,7 @@ pub fn validate_schema(schema: &str) -> Result<RelationType, Error> {
                     Ok(ColumnType {
                         name: Some(f.name.clone()),
                         nullable: is_nullable(&f.schema),
-                        scalar_type: parse_schema_1(&f.schema)?,
+                        scalar_type: validate_schema_1(&f.schema)?,
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
@@ -82,7 +82,7 @@ pub fn validate_schema(schema: &str) -> Result<RelationType, Error> {
     }
 }
 
-fn parse_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
+fn validate_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
     Ok(match schema {
         Schema::Null => ScalarType::Null,
         Schema::Boolean => ScalarType::Bool,
@@ -105,7 +105,7 @@ fn parse_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
                     Ok(ColumnType {
                         name: None,
                         nullable: is_nullable(s),
-                        scalar_type: parse_schema_1(s)?,
+                        scalar_type: validate_schema_1(s)?,
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
@@ -117,42 +117,6 @@ fn parse_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
             }
         }
 
-        // Schema::Array(schema) => {
-        //     let el_type = ColumnType {
-        //         name: None,
-        //         nullable: is_nullable(schema),
-        //         scalar_type: parse_schema_1(schema),
-        //     };
-
-        //     ScalarType::Array(Box::new(el_type))
-        // }
-
-        // Schema::Map(s) => ScalarType::Tuple(vec![
-        //     ColumnType {
-        //         name: Some("key".into()),
-        //         nullable: false,
-        //         scalar_type: ScalarType::String,
-        //     },
-        //     ColumnType {
-        //         name: Some("value".into()),
-        //         nullable: is_nullable(s),
-        //         scalar_type: parse_schema_1(s),
-        //     },
-        // ]),
-
-        // Schema::Record { fields, .. } => {
-        //     let scalar_types = fields
-        //         .iter()
-        //         .map(|f| ColumnType {
-        //             name: Some(f.name.clone()),
-        //             nullable: is_nullable(&f.schema),
-        //             scalar_type: parse_schema_1(&f.schema),
-        //         })
-        //         .collect();
-
-        //     ScalarType::Tuple(scalar_types)
-        // }
-        //
         _ => bail!("Unsupported scalar type in schema: {:?}", schema),
     })
 }
@@ -314,9 +278,6 @@ impl Decoder {
             Some(cache) => cache.get(schema_id)?,
             None => &self.reader_schema,
         };
-
-        // println!("writer schema\n{:#?}\nreader schema{:#?}", writer_schema, self.reader_schema);
-        // assert_eq!(writer_schema, &self.reader_schema);
 
         fn value_to_datum(v: Value) -> Result<Datum, failure::Error> {
             match v {
