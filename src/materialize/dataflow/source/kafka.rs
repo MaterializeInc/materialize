@@ -110,11 +110,12 @@ where
         }
     });
 
+    use differential_dataflow::hashable::Hashable;
     use timely::dataflow::channels::pact::Exchange;
     use timely::dataflow::operators::generic::operator::Operator;
 
     let stream = stream.unary(
-        Exchange::new(|x: &Vec<u8>| x.len() as u64),
+        Exchange::new(|x: &Vec<u8>| x.hashed()),
         "AvroDecode",
         move |_, _| {
             let mut decoder =
