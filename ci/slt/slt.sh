@@ -26,7 +26,7 @@ set -x
 
 mkdir -p target
 
-cargo run --release --bin=sqllogictest -- \
+RUST_BACKTRACE=full cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/ \
     test/*.slt \
     test/cockroach/*.slt \
