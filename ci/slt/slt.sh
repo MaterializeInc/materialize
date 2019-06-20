@@ -30,7 +30,7 @@ cargo run --release --bin=sqllogictest -- \
     sqllogictest/test/ \
     test/*.slt \
     test/cockroach/*.slt \
-    "$verbosity" "$@" | tee target/slt.out || true
+    "$verbosity" "$@" | tee target/slt.out
 
 if [[ "${BUILDKITE_BRANCH-}" = master && "${BUILDKITE_COMMIT-}" ]]; then
     # TODO(benesch): handle the new fields in the output, rather than just
