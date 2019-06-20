@@ -45,13 +45,11 @@ pub fn build_dataflow<A: Allocate>(
         Dataflow::Source(src) => {
             let relation_expr = match &src.connector {
                 SourceConnector::Kafka(c) => {
-                    if worker_index == 0 {
-                        let (stream, cap) = source::kafka(scope, &src.name, &c);
-                        inputs.insert(src.name.clone(), InputCapability::Raw(cap));
-                        stream
-                    } else {
-                        source::null(scope, &src.name)
+                    let (stream, cap) = source::kafka(scope, &src.name, &c, worker_index == 0);
+                    if let Some(capability) = cap {
+                        inputs.insert(src.name.clone(), InputCapability::Raw(capability));
                     }
+                    stream
                 }
                 SourceConnector::Local(_) => {
                     let (mut session, collection) = scope.new_collection();
