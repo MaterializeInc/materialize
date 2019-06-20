@@ -61,6 +61,8 @@ where
                 // Repeatedly interrogate Kafka for messages. Cease only when
                 // Kafka stops returning new data. We could cease earlier, if we
                 // had a better policy.
+                let timer = std::time::Instant::now();
+
                 while let Some(result) = consumer.poll(Duration::from_millis(0)) {
                     match result {
                         Ok(message) => {
@@ -98,6 +100,10 @@ where
                             output.session(&cap).give(payload.to_vec());
                         }
                         Err(err) => error!("kafka error: {}: {}", name, err),
+                    }
+
+                    if timer.elapsed().as_millis() > 10 {
+                        return;
                     }
                 }
             }
