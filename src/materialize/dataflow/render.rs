@@ -357,7 +357,7 @@ where
                 let abelian2 = abelian.clone();
                 let aggregates_clone = aggregates.clone();
 
-                let float_scale = (1 << 24) as f64;
+                let float_scale = f64::from(1 << 24);
 
                 // Our first action is to take our input from a collection of `tuple`
                 // to one structured as `((keys, vals), time, aggs)`
@@ -410,7 +410,7 @@ where
                                             Datum::Int32(i) => (i as isize, 1),
                                             Datum::Int64(i) => (i as isize, 1),
                                             Datum::Float32(f) => {
-                                                (((*f as f64) * float_scale) as isize, 1)
+                                                ((f64::from(*f) * float_scale) as isize, 1)
                                             }
                                             Datum::Float64(f) => ((*f * float_scale) as isize, 1),
                                             Datum::Null => (0, 0),
@@ -538,7 +538,7 @@ where
                                         if non_nulls > 0 {
                                             Datum::Float32(
                                                 ((((total as f64) / float_scale)
-                                                    / (non_nulls as f64))
+                                                    / f64::from(non_nulls))
                                                     as f32)
                                                     .into(),
                                             )
