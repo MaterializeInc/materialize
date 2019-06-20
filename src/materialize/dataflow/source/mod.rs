@@ -9,10 +9,10 @@ use std::rc::Rc;
 use timely::dataflow::operators::Capability;
 
 mod kafka;
-mod null;
+// mod null;
 mod util;
 
 pub use kafka::kafka;
-pub use null::null;
+// pub use null::null;
 
 pub type SharedCapability = Rc<RefCell<Capability<Timestamp>>>;

@@ -21,18 +21,16 @@ pub fn kafka<G>(
     name: &str,
     connector: &KafkaSourceConnector,
     read_kafka: bool,
-) -> (Stream<G, (Vec<Datum>, Timestamp, Diff)>, Option<SharedCapability>)
+) -> (
+    Stream<G, (Vec<Datum>, Timestamp, Diff)>,
+    Option<SharedCapability>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let (stream, capability) =
-    source(scope, name, move |info| {
-
+    let (stream, capability) = source(scope, name, move |info| {
         let name = name.to_owned();
         let activator = scope.activator_for(&info.address[..]);
-
-        let mut decoder =
-            avro::Decoder::new(&connector.raw_schema, connector.schema_registry_url.clone());
 
         let mut config = ClientConfig::new();
         config
@@ -55,9 +53,7 @@ where
         }
 
         move |cap, output| {
-
             if let Some(consumer) = consumer.as_mut() {
-
                 // Indicate that we should run again.
                 activator.activate();
 
@@ -84,9 +80,8 @@ where
                                     error!("dropped kafka message with no timestamp");
                                     continue;
                                 }
-                                KafkaTimestamp::CreateTime(ms) | KafkaTimestamp::LogAppendTime(ms) => {
-                                    ms as u64
-                                }
+                                KafkaTimestamp::CreateTime(ms)
+                                | KafkaTimestamp::LogAppendTime(ms) => ms as u64,
                             };
                             if ms >= *cap.time() {
                                 cap.downgrade(&ms)
@@ -99,17 +94,19 @@ where
                                 );
                             };
 
-                            match decoder.decode(payload) {
-                                Ok(diff_pair) => {
-                                    if let Some(before) = diff_pair.before {
-                                        output.session(&cap).give((before, *cap.time(), -1));
-                                    }
-                                    if let Some(after) = diff_pair.after {
-                                        output.session(&cap).give((after, *cap.time(), 1));
-                                    }
-                                }
-                                Err(err) => error!("avro deserialization error: {}", err),
-                            }
+                            output.session(&cap).give(payload.to_vec());
+
+                            // match decoder.decode(payload) {
+                            //     Ok(diff_pair) => {
+                            //         if let Some(before) = diff_pair.before {
+                            //             output.session(&cap).give((before, *cap.time(), -1));
+                            //         }
+                            //         if let Some(after) = diff_pair.after {
+                            //             output.session(&cap).give((after, *cap.time(), 1));
+                            //         }
+                            //     }
+                            //     Err(err) => error!("avro deserialization error: {}", err),
+                            // }
                         }
                         Err(err) => error!("kafka error: {}: {}", name, err),
                     }
@@ -118,10 +115,39 @@ where
         }
     });
 
+    use timely::dataflow::channels::pact::Exchange;
+    use timely::dataflow::operators::generic::operator::Operator;
+
+    let stream = stream.unary(
+        Exchange::new(|x: &Vec<u8>| x.len() as u64),
+        "AvroDecode",
+        move |_, _| {
+            let mut decoder =
+                avro::Decoder::new(&connector.raw_schema, connector.schema_registry_url.clone());
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for payload in data.iter() {
+                        match decoder.decode(payload) {
+                            Ok(diff_pair) => {
+                                if let Some(before) = diff_pair.before {
+                                    session.give((before, *cap.time(), -1));
+                                }
+                                if let Some(after) = diff_pair.after {
+                                    session.give((after, *cap.time(), 1));
+                                }
+                            }
+                            Err(err) => error!("avro deserialization error: {}", err),
+                        }
+                    }
+                });
+            }
+        },
+    );
+
     if read_kafka {
         (stream, Some(capability))
-    }
-    else {
+    } else {
         (stream, None)
     }
 }
