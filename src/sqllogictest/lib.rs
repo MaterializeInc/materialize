@@ -723,13 +723,19 @@ impl RecordRunner for FullState {
                         }
                     }
                 };
-                match &*statements {
-                    [SQLStatement::SQLCreateView { .. }] | [SQLStatement::SQLQuery { .. }] => (),
-                    [_] if output.is_err() => {
-                        // We're not interested in testing our hacky handling of INSERT etc
-                        return Ok(Outcome::Success);
-                    }
+                let statement = match &*statements {
+                    [] => bail!("Got zero statements?"),
+                    [statement] => statement,
                     _ => bail!("Got multiple statements: {:?}", statements),
+                };
+                match statement {
+                    SQLStatement::SQLCreateView { .. } | SQLStatement::SQLQuery { .. } => (),
+                    _ => {
+                        if output.is_err() {
+                            // We're not interested in testing our hacky handling of INSERT etc
+                            return Ok(Outcome::Success);
+                        }
+                    }
                 }
 
                 let (typ, dataflow_command) = match self.planner.handle_command(sql.to_string()) {
