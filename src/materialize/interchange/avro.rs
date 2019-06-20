@@ -3,10 +3,11 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use avro_rs::schema::{Schema, SchemaFingerprint};
 use avro_rs::types::Value;
-use avro_rs::Schema;
 use byteorder::{BigEndian, ByteOrder};
 use failure::{bail, Error};
+use sha2::Sha256;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use url::Url;
@@ -239,11 +240,14 @@ impl Decoder {
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
     pub fn new(reader_schema: &str, schema_registry_url: Option<url::Url>) -> Decoder {
+        // It is assumed that the reader schema has already been verified
+        // to be a valid Avro schema.
+        let reader_schema = parse_schema(reader_schema).unwrap();
+        let writer_schemas = schema_registry_url
+            .map(|url| SchemaCache::new(url, reader_schema.fingerprint::<Sha256>()));
         Decoder {
-            // It is assumed that the reader schema has already been verified
-            // to be a valid Avro schema.
-            reader_schema: parse_schema(reader_schema).unwrap(),
-            writer_schemas: schema_registry_url.map(SchemaCache::new),
+            reader_schema,
+            writer_schemas,
         }
     }
 
@@ -271,12 +275,18 @@ impl Decoder {
             );
         }
 
-        // If we haven't been asked to use a schema registry, we have no way to
-        // discover the writer's schema. That's ok; we'll just use the reader's
-        // schema and hope it lines up.
-        let writer_schema = match &mut self.writer_schemas {
-            Some(cache) => cache.get(schema_id)?,
-            None => &self.reader_schema,
+        let (writer_schema, reader_schema) = match &mut self.writer_schemas {
+            Some(cache) => match cache.get(schema_id)? {
+                // If we get a schema back, the writer schema differs from our
+                // schema, so we need to perform schema resolution. If not,
+                // the schemas are identical, so we can skip schema resolution.
+                Some(writer_schema) => (writer_schema, Some(&self.reader_schema)),
+                None => (&self.reader_schema, None),
+            },
+            // If we haven't been asked to use a schema registry, we have no way
+            // to discover the writer's schema. That's ok; we'll just use the
+            // reader's schema and hope it lines up.
+            None => (&self.reader_schema, None),
         };
 
         fn value_to_datum(v: Value) -> Result<Datum, failure::Error> {
@@ -313,7 +323,7 @@ impl Decoder {
             }
         }
 
-        let val = avro_rs::from_avro_datum(&writer_schema, &mut bytes, Some(&self.reader_schema))?;
+        let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
         let mut before = None;
         let mut after = None;
         match val {
@@ -335,27 +345,37 @@ impl Decoder {
 }
 
 struct SchemaCache {
-    cache: HashMap<i32, Schema>,
+    cache: HashMap<i32, Option<Schema>>,
     ccsr_client: ccsr::Client,
+
+    reader_fingerprint: SchemaFingerprint,
 }
 
 impl SchemaCache {
-    fn new(schema_registry_url: Url) -> SchemaCache {
+    fn new(schema_registry_url: Url, reader_fingerprint: SchemaFingerprint) -> SchemaCache {
         SchemaCache {
             cache: HashMap::new(),
             ccsr_client: ccsr::Client::new(schema_registry_url),
+            reader_fingerprint,
         }
     }
 
-    fn get(&mut self, id: i32) -> Result<&Schema, failure::Error> {
+    /// Looks up the writer schema for ID. If the schema is literally identical
+    /// to the reader schema, as determined by the reader schema fingerprint
+    /// that this schema cache was initialized with, returns None.
+    fn get(&mut self, id: i32) -> Result<Option<&Schema>, failure::Error> {
         match self.cache.entry(id) {
-            Entry::Occupied(o) => Ok(o.into_mut()),
+            Entry::Occupied(o) => Ok(o.into_mut().as_ref()),
             Entry::Vacant(v) => {
                 // TODO(benesch): make this asynchronous, to avoid blocking the
                 // Timely thread on this network request.
                 let res = self.ccsr_client.get_schema_by_id(id)?;
                 let schema = parse_schema(&res.raw)?;
-                Ok(v.insert(schema))
+                if schema.fingerprint::<Sha256>().bytes == self.reader_fingerprint.bytes {
+                    Ok(v.insert(None).as_ref())
+                } else {
+                    Ok(v.insert(Some(schema)).as_ref())
+                }
             }
         }
     }
