@@ -650,7 +650,13 @@ impl RecordRunner for FullState {
                     source,
                 }] = &*statements
                 {
+                    // we can't handle the column rearrangement logic here because we don't know the table schema :(
                     if columns.is_empty() {
+                        if !*should_run {
+                            // We're not interested in testing our hacky handling of INSERT
+                            return Ok(Outcome::Success);
+                        }
+
                         // run the query
                         let (_typ, dataflow_command) =
                             match self.planner.handle_select(*source.clone()) {
@@ -675,7 +681,6 @@ impl RecordRunner for FullState {
                             table_name.to_string(),
                             results,
                         ));
-
                         return Ok(Outcome::Success);
                     }
                 }
