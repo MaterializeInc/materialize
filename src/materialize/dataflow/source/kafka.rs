@@ -43,10 +43,11 @@ where
             .set("session.timeout.ms", "6000")
             .set("bootstrap.servers", &connector.addr.to_string());
 
-        let mut consumer: Option<BaseConsumer<DefaultConsumerContext>> = None;
-        if read_kafka {
+        let mut consumer: Option<BaseConsumer<DefaultConsumerContext>> = if read_kafka {
             consumer = Some(config.create().expect("Failed to create Kafka Consumer"));
-        }
+        } else {
+            None
+        };
 
         if let Some(consumer) = consumer.as_mut() {
             consumer.subscribe(&[&connector.topic]).unwrap();
@@ -95,18 +96,6 @@ where
                             };
 
                             output.session(&cap).give(payload.to_vec());
-
-                            // match decoder.decode(payload) {
-                            //     Ok(diff_pair) => {
-                            //         if let Some(before) = diff_pair.before {
-                            //             output.session(&cap).give((before, *cap.time(), -1));
-                            //         }
-                            //         if let Some(after) = diff_pair.after {
-                            //             output.session(&cap).give((after, *cap.time(), 1));
-                            //         }
-                            //     }
-                            //     Err(err) => error!("avro deserialization error: {}", err),
-                            // }
                         }
                         Err(err) => error!("kafka error: {}: {}", name, err),
                     }
