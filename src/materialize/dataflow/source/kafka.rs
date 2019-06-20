@@ -44,7 +44,7 @@ where
             .set("bootstrap.servers", &connector.addr.to_string());
 
         let mut consumer: Option<BaseConsumer<DefaultConsumerContext>> = if read_kafka {
-            consumer = Some(config.create().expect("Failed to create Kafka Consumer"));
+            Some(config.create().expect("Failed to create Kafka Consumer"))
         } else {
             None
         };
