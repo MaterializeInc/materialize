@@ -102,7 +102,9 @@ where
                         Err(err) => error!("kafka error: {}: {}", name, err),
                     }
 
-                    if timer.elapsed().as_millis() > 10 { return; }
+                    if timer.elapsed().as_millis() > 10 {
+                        return;
+                    }
                 }
             }
         }

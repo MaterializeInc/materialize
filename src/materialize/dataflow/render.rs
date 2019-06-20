@@ -409,7 +409,9 @@ where
                                         let (value, non_null) = match eval {
                                             Datum::Int32(i) => (i as isize, 1),
                                             Datum::Int64(i) => (i as isize, 1),
-                                            Datum::Float32(f) => (((*f as f64) * float_scale) as isize, 1),
+                                            Datum::Float32(f) => {
+                                                (((*f as f64) * float_scale) as isize, 1)
+                                            }
                                             Datum::Float64(f) => ((*f * float_scale) as isize, 1),
                                             Datum::Null => (0, 0),
                                             x => panic!("Accumulating non-integer data: {:?}", x),
@@ -468,20 +470,26 @@ where
                                         }
                                     }
                                     AggregateFunc::SumFloat32 => {
-                                        let total: isize =
-                                            source.iter().map(|(_, w)| w[abelian_pos] as isize).sum();
+                                        let total: isize = source
+                                            .iter()
+                                            .map(|(_, w)| w[abelian_pos] as isize)
+                                            .sum();
                                         let non_nulls: isize =
                                             source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
-                                            Datum::Float32((((total as f64) / float_scale) as f32).into())
+                                            Datum::Float32(
+                                                (((total as f64) / float_scale) as f32).into(),
+                                            )
                                         } else {
                                             Datum::Null
                                         }
                                     }
                                     AggregateFunc::SumFloat64 => {
-                                        let total: isize =
-                                            source.iter().map(|(_, w)| w[abelian_pos] as isize).sum();
+                                        let total: isize = source
+                                            .iter()
+                                            .map(|(_, w)| w[abelian_pos] as isize)
+                                            .sum();
                                         let non_nulls: isize =
                                             source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
                                         abelian_pos += 2;
@@ -528,7 +536,12 @@ where
                                             .sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
-                                            Datum::Float32(((((total as f64) / float_scale) / (non_nulls as f64)) as f32).into())
+                                            Datum::Float32(
+                                                ((((total as f64) / float_scale)
+                                                    / (non_nulls as f64))
+                                                    as f32)
+                                                    .into(),
+                                            )
                                         } else {
                                             Datum::Null
                                         }
@@ -542,7 +555,11 @@ where
                                             .sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
-                                            Datum::Float64((((total as f64) / float_scale) / (non_nulls as f64)).into())
+                                            Datum::Float64(
+                                                (((total as f64) / float_scale)
+                                                    / (non_nulls as f64))
+                                                    .into(),
+                                            )
                                         } else {
                                             Datum::Null
                                         }
