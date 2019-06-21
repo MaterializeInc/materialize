@@ -57,29 +57,7 @@ impl JoinOrder {
             let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
             // Step 1: determine a relation_expr order starting from `inputs[0]`.
-            let mut relation_expr_order = vec![0];
-            while relation_expr_order.len() < inputs.len() {
-                let mut candidates = (0..inputs.len())
-                    .filter(|i| !relation_expr_order.contains(i))
-                    .map(|i| {
-                        (
-                            variables
-                                .iter()
-                                .filter(|vars| {
-                                    vars.iter().any(|(idx, _)| &i == idx)
-                                        && vars
-                                            .iter()
-                                            .any(|(idx, _)| relation_expr_order.contains(idx))
-                                })
-                                .count(),
-                            i,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-
-                candidates.sort();
-                relation_expr_order.push(candidates.pop().expect("Candidate expected").1);
-            }
+            let relation_expr_order = order_join(inputs.len(), &variables[..]);
 
             // Step 2: rewrite `variables`.
             let mut positions = vec![0; relation_expr_order.len()];
@@ -134,4 +112,63 @@ impl JoinOrder {
         //     (relation, metadata)
         // }
     }
+}
+
+fn order_join(relations: usize, constraints: &[Vec<(usize, usize)>]) -> Vec<usize> {
+    for i in 0..relations {
+        if let Some(order) = order_on_primary(relations, i, constraints) {
+            return order;
+        }
+    }
+
+    let mut relation_expr_order = vec![0];
+    while relation_expr_order.len() < relations {
+        let mut candidates = (0..relations)
+            .filter(|i| !relation_expr_order.contains(i))
+            .map(|i| {
+                (
+                    constraints
+                        .iter()
+                        .filter(|vars| {
+                            vars.iter().any(|(idx, _)| &i == idx)
+                                && vars
+                                    .iter()
+                                    .any(|(idx, _)| relation_expr_order.contains(idx))
+                        })
+                        .count(),
+                    i,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        candidates.sort();
+        relation_expr_order.push(candidates.pop().expect("Candidate expected").1);
+    }
+    relation_expr_order
+}
+
+fn order_on_primary(
+    relations: usize,
+    start: usize,
+    constraints: &[Vec<(usize, usize)>],
+) -> Option<Vec<usize>> {
+    let mut order = vec![start];
+    while order.len() < relations {
+        let candidate = (0..relations)
+            .filter(|i| !order.contains(i))
+            .filter(|i| {
+                constraints.iter().any(|variables| {
+                    variables.contains(&(*i, 0))
+                        && variables.iter().any(|(idx, _)| order.contains(idx))
+                })
+            })
+            .next();
+
+        if let Some(next) = candidate {
+            order.push(next);
+        } else {
+            return None;
+        }
+    }
+    Some(order)
 }
