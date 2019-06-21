@@ -156,13 +156,12 @@ fn order_on_primary(
     while order.len() < relations {
         let candidate = (0..relations)
             .filter(|i| !order.contains(i))
-            .filter(|i| {
+            .find(|i| {
                 constraints.iter().any(|variables| {
                     variables.contains(&(*i, 0))
                         && variables.iter().any(|(idx, _)| order.contains(idx))
                 })
-            })
-            .next();
+            });
 
         if let Some(next) = candidate {
             order.push(next);
