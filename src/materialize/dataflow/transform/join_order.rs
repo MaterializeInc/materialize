@@ -154,14 +154,11 @@ fn order_on_primary(
 ) -> Option<Vec<usize>> {
     let mut order = vec![start];
     while order.len() < relations {
-        let candidate = (0..relations)
-            .filter(|i| !order.contains(i))
-            .find(|i| {
-                constraints.iter().any(|variables| {
-                    variables.contains(&(*i, 0))
-                        && variables.iter().any(|(idx, _)| order.contains(idx))
-                })
-            });
+        let candidate = (0..relations).filter(|i| !order.contains(i)).find(|i| {
+            constraints.iter().any(|variables| {
+                variables.contains(&(*i, 0)) && variables.iter().any(|(idx, _)| order.contains(idx))
+            })
+        });
 
         if let Some(next) = candidate {
             order.push(next);
