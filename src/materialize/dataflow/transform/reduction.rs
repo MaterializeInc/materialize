@@ -57,10 +57,10 @@ impl FoldConstants {
 }
 
 pub mod demorgans {
-        
+
+    use crate::dataflow::func::{BinaryFunc, UnaryFunc};
+    use crate::dataflow::types::{RelationExpr, ScalarExpr};
     use crate::repr::{Datum, RelationType};
-    use crate::dataflow::func::{UnaryFunc, BinaryFunc};
-    use crate::dataflow::types::{ScalarExpr, RelationExpr};
 
     pub struct DeMorgans;
     impl crate::dataflow::transform::Transform for DeMorgans {
@@ -76,7 +76,11 @@ pub mod demorgans {
             });
         }
         pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            if let RelationExpr::Filter { input: _, predicates } = relation {
+            if let RelationExpr::Filter {
+                input: _,
+                predicates,
+            } = relation
+            {
                 for predicate in predicates.iter_mut() {
                     demorgans(predicate);
                 }
@@ -86,32 +90,56 @@ pub mod demorgans {
 
     /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
     pub fn demorgans(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallUnary { expr: inner, func: UnaryFunc::Not } = expr {
+        if let ScalarExpr::CallUnary {
+            expr: inner,
+            func: UnaryFunc::Not,
+        } = expr
+        {
             if let ScalarExpr::CallBinary { expr1, expr2, func } = &mut **inner {
                 match func {
                     BinaryFunc::And => {
-                        let inner0 = ScalarExpr::CallUnary { 
-                            expr: Box::new(std::mem::replace(expr1, ScalarExpr::Literal(Datum::Null))), 
+                        let inner0 = ScalarExpr::CallUnary {
+                            expr: Box::new(std::mem::replace(
+                                expr1,
+                                ScalarExpr::Literal(Datum::Null),
+                            )),
                             func: UnaryFunc::Not,
                         };
-                        let inner1 = ScalarExpr::CallUnary { 
-                            expr: Box::new(std::mem::replace(expr2, ScalarExpr::Literal(Datum::Null))), 
+                        let inner1 = ScalarExpr::CallUnary {
+                            expr: Box::new(std::mem::replace(
+                                expr2,
+                                ScalarExpr::Literal(Datum::Null),
+                            )),
                             func: UnaryFunc::Not,
                         };
-                        *expr = ScalarExpr::CallBinary { expr1: Box::new(inner0), expr2: Box::new(inner1), func: BinaryFunc::Or }
-                    },
+                        *expr = ScalarExpr::CallBinary {
+                            expr1: Box::new(inner0),
+                            expr2: Box::new(inner1),
+                            func: BinaryFunc::Or,
+                        }
+                    }
                     BinaryFunc::Or => {
-                        let inner0 = ScalarExpr::CallUnary { 
-                            expr: Box::new(std::mem::replace(expr1, ScalarExpr::Literal(Datum::Null))), 
+                        let inner0 = ScalarExpr::CallUnary {
+                            expr: Box::new(std::mem::replace(
+                                expr1,
+                                ScalarExpr::Literal(Datum::Null),
+                            )),
                             func: UnaryFunc::Not,
                         };
-                        let inner1 = ScalarExpr::CallUnary { 
-                            expr: Box::new(std::mem::replace(expr2, ScalarExpr::Literal(Datum::Null))), 
+                        let inner1 = ScalarExpr::CallUnary {
+                            expr: Box::new(std::mem::replace(
+                                expr2,
+                                ScalarExpr::Literal(Datum::Null),
+                            )),
                             func: UnaryFunc::Not,
                         };
-                        *expr = ScalarExpr::CallBinary { expr1: Box::new(inner0), expr2: Box::new(inner1), func: BinaryFunc::Or }
-                    },
-                    _ => { },
+                        *expr = ScalarExpr::CallBinary {
+                            expr1: Box::new(inner0),
+                            expr2: Box::new(inner1),
+                            func: BinaryFunc::Or,
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -121,9 +149,9 @@ pub mod demorgans {
 
 pub mod undistribute_and {
 
-    use crate::repr::{Datum, RelationType};
     use crate::dataflow::func::BinaryFunc;
-    use crate::dataflow::types::{ScalarExpr, RelationExpr};
+    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use crate::repr::{Datum, RelationType};
 
     pub struct UndistributeAnd;
 
@@ -140,7 +168,11 @@ pub mod undistribute_and {
             });
         }
         pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-            if let RelationExpr::Filter { input: _, predicates } = relation {
+            if let RelationExpr::Filter {
+                input: _,
+                predicates,
+            } = relation
+            {
                 for predicate in predicates.iter_mut() {
                     undistribute_and(predicate);
                 }
@@ -150,28 +182,35 @@ pub mod undistribute_and {
 
     /// Collects undistributable terms from AND expressions.
     fn harvest_ands(expr: &ScalarExpr, ands: &mut Vec<ScalarExpr>) {
-        if let ScalarExpr::CallBinary { expr1, expr2, func: BinaryFunc::And } = expr {
+        if let ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::And,
+        } = expr
+        {
             harvest_ands(expr1, ands);
             harvest_ands(expr2, ands);
-        }
-        else {
+        } else {
             ands.push(expr.clone())
         }
     }
 
     /// Removes undistributed terms from AND expressions.
     fn suppress_ands(expr: &mut ScalarExpr, ands: &[ScalarExpr]) {
-        if let ScalarExpr::CallBinary { expr1, expr2, func: BinaryFunc::And } = expr {
-
+        if let ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::And,
+        } = expr
+        {
             // Suppress the ands in children.
             suppress_ands(expr1, ands);
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
-            if ands.contains(expr1) { 
+            if ands.contains(expr1) {
                 *expr = std::mem::replace(expr2, ScalarExpr::Literal(Datum::True));
-            }
-            else if ands.contains(expr2) { 
+            } else if ands.contains(expr2) {
                 *expr = std::mem::replace(expr1, ScalarExpr::Literal(Datum::True));
             }
         }
@@ -184,8 +223,12 @@ pub mod undistribute_and {
 
     /// AND undistribution to apply at each `ScalarExpr`.
     pub fn undistribute_and_helper(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallBinary { expr1, expr2, func: BinaryFunc::Or } = expr {
-
+        if let ScalarExpr::CallBinary {
+            expr1,
+            expr2,
+            func: BinaryFunc::Or,
+        } = expr
+        {
             let mut ands0 = Vec::new();
             harvest_ands(expr1, &mut ands0);
 
@@ -206,9 +249,9 @@ pub mod undistribute_and {
 
             for and_term in intersection.into_iter() {
                 let temp = std::mem::replace(expr, ScalarExpr::Literal(Datum::Null));
-                *expr = ScalarExpr::CallBinary { 
-                    expr1: Box::new(temp), 
-                    expr2: Box::new(and_term), 
+                *expr = ScalarExpr::CallBinary {
+                    expr1: Box::new(temp),
+                    expr2: Box::new(and_term),
                     func: BinaryFunc::And,
                 };
             }
