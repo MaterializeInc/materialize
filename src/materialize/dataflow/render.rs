@@ -106,12 +106,14 @@ pub fn build_dataflow<A: Allocate>(
 
             use crate::dataflow::transform;
             let transforms: Vec<Box<dyn transform::Transform>> = vec![
+                Box::new(transform::reduction::FoldConstants),
+                Box::new(transform::reduction::DeMorgans),
+                Box::new(transform::reduction::UndistributeAnd),
                 Box::new(transform::split_predicates::SplitPredicates),
                 Box::new(transform::fusion::join::Join),
                 Box::new(transform::predicate_pushdown::PredicatePushdown),
                 Box::new(transform::fusion::filter::Filter),
                 Box::new(transform::join_order::JoinOrder),
-                Box::new(transform::reduction::FoldConstants),
                 Box::new(transform::empty_map::EmptyMap),
                 // Box::new(transform::aggregation::FractureReduce),
             ];
