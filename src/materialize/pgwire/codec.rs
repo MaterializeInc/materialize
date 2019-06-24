@@ -107,6 +107,7 @@ impl Encoder for Codec {
                         Datum::Float64(f) => format!("{}", f).into_bytes().into(),
                         Datum::Bytes(ref b) => b.into(),
                         Datum::String(ref s) => s.as_bytes().into(),
+                        Datum::Regex(_) => panic!("Datum::Regex cannot be sent over pgwire"),
                     };
                     buf.put_u32_be(s.len() as u32);
                     buf.put(&*s);

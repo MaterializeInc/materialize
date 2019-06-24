@@ -83,6 +83,7 @@ impl From<&ScalarType> for PgType {
             ScalarType::Time => unimplemented!(),
             ScalarType::Bytes => BYTEA,
             ScalarType::String => TEXT,
+            ScalarType::Regex => panic!("ScalarType::Regex is not representable over pgwire"),
         }
     }
 }
