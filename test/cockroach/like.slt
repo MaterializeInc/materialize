@@ -1,0 +1,435 @@
+# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on June 10, 2019 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/sem/tree/testdata/eval/like
+#
+# The original source code is subject to the terms of the Apache
+# 2.0 license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+query B
+SELECT 'TEST' LIKE 'TEST'
+----
+true
+
+query B
+SELECT 'TEST' LIKE 'test'
+----
+false
+
+query B
+SELECT 'TEST' LIKE 'TESTER'
+----
+false
+
+query B
+SELECT 'TEST' LIKE ''
+----
+false
+
+
+query B
+SELECT '' LIKE ''
+----
+true
+
+# Regex special characters.
+
+query B
+SELECT '[' LIKE '['
+----
+true
+
+query B
+SELECT '.' LIKE '.'
+----
+true
+
+query B
+SELECT '.A' LIKE '._'
+----
+true
+
+query B
+SELECT 'AB' LIKE '._'
+----
+false
+
+query B
+SELECT '.*B' LIKE '.*B'
+----
+true
+
+query B
+SELECT 'AB' LIKE '.*B'
+----
+false
+
+# Escaped character cases.
+
+query B
+SELECT '[' LIKE '\['
+----
+true
+
+query B
+SELECT '.' LIKE '\.'
+----
+true
+
+query B
+SELECT '\' LIKE '\\%'
+----
+true
+
+query B
+SELECT '\' LIKE '%\\'
+----
+true
+
+query B
+SELECT '\' LIKE '%\\%'
+----
+true
+
+query B
+SELECT '\%' LIKE '\\\%'
+----
+true
+
+query B
+SELECT '\.*' LIKE '\\.*'
+----
+true
+
+query B
+SELECT '\.*' LIKE '\\.\*'
+----
+true
+
+query B
+SELECT '\.*' LIKE '\\\.\*'
+----
+true
+
+query B
+SELECT '\\.' LIKE '\\.'
+----
+false
+
+query B
+SELECT '\\.' LIKE '\\\\.'
+----
+true
+
+query B
+SELECT '\\.' LIKE '\\\\\.'
+----
+true
+
+query B
+SELECT '\A' LIKE '\\A'
+----
+true
+
+query B
+SELECT 'A' LIKE '\\A'
+----
+false
+
+query B
+SELECT '_' LIKE '\_'
+----
+true
+
+query B
+SELECT '\' LIKE '\\'
+----
+true
+
+query B
+SELECT 'A\A' LIKE '_\\_'
+----
+true
+
+query B
+SELECT '__' LIKE '_\\_'
+----
+false
+
+query B
+SELECT '\_' LIKE '\\\_'
+----
+true
+
+query B
+SELECT '\\' LIKE '\\'
+----
+false
+
+query B
+SELECT '\\' LIKE '\\_'
+----
+true
+
+query B
+SELECT '\\' LIKE '_\\'
+----
+true
+
+query B
+SELECT 'A\' LIKE '_\\'
+----
+true
+
+query B
+SELECT '%' LIKE '\%'
+----
+true
+
+query B
+SELECT 'ABC' LIKE '\AB%'
+----
+true
+
+query B
+SELECT 'ABC' LIKE '\AB_'
+----
+true
+
+query B
+SELECT 'ABC' LIKE '%B\C'
+----
+true
+
+query B
+SELECT 'ABC' LIKE '_B\C'
+----
+true
+
+query B
+SELECT 'TEST' LIKE 'TE\ST'
+----
+true
+
+query B
+SELECT '_漢' LIKE '\__'
+----
+true
+
+query B
+SELECT '漢漢' LIKE '漢\漢'
+----
+true
+
+query B
+SELECT '_漢' LIKE '\_\漢'
+----
+true
+
+query B
+SELECT 'TEST' LIKE 'TE%'
+----
+true
+
+query B
+SELECT 'TEST' LIKE '%E%'
+----
+true
+
+query B
+SELECT 'TEST' LIKE '%e%'
+----
+false
+
+query B
+SELECT 'TEST' LIKE 'TES_'
+----
+true
+
+query B
+SELECT 'TEST' LIKE 'TE_%'
+----
+true
+
+query B
+SELECT 'TEST' LIKE 'TE_'
+----
+false
+
+query B
+SELECT 'TEST' LIKE '%'
+----
+true
+
+query B
+SELECT 'TEST' LIKE '%R'
+----
+false
+
+query B
+SELECT 'T' LIKE '\_'
+----
+false
+
+query B
+SELECT 'T' LIKE '\%'
+----
+false
+
+query B
+SELECT 'TE_T' LIKE 'TE\_T'
+----
+true
+
+query B
+SELECT 'TE\AT' LIKE 'TE\_T'
+----
+false
+
+query B
+SELECT 'TES%T' LIKE 'TES\%T'
+----
+true
+
+query B
+SELECT 'TES\AT' LIKE 'TES\%T'
+----
+false
+
+query B
+SELECT 'T' LIKE '_'
+----
+true
+
+query B
+SELECT 'TE' LIKE '_'
+----
+false
+
+query B
+SELECT 'TE' LIKE '_%'
+----
+true
+
+query B
+SELECT 'T' LIKE '_%'
+----
+true
+
+query B
+SELECT '' LIKE '_%'
+----
+false
+
+query B
+SELECT 'TE' LIKE '%_'
+----
+true
+
+query B
+SELECT '' LIKE '%_'
+----
+false
+
+query B
+SELECT 'T' LIKE '%_'
+----
+true
+
+query B
+SELECT 'TEST' LIKE '_ES_'
+----
+true
+
+query B
+SELECT '' LIKE '__'
+----
+false
+
+query B
+SELECT 'A' LIKE 'T_'
+----
+false
+
+query B
+SELECT 'A' LIKE '_T'
+----
+false
+
+query B
+SELECT 'TEST' LIKE '_E%'
+----
+true
+
+query B
+SELECT 'TEST' LIKE '_E\%'
+----
+false
+
+query B
+SELECT 'TES_' LIKE '%S\_'
+----
+true
+
+query B
+SELECT 'TES%' LIKE '%S\%'
+----
+true
+
+query B
+SELECT 'TES_' LIKE '_ES\_'
+----
+true
+
+query B
+SELECT 'TES%' LIKE '_ES\%'
+----
+true
+
+query B
+SELECT 'TEST' LIKE '%S_'
+----
+true
+
+query B
+SELECT 'TEST' LIKE '%S\_'
+----
+false
+
+query B
+SELECT 'TEST' NOT LIKE '%E%'
+----
+false
+
+query B
+SELECT 'TEST' NOT LIKE 'TES_'
+----
+false
+
+query B
+SELECT 'TEST' NOT LIKE 'TeS_'
+----
+true
+
+query B
+SELECT 'TEST' NOT LIKE 'TE_'
+----
+true
+
+# Test bad escaping.
+
+# TODO(benesch): this should return "LIKE pattern must not end with escape
+# character." Since we don't yet support runtime errors, it currently
+# returns NULL instead.
+
+query B
+SELECT 'a' LIKE '\'
+----
+NULL
