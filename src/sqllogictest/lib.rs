@@ -23,9 +23,9 @@ use materialize::dataflow;
 use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
 use materialize::sql::Planner;
-use sqlparser::dialect::AnsiSqlDialect;
-use sqlparser::sqlast::SQLStatement;
-use sqlparser::sqlparser::Parser;
+use sqlparser::ast::Statement;
+use sqlparser::dialect::AnsiDialect;
+use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -385,7 +385,7 @@ pub enum Outcome<'a> {
         error: failure::Error,
     },
     ParseFailure {
-        error: sqlparser::sqlparser::ParserError,
+        error: SqlParserError,
     },
     PlanFailure {
         error: failure::Error,
@@ -631,7 +631,7 @@ impl RecordRunner for FullState {
                 // we don't support non-materialized views
                 let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
-                let parsed = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string());
+                let parsed = SqlParser::parse_sql(&AnsiDialect {}, sql.to_string());
                 let statements = match parsed {
                     Err(error) => {
                         if *should_run {
@@ -644,7 +644,7 @@ impl RecordRunner for FullState {
                 };
 
                 // total hack for handling INSERT statements
-                if let [SQLStatement::SQLInsert {
+                if let [Statement::Insert {
                     table_name,
                     columns,
                     source,
@@ -713,7 +713,7 @@ impl RecordRunner for FullState {
                 Ok(Outcome::Success)
             }
             Record::Query { sql, output } => {
-                let statements = match Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
+                let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
                     Ok(statements) => statements,
                     Err(error) => {
                         if output.is_err() {
@@ -729,7 +729,7 @@ impl RecordRunner for FullState {
                     _ => bail!("Got multiple statements: {:?}", statements),
                 };
                 match statement {
-                    SQLStatement::SQLCreateView { .. } | SQLStatement::SQLQuery { .. } => (),
+                    Statement::CreateView { .. } | Statement::Query { .. } => (),
                     _ => {
                         if output.is_err() {
                             // We're not interested in testing our hacky handling of INSERT etc
@@ -919,7 +919,7 @@ impl RecordRunner for OnlyParseState {
                 // we don't support non-materialized views
                 let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
-                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
+                if let Err(error) = SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
                     if *should_run {
                         return Ok(Outcome::ParseFailure { error });
                     } else {
@@ -929,7 +929,7 @@ impl RecordRunner for OnlyParseState {
                 Ok(Outcome::Success)
             }
             Record::Query { sql, .. } => {
-                if let Err(error) = Parser::parse_sql(&AnsiSqlDialect {}, sql.to_string()) {
+                if let Err(error) = SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
                     return Ok(Outcome::ParseFailure { error });
                 }
                 Ok(Outcome::Success)

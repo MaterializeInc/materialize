@@ -5,9 +5,9 @@
 
 use postgres::error::DbError;
 use postgres::error::Error as PostgresError;
-use sqlparser::dialect::AnsiSqlDialect;
-use sqlparser::sqlast::SQLStatement;
-use sqlparser::sqlparser::Parser as SQLParser;
+use sqlparser::ast::Statement;
+use sqlparser::dialect::AnsiDialect;
+use sqlparser::parser::Parser as SqlParser;
 use std::thread;
 use std::time::Duration;
 
@@ -17,11 +17,11 @@ use ore::collections::CollectionExt;
 
 pub struct SqlAction {
     cmd: SqlCommand,
-    stmt: SQLStatement,
+    stmt: Statement,
 }
 
 pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, String> {
-    let stmts = SQLParser::parse_sql(&AnsiSqlDialect {}, cmd.query.clone())
+    let stmts = SqlParser::parse_sql(&AnsiDialect {}, cmd.query.clone())
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
         return Err(format!("expected one statement, but got {}", stmts.len()));
@@ -37,15 +37,15 @@ pub fn build_sql(mut cmd: SqlCommand) -> Result<SqlAction, String> {
 impl Action for SqlAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
         match &self.stmt {
-            SQLStatement::SQLCreateSource { name, .. } => self.try_drop(
+            Statement::CreateSource { name, .. } => self.try_drop(
                 &mut state.pgconn,
                 &format!("DROP SOURCE IF EXISTS {} CASCADE", name.to_string()),
             ),
-            SQLStatement::SQLCreateView { name, .. } => self.try_drop(
+            Statement::CreateView { name, .. } => self.try_drop(
                 &mut state.pgconn,
                 &format!("DROP VIEW IF EXISTS {} CASCADE", name.to_string()),
             ),
-            SQLStatement::SQLCreateTable { name, .. } => self.try_drop(
+            Statement::CreateTable { name, .. } => self.try_drop(
                 &mut state.pgconn,
                 &format!("DROP TABLE IF EXISTS {} CASCADE", name.to_string()),
             ),
@@ -59,7 +59,7 @@ impl Action for SqlAction {
         let max = match self.stmt {
             // TODO(benesch): this is horrible. PEEK needs to learn to wait
             // until it's up to date.
-            SQLStatement::SQLPeek { .. } => 7,
+            Statement::Peek { .. } => 7,
             _ => 0,
         };
         let mut i = 0;
