@@ -1744,6 +1744,7 @@ where
         let func = match (&typ.scalar_type, &max_scalar_type) {
             (ScalarType::Int32, ScalarType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
             (ScalarType::Int32, ScalarType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
+            (ScalarType::Int32, ScalarType::Int64) => Some(UnaryFunc::CastInt32ToInt64),
             (ScalarType::Int64, ScalarType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
             (ScalarType::Int64, ScalarType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
             (ScalarType::Float32, ScalarType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),

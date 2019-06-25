@@ -87,6 +87,13 @@ pub fn cast_int32_to_float64(a: Datum) -> Datum {
     Datum::from(f64::from(a.unwrap_int32()))
 }
 
+pub fn cast_int32_to_int64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(i64::from(a.unwrap_int32()))
+}
+
 pub fn cast_int64_to_int32(a: Datum) -> Datum {
     if a.is_null() {
         return Datum::Null;
@@ -509,6 +516,7 @@ pub enum UnaryFunc {
     AbsFloat64,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
+    CastInt32ToInt64,
     CastInt64ToInt32,
     CastInt64ToFloat32,
     CastInt64ToFloat64,
@@ -533,6 +541,7 @@ impl UnaryFunc {
             UnaryFunc::AbsFloat64 => abs_float64,
             UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32,
             UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64,
+            UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64,
             UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
             UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32,
             UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64,
