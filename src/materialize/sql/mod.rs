@@ -1497,7 +1497,40 @@ impl Planner {
                 };
                 (func, ScalarType::Bool)
             }
-            other => bail!("Function {:?} is not supported yet", other),
+            SQLBinaryOperator::Like | SQLBinaryOperator::NotLike => {
+                if (ltype.scalar_type != ScalarType::String
+                    && ltype.scalar_type != ScalarType::Null)
+                    || (rtype.scalar_type != ScalarType::String
+                        && rtype.scalar_type != ScalarType::Null)
+                {
+                    bail!(
+                        "LIKE operator requires two string operators, found: {:?} and {:?}",
+                        ltype,
+                        rtype
+                    );
+                } else {
+                    let mut expr = ScalarExpr::CallBinary {
+                        func: BinaryFunc::MatchRegex,
+                        expr1: Box::new(lexpr),
+                        expr2: Box::new(ScalarExpr::CallUnary {
+                            func: UnaryFunc::BuildLikeRegex,
+                            expr: Box::new(rexpr),
+                        }),
+                    };
+                    if let SQLBinaryOperator::NotLike = op {
+                        expr = ScalarExpr::CallUnary {
+                            func: UnaryFunc::Not,
+                            expr: Box::new(expr),
+                        };
+                    }
+                    let typ = ColumnType {
+                        name: None,
+                        nullable: ltype.nullable || rtype.nullable,
+                        scalar_type: ScalarType::Bool,
+                    };
+                    return Ok((expr, typ));
+                }
+            }
         };
         let is_integer_div = match &func {
             BinaryFunc::DivInt32 | BinaryFunc::DivInt64 => true,

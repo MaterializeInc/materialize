@@ -20,6 +20,9 @@
 //! [`Datum`]: repr::Datum
 //! [`Datum::Tuple`]: repr::Datum::Tuple
 
+mod regex;
+
+use self::regex::Regex;
 use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -49,6 +52,8 @@ pub enum Datum {
     Bytes(Vec<u8>),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(String),
+    /// A compiled regular expression.
+    Regex(Regex),
 }
 
 impl Datum {
@@ -123,6 +128,13 @@ impl Datum {
         }
     }
 
+    pub fn unwrap_regex(self) -> Regex {
+        match self {
+            Datum::Regex(r) => r,
+            _ => panic!("Datum::unwrap_regex calloed on {:?}", self),
+        }
+    }
+
     pub fn scalar_type(&self) -> ScalarType {
         match self {
             Datum::Null => ScalarType::Null,
@@ -134,6 +146,7 @@ impl Datum {
             Datum::Float64(_) => ScalarType::Float64,
             Datum::Bytes(_) => ScalarType::Bytes,
             Datum::String(_) => ScalarType::String,
+            Datum::Regex(_) => ScalarType::Regex,
         }
     }
 }
@@ -190,6 +203,12 @@ impl From<String> for Datum {
     }
 }
 
+impl From<::regex::Regex> for Datum {
+    fn from(r: ::regex::Regex) -> Datum {
+        Datum::Regex(Regex(r))
+    }
+}
+
 impl<T> From<Option<T>> for Datum
 where
     Datum: From<T>,
@@ -227,6 +246,7 @@ pub enum ScalarType {
     Timestamp,
     Bytes,
     String,
+    Regex,
 }
 
 /// The type of a [`Datum`].

@@ -5,6 +5,7 @@
 
 use failure::bail;
 use ordered_float::OrderedFloat;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
@@ -361,6 +362,66 @@ pub fn gte(a: Datum, b: Datum) -> Datum {
     Datum::from(a >= b)
 }
 
+pub fn match_regex(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    let haystack = a.unwrap_string();
+    let needle = b.unwrap_regex();
+    Datum::from(needle.is_match(&haystack))
+}
+
+pub fn build_like_regex(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // The goal is to build a regex that matches the same strings as the LIKE
+    // pattern.
+    //
+    // LIKE patterns always cover the whole string, so we anchor the regex on
+    // both sides. An underscore (`_`) in a LIKE pattern matches any single
+    // character and a percent sign (`%`) matches any sequence of zero or more
+    // characters, so we translate those operators to their equivalent regex
+    // operators, `.` and `.*`, respectively. Other characters match themselves
+    // and are copied directly, unless they have special meaning in a regex, in
+    // which case they are escaped in the regex with a backslash (`\`).
+    //
+    // Note that characters in LIKE patterns may also be escaped by preceding
+    // them with a backslash. This has no effect on most characters, but it
+    // removes the special meaning from the underscore and percent sign
+    // operators, and means that matching a literal backslash requires doubling
+    // the backslash.
+    //
+    // TODO(benesch): SQL permits selecting a different escape character than
+    // the backslash via LIKE '...' ESCAPE '...'. We will need to support this
+    // syntax eventually.
+    let mut regex = String::from("^");
+    let mut escape = false;
+    for c in a.unwrap_str().chars() {
+        match c {
+            '\\' if !escape => escape = true,
+            '_' if !escape => regex.push('.'),
+            '%' if !escape => regex.push_str(".*"),
+            c => {
+                if regex_syntax::is_meta_character(c) {
+                    regex.push('\\');
+                }
+                regex.push(c);
+                escape = false;
+            }
+        }
+    }
+    regex.push('$');
+    if escape {
+        // Unterminated escape sequence. TODO(benesch): PostgreSQL returns "LIKE
+        // pattern must not end with escape sequence" here, but we don't support
+        // runtime errors yet, so just return NULL for now.
+        Datum::Null
+    } else {
+        Datum::from(Regex::new(&regex).unwrap())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
@@ -391,6 +452,7 @@ pub enum BinaryFunc {
     Lte,
     Gt,
     Gte,
+    MatchRegex,
 }
 
 impl BinaryFunc {
@@ -424,6 +486,7 @@ impl BinaryFunc {
             BinaryFunc::Lte => lte,
             BinaryFunc::Gt => gt,
             BinaryFunc::Gte => gte,
+            BinaryFunc::MatchRegex => match_regex,
         }
     }
 }
@@ -452,6 +515,7 @@ pub enum UnaryFunc {
     CastFloat32ToInt64,
     CastFloat32ToFloat64,
     CastFloat64ToInt64,
+    BuildLikeRegex,
 }
 
 impl UnaryFunc {
@@ -475,6 +539,7 @@ impl UnaryFunc {
             UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64,
             UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64,
             UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64,
+            UnaryFunc::BuildLikeRegex => build_like_regex,
         }
     }
 }
