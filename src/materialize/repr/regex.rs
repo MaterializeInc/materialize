@@ -8,27 +8,18 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
 /// A regular expression object suitable for use in `crate::repr::Datum`. The
-/// object exhibits a number of strange properties as a result: it claims to
-/// implement [`PartialEq`], [`Eq`], [`PartialOrd`], and [`Ord`], though it will
-/// panic if any of those traits' methods are invoked. Efficiently implementing
-/// these traits with reasonable semantics is challenging, as doing so requires
-/// either peeking inside the regex object's internal state, or serializing the
-/// regex to a string, both of which are expensive. Since it is not currently
-/// possible to produce a plan that compares regexes, for now it seems best to
-/// panic.
+/// object has perhaps surprising comparison semantics as a result: two regexes
+/// are considered equal iff their string representation is identical. The
+/// [`PartialOrd`], [`Ord`], and [`Hash`] implementations are similarly based
+/// upon the string representation. This is not the natural equivalence relation
+/// for regexes: for example, the regexes `aa*` and `a+` define the same
+/// language, but would not compare as equal with this implementation of
+/// [`PartialEq`].
 ///
-/// We could avoid introducing this weirdness by store regexes as strings in the
-/// dataflow graph, compiling them into regex objects at the last possible
-/// moment (e.g., in the LIKE operator). But this would require special casing
-/// all regex optimizations to recover acceptable performance; we'd need
-/// regex-specific constant propagation to avoid recompiling constant regexes on
-/// every expression evaluation, and we wouldn't be able to pass compiled
-/// regexes between workers without forcing a recompilation.*
-///
-/// *Actually, I think the serde_regex serialization currently serializes
-/// regexes to a string and therefore recompiles them during deserialization.
-/// There is interest in the official regex crate about a more efficient
-/// binary serialization, though: https://github.com/rust-lang/regex/issues/258.
+/// TODO(benesch): watch for a more efficient binary serialization for
+/// [`regex::Regex`] (https://github.com/rust-lang/regex/issues/258). The
+/// `serde_regex` crate serializes to a string and is forced to recompile
+/// the regex during deserialization.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Regex(#[serde(with = "serde_regex")] pub regex::Regex);
 
@@ -39,27 +30,27 @@ impl Regex {
 }
 
 impl PartialEq<Regex> for Regex {
-    fn eq(&self, _: &Regex) -> bool {
-        panic!("Regex is not comparable")
+    fn eq(&self, other: &Regex) -> bool {
+        self.0.as_str() == other.0.as_str()
     }
 }
 
 impl Eq for Regex {}
 
 impl PartialOrd for Regex {
-    fn partial_cmp(&self, _: &Regex) -> Option<Ordering> {
-        panic!("Regex is not comparable")
+    fn partial_cmp(&self, other: &Regex) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Regex {
-    fn cmp(&self, _: &Regex) -> Ordering {
-        panic!("Regex is not comparable")
+    fn cmp(&self, other: &Regex) -> Ordering {
+        self.0.as_str().cmp(other.0.as_str())
     }
 }
 
 impl Hash for Regex {
-    fn hash<H: Hasher>(&self, _: &mut H) {
-        panic!("Regex is not hashable")
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        self.0.as_str().hash(hasher)
     }
 }
