@@ -3,7 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
@@ -13,6 +12,9 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
+use timely::dataflow::operators::unordered_input::{
+    ActivateCapability, UnorderedHandle, UnorderedInput,
+};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
@@ -27,8 +29,11 @@ use crate::dataflow::types::RelationExpr;
 use crate::repr::Datum;
 
 pub enum InputCapability {
-    Session(InputSession<Timestamp, Vec<Datum>, isize>),
-    Raw(SharedCapability),
+    Local {
+        handle: UnorderedHandle<Timestamp, (Vec<Datum>, Timestamp, Diff)>,
+        capability: ActivateCapability<Timestamp>,
+    },
+    External(SharedCapability),
 }
 
 pub fn build_dataflow<A: Allocate>(
@@ -45,18 +50,21 @@ pub fn build_dataflow<A: Allocate>(
         Dataflow::Source(src) => {
             let relation_expr = match &src.connector {
                 SourceConnector::Kafka(c) => {
-                    let (stream, cap) = source::kafka(scope, &src.name, &c, worker_index == 0);
-                    if let Some(capability) = cap {
-                        inputs.insert(src.name.clone(), InputCapability::Raw(capability));
+                    let (stream, capability) =
+                        source::kafka(scope, &src.name, &c, worker_index == 0);
+                    if let Some(capability) = capability {
+                        inputs.insert(src.name.clone(), InputCapability::External(capability));
                     }
                     stream
                 }
                 SourceConnector::Local(_) => {
-                    let (mut session, collection) = scope.new_collection();
-                    session.advance_to(input_time);
-                    session.flush();
-                    inputs.insert(src.name.clone(), InputCapability::Session(session));
-                    collection.inner
+                    let ((handle, mut capability), stream) = scope.new_unordered_input();
+                    capability.downgrade(&input_time);
+                    inputs.insert(
+                        src.name.clone(),
+                        InputCapability::Local { handle, capability },
+                    );
+                    stream
                 }
             };
             let arrangement = relation_expr.as_collection().arrange_by_self();

@@ -217,13 +217,17 @@ where
                 // Only broadcast the input on the first worker. Otherwise we'd
                 // insert multiple copies.
                 if self.inner.index() == 0 {
-                    let session = match self.inputs.get_mut(&name).expect("Failed to find input") {
-                        InputCapability::Session(session) => session,
-                        _ => panic!("attempted to insert into external source"),
+                    match self.inputs.get_mut(&name).expect("Failed to find input") {
+                        InputCapability::Local { handle, capability } => {
+                            let mut session = handle.session(capability.clone());
+                            for row in rows {
+                                session.give((row, self.input_time, 1));
+                            }
+                        }
+                        InputCapability::External(_) => {
+                            panic!("attempted to insert into external source")
+                        }
                     };
-                    for row in rows {
-                        session.insert(row)
-                    }
                 }
 
                 // Unconditionally advance time after an insertion to allow the
@@ -232,11 +236,10 @@ where
                 self.input_time += 1;
                 for handle in self.inputs.values_mut() {
                     match handle {
-                        InputCapability::Session(session) => {
-                            session.advance_to(self.input_time);
-                            session.flush();
+                        InputCapability::Local { capability, .. } => {
+                            capability.downgrade(&self.input_time);
                         }
-                        InputCapability::Raw(_) => (),
+                        InputCapability::External(_) => (),
                     }
                 }
             }
@@ -309,8 +312,8 @@ where
     fn root_input_time(&self, name: &str) -> u64 {
         match &self.dataflows[name] {
             Dataflow::Source(_) => match &self.inputs[name] {
-                InputCapability::Raw(cap) => *cap.borrow().time(),
-                InputCapability::Session(session) => *session.time(),
+                InputCapability::External(capability) => *capability.borrow().time(),
+                InputCapability::Local { capability, .. } => *capability.time(),
             },
             Dataflow::Sink(_) => unreachable!(),
             v @ Dataflow::View(_) => v
