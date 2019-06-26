@@ -135,18 +135,19 @@ impl Datum {
         }
     }
 
-    pub fn scalar_type(&self) -> ScalarType {
-        match self {
-            Datum::Null => ScalarType::Null,
-            Datum::False => ScalarType::Bool,
-            Datum::True => ScalarType::Bool,
-            Datum::Int32(_) => ScalarType::Int32,
-            Datum::Int64(_) => ScalarType::Int64,
-            Datum::Float32(_) => ScalarType::Float32,
-            Datum::Float64(_) => ScalarType::Float64,
-            Datum::Bytes(_) => ScalarType::Bytes,
-            Datum::String(_) => ScalarType::String,
-            Datum::Regex(_) => ScalarType::Regex,
+    pub fn is_instance_of(&self, column_type: &ColumnType) -> bool {
+        match (self, &column_type.scalar_type) {
+            (Datum::Null, _) if column_type.nullable => true,
+            (Datum::False, ScalarType::Bool) => true,
+            (Datum::True, ScalarType::Bool) => true,
+            (Datum::Int32(_), ScalarType::Int32) => true,
+            (Datum::Int64(_), ScalarType::Int64) => true,
+            (Datum::Float32(_), ScalarType::Float32) => true,
+            (Datum::Float64(_), ScalarType::Float64) => true,
+            (Datum::Bytes(_), ScalarType::Bytes) => true,
+            (Datum::String(_), ScalarType::String) => true,
+            (Datum::Regex(_), ScalarType::Regex) => true,
+            _ => false,
         }
     }
 }
@@ -251,13 +252,8 @@ pub enum ScalarType {
 
 /// The type of a [`Datum`].
 ///
-/// [`ColumnType`] bundles information about the fundamental type of a datum (e.g.,
-/// Int32 or String) with additional attributes, like its default value and its
-/// nullability.
-///
-/// It is not possible to construct a `ColumnType` directly from a `Datum`, as it is
-/// impossible to determine anything but the type's `scalar_type`. Consider: a naked
-/// `Datum` provides no information about its name, default value, or
+/// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
+/// Int32 or String) with additional attributes, like its name and its
 /// nullability.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ColumnType {
@@ -278,18 +274,6 @@ pub struct RelationType {
 impl RelationType {
     pub fn new(column_types: Vec<ColumnType>) -> Self {
         RelationType { column_types }
-    }
-}
-
-impl Datum {
-    pub fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
-        self.scalar_type().is_instance_of(column_typ)
-    }
-}
-
-impl ScalarType {
-    pub fn is_instance_of(&self, column_typ: &ColumnType) -> bool {
-        self == &column_typ.scalar_type || (self == &ScalarType::Null && column_typ.nullable)
     }
 }
 

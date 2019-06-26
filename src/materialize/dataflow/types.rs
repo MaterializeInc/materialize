@@ -243,7 +243,7 @@ impl RelationExpr {
             RelationExpr::OrDefault { input, default } => {
                 let typ = input.typ();
                 for (column_typ, datum) in typ.column_types.iter().zip(default.iter()) {
-                    assert!(datum.scalar_type().is_instance_of(column_typ));
+                    assert!(datum.is_instance_of(column_typ));
                 }
                 typ
             }

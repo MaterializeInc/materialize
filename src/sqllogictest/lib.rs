@@ -1035,13 +1035,7 @@ pub fn fuzz(sqls: &str) {
                 if let SqlResponse::Peeking { typ } = sql_response {
                     for row in state.receive_peek_results(receiver) {
                         for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
-                            assert!(
-                                (typ.scalar_type == datum.scalar_type())
-                                    || (typ.nullable && datum.is_null()),
-                                "{:?} was inferred to have type {:?}",
-                                typ.scalar_type,
-                                datum.scalar_type(),
-                            );
+                            assert!(datum.is_instance_of(typ));
                         }
                     }
                 }
