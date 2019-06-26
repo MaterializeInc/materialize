@@ -6,7 +6,7 @@
 //! Types and data structures used to glue the various components of
 //! Materialize together.
 
-use crate::dataflow::{Dataflow, Timestamp, View};
+use crate::dataflow::{Dataflow, RelationExpr, Timestamp};
 use crate::repr::{Datum, RelationType};
 use failure::{ensure, format_err};
 use serde::{Deserialize, Serialize};
@@ -54,8 +54,14 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 pub enum DataflowCommand {
     CreateDataflow(Dataflow),
     DropDataflows(Vec<Dataflow>),
-    PeekExisting { dataflow: Dataflow, when: PeekWhen },
-    PeekTransient { view: View, when: PeekWhen },
+    PeekExisting {
+        dataflow: Dataflow,
+        when: PeekWhen,
+    },
+    PeekTransient {
+        relation_expr: RelationExpr,
+        when: PeekWhen,
+    },
     Tail(String),
     Insert(String, Vec<Vec<Datum>>),
     Shutdown,

@@ -153,28 +153,16 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> PlannerResult {
-        let id: u64 = rand::random();
-        let name = format!("<temp_{}>", id);
-        let dataflow = self.plan_statement(&Statement::CreateView {
-            name: ObjectName(vec![name.clone()]),
-            columns: vec![],
-            query: Box::new(query),
-            materialized: true,
-            with_options: vec![],
-        })?;
-        if let Dataflow::View(view) = dataflow {
-            Ok((
-                SqlResponse::Peeking {
-                    typ: view.typ.clone(),
-                },
-                Some(DataflowCommand::PeekTransient {
-                    view,
-                    when: PeekWhen::AfterFlush,
-                }),
-            ))
-        } else {
-            panic!("Got a non-view dataflow for a SELECT: {:?}", dataflow);
-        }
+        let relation_expr = self.plan_query(&query)?;
+        Ok((
+            SqlResponse::Peeking {
+                typ: relation_expr.typ(),
+            },
+            Some(DataflowCommand::PeekTransient {
+                relation_expr,
+                when: PeekWhen::AfterFlush,
+            }),
+        ))
     }
 
     fn handle_insert(
@@ -308,7 +296,7 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let relation_expr = self.plan_view_query(query)?;
+                let relation_expr = self.plan_query(query)?;
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -465,7 +453,7 @@ impl Planner {
         }
     }
 
-    fn plan_view_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
+    pub fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }

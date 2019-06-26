@@ -25,7 +25,7 @@ use super::render::InputCapability;
 use super::trace::{KeysOnlyHandle, TraceManager};
 use super::RelationExpr;
 use super::{LocalSourceConnector, Source, SourceConnector};
-use crate::dataflow::{Dataflow, Timestamp};
+use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
@@ -109,6 +109,7 @@ where
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputCapability>,
     input_time: u64,
+    transient_view_counter: u64,
     dataflows: HashMap<String, Dataflow>,
     sequencer: Sequencer<PendingPeek>,
 }
@@ -132,6 +133,7 @@ where
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
             input_time: 1,
+            transient_view_counter: 1,
             dataflows: HashMap::new(),
             sequencer,
         }
@@ -199,8 +201,16 @@ where
                 self.sequence_peek(cmd_meta, dataflow, when, false /* drop */)
             }
 
-            DataflowCommand::PeekTransient { view, when } => {
-                let dataflow = Dataflow::View(view);
+            DataflowCommand::PeekTransient {
+                relation_expr,
+                when,
+            } => {
+                let typ = relation_expr.typ();
+                let dataflow = Dataflow::View(View {
+                    name: format!("<temp_{}>", self.transient_view_counter),
+                    relation_expr,
+                    typ,
+                });
                 render::build_dataflow(
                     &dataflow,
                     &mut self.traces,
@@ -210,7 +220,8 @@ where
                 );
                 self.dataflows
                     .insert(dataflow.name().to_owned(), dataflow.clone());
-                self.sequence_peek(cmd_meta, dataflow, when, true /* drop */)
+                self.sequence_peek(cmd_meta, dataflow, when, true /* drop */);
+                self.transient_view_counter += 1;
             }
 
             DataflowCommand::Insert(name, rows) => {
