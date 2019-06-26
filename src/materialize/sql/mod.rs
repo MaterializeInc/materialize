@@ -14,6 +14,7 @@ use sqlparser::ast::{
 };
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
+use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::iter::FromIterator;
@@ -27,6 +28,7 @@ use crate::dataflow::{
 };
 use crate::glue::*;
 use crate::interchange::avro;
+use crate::repr::decimal::MAX_DECIMAL_PRECISION;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
@@ -217,18 +219,29 @@ impl Planner {
         };
 
         let expr = self.plan_query(&source)?;
-        let expr_cols = expr.typ().column_types.len();
-        if expr_cols != permutation.len() {
+        let expr_cols = expr.typ().column_types;
+        if expr_cols.len() != permutation.len() {
             bail!(
                 "INSERT has {} expression(s) but {} target column(s)",
-                expr_cols,
+                expr_cols.len(),
                 permutation.len()
             );
         }
-        let expr = RelationExpr::Project {
-            input: Box::new(expr),
-            outputs: permutation,
-        };
+
+        let mut project_exprs = vec![];
+        let mut project_key = vec![];
+        for (p, i) in permutation.iter().enumerate() {
+            let cast = self.plan_internal_cast(
+                "INSERT",
+                ScalarExpr::column(p),
+                &expr_cols[p],
+                typ.column_types[p].scalar_type.clone(),
+            )?;
+            project_exprs.push(cast);
+            project_key.push(permutation.len() + i);
+        }
+
+        let expr = expr.map(project_exprs).project(project_key);
 
         Ok((
             SqlResponse::Inserting,
@@ -254,8 +267,7 @@ impl Datum {
                 }
                 (Value::Long(l), ScalarType::Int64) => Datum::Int64(l as i64), // TODO(benesch): safe conversion
                 (Value::Decimal(d), ScalarType::Float64) => {
-                    let f: f64 = d.to_string().parse().unwrap();
-                    Datum::Float64(f.into())
+                    Datum::Float64(d.to_string().parse::<f64>().unwrap().into())
                 }
                 (Value::SingleQuotedString(s), ScalarType::String)
                 | (Value::NationalStringLiteral(s), ScalarType::String) => Datum::String(s),
@@ -422,10 +434,26 @@ impl Planner {
                                 DataType::Float(_) | DataType::Real | DataType::Double => {
                                     ScalarType::Float64
                                 }
-                                DataType::Decimal(scale, precision) => ScalarType::Decimal(
-                                    scale.unwrap_or(0) as usize,
-                                    precision.unwrap_or(0) as usize,
-                                ),
+                                DataType::Decimal(precision, scale) => {
+                                    let precision =
+                                        precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
+                                    let scale = scale.unwrap_or(0);
+                                    if precision > MAX_DECIMAL_PRECISION.into() {
+                                        bail!(
+                                            "decimal precision {} exceeds maximum precision {}",
+                                            precision,
+                                            MAX_DECIMAL_PRECISION
+                                        );
+                                    }
+                                    if scale > precision {
+                                        bail!(
+                                            "decimal scale {} exceeds precision {}",
+                                            scale,
+                                            precision
+                                        );
+                                    }
+                                    ScalarType::Decimal(precision as u8, scale as u8)
+                                }
                                 DataType::Date => ScalarType::Date,
                                 DataType::Timestamp => ScalarType::Timestamp,
                                 DataType::Time => ScalarType::Time,
@@ -1113,38 +1141,52 @@ impl Planner {
             DataType::SmallInt => ScalarType::Int32,
             DataType::Int => ScalarType::Int64,
             DataType::BigInt => ScalarType::Int64,
+            DataType::Decimal(p, s) => {
+                ScalarType::Decimal(p.unwrap_or(0) as u8, s.unwrap_or(0) as u8)
+            }
             DataType::Boolean => ScalarType::Bool,
             _ => bail!("CAST ... AS {} is not yet supported", data_type.to_string()),
         };
         let (expr, from_type) = self.plan_expr(ctx, expr)?;
-        let func = match (&from_type.scalar_type, &to_scalar_type) {
-            (ScalarType::Int32, ScalarType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
-            (ScalarType::Int32, ScalarType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
-            (ScalarType::Int64, ScalarType::Int32) => Some(UnaryFunc::CastInt64ToInt32),
-            (ScalarType::Int64, ScalarType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
-            (ScalarType::Int64, ScalarType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
-            (ScalarType::Float32, ScalarType::Int64) => Some(UnaryFunc::CastFloat32ToInt64),
-            (ScalarType::Float32, ScalarType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
-            (ScalarType::Float64, ScalarType::Int64) => Some(UnaryFunc::CastFloat64ToInt64),
-            (ScalarType::Null, _) => None,
-            (from, to) => {
-                if from != to {
-                    bail!("CAST does not support casting from {:?} to {:?}", from, to);
-                }
-                None
-            }
-        };
-        let expr = match func {
-            Some(func) => ScalarExpr::CallUnary {
-                func,
-                expr: Box::new(expr),
-            },
-            None => expr,
-        };
+        self.plan_internal_cast("CAST", expr, &from_type, to_scalar_type)
+    }
+
+    fn plan_internal_cast<'a>(
+        &self,
+        name: &'static str,
+        expr: ScalarExpr,
+        from_type: &'a ColumnType,
+        to_scalar_type: ScalarType,
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        use ScalarType::*;
+        use UnaryFunc::*;
         let to_type = ColumnType {
             name: None,
             nullable: from_type.nullable,
             scalar_type: to_scalar_type,
+        };
+        let expr = match (&from_type.scalar_type, &to_type.scalar_type) {
+            (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
+            (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
+            (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
+            (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, *s),
+            (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, *s),
+            (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
+            (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
+            (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
+            (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
+            (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
+            (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
+            (Null, _) => expr,
+            (from, to) if from == to => expr,
+            (from, to) => {
+                bail!(
+                    "{} does not support casting from {:?} to {:?}",
+                    name,
+                    from,
+                    to
+                );
+            }
         };
         Ok((expr, to_type))
     }
@@ -1343,6 +1385,64 @@ impl Planner {
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
         let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
+
+        // Arithmetic operations follow Snowflake's rules for precision/scale
+        // conversions. [0]
+        //
+        // [0]: https://docs.snowflake.net/manuals/sql-reference/operators-arithmetic.html
+        match (&op, &ltype.scalar_type, &rtype.scalar_type) {
+            (BinaryOperator::Plus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2))
+            | (BinaryOperator::Minus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => {
+                let p = cmp::max(p1, p2) + 1;
+                let so = cmp::max(s1, s2);
+                let lexpr = rescale_decimal(lexpr, *s1, *so);
+                let rexpr = rescale_decimal(rexpr, *s2, *so);
+                let func = if op == &BinaryOperator::Plus {
+                    BinaryFunc::AddDecimal
+                } else {
+                    BinaryFunc::SubDecimal
+                };
+                let expr = lexpr.call_binary(rexpr, func);
+                let typ = ColumnType {
+                    name: None,
+                    nullable: ltype.nullable || rtype.nullable,
+                    scalar_type: ScalarType::Decimal(p, *so),
+                };
+                return Ok((expr, typ));
+            }
+            (
+                BinaryOperator::Multiply,
+                ScalarType::Decimal(p1, s1),
+                ScalarType::Decimal(p2, s2),
+            ) => {
+                let so = cmp::max(cmp::max(cmp::min(s1 + s2, 12), *s1), *s2);
+                let si = s1 + s2;
+                let expr = lexpr.call_binary(rexpr, BinaryFunc::MulDecimal);
+                let expr = rescale_decimal(expr, si, so);
+                let p = (p1 - s1) + (p2 - s2) + so;
+                let typ = ColumnType {
+                    name: None,
+                    nullable: ltype.nullable || rtype.nullable,
+                    scalar_type: ScalarType::Decimal(p, so),
+                };
+                return Ok((expr, typ));
+            }
+            (BinaryOperator::Divide, ScalarType::Decimal(p1, s1), ScalarType::Decimal(_, s2)) => {
+                let s = cmp::max(cmp::min(12, s1 + 6), *s1);
+                let si = cmp::max(s + 1, *s2);
+                lexpr = rescale_decimal(lexpr, *s1, si);
+                let expr = lexpr.call_binary(rexpr, BinaryFunc::DivDecimal);
+                let expr = rescale_decimal(expr, si - s2, s);
+                let p = (p1 - s1) + s2 + s;
+                let typ = ColumnType {
+                    name: None,
+                    nullable: true,
+                    scalar_type: ScalarType::Decimal(p, s),
+                };
+                return Ok((expr, typ));
+            }
+            _ => (),
+        }
 
         if op == &BinaryOperator::Plus
             || op == &BinaryOperator::Minus
@@ -1667,8 +1767,26 @@ impl Planner {
         let (datum, scalar_type) = match l {
             Value::Long(i) => (Datum::Int64(*i as i64), ScalarType::Int64), // TODO(benesch): safe conversion
             Value::Decimal(d) => {
-                let f: f64 = d.to_string().parse().unwrap();
-                (Datum::Float64(f.into()), ScalarType::Float64)
+                // Our SQL parser parses negative numbers as a unary negation
+                // of a positive literal, so we don't need to worry about
+                // negative numbers here.
+                assert_ne!(d.sign(), num_bigint::Sign::Minus);
+                let (bigint, scale) = d.as_bigint_and_exponent();
+                let precision = cmp::max(d.digits(), scale as u64);
+                if precision > 38 {
+                    bail!(
+                        "decimal literal has precision {}, which exceeds maximum precision of 38",
+                        precision
+                    );
+                }
+                let mut significand: i128 = 0;
+                for digit in bigint.to_radix_be(2).1 {
+                    significand = (significand << 1) + i128::from(digit);
+                }
+                (
+                    Datum::from(significand),
+                    ScalarType::Decimal(precision as u8, scale as u8),
+                )
             }
             Value::SingleQuotedString(s) => (Datum::String(s.clone()), ScalarType::String),
             Value::NationalStringLiteral(_) => {
@@ -1708,8 +1826,8 @@ fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
 }
 
 // When types don't match exactly, SQL has some poorly-documented type promotion
-// rules. For now, just promote integers into floats, and small floats into
-// bigger floats.
+// rules. For now, just promote integers into decimals or floats, decimals into
+// floats, and small Xs into bigger Xs.
 fn try_coalesce_types<C>(
     exprs: Vec<(ScalarExpr, ColumnType)>,
     context: C,
@@ -1723,9 +1841,10 @@ where
         ScalarType::Null => 0,
         ScalarType::Int32 => 1,
         ScalarType::Int64 => 2,
-        ScalarType::Float32 => 3,
-        ScalarType::Float64 => 4,
-        _ => 5,
+        ScalarType::Decimal(_, _) => 3,
+        ScalarType::Float32 => 4,
+        ScalarType::Float64 => 5,
+        _ => 6,
     };
     let max_scalar_type = exprs
         .iter()
@@ -1735,16 +1854,24 @@ where
         .clone();
     let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
     let mut out = Vec::new();
-    for (mut expr, typ) in exprs {
-        let func = match (&typ.scalar_type, &max_scalar_type) {
-            (ScalarType::Int32, ScalarType::Float32) => Some(UnaryFunc::CastInt32ToFloat32),
-            (ScalarType::Int32, ScalarType::Float64) => Some(UnaryFunc::CastInt32ToFloat64),
-            (ScalarType::Int32, ScalarType::Int64) => Some(UnaryFunc::CastInt32ToInt64),
-            (ScalarType::Int64, ScalarType::Float32) => Some(UnaryFunc::CastInt64ToFloat32),
-            (ScalarType::Int64, ScalarType::Float64) => Some(UnaryFunc::CastInt64ToFloat64),
-            (ScalarType::Float32, ScalarType::Float64) => Some(UnaryFunc::CastFloat32ToFloat64),
-            (ScalarType::Null, _) => None,
-            (from, to) if from == to => None,
+    let out_typ = ColumnType {
+        name: None,
+        nullable,
+        scalar_type: max_scalar_type,
+    };
+    for (expr, typ) in exprs {
+        use ScalarType::*;
+        use UnaryFunc::*;
+        let expr = match (&typ.scalar_type, &out_typ.scalar_type) {
+            (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
+            (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
+            (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
+            (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
+            (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
+            (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
+            (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
+            (Null, _) => expr,
+            (from, to) if from == to => expr,
             (from, to) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
                 context,
@@ -1752,20 +1879,23 @@ where
                 to,
             ),
         };
-        if let Some(func) = func {
-            expr = ScalarExpr::CallUnary {
-                func,
-                expr: Box::new(expr),
-            }
-        }
         out.push(expr);
     }
-    let typ = ColumnType {
-        name: None,
-        nullable,
-        scalar_type: max_scalar_type,
-    };
-    Ok((out, typ))
+    Ok((out, out_typ))
+}
+
+fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
+    if s2 > s1 {
+        let factor = 10_i128.pow(u32::from(s2 - s1));
+        let factor = ScalarExpr::Literal(Datum::from(factor));
+        expr.call_binary(factor, BinaryFunc::MulDecimal)
+    } else if s1 > s2 {
+        let factor = 10_i128.pow(u32::from(s1 - s2));
+        let factor = ScalarExpr::Literal(Datum::from(factor));
+        expr.call_binary(factor, BinaryFunc::DivDecimal)
+    } else {
+        expr
+    }
 }
 
 fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {

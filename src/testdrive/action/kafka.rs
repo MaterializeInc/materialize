@@ -24,6 +24,8 @@ use rdkafka::consumer::Consumer;
 use rdkafka::error::RDKafkaError;
 use rdkafka::producer::FutureRecord;
 use serde_json::Value as JsonValue;
+use std::convert::{TryFrom, TryInto};
+use std::num::TryFromIntError;
 use std::thread;
 use std::time::Duration;
 
@@ -211,9 +213,10 @@ impl Action for IngestAction {
         let mut futs = FuturesUnordered::new();
         for row in &self.rows {
             let val = json_to_avro(
-                serde_json::from_str(row)
+                &serde_json::from_str(row)
                     .map_err(|e| format!("parsing avro datum: {}", e.to_string()))?,
-            )
+                &schema,
+            )?
             .resolve(&schema)
             .map_err(|e| format!("resolving avro schema: {}", e))?;
 
@@ -239,21 +242,69 @@ impl Action for IngestAction {
 
 // This function is derived from code in the avro_rs project. Update the license
 // header on this file accordingly if you move it to a new home.
-fn json_to_avro(json: JsonValue) -> AvroValue {
-    match json {
-        JsonValue::Null => AvroValue::Null,
-        JsonValue::Bool(b) => AvroValue::Boolean(b),
-        JsonValue::Number(ref n) if n.is_i64() => AvroValue::Long(n.as_i64().unwrap()),
-        JsonValue::Number(ref n) if n.is_f64() => AvroValue::Double(n.as_f64().unwrap()),
-        // TODO(benesch): this is silently wrong for large numbers
-        JsonValue::Number(n) => AvroValue::Long(n.as_u64().unwrap() as i64),
-        JsonValue::String(s) => AvroValue::String(s),
-        JsonValue::Array(items) => AvroValue::Array(items.into_iter().map(json_to_avro).collect()),
-        JsonValue::Object(items) => AvroValue::Record(
+fn json_to_avro(json: &JsonValue, schema: &Schema) -> Result<AvroValue, String> {
+    match (json, schema) {
+        (JsonValue::Null, Schema::Null) => Ok(AvroValue::Null),
+        (JsonValue::Bool(b), Schema::Boolean) => Ok(AvroValue::Boolean(*b)),
+        (JsonValue::Number(ref n), Schema::Int) => Ok(AvroValue::Int(
+            n.as_i64()
+                .unwrap()
+                .try_into()
+                .map_err(|e: TryFromIntError| e.to_string())?,
+        )),
+        (JsonValue::Number(ref n), Schema::Long) => Ok(AvroValue::Long(n.as_i64().unwrap())),
+        (JsonValue::Number(ref n), Schema::Float) => {
+            Ok(AvroValue::Float(n.as_f64().unwrap() as f32))
+        }
+        (JsonValue::Number(ref n), Schema::Double) => Ok(AvroValue::Double(n.as_f64().unwrap())),
+        (JsonValue::Array(items), Schema::Array(inner)) => Ok(AvroValue::Array(
             items
-                .into_iter()
-                .map(|(key, value)| (key, json_to_avro(value)))
-                .collect(),
-        ),
+                .iter()
+                .map(|x| json_to_avro(x, inner))
+                .collect::<Result<_, _>>()?,
+        )),
+        (JsonValue::String(s), Schema::String) => Ok(AvroValue::String(s.clone())),
+        (
+            JsonValue::Array(items),
+            Schema::Decimal {
+                precision, scale, ..
+            },
+        ) => {
+            let bytes = match items
+                .iter()
+                .map(|x| x.as_i64().and_then(|x| u8::try_from(x).ok()))
+                .collect::<Option<Vec<u8>>>()
+            {
+                Some(bytes) => bytes,
+                None => return Err("decimal was not represented by byte array".into()),
+            };
+            Ok(AvroValue::Decimal {
+                unscaled: bytes,
+                precision: *precision,
+                scale: *scale,
+            })
+        }
+        (JsonValue::Object(items), Schema::Record { fields, .. }) => Ok(AvroValue::Record(
+            items
+                .iter()
+                .zip(fields)
+                .map(|((key, value), field)| Ok((key.clone(), json_to_avro(value, &field.schema)?)))
+                .collect::<Result<_, String>>()?,
+        )),
+        (val, Schema::Union(us)) => {
+            let variants = us.variants();
+            let mut last_err = format!("Union schema {:?} did not match {:?}", variants, val);
+            for variant in variants {
+                match json_to_avro(val, variant) {
+                    Ok(avro) => return Ok(avro),
+                    Err(msg) => last_err = msg,
+                }
+            }
+            Err(last_err)
+        }
+        _ => Err(format!(
+            "unable to match JSON value to schema: {:?} vs {:?}",
+            json, schema
+        )),
     }
 }

@@ -15,3 +15,6 @@ INSERT has 3 expression(s) but 2 target column(s)
 
 ! INSERT INTO t (a) VALUES (1, 2)
 Missing column in INSERT INTO ... COLUMNS (a), expected a, b
+
+! INSERT INTO t VALUES ('a', 'b')
+INSERT does not support casting from String to Int64

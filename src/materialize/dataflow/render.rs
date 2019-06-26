@@ -314,6 +314,7 @@ where
             } => {
                 use differential_dataflow::operators::reduce::ReduceCore;
                 use differential_dataflow::trace::implementations::ord::OrdValSpine;
+                use timely::dataflow::operators::map::Map;
 
                 let self_clone = relation_expr.clone();
                 let keys_clone = group_key.clone();
@@ -339,10 +340,12 @@ where
                         AggregateFunc::SumInt64 => !aggregate.distinct,
                         AggregateFunc::SumFloat32 => !aggregate.distinct,
                         AggregateFunc::SumFloat64 => !aggregate.distinct,
+                        AggregateFunc::SumDecimal => !aggregate.distinct,
                         AggregateFunc::AvgInt32 => !aggregate.distinct,
                         AggregateFunc::AvgInt64 => !aggregate.distinct,
                         AggregateFunc::AvgFloat32 => !aggregate.distinct,
                         AggregateFunc::AvgFloat64 => !aggregate.distinct,
+                        AggregateFunc::AvgDecimal => !aggregate.distinct,
                         AggregateFunc::Count => !aggregate.distinct,
                         AggregateFunc::CountAll => !aggregate.distinct,
                         _ => false,
@@ -366,9 +369,11 @@ where
                             .collect::<Vec<_>>();
 
                         let mut vals = Vec::new();
-                        let mut aggs = vec![1isize];
+                        let mut aggs = vec![1i128];
 
-                        for (index, (aggregate, _type)) in aggregates_clone.iter().enumerate() {
+                        for (index, (aggregate, _column_type)) in
+                            aggregates_clone.iter().enumerate()
+                        {
                             // Presently, we can accumulate in the difference field only
                             // if the aggregation has a known type and does not require
                             // us to accumulate only distinct elements.
@@ -404,12 +409,13 @@ where
                                         // value from its NULL-ness, which is not quite as easily
                                         // accumulated.
                                         let (value, non_null) = match eval {
-                                            Datum::Int32(i) => (i as isize, 1),
-                                            Datum::Int64(i) => (i as isize, 1),
+                                            Datum::Int32(i) => (i128::from(i), 1),
+                                            Datum::Int64(i) => (i128::from(i), 1),
                                             Datum::Float32(f) => {
-                                                ((f64::from(*f) * float_scale) as isize, 1)
+                                                ((f64::from(*f) * float_scale) as i128, 1)
                                             }
-                                            Datum::Float64(f) => ((*f * float_scale) as isize, 1),
+                                            Datum::Float64(f) => ((*f * float_scale) as i128, 1),
+                                            Datum::Decimal(d) => (d.into_i128(), 1),
                                             Datum::Null => (0, 0),
                                             x => panic!("Accumulating non-integer data: {:?}", x),
                                         };
@@ -427,6 +433,9 @@ where
                             differential_dataflow::difference::DiffVector::new(aggs),
                         )
                     })
+                    .inner
+                    .map(|(data, time, diff)| (data, time, diff as i128))
+                    .as_collection()
                     .explode(|(keys, vals, aggs)| Some(((keys, vals), aggs)));
 
                 // We now reduce by `keys`, performing both Abelian and non-Abelian aggregations.
@@ -439,14 +448,16 @@ where
                         let mut abelian_pos = 1; // <- advance past the count
                         let mut non_abelian_pos = 0;
 
-                        for ((agg, _typ), abl) in aggregates.iter().zip(abelian.iter()) {
+                        for ((agg, _column_type), abl) in aggregates.iter().zip(abelian.iter()) {
                             if *abl {
                                 let value = match agg.func {
                                     AggregateFunc::SumInt32 => {
                                         let total =
                                             source.iter().map(|(_, w)| w[abelian_pos] as i32).sum();
-                                        let non_nulls: isize =
-                                            source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
+                                        let non_nulls: i32 = source
+                                            .iter()
+                                            .map(|(_, w)| w[abelian_pos + 1] as i32)
+                                            .sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
                                             Datum::Int32(total)
@@ -457,8 +468,10 @@ where
                                     AggregateFunc::SumInt64 => {
                                         let total =
                                             source.iter().map(|(_, w)| w[abelian_pos] as i64).sum();
-                                        let non_nulls: isize =
-                                            source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
+                                        let non_nulls: i64 = source
+                                            .iter()
+                                            .map(|(_, w)| w[abelian_pos + 1] as i64)
+                                            .sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
                                             Datum::Int64(total)
@@ -467,11 +480,11 @@ where
                                         }
                                     }
                                     AggregateFunc::SumFloat32 => {
-                                        let total: isize = source
+                                        let total: i128 = source
                                             .iter()
-                                            .map(|(_, w)| w[abelian_pos] as isize)
+                                            .map(|(_, w)| w[abelian_pos] as i128)
                                             .sum();
-                                        let non_nulls: isize =
+                                        let non_nulls: i128 =
                                             source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
@@ -483,15 +496,25 @@ where
                                         }
                                     }
                                     AggregateFunc::SumFloat64 => {
-                                        let total: isize = source
-                                            .iter()
-                                            .map(|(_, w)| w[abelian_pos] as isize)
-                                            .sum();
-                                        let non_nulls: isize =
+                                        let total: i128 =
+                                            source.iter().map(|(_, w)| w[abelian_pos]).sum();
+                                        let non_nulls: i128 =
                                             source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
                                             Datum::Float64(((total as f64) / float_scale).into())
+                                        } else {
+                                            Datum::Null
+                                        }
+                                    }
+                                    AggregateFunc::SumDecimal => {
+                                        let total: i128 =
+                                            source.iter().map(|(_, w)| w[abelian_pos]).sum();
+                                        let non_nulls: i128 =
+                                            source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
+                                        abelian_pos += 2;
+                                        if non_nulls > 0 {
+                                            Datum::from(total)
                                         } else {
                                             Datum::Null
                                         }
@@ -525,17 +548,17 @@ where
                                         }
                                     }
                                     AggregateFunc::AvgFloat32 => {
-                                        let total: isize =
+                                        let total: i128 =
                                             source.iter().map(|(_, w)| w[abelian_pos]).sum();
-                                        let non_nulls: i32 = source
+                                        let non_nulls: i128 = source
                                             .iter()
-                                            .map(|(_, w)| w[abelian_pos + 1] as i32)
+                                            .map(|(_, w)| w[abelian_pos + 1] as i128)
                                             .sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
                                             Datum::Float32(
                                                 ((((total as f64) / float_scale)
-                                                    / f64::from(non_nulls))
+                                                    / (non_nulls as f64))
                                                     as f32)
                                                     .into(),
                                             )
@@ -544,11 +567,11 @@ where
                                         }
                                     }
                                     AggregateFunc::AvgFloat64 => {
-                                        let total: isize =
+                                        let total: i128 =
                                             source.iter().map(|(_, w)| w[abelian_pos]).sum();
-                                        let non_nulls: i64 = source
+                                        let non_nulls: i128 = source
                                             .iter()
-                                            .map(|(_, w)| w[abelian_pos + 1] as i64)
+                                            .map(|(_, w)| w[abelian_pos + 1] as i128)
                                             .sum();
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
@@ -557,6 +580,21 @@ where
                                                     / (non_nulls as f64))
                                                     .into(),
                                             )
+                                        } else {
+                                            Datum::Null
+                                        }
+                                    }
+                                    AggregateFunc::AvgDecimal => {
+                                        let total: i128 =
+                                            source.iter().map(|(_, w)| w[abelian_pos]).sum();
+                                        let non_nulls: i128 =
+                                            source.iter().map(|(_, w)| w[abelian_pos + 1]).sum();
+                                        abelian_pos += 2;
+                                        if non_nulls > 0 {
+                                            // TODO(benesch): This should use the same decimal
+                                            // division path as the planner, rather than
+                                            // hardcoding a 6 digit increase in the scale (#212).
+                                            Datum::from(1_000_000 * total / non_nulls)
                                         } else {
                                             Datum::Null
                                         }
@@ -600,7 +638,7 @@ where
                                 non_abelian_pos += 1;
                             }
                         }
-                        target.push((result, 1));
+                        target.push((result, 1isize));
                     },
                 );
 

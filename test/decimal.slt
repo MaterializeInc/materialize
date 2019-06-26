@@ -1,0 +1,148 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+mode cockroach
+
+statement ok
+CREATE TABLE basic (
+    a decimal(15, 1)
+)
+
+statement ok
+INSERT INTO basic VALUES (0.1)
+
+query R
+SELECT a FROM basic
+----
+0.1
+
+statement ok
+CREATE TABLE multi_precision (
+    p0 decimal(15, 0),
+    p1 decimal(15, 1),
+    p2 decimal(15, 2),
+    p3 decimal(15, 3)
+)
+
+statement ok
+INSERT INTO multi_precision VALUES (0.1, 0.1, 0.1, 0.1)
+
+query RRRR
+SELECT * FROM multi_precision
+----
+0  0.1  0.10  0.100
+
+# Arithmetic that doesn't involve rescaling.
+
+query R
+SELECT a + 0.2 FROM basic
+----
+0.3
+
+query R
+SELECT a - 0.2 FROM basic
+----
+-0.1
+
+query R
+SELECT a * 0.2 FROM basic
+----
+0.02
+
+# Arithmetic that involves simple rescaling.
+
+query RR
+SELECT p1, p2 FROM multi_precision
+----
+0.1  0.10
+
+query RR
+SELECT p1 + p2, p2 + p1 FROM multi_precision
+----
+0.20  0.20
+
+query RR
+SELECT p1 - p2, p2 - p1 FROM multi_precision
+----
+0.00  0.00
+
+query RR
+SELECT p1 * p2, p2 * p1 FROM multi_precision
+----
+0.010  0.010
+
+# "Complicated" arithmetic. These tests will need to be expanded.
+
+query R
+SELECT 10.01 * 1.1
+----
+11.011
+
+query R
+SELECT 10.001 * 0.001;
+----
+0.010001
+
+query R
+SELECT 0.1 * 0.0000000000001
+----
+0.0000000000000
+
+query R
+SELECT 1.0 / 3.0
+----
+0.3333333
+
+query R
+SELECT CAST(2 AS decimal(1, 0)) / CAST(7 AS decimal(1, 0))
+----
+0.285714
+
+query R
+SELECT 10.1 / 2.1
+----
+4.8095238
+
+query R
+SELECT 10.001 / 0.001
+----
+10001.000000000
+
+query R
+SELECT 0.1 / 0.0000000000001
+----
+1000000000000.0000000
+
+statement ok
+CREATE TABLE agg (
+    a decimal(15, 1)
+)
+
+statement ok
+INSERT INTO agg VALUES (0.1), (0.2), (0.4)
+
+query R
+select sum(a) from agg
+----
+0.7
+
+query R
+select avg(a) from agg
+----
+0.2333333
+
+statement ok
+CREATE TABLE regression (
+    a decimal(15, 2)
+)
+
+statement ok
+INSERT INTO regression VALUES (0.07), (0.10)
+
+query R rowsort
+SELECT * FROM regression
+----
+0.07
+0.10

@@ -9,6 +9,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
+use crate::repr::decimal::Significand;
 use crate::repr::Datum;
 use crate::repr::ScalarType;
 
@@ -105,6 +106,20 @@ pub fn cast_int64_to_int32(a: Datum) -> Datum {
     Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
 }
 
+pub fn cast_int32_to_decimal(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(i128::from(a.unwrap_int32()))
+}
+
+pub fn cast_int64_to_decimal(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(i128::from(a.unwrap_int64()))
+}
+
 pub fn cast_int64_to_float32(a: Datum) -> Datum {
     if a.is_null() {
         return Datum::Null;
@@ -175,6 +190,13 @@ pub fn add_float64(a: Datum, b: Datum) -> Datum {
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
 }
 
+pub fn add_decimal(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
+}
+
 pub fn sub_int32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -203,6 +225,13 @@ pub fn sub_float64(a: Datum, b: Datum) -> Datum {
     Datum::from(a.unwrap_float64() - b.unwrap_float64())
 }
 
+pub fn sub_decimal(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
+}
+
 pub fn mul_int32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -229,6 +258,13 @@ pub fn mul_float64(a: Datum, b: Datum) -> Datum {
         return Datum::Null;
     }
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
+}
+
+pub fn mul_decimal(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
 // TODO(jamii) we don't currently have any way of reporting errors from functions, so for now we just adopt sqlite's approach 1/0 = null
@@ -269,6 +305,13 @@ pub fn div_float64(a: Datum, b: Datum) -> Datum {
         return Datum::Null;
     }
     Datum::from(a.unwrap_float64() / b.unwrap_float64())
+}
+
+pub fn div_decimal(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal() / b.unwrap_decimal())
 }
 
 pub fn mod_int32(a: Datum, b: Datum) -> Datum {
@@ -437,18 +480,22 @@ pub enum BinaryFunc {
     AddInt64,
     AddFloat32,
     AddFloat64,
+    AddDecimal,
     SubInt32,
     SubInt64,
     SubFloat32,
     SubFloat64,
+    SubDecimal,
     MulInt32,
     MulInt64,
     MulFloat32,
     MulFloat64,
+    MulDecimal,
     DivInt32,
     DivInt64,
     DivFloat32,
     DivFloat64,
+    DivDecimal,
     ModInt32,
     ModInt64,
     ModFloat32,
@@ -471,18 +518,22 @@ impl BinaryFunc {
             BinaryFunc::AddInt64 => add_int64,
             BinaryFunc::AddFloat32 => add_float32,
             BinaryFunc::AddFloat64 => add_float64,
+            BinaryFunc::AddDecimal => add_decimal,
             BinaryFunc::SubInt32 => sub_int32,
             BinaryFunc::SubInt64 => sub_int64,
             BinaryFunc::SubFloat32 => sub_float32,
             BinaryFunc::SubFloat64 => sub_float64,
+            BinaryFunc::SubDecimal => sub_decimal,
             BinaryFunc::MulInt32 => mul_int32,
             BinaryFunc::MulInt64 => mul_int64,
             BinaryFunc::MulFloat32 => mul_float32,
             BinaryFunc::MulFloat64 => mul_float64,
+            BinaryFunc::MulDecimal => mul_decimal,
             BinaryFunc::DivInt32 => div_int32,
             BinaryFunc::DivInt64 => div_int64,
             BinaryFunc::DivFloat32 => div_float32,
             BinaryFunc::DivFloat64 => div_float64,
+            BinaryFunc::DivDecimal => div_decimal,
             BinaryFunc::ModInt32 => mod_int32,
             BinaryFunc::ModInt64 => mod_int64,
             BinaryFunc::ModFloat32 => mod_float32,
@@ -518,6 +569,8 @@ pub enum UnaryFunc {
     CastInt32ToFloat64,
     CastInt32ToInt64,
     CastInt64ToInt32,
+    CastInt32ToDecimal,
+    CastInt64ToDecimal,
     CastInt64ToFloat32,
     CastInt64ToFloat64,
     CastFloat32ToInt64,
@@ -543,6 +596,8 @@ impl UnaryFunc {
             UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64,
             UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64,
             UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
+            UnaryFunc::CastInt32ToDecimal => cast_int32_to_decimal,
+            UnaryFunc::CastInt64ToDecimal => cast_int64_to_decimal,
             UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32,
             UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64,
             UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64,
@@ -649,6 +704,28 @@ where
         Datum::Null
     } else {
         Datum::from(sum / (len as f64))
+    }
+}
+
+pub fn avg_decimal<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let mut sum = Significand::new(0);
+    let mut len = Significand::new(0);
+    for d in datums.into_iter() {
+        if !d.is_null() {
+            sum += d.unwrap_decimal();
+            len += 1;
+        }
+    }
+    if len == 0 {
+        Datum::Null
+    } else {
+        // TODO(benesch): This should use the same decimal division path as the
+        // planner, rather than hardcoding a 6 digit increase in the scale
+        // (#212).
+        Datum::from(sum * 1_000_000 / len)
     }
 }
 
@@ -869,6 +946,19 @@ where
     }
 }
 
+pub fn sum_decimal<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
+    if datums.peek().is_none() {
+        Datum::Null
+    } else {
+        let sum: Significand = datums.map(|d| d.unwrap_decimal()).sum();
+        Datum::from(sum)
+    }
+}
+
 pub fn sum_null<I>(_datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -898,6 +988,7 @@ pub enum AggregateFunc {
     AvgInt64,
     AvgFloat32,
     AvgFloat64,
+    AvgDecimal,
     AvgNull,
     MaxInt32,
     MaxInt64,
@@ -917,6 +1008,7 @@ pub enum AggregateFunc {
     SumInt64,
     SumFloat32,
     SumFloat64,
+    SumDecimal,
     SumNull,
     Count,
     CountAll, // COUNT(*) counts nulls too
@@ -939,6 +1031,7 @@ impl AggregateFunc {
             ("avg", ScalarType::Int64) => AggregateFunc::AvgInt64,
             ("avg", ScalarType::Float32) => AggregateFunc::AvgFloat32,
             ("avg", ScalarType::Float64) => AggregateFunc::AvgFloat64,
+            ("avg", ScalarType::Decimal(_, _)) => AggregateFunc::AvgDecimal,
             ("avg", ScalarType::Null) => AggregateFunc::AvgNull,
             ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
             ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
@@ -958,13 +1051,18 @@ impl AggregateFunc {
             ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
             ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
             ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
+            ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
             ("sum", ScalarType::Null) => AggregateFunc::SumNull,
             ("count", _) => AggregateFunc::Count,
             other => bail!("Unimplemented function/type combo: {:?}", other),
         };
-        let scalar_type = match name {
-            "count" => ScalarType::Int64,
-            "avg" | "max" | "min" | "sum" => scalar_type.clone(),
+        let scalar_type = match (name, scalar_type) {
+            ("count", _) => ScalarType::Int64,
+            // TODO(benesch): This should use the same decimal division path as
+            // the planner, rather than hardcoding a 6 digit increase in the
+            // scale (#212).
+            ("avg", ScalarType::Decimal(p, s)) => ScalarType::Decimal(*p, s + 6),
+            ("max", _) | ("min", _) | ("sum", _) | ("avg", _) => scalar_type.clone(),
             other => bail!("Unknown aggregate function: {:?}", other),
         };
         Ok((func, scalar_type))
@@ -979,6 +1077,7 @@ impl AggregateFunc {
             AggregateFunc::AvgInt64 => avg_int64,
             AggregateFunc::AvgFloat32 => avg_float32,
             AggregateFunc::AvgFloat64 => avg_float64,
+            AggregateFunc::AvgDecimal => avg_decimal,
             AggregateFunc::AvgNull => avg_null,
             AggregateFunc::MaxInt32 => max_int32,
             AggregateFunc::MaxInt64 => max_int64,
@@ -998,6 +1097,7 @@ impl AggregateFunc {
             AggregateFunc::SumInt64 => sum_int64,
             AggregateFunc::SumFloat32 => sum_float32,
             AggregateFunc::SumFloat64 => sum_float64,
+            AggregateFunc::SumDecimal => sum_decimal,
             AggregateFunc::SumNull => sum_null,
             AggregateFunc::Count => count,
             AggregateFunc::CountAll => count_all,

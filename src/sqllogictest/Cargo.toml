@@ -12,6 +12,7 @@ path = "main.rs"
 path = "lib.rs"
 
 [dependencies]
+itertools = "0.8.0"
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 materialize = { path = "../materialize" }
 ore = { path = "../ore" }

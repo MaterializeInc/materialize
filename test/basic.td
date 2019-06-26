@@ -17,15 +17,6 @@
 
 $ set schema={
     "type": "record",
-    "name": "na",
-    "fields": [
-        {"name": "a", "type": "long"},
-        {"name": "b", "type": "long"}
-    ]
-  }
-
-$ set schema={
-    "type": "record",
     "name": "envelope",
     "fields": [
       {

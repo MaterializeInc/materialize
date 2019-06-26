@@ -20,12 +20,16 @@
 //! [`Datum`]: repr::Datum
 //! [`Datum::Tuple`]: repr::Datum::Tuple
 
+pub mod decimal;
+
 mod regex;
 
-use self::regex::Regex;
 use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+
+use self::decimal::Significand;
+use self::regex::Regex;
 
 /// A literal value.
 ///
@@ -48,6 +52,9 @@ pub enum Datum {
     Float32(OrderedFloat<f32>),
     /// A 64-bit floating point number.
     Float64(OrderedFloat<f64>),
+    /// An exact decimal number, possibly with a fractional component, with up
+    /// to 38 digits of precision.
+    Decimal(Significand),
     /// A sequence of untyped bytes.
     Bytes(Vec<u8>),
     /// A sequence of Unicode codepoints encoded as UTF-8.
@@ -111,6 +118,13 @@ impl Datum {
         match self {
             Datum::Float64(f) => f.into_inner(),
             _ => panic!("Datum::unwrap_float64 called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_decimal(&self) -> Significand {
+        match self {
+            Datum::Decimal(d) => *d,
+            _ => panic!("Datum::unwrap_decimal called on {:?}", self),
         }
     }
 
@@ -198,6 +212,18 @@ impl From<f64> for Datum {
     }
 }
 
+impl From<i128> for Datum {
+    fn from(d: i128) -> Datum {
+        Datum::Decimal(Significand::new(d))
+    }
+}
+
+impl From<Significand> for Datum {
+    fn from(d: Significand) -> Datum {
+        Datum::Decimal(d)
+    }
+}
+
 impl From<String> for Datum {
     fn from(s: String) -> Datum {
         Datum::String(s)
@@ -241,13 +267,27 @@ pub enum ScalarType {
     Int64,
     Float32,
     Float64,
-    Decimal(usize, usize),
+    /// An exact decimal number with a specified precision and scale. The
+    /// precision constrains the total number of digits in the number, while the
+    /// scale specifies the number of digits after the decimal point. The
+    /// maximum precision is [`decimal::MAX_DECIMAL_PRECISION`]. The scale must
+    /// be less than or equal to the precision.
+    Decimal(u8, u8),
     Date,
     Time,
     Timestamp,
     Bytes,
     String,
     Regex,
+}
+
+impl ScalarType {
+    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
+        match self {
+            ScalarType::Decimal(p, s) => (*p, *s),
+            _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
+        }
+    }
 }
 
 /// The type of a [`Datum`].
