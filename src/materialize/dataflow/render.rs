@@ -69,22 +69,12 @@ pub fn build_dataflow<A: Allocate>(
             };
             let arrangement = relation_expr.as_collection().arrange_by_self();
             let on_delete = Box::new(|| ());
-            manager.set_trace(
-                &RelationExpr::Get {
-                    name: src.name.clone(),
-                    typ: src.typ.clone(),
-                },
-                arrangement.trace,
-                on_delete,
-            );
+            manager.set_trace(src.name.to_owned(), arrangement.trace, on_delete);
         }
         Dataflow::Sink(sink) => {
             let done = Rc::new(Cell::new(false));
             let (arrangement, _) = manager
-                .get_trace(&RelationExpr::Get {
-                    name: sink.from.0.clone(),
-                    typ: sink.from.1.clone(),
-                })
+                .get_trace(&sink.from.0)
                 .unwrap_or_else(|| panic!(format!("unable to find dataflow {:?}", sink.from)))
                 .import_core(scope, &format!("Import({:?})", sink.from));
             match &sink.connector {
@@ -98,7 +88,7 @@ pub fn build_dataflow<A: Allocate>(
             let mut context = Context::new();
             view.relation_expr.visit(&mut |e| {
                 if let RelationExpr::Get { name, typ: _ } = e {
-                    if let Some(mut trace) = manager.get_trace(e) {
+                    if let Some(mut trace) = manager.get_trace(&name) {
                         // TODO(frankmcsherry) do the thing
                         let (arranged, button) = trace.import_core(scope, name);
                         context
@@ -137,10 +127,7 @@ pub fn build_dataflow<A: Allocate>(
             )
             .arrange_by_self();
             manager.set_trace(
-                &RelationExpr::Get {
-                    name: view.name.clone(),
-                    typ: view.typ.clone(),
-                },
+                view.name,
                 arrangement.trace,
                 Box::new(move || {
                     for mut button in buttons.drain(..) {

@@ -23,7 +23,6 @@ use std::time::Instant;
 use super::render;
 use super::render::InputCapability;
 use super::trace::{KeysOnlyHandle, TraceManager};
-use super::RelationExpr;
 use super::{LocalSourceConnector, Source, SourceConnector};
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
@@ -67,8 +66,8 @@ pub enum PeekResultsHandler {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct PendingPeek {
-    /// The expr that identifies the dataflow to peek.
-    expr: RelationExpr,
+    /// The name of the dataflow to peek.
+    name: String,
     /// Identifies intended recipient of the peek.
     connection_uuid: uuid::Uuid,
     /// Time at which the collection should be materialized.
@@ -189,10 +188,7 @@ where
                     if let Dataflow::Sink { .. } = dataflow {
                         // TODO(jamii) it's not clear how we're supposed to drop a Sink
                     } else {
-                        self.traces.del_trace(&RelationExpr::Get {
-                            name: dataflow.name().to_owned(),
-                            typ: dataflow.typ().clone(),
-                        });
+                        self.traces.del_trace(dataflow.name());
                     }
                 }
             }
@@ -278,14 +274,9 @@ where
             return;
         }
 
-        let get = RelationExpr::Get {
-            name: dataflow.name().to_owned(),
-            typ: dataflow.typ().clone(),
-        };
-
         let timestamp = match when {
             PeekWhen::Immediately => {
-                let trace = self.traces.get_trace(&get).unwrap_or_else(|| {
+                let trace = self.traces.get_trace(dataflow.name()).unwrap_or_else(|| {
                     panic!("failed to find arrangement for PEEK {}", dataflow.name())
                 });
 
@@ -313,7 +304,7 @@ where
         };
 
         self.sequencer.push(PendingPeek {
-            expr: get,
+            name: dataflow.name().to_owned(),
             connection_uuid: cmd_meta.connection_uuid,
             timestamp,
             drop_after_peek: if drop { Some(dataflow) } else { None },
@@ -340,7 +331,7 @@ where
     fn process_peeks(&mut self) {
         // Look for new peeks.
         while let Some(pending_peek) = self.sequencer.next() {
-            let trace = self.traces.get_trace(&pending_peek.expr).unwrap();
+            let trace = self.traces.get_trace(&pending_peek.name).unwrap();
             self.pending_peeks.push((pending_peek, trace));
         }
 
