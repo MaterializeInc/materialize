@@ -28,7 +28,7 @@ pub enum QueueConfig {
     Transient,
 }
 
-pub enum PeekResultsConfig {
+pub enum DataflowResultsConfig {
     Local,
     Remote,
 }
@@ -36,7 +36,7 @@ pub enum PeekResultsConfig {
 pub struct Config {
     queue: QueueConfig,
     num_timely_workers: usize,
-    peek_results: PeekResultsConfig,
+    dataflow_results: DataflowResultsConfig,
 }
 
 impl Default for Config {
@@ -44,7 +44,7 @@ impl Default for Config {
         Config {
             queue: QueueConfig::Transient,
             num_timely_workers: 4,
-            peek_results: PeekResultsConfig::Remote,
+            dataflow_results: DataflowResultsConfig::Remote,
         }
     }
 }
@@ -53,7 +53,7 @@ fn handle_connection(
     tcp_stream: TcpStream,
     sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
     sql_response_mux: SqlResponseMux,
-    peek_results_mux: PeekResultsMux,
+    dataflow_results_mux: DataflowResultsMux,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
@@ -72,12 +72,12 @@ fn handle_connection(
                     ss.into_sniffed(),
                     sql_command_sender,
                     sql_response_mux,
-                    peek_results_mux,
+                    dataflow_results_mux,
                     num_timely_workers,
                 )
                 .either_a()
             } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed(), peek_results_mux).either_b()
+                http::handle_connection(ss.into_sniffed(), dataflow_results_mux).either_b()
             } else {
                 reject_connection(ss.into_sniffed()).from_err().either_c()
             }
@@ -96,16 +96,18 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     let (dataflow_command_senders, dataflow_command_receivers) = (0..config.num_timely_workers)
         .map(|_| unbounded::<(DataflowCommand, CommandMeta)>())
         .unzip();
-    let peek_results_mux = PeekResultsMux::default();
+    let dataflow_results_mux = DataflowResultsMux::default();
 
     // timely dataflow
-    let peek_results_handler = match config.peek_results {
-        PeekResultsConfig::Local => dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
-        PeekResultsConfig::Remote => dataflow::PeekResultsHandler::Remote,
+    let dataflow_results_handler = match config.dataflow_results {
+        DataflowResultsConfig::Local => {
+            dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone())
+        }
+        DataflowResultsConfig::Remote => dataflow::DataflowResultsHandler::Remote,
     };
     let dd_workers = dataflow::serve(
         dataflow_command_receivers,
-        peek_results_handler,
+        dataflow_results_handler,
         config.num_timely_workers,
     )?;
 
@@ -138,7 +140,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
                     stream,
                     sql_command_sender.clone(),
                     sql_response_mux.clone(),
-                    peek_results_mux.clone(),
+                    dataflow_results_mux.clone(),
                     config.num_timely_workers,
                 ));
                 Ok(())

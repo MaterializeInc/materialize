@@ -42,7 +42,7 @@ pub enum SqlResponse {
     DroppedView,
     DroppedTable,
     EmptyQuery,
-    Inserted(usize),
+    Inserting,
     Peeking { typ: RelationType },
 }
 
@@ -63,7 +63,10 @@ pub enum DataflowCommand {
         when: PeekWhen,
     },
     Tail(String),
-    Insert(String, Vec<Vec<Datum>>),
+    Insert {
+        source: RelationExpr,
+        dest: String,
+    },
     Shutdown,
 }
 
@@ -80,8 +83,35 @@ pub enum PeekWhen {
     AtTimestamp(Timestamp),
 }
 
-pub type PeekResults = Vec<Vec<Datum>>;
-pub type PeekResultsMux = Arc<RwLock<Mux<Uuid, PeekResults>>>;
+#[derive(Debug, Serialize, Deserialize)]
+pub enum DataflowResults {
+    Peeked(Vec<Vec<Datum>>),
+    Inserted(usize),
+}
+
+impl DataflowResults {
+    pub fn unwrap_peeked(self) -> Vec<Vec<Datum>> {
+        match self {
+            DataflowResults::Peeked(v) => v,
+            _ => panic!(
+                "DataflowResults::unwrap_peeked called on a {:?} variant",
+                self
+            ),
+        }
+    }
+
+    pub fn unwrap_inserted(self) -> usize {
+        match self {
+            DataflowResults::Inserted(v) => v,
+            _ => panic!(
+                "DataflowResults::unwrap_inserted called on a {:?} variant",
+                self
+            ),
+        }
+    }
+}
+
+pub type DataflowResultsMux = Arc<RwLock<Mux<Uuid, DataflowResults>>>;
 
 /// A multiple-producer, multiple-consumer (mpmc) channel where receivers are
 /// keyed by K.

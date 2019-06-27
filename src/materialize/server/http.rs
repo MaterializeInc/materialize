@@ -49,14 +49,14 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 
 pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
     a: A,
-    peek_results_mux: PeekResultsMux,
+    dataflow_results_mux: DataflowResultsMux,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let svc =
         service::service_fn(
             move |req: Request<Body>| match (req.method(), req.uri().path()) {
                 (&Method::GET, "/") => handle_home(req).left(),
-                (&Method::POST, "/api/peek-results") => {
-                    handle_peek_result(req, peek_results_mux.clone()).right()
+                (&Method::POST, "/api/dataflow-results") => {
+                    handle_dataflow_results(req, dataflow_results_mux.clone()).right()
                 }
                 _ => handle_unknown(req).left(),
             },
@@ -77,9 +77,9 @@ fn handle_unknown(_: Request<Body>) -> FutureResponse {
         .into()
 }
 
-fn handle_peek_result(
+fn handle_dataflow_results(
     req: Request<Body>,
-    peek_results_mux: PeekResultsMux,
+    dataflow_results_mux: DataflowResultsMux,
 ) -> Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send> {
     Box::new(
         future::lazy(move || {
@@ -92,9 +92,9 @@ fn handle_peek_result(
         })
         .and_then(move |(uuid, req)| {
             req.into_body().concat2().from_err().and_then(move |body| {
-                let rows: Vec<Vec<crate::repr::Datum>> = bincode::deserialize(&body).unwrap();
+                let rows: DataflowResults = bincode::deserialize(&body).unwrap();
                 // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-                if let Ok(sender) = peek_results_mux.read().unwrap().sender(&uuid) {
+                if let Ok(sender) = dataflow_results_mux.read().unwrap().sender(&uuid) {
                     drop(sender.unbounded_send(rows))
                 }
                 Ok(Response::new(Body::from("ok")))

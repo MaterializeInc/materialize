@@ -10,6 +10,7 @@ use differential_dataflow::trace::TraceReader;
 
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
+use timely::dataflow::operators::unordered_input::ActivateCapability;
 use timely::progress::frontier::Antichain;
 use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
@@ -17,20 +18,22 @@ use timely::worker::Worker as TimelyWorker;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use uuid::Uuid;
 
 use super::render;
 use super::render::InputCapability;
 use super::trace::{KeysOnlyHandle, TraceManager};
-use super::{LocalSourceConnector, Source, SourceConnector};
+use super::{LocalSourceConnector, RelationExpr, Source, SourceConnector};
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 pub fn serve(
     dataflow_command_receivers: Vec<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
-    peek_results_handler: PeekResultsHandler,
+    dataflow_results_handler: DataflowResultsHandler,
     num_workers: usize,
 ) -> Result<WorkerGuards<()>, String> {
     assert_eq!(dataflow_command_receivers.len(), num_workers);
@@ -52,15 +55,15 @@ pub fn serve(
         Worker::new(
             worker,
             dataflow_command_receiver,
-            peek_results_handler.clone(),
+            dataflow_results_handler.clone(),
         )
         .run()
     })
 }
 
 #[derive(Clone)]
-pub enum PeekResultsHandler {
-    Local(PeekResultsMux),
+pub enum DataflowResultsHandler {
+    Local(DataflowResultsMux),
     Remote,
 }
 
@@ -74,6 +77,13 @@ struct PendingPeek {
     timestamp: Timestamp,
     /// Handle to trace.
     drop_after_peek: Option<Dataflow>,
+}
+
+struct PendingInsert {
+    /// The name of the dataflow to insert into.
+    name: String,
+    /// The capability to use to perform the insert.
+    capability: ActivateCapability<Timestamp>,
 }
 
 lazy_static! {
@@ -92,7 +102,17 @@ lazy_static! {
                 scalar_type: ScalarType::String,
             }]),
         })),
-        DataflowCommand::Insert("dual".into(), vec![vec![Datum::String("X".into())]]),
+        DataflowCommand::Insert {
+            source: RelationExpr::Constant {
+                rows: vec![vec![Datum::String("X".into())]],
+                typ: RelationType::new(vec![ColumnType {
+                    name: None,
+                    nullable: false,
+                    scalar_type: ScalarType::String,
+                }]),
+            },
+            dest: "dual".into()
+        },
     ];
 }
 
@@ -102,8 +122,9 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
-    peek_results_handler: PeekResultsHandler,
+    dataflow_results_handler: DataflowResultsHandler,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
+    pending_inserts: HashMap<String, PendingInsert>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputCapability>,
@@ -120,14 +141,15 @@ where
     fn new(
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
-        peek_results_handler: PeekResultsHandler,
+        dataflow_results_handler: DataflowResultsHandler,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
         Worker {
             inner: w,
             dataflow_command_receiver,
-            peek_results_handler,
+            dataflow_results_handler,
             pending_peeks: Vec::new(),
+            pending_inserts: HashMap::new(),
             traces: TraceManager::new(),
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
@@ -194,48 +216,31 @@ where
             }
 
             DataflowCommand::PeekExisting { dataflow, when } => {
-                self.sequence_peek(cmd_meta, dataflow, when, false /* drop */)
+                self.sequence_peek(cmd_meta, dataflow, when, false /* drop */);
             }
 
             DataflowCommand::PeekTransient {
                 relation_expr,
                 when,
             } => {
-                let typ = relation_expr.typ();
-                let dataflow = Dataflow::View(View {
-                    name: format!("<temp_{}>", self.transient_view_counter),
-                    relation_expr,
-                    typ,
-                });
-                render::build_dataflow(
-                    &dataflow,
-                    &mut self.traces,
-                    self.inner,
-                    &mut self.inputs,
-                    self.input_time,
-                );
-                self.dataflows
-                    .insert(dataflow.name().to_owned(), dataflow.clone());
-                self.sequence_peek(cmd_meta, dataflow, when, true /* drop */);
-                self.transient_view_counter += 1;
+                self.peek_transient(cmd_meta, relation_expr, when);
             }
 
-            DataflowCommand::Insert(name, rows) => {
-                // Only broadcast the input on the first worker. Otherwise we'd
-                // insert multiple copies.
-                if self.inner.index() == 0 {
-                    match self.inputs.get_mut(&name).expect("Failed to find input") {
-                        InputCapability::Local { handle, capability } => {
-                            let mut session = handle.session(capability.clone());
-                            for row in rows {
-                                session.give((row, self.input_time, 1));
-                            }
-                        }
-                        InputCapability::External(_) => {
-                            panic!("attempted to insert into external source")
-                        }
-                    };
-                }
+            DataflowCommand::Insert { source, dest } => {
+                let transient_source_name =
+                    self.peek_transient(cmd_meta, source, PeekWhen::AfterFlush);
+                match self.inputs.get_mut(&dest).expect("Failed to find input") {
+                    InputCapability::Local { capability, .. } => self.pending_inserts.insert(
+                        transient_source_name,
+                        PendingInsert {
+                            name: dest,
+                            capability: capability.clone(),
+                        },
+                    ),
+                    InputCapability::External(_) => {
+                        panic!("attempted to insert into external source")
+                    }
+                };
 
                 // Unconditionally advance time after an insertion to allow the
                 // computation to make progress. Importantly, this occurs on
@@ -259,6 +264,33 @@ where
                 self.traces.del_all_traces();
             }
         }
+    }
+
+    fn peek_transient(
+        &mut self,
+        cmd_meta: CommandMeta,
+        relation_expr: RelationExpr,
+        when: PeekWhen,
+    ) -> String {
+        let name = format!("<temp_{}>", self.transient_view_counter);
+        let typ = relation_expr.typ();
+        let dataflow = Dataflow::View(View {
+            name: name.clone(),
+            relation_expr,
+            typ,
+        });
+        render::build_dataflow(
+            &dataflow,
+            &mut self.traces,
+            self.inner,
+            &mut self.inputs,
+            self.input_time,
+        );
+        self.dataflows
+            .insert(dataflow.name().to_owned(), dataflow.clone());
+        self.sequence_peek(cmd_meta, dataflow, when, true /* drop */);
+        self.transient_view_counter += 1;
+        name
     }
 
     fn sequence_peek(
@@ -308,7 +340,7 @@ where
             connection_uuid: cmd_meta.connection_uuid,
             timestamp,
             drop_after_peek: if drop { Some(dataflow) } else { None },
-        })
+        });
     }
 
     fn root_input_time(&self, name: &str) -> u64 {
@@ -338,81 +370,97 @@ where
         // See if time has advanced enough to handle any of our pending
         // peeks.
         let mut dataflows_to_be_dropped = vec![];
-        {
-            let Worker {
-                pending_peeks,
-                peek_results_handler,
-                rpc_client,
-                ..
-            } = self;
-            pending_peeks.retain(|(peek, trace)| {
-                let mut upper = timely::progress::frontier::Antichain::new();
-                let mut trace = trace.clone();
-                trace.read_upper(&mut upper);
+        let mut pending_peeks = mem::replace(&mut self.pending_peeks, Vec::new());
+        pending_peeks.retain(|(peek, trace)| {
+            let mut upper = timely::progress::frontier::Antichain::new();
+            let mut trace = trace.clone();
+            trace.read_upper(&mut upper);
 
-                // To produce output at `peek.timestamp`, we must be certain that
-                // it is no longer changing. A trace guarantees that all future
-                // changes will be greater than or equal to an element of `upper`.
-                //
-                // If an element of `upper` is less or equal to `peek.timestamp`,
-                // then there can be further updates that would change the output.
-                // If no element of `upper` is less or equal to `peek.timestamp`,
-                // then for any time `t` less or equal to `peek.timestamp` it is
-                // not the case that `upper` is less or equal to that timestamp,
-                // and so the result cannot further evolve.
-                if upper.less_equal(&peek.timestamp) {
-                    return true; // retain
-                }
-                let (mut cur, storage) = trace.cursor();
-                let mut results = Vec::new();
-                while let Some(key) = cur.get_key(&storage) {
-                    // TODO: Absent value iteration might be weird (in principle
-                    // the cursor *could* say no `()` values associated with the
-                    // key, though I can't imagine how that would happen for this
-                    // specific trace implementation).
+            // To produce output at `peek.timestamp`, we must be certain that
+            // it is no longer changing. A trace guarantees that all future
+            // changes will be greater than or equal to an element of `upper`.
+            //
+            // If an element of `upper` is less or equal to `peek.timestamp`,
+            // then there can be further updates that would change the output.
+            // If no element of `upper` is less or equal to `peek.timestamp`,
+            // then for any time `t` less or equal to `peek.timestamp` it is
+            // not the case that `upper` is less or equal to that timestamp,
+            // and so the result cannot further evolve.
+            if upper.less_equal(&peek.timestamp) {
+                return true; // retain
+            }
+            let (mut cur, storage) = trace.cursor();
+            let mut results = Vec::new();
+            while let Some(key) = cur.get_key(&storage) {
+                // TODO: Absent value iteration might be weird (in principle
+                // the cursor *could* say no `()` values associated with the
+                // key, though I can't imagine how that would happen for this
+                // specific trace implementation).
 
-                    let mut copies = 0;
-                    cur.map_times(&storage, |time, diff| {
-                        use timely::order::PartialOrder;
-                        if time.less_equal(&peek.timestamp) {
-                            copies += diff;
-                        }
-                    });
-                    assert!(copies >= 0);
-                    for _ in 0..copies {
-                        results.push(key.clone());
+                let mut copies = 0;
+                cur.map_times(&storage, |time, diff| {
+                    use timely::order::PartialOrder;
+                    if time.less_equal(&peek.timestamp) {
+                        copies += diff;
                     }
-
-                    cur.step_key(&storage)
+                });
+                assert!(copies >= 0);
+                for _ in 0..copies {
+                    results.push(key.clone());
                 }
-                match peek_results_handler {
-                    PeekResultsHandler::Local(peek_results_mux) => {
-                        // The sender is allowed disappear at any time, so the
-                        // error handling here is deliberately relaxed.
-                        if let Ok(sender) = peek_results_mux
-                            .read()
-                            .unwrap()
-                            .sender(&peek.connection_uuid)
-                        {
-                            drop(sender.unbounded_send(results))
+
+                cur.step_key(&storage)
+            }
+            let results = if let Some(insert) = self.pending_inserts.remove(&peek.name) {
+                let n = results.len();
+                match self
+                    .inputs
+                    .get_mut(&insert.name)
+                    .expect("Failed to find input")
+                {
+                    InputCapability::Local { handle, .. } => {
+                        let time = *insert.capability.time();
+                        let mut session = handle.session(insert.capability);
+                        for row in results {
+                            session.give((row, time, 1));
                         }
                     }
-                    PeekResultsHandler::Remote => {
-                        let encoded = bincode::serialize(&results).unwrap();
-                        rpc_client
-                            .post("http://localhost:6875/api/peek-results")
-                            .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
-                            .body(encoded)
-                            .send()
-                            .unwrap();
+                    InputCapability::External(_) => {
+                        panic!("attempted to insert into external source")
                     }
                 }
-                if let Some(dataflow) = &peek.drop_after_peek {
-                    dataflows_to_be_dropped.push(dataflow.clone());
+                DataflowResults::Inserted(n)
+            } else {
+                DataflowResults::Peeked(results)
+            };
+            match &self.dataflow_results_handler {
+                DataflowResultsHandler::Local(peek_results_mux) => {
+                    // The sender is allowed disappear at any time, so the
+                    // error handling here is deliberately relaxed.
+                    if let Ok(sender) = peek_results_mux
+                        .read()
+                        .unwrap()
+                        .sender(&peek.connection_uuid)
+                    {
+                        drop(sender.unbounded_send(results))
+                    }
                 }
-                false // don't retain
-            });
-        }
+                DataflowResultsHandler::Remote => {
+                    let encoded = bincode::serialize(&results).unwrap();
+                    self.rpc_client
+                        .post("http://localhost:6875/api/dataflow-results")
+                        .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
+                        .body(encoded)
+                        .send()
+                        .unwrap();
+                }
+            }
+            if let Some(dataflow) = &peek.drop_after_peek {
+                dataflows_to_be_dropped.push(dataflow.clone());
+            }
+            false // don't retain
+        });
+        mem::replace(&mut self.pending_peeks, pending_peeks);
         if !dataflows_to_be_dropped.is_empty() {
             self.handle_command(
                 DataflowCommand::DropDataflows(dataflows_to_be_dropped),

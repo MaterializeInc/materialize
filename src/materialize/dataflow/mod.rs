@@ -17,5 +17,5 @@ pub mod func;
 pub mod server;
 pub mod transform;
 
-pub use server::{serve, PeekResultsHandler};
+pub use server::{serve, DataflowResultsHandler};
 pub use types::*;

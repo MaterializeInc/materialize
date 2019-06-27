@@ -34,7 +34,7 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
     sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
     sql_response_mux: SqlResponseMux,
-    peek_results_mux: PeekResultsMux,
+    dataflow_results_mux: DataflowResultsMux,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let uuid = Uuid::new_v4();
@@ -45,7 +45,7 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
             uuid,
             sql_command_sender,
             sql_response_receiver: sql_response_mux.write().unwrap().channel(uuid).unwrap(),
-            peek_results_receiver: peek_results_mux.write().unwrap().channel(uuid).unwrap(),
+            dataflow_results_receiver: dataflow_results_mux.write().unwrap().channel(uuid).unwrap(),
             num_timely_workers,
         },
     )

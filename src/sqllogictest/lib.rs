@@ -394,8 +394,8 @@ pub enum Outcome<'a> {
         expected_error: &'a str,
     },
     WrongNumberOfRowsInserted {
-        expected_rows_inserted: usize,
-        actual_response: SqlResponse,
+        expected_count: usize,
+        actual_count: usize,
     },
     InferenceFailure {
         expected_types: &'a [Type],
@@ -509,7 +509,7 @@ struct FullState {
     threads: Vec<std::thread::Thread>,
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<Drop>,
-    peek_results_mux: PeekResultsMux,
+    dataflow_results_mux: DataflowResultsMux,
 }
 
 fn format_row(row: &[Datum], types: &[Type], mode: Mode) -> Vec<String> {
@@ -552,10 +552,10 @@ impl FullState {
         let planner = Planner::default();
         let (dataflow_command_senders, dataflow_command_receivers) =
             (0..NUM_TIMELY_WORKERS).map(|_| unbounded()).unzip();
-        let peek_results_mux = PeekResultsMux::default();
+        let dataflow_results_mux = DataflowResultsMux::default();
         let dataflow_workers = dataflow::serve(
             dataflow_command_receivers,
-            dataflow::PeekResultsHandler::Local(peek_results_mux.clone()),
+            dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone()),
             NUM_TIMELY_WORKERS,
         )
         .unwrap();
@@ -570,7 +570,7 @@ impl FullState {
             planner,
             dataflow_command_senders,
             _dataflow_workers: Box::new(dataflow_workers),
-            peek_results_mux,
+            dataflow_results_mux,
             threads,
         }
     }
@@ -578,10 +578,10 @@ impl FullState {
     fn send_dataflow_command(
         &self,
         dataflow_command: DataflowCommand,
-    ) -> UnboundedReceiver<PeekResults> {
+    ) -> UnboundedReceiver<DataflowResults> {
         let uuid = Uuid::new_v4();
         let receiver = self
-            .peek_results_mux
+            .dataflow_results_mux
             .write()
             .unwrap()
             .channel(uuid)
@@ -601,13 +601,25 @@ impl FullState {
         receiver
     }
 
-    fn receive_peek_results(&self, receiver: UnboundedReceiver<PeekResults>) -> Vec<Vec<Datum>> {
+    fn receive_peek_results(
+        &self,
+        receiver: UnboundedReceiver<DataflowResults>,
+    ) -> Vec<Vec<Datum>> {
         let mut results = vec![];
         let mut receiver = receiver.wait();
         for _ in 0..NUM_TIMELY_WORKERS {
-            results.append(&mut receiver.next().unwrap().unwrap());
+            results.append(&mut receiver.next().unwrap().unwrap().unwrap_peeked());
         }
         results
+    }
+
+    fn receive_insert_count(&self, receiver: UnboundedReceiver<DataflowResults>) -> usize {
+        let mut count = 0;
+        let mut receiver = receiver.wait();
+        for _ in 0..NUM_TIMELY_WORKERS {
+            count += receiver.next().unwrap().unwrap().unwrap_inserted();
+        }
+        count
     }
 }
 
@@ -631,86 +643,38 @@ impl RecordRunner for FullState {
                 // we don't support non-materialized views
                 let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
-                let parsed = SqlParser::parse_sql(&AnsiDialect {}, sql.to_string());
-                let statements = match parsed {
-                    Err(error) => {
-                        if *should_run {
-                            return Ok(Outcome::ParseFailure { error });
-                        } else {
-                            return Ok(Outcome::Success);
-                        }
-                    }
-                    Ok(statements) => statements,
-                };
-
-                // total hack for handling INSERT statements
-                if let [Statement::Insert {
-                    table_name,
-                    columns,
-                    source,
-                }] = &*statements
-                {
-                    // we can't handle the column rearrangement logic here because we don't know the table schema :(
-                    if columns.is_empty() {
-                        if !*should_run {
-                            // We're not interested in testing our hacky handling of INSERT
-                            return Ok(Outcome::Success);
-                        }
-
-                        // run the query
-                        let (_typ, dataflow_command) =
-                            match self.planner.handle_select(*source.clone()) {
-                                Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
-                                    (typ, dataflow_command)
-                                }
-                                other => {
-                                    if *should_run {
-                                        return Ok(Outcome::PlanFailure {
-                                            error: format_err!("{:?}", other),
-                                        });
-                                    } else {
-                                        return Ok(Outcome::Success);
-                                    }
-                                }
-                            };
-                        let receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                        let results = self.receive_peek_results(receiver);
-
-                        // insert the results
-                        let _receiver = self.send_dataflow_command(DataflowCommand::Insert(
-                            table_name.to_string(),
-                            results,
-                        ));
-                        return Ok(Outcome::Success);
-                    }
-                }
-
-                let dataflow_command = match self.planner.handle_command(sql.to_string()) {
-                    Ok((response, dataflow_command)) => {
-                        if let Some(expected_rows_inserted) = *expected_rows_inserted {
-                            match response {
-                                SqlResponse::Inserted(actual_rows_inserted)
-                                    if actual_rows_inserted == expected_rows_inserted => {}
-                                _ => {
-                                    return Ok(Outcome::WrongNumberOfRowsInserted {
-                                        expected_rows_inserted,
-                                        actual_response: response,
-                                    });
-                                }
+                let (response, dataflow_command) =
+                    match self.planner.handle_command(sql.to_string()) {
+                        Ok((response, dataflow_command)) => (response, dataflow_command),
+                        Err(error) => {
+                            if *should_run {
+                                return Ok(Outcome::PlanFailure { error });
+                            } else {
+                                return Ok(Outcome::Success);
                             }
                         }
-                        dataflow_command
-                    }
-                    Err(error) => {
-                        if *should_run {
-                            return Ok(Outcome::PlanFailure { error });
-                        } else {
-                            return Ok(Outcome::Success);
-                        }
-                    }
+                    };
+                let receiver = self.send_dataflow_command(dataflow_command.unwrap());
+                let insert_count = if let SqlResponse::Inserting = response {
+                    Some(self.receive_insert_count(receiver))
+                } else {
+                    None
                 };
-                let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                Ok(Outcome::Success)
+                match (insert_count, expected_rows_inserted) {
+                    (None, Some(_)) => Ok(Outcome::PlanFailure {
+                        error: failure::format_err!(
+                            "Query did not result in Inserting, instead got {:?}",
+                            response
+                        ),
+                    }),
+                    (Some(actual), Some(expected)) if actual != *expected => {
+                        Ok(Outcome::WrongNumberOfRowsInserted {
+                            expected_count: *expected,
+                            actual_count: actual,
+                        })
+                    }
+                    _ => Ok(Outcome::Success),
+                }
             }
             Record::Query { sql, output } => {
                 let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {

@@ -6,7 +6,6 @@
 //! SQL-dataflow translation.
 
 use failure::{bail, format_err};
-use itertools::Itertools;
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
@@ -211,41 +210,26 @@ impl Planner {
                 .collect::<Vec<_>>()
         };
 
-        if !source.ctes.is_empty() || !source.order_by.is_empty() || source.limit.is_some() {
-            bail!("complicated INSERTs are not supported");
+        let expr = self.plan_query(&source)?;
+        let expr_cols = expr.typ().column_types.len();
+        if expr_cols != permutation.len() {
+            bail!(
+                "INSERT has {} expression(s) but {} target column(s)",
+                expr_cols,
+                permutation.len()
+            );
         }
-
-        let datums = match source.body {
-            SetExpr::Values(Values(values)) => {
-                assert!(!values.is_empty());
-                if !values.iter().map(Vec::len).all_equal() {
-                    bail!("VALUES lists must all be the same length");
-                }
-                if values[0].len() != permutation.len() {
-                    bail!(
-                        "INSERT has {} expression(s) but {} target column(s)",
-                        values[0].len(),
-                        permutation.len()
-                    );
-                }
-                values
-                    .into_iter()
-                    .map(|asts| {
-                        let permuted_asts = permutation.iter().map(|i| asts[*i].clone());
-                        let datums = permuted_asts
-                            .zip(typ.column_types.iter())
-                            .map(|(ast, typ)| Datum::from_sql(ast, typ))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        Ok(datums)
-                    })
-                    .collect::<Result<Vec<_>, failure::Error>>()?
-            }
-            _ => bail!("complicated INSERTs are not supported"),
+        let expr = RelationExpr::Project {
+            input: Box::new(expr),
+            outputs: permutation,
         };
 
         Ok((
-            SqlResponse::Inserted(datums.len()),
-            Some(DataflowCommand::Insert(name, datums)),
+            SqlResponse::Inserting,
+            Some(DataflowCommand::Insert {
+                source: expr,
+                dest: name,
+            }),
         ))
     }
 }
