@@ -136,7 +136,7 @@ pub mod demorgans {
                         *expr = ScalarExpr::CallBinary {
                             expr1: Box::new(inner0),
                             expr2: Box::new(inner1),
-                            func: BinaryFunc::Or,
+                            func: BinaryFunc::And,
                         }
                     }
                     _ => {}
