@@ -14,6 +14,10 @@
 
 set -euo pipefail
 
+if [[ "$1" != master ]]; then
+    exit 0
+fi
+
 oldlist=$(git stash list)
 git stash save -q -u
 newlist=$(git stash list)
