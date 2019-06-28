@@ -134,6 +134,7 @@ impl Planner {
             ObjectType::View => SqlResponse::DroppedView,
             _ => unreachable!(),
         };
+        let removed = removed.iter().map(|d| d.name().to_owned()).collect();
         Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
     }
 

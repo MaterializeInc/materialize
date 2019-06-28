@@ -75,8 +75,8 @@ struct PendingPeek {
     connection_uuid: uuid::Uuid,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
-    /// Handle to trace.
-    drop_after_peek: Option<Dataflow>,
+    /// Whether to drop the dataflow when the peek completes.
+    drop_after_peek: bool,
 }
 
 struct PendingInsert {
@@ -204,14 +204,10 @@ where
             }
 
             DataflowCommand::DropDataflows(dataflows) => {
-                for dataflow in dataflows {
-                    self.inputs.remove(dataflow.name());
-                    self.dataflows.remove(dataflow.name());
-                    if let Dataflow::Sink { .. } = dataflow {
-                        // TODO(jamii) it's not clear how we're supposed to drop a Sink
-                    } else {
-                        self.traces.del_trace(dataflow.name());
-                    }
+                for name in &dataflows {
+                    self.inputs.remove(name);
+                    self.dataflows.remove(name);
+                    self.traces.del_trace(name);
                 }
             }
 
@@ -339,7 +335,7 @@ where
             name: dataflow.name().to_owned(),
             connection_uuid: cmd_meta.connection_uuid,
             timestamp,
-            drop_after_peek: if drop { Some(dataflow) } else { None },
+            drop_after_peek: drop,
         });
     }
 
@@ -455,8 +451,8 @@ where
                         .unwrap();
                 }
             }
-            if let Some(dataflow) = &peek.drop_after_peek {
-                dataflows_to_be_dropped.push(dataflow.clone());
+            if peek.drop_after_peek {
+                dataflows_to_be_dropped.push(peek.name.clone());
             }
             false // don't retain
         });
