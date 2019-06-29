@@ -102,7 +102,7 @@ lazy_static! {
                 scalar_type: ScalarType::String,
             }]),
         })),
-        DataflowCommand::Insert {
+        DataflowCommand::Peek {
             source: RelationExpr::Constant {
                 rows: vec![vec![Datum::String("X".into())]],
                 typ: RelationType::new(vec![ColumnType {
@@ -111,7 +111,8 @@ lazy_static! {
                     scalar_type: ScalarType::String,
                 }]),
             },
-            dest: "dual".into()
+            when: PeekWhen::AfterFlush,
+            insert_into: Some("dual".into()),
         },
     ];
 }
@@ -211,45 +212,12 @@ where
                 }
             }
 
-            DataflowCommand::PeekExisting { dataflow, when } => {
-                self.sequence_peek(cmd_meta, dataflow, when, false /* drop */);
-            }
-
-            DataflowCommand::PeekTransient {
-                relation_expr,
+            DataflowCommand::Peek {
+                source,
                 when,
+                insert_into,
             } => {
-                self.peek_transient(cmd_meta, relation_expr, when);
-            }
-
-            DataflowCommand::Insert { source, dest } => {
-                let transient_source_name =
-                    self.peek_transient(cmd_meta, source, PeekWhen::AfterFlush);
-                match self.inputs.get_mut(&dest).expect("Failed to find input") {
-                    InputCapability::Local { capability, .. } => self.pending_inserts.insert(
-                        transient_source_name,
-                        PendingInsert {
-                            name: dest,
-                            capability: capability.clone(),
-                        },
-                    ),
-                    InputCapability::External(_) => {
-                        panic!("attempted to insert into external source")
-                    }
-                };
-
-                // Unconditionally advance time after an insertion to allow the
-                // computation to make progress. Importantly, this occurs on
-                // *all* internal inputs.
-                self.input_time += 1;
-                for handle in self.inputs.values_mut() {
-                    match handle {
-                        InputCapability::Local { capability, .. } => {
-                            capability.downgrade(&self.input_time);
-                        }
-                        InputCapability::External(_) => (),
-                    }
-                }
+                self.peek(cmd_meta, source, when, insert_into);
             }
 
             DataflowCommand::Tail(_) => unimplemented!(),
@@ -262,40 +230,72 @@ where
         }
     }
 
-    fn peek_transient(
+    fn peek(
         &mut self,
         cmd_meta: CommandMeta,
-        relation_expr: RelationExpr,
+        source: RelationExpr,
         when: PeekWhen,
-    ) -> String {
-        let name = format!("<temp_{}>", self.transient_view_counter);
-        let typ = relation_expr.typ();
-        let dataflow = Dataflow::View(View {
-            name: name.clone(),
-            relation_expr,
-            typ,
-        });
-        render::build_dataflow(
-            &dataflow,
-            &mut self.traces,
-            self.inner,
-            &mut self.inputs,
-            self.input_time,
-        );
-        self.dataflows
-            .insert(dataflow.name().to_owned(), dataflow.clone());
-        self.sequence_peek(cmd_meta, dataflow, when, true /* drop */);
-        self.transient_view_counter += 1;
-        name
-    }
-
-    fn sequence_peek(
-        &mut self,
-        cmd_meta: CommandMeta,
-        dataflow: Dataflow,
-        when: PeekWhen,
-        drop: bool,
+        insert_into: Option<String>,
     ) {
+        let (name, drop) = if let RelationExpr::Get { name, typ: _ } = source {
+            // Fast path. Just look at the existing dataflow directly.
+            (name, false)
+        } else {
+            // Slow path. We need to perform some computation, so build a new
+            // transient dataflow that will be dropped after the peek completes.
+            let name = format!("<temp_{}>", self.transient_view_counter);
+            self.transient_view_counter += 1;
+            let typ = source.typ();
+            let dataflow = Dataflow::View(View {
+                name: name.clone(),
+                relation_expr: source,
+                typ,
+            });
+            render::build_dataflow(
+                &dataflow,
+                &mut self.traces,
+                self.inner,
+                &mut self.inputs,
+                self.input_time,
+            );
+            self.dataflows
+                .insert(dataflow.name().to_owned(), dataflow.clone());
+            (name, true)
+        };
+
+        if let Some(insert_into) = insert_into {
+            // This results of this peek should be inserted into an existing
+            // dataflow. Stash away the capability to insert as the current
+            // time, because it might be a while before the peek completes.
+            match self
+                .inputs
+                .get_mut(&insert_into)
+                .expect("Failed to find input")
+            {
+                InputCapability::Local { capability, .. } => self.pending_inserts.insert(
+                    name.clone(),
+                    PendingInsert {
+                        name: insert_into,
+                        capability: capability.clone(),
+                    },
+                ),
+                InputCapability::External(_) => panic!("attempted to insert into external source"),
+            };
+
+            // Unconditionally advance time after an insertion to allow the
+            // computation to make progress. Importantly, this occurs on *all*
+            // internal inputs.
+            self.input_time += 1;
+            for handle in self.inputs.values_mut() {
+                match handle {
+                    InputCapability::Local { capability, .. } => {
+                        capability.downgrade(&self.input_time);
+                    }
+                    InputCapability::External(_) => (),
+                }
+            }
+        }
+
         if self.inner.index() != 0 {
             // Only worker 0 sequences peeks. It will broadcast the sequenced
             // peek to other workers.
@@ -304,9 +304,10 @@ where
 
         let timestamp = match when {
             PeekWhen::Immediately => {
-                let trace = self.traces.get_trace(dataflow.name()).unwrap_or_else(|| {
-                    panic!("failed to find arrangement for PEEK {}", dataflow.name())
-                });
+                let trace = self
+                    .traces
+                    .get_trace(&name)
+                    .unwrap_or_else(|| panic!("failed to find arrangement for PEEK {}", name));
 
                 // Ask the trace for the latest time it knows about. The latest
                 // "committed" time (i.e., the time at which we know results can
@@ -326,13 +327,13 @@ where
 
             // Compute the lastest time that is committed by all inputs. Peeking
             // at this time may involve waiting for the outputs to catch up.
-            PeekWhen::AfterFlush => self.root_input_time(dataflow.name()).saturating_sub(1),
+            PeekWhen::AfterFlush => self.root_input_time(&name).saturating_sub(1),
 
             PeekWhen::AtTimestamp(timestamp) => timestamp,
         };
 
         self.sequencer.push(PendingPeek {
-            name: dataflow.name().to_owned(),
+            name,
             connection_uuid: cmd_meta.connection_uuid,
             timestamp,
             drop_after_peek: drop,

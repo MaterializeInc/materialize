@@ -145,9 +145,13 @@ impl Planner {
             SqlResponse::Peeking {
                 typ: dataflow.typ().clone(),
             },
-            Some(DataflowCommand::PeekExisting {
-                dataflow,
+            Some(DataflowCommand::Peek {
+                source: RelationExpr::Get {
+                    name: dataflow.name().to_owned(),
+                    typ: dataflow.typ().clone(),
+                },
                 when: PeekWhen::Immediately,
+                insert_into: None,
             }),
         ))
     }
@@ -158,9 +162,10 @@ impl Planner {
             SqlResponse::Peeking {
                 typ: relation_expr.typ(),
             },
-            Some(DataflowCommand::PeekTransient {
-                relation_expr,
+            Some(DataflowCommand::Peek {
+                source: relation_expr,
                 when: PeekWhen::AfterFlush,
+                insert_into: None,
             }),
         ))
     }
@@ -227,9 +232,10 @@ impl Planner {
 
         Ok((
             SqlResponse::Inserting,
-            Some(DataflowCommand::Insert {
+            Some(DataflowCommand::Peek {
                 source: expr,
-                dest: name,
+                when: PeekWhen::AfterFlush,
+                insert_into: Some(name),
             }),
         ))
     }

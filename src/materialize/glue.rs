@@ -54,23 +54,16 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 pub enum DataflowCommand {
     CreateDataflow(Dataflow),
     DropDataflows(Vec<String>),
-    PeekExisting {
-        dataflow: Dataflow,
+    Peek {
+        source: RelationExpr,
         when: PeekWhen,
-    },
-    PeekTransient {
-        relation_expr: RelationExpr,
-        when: PeekWhen,
+        insert_into: Option<String>,
     },
     Tail(String),
-    Insert {
-        source: RelationExpr,
-        dest: String,
-    },
     Shutdown,
 }
 
-/// Specifies when a `PeekExisting` or a `PeekTransient` should occur.
+/// Specifies when a `Peek` should occur.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PeekWhen {
     /// The peek should occur at the latest possible timestamp that allows the
