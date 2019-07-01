@@ -5,7 +5,7 @@
 
 //! SQL-dataflow translation.
 
-use failure::{bail, format_err};
+use failure::{bail, ensure, format_err};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
@@ -497,7 +497,7 @@ impl Planner {
                 Ok(relation_expr)
             }
             SetExpr::Values(Values(values)) => {
-                assert!(
+                ensure!(
                     !values.is_empty(),
                     "Can't infer a type for empty VALUES expression"
                 );
