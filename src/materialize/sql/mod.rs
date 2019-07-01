@@ -869,7 +869,7 @@ impl Planner {
                 right_scope,
                 |both, both_scope| Ok((both, both_scope)),
             ),
-            JoinOperator::LeftOuter(constraint) => RelationExpr::let_(left, |left| {
+            JoinOperator::LeftOuter(constraint) => left.let_(|left| {
                 self.plan_join_constraint(
                     &constraint,
                     left.clone(),
@@ -877,13 +877,13 @@ impl Planner {
                     right,
                     right_scope,
                     |both, both_scope| {
-                        RelationExpr::let_(both, |both| {
+                        both.let_(|both| {
                             Ok((both.clone().union(both.left_outer(left)), both_scope))
                         })
                     },
                 )
             }),
-            JoinOperator::RightOuter(constraint) => RelationExpr::let_(right, |right| {
+            JoinOperator::RightOuter(constraint) => right.let_(|right| {
                 self.plan_join_constraint(
                     &constraint,
                     left,
@@ -891,14 +891,14 @@ impl Planner {
                     right.clone(),
                     right_scope,
                     |both, both_scope| {
-                        RelationExpr::let_(both, |both| {
+                        both.let_(|both| {
                             Ok((both.clone().union(both.right_outer(right)), both_scope))
                         })
                     },
                 )
             }),
-            JoinOperator::FullOuter(constraint) => RelationExpr::let_(left, |left| {
-                RelationExpr::let_(right, |right| {
+            JoinOperator::FullOuter(constraint) => left.let_(|left| {
+                right.let_(|right| {
                     self.plan_join_constraint(
                         &constraint,
                         left.clone(),
@@ -906,7 +906,7 @@ impl Planner {
                         right.clone(),
                         right_scope,
                         |both, both_scope| {
-                            RelationExpr::let_(both, |both| {
+                            both.let_(|both| {
                                 Ok((
                                     both.clone()
                                         .union(both.clone().left_outer(left))
@@ -1935,19 +1935,19 @@ impl Scope {
 }
 
 impl RelationExpr {
-    fn let_<F>(value: RelationExpr, f: F) -> Result<(Self, Scope), failure::Error>
+    fn let_<F>(self: RelationExpr, f: F) -> Result<(Self, Scope), failure::Error>
     where
         F: FnOnce(Self) -> Result<(Self, Scope), failure::Error>,
     {
         let name = format!("tmp_{}", Uuid::new_v4());
-        let typ = value.typ();
+        let typ = self.typ();
         let (body, scope) = f(RelationExpr::Get {
             name: name.clone(),
             typ,
         })?;
         let expr = RelationExpr::Let {
             name: name.clone(),
-            value: Box::new(value),
+            value: Box::new(self),
             body: Box::new(body),
         };
         Ok((expr, scope))
