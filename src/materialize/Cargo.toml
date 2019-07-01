@@ -36,7 +36,7 @@ log = "0.4"
 metastore = { path = "../metastore" }
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
-rand = "0.6"
+rand = "0.7"
 regex = "1.1.7"
 regex-syntax = "0.6.7"
 reqwest = "0.9.18"
