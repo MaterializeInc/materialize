@@ -145,6 +145,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bigdecimal"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "num-bigint 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-integer 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-traits 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "bincode"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -615,7 +625,7 @@ dependencies = [
  "fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
- "timely 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "timely_sort 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1113,9 +1123,9 @@ dependencies = [
  "sha2 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "simplelog 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "smallvec 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
- "sqlparser 0.3.2-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
+ "sqlparser 0.4.1-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
  "state_machine_future 0.2.0 (git+https://github.com/benesch/state_machine_future.git?branch=context-generic-bounds)",
- "timely 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "tokio 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-threadpool 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 1.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1280,6 +1290,15 @@ dependencies = [
 name = "normalize-line-endings"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "num-bigint"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "num-integer 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num-traits 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "num-integer"
@@ -2116,18 +2135,18 @@ dependencies = [
  "md5 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "ore 0.1.0",
  "regex 1.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "sqlparser 0.3.2-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
+ "sqlparser 0.4.1-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
  "uuid 0.7.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "walkdir 2.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "sqlparser"
-version = "0.3.2-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#850e1bfc2cb5908d880311f66e8f852109fe6b9c"
+version = "0.4.1-alpha.0"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#6439120894b7fa652b1fc4006403364c5c07406b"
 dependencies = [
+ "bigdecimal 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "ordered-float 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2298,7 +2317,7 @@ dependencies = [
  "regex 1.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.9.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)",
- "sqlparser 0.3.2-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
+ "sqlparser 0.4.1-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
  "termcolor 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2330,27 +2349,27 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#28430ee6f0adf48350462bd73b31606650e21a8d"
 dependencies = [
  "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
- "timely_bytes 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
- "timely_communication 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
- "timely_logging 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_communication 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
 ]
 
 [[package]]
 name = "timely_bytes"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#28430ee6f0adf48350462bd73b31606650e21a8d"
 
 [[package]]
 name = "timely_communication"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#28430ee6f0adf48350462bd73b31606650e21a8d"
 dependencies = [
  "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2358,14 +2377,14 @@ dependencies = [
  "getopts 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
- "timely_bytes 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
- "timely_logging 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
 ]
 
 [[package]]
 name = "timely_logging"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#28430ee6f0adf48350462bd73b31606650e21a8d"
 
 [[package]]
 name = "timely_sort"
@@ -2825,6 +2844,7 @@ dependencies = [
 "checksum backtrace 0.3.32 (registry+https://github.com/rust-lang/crates.io-index)" = "18b50f5258d1a9ad8396d2d345827875de4261b158124d4c819d9b351454fae5"
 "checksum backtrace-sys 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)" = "797c830ac25ccc92a7f8a7b9862bde440715531514594a6154e3d4a54dd769b6"
 "checksum base64 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
+"checksum bigdecimal 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "460825c9e21708024d67c07057cd5560e5acdccac85de0de624a81d3de51bacb"
 "checksum bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "9f04a5e50dc80b3d5d35320889053637d15011aed5e66b66b37ae798c65da6f7"
 "checksum bindgen 0.42.3 (registry+https://github.com/rust-lang/crates.io-index)" = "e0f199ccbabf5e9f9e13a3096534e80c9ce37aee440789dafaa47190e283245c"
 "checksum bitflags 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d155346769a6855b86399e9bc3814ab343cd3d62c7e985113d46a0ec3c281fd"
@@ -2943,6 +2963,7 @@ dependencies = [
 "checksum nodrop 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)" = "2f9667ddcc6cc8a43afc9b7917599d7216aa09c463919ea32c59ed6cac8bc945"
 "checksum nom 4.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "2ad2a91a8e869eeb30b9cb3119ae87773a8f4ae617f41b1eb9c154b2905f7bd6"
 "checksum normalize-line-endings 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "2e0a1a39eab95caf4f5556da9289b9e68f0aafac901b2ce80daaf020d3b733a8"
+"checksum num-bigint 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "57450397855d951f1a41305e54851b1a7b8f5d2e349543a02a2effe25459f718"
 "checksum num-integer 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)" = "b85e541ef8255f6cf42bbfe4ef361305c6c135d10919ecc26126c4e5ae94bc09"
 "checksum num-traits 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "6ba9a427cfca2be13aa6f6403b0b7e7368fe982bfa16fccc450ce74c46cd9b32"
 "checksum num_cpus 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)" = "cee7e88156f3f9e19bdd598f8d6c9db7bf4078f99f8381f43a55b09648d1a6e3"
@@ -3035,7 +3056,7 @@ dependencies = [
 "checksum slog-scope 4.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "60c04b4726fa04595ccf2c2dad7bcd15474242c4c5e109a8a376e8a2c9b1539a"
 "checksum slog-stdlog 3.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "ac42f8254ae996cc7d640f9410d3b048dcdf8887a10df4d5d4c44966de24c4a8"
 "checksum smallvec 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)" = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
-"checksum sqlparser 0.3.2-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)" = "<none>"
+"checksum sqlparser 0.4.1-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)" = "<none>"
 "checksum stable_deref_trait 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 "checksum state_machine_future 0.2.0 (git+https://github.com/benesch/state_machine_future.git?branch=context-generic-bounds)" = "<none>"
 "checksum state_machine_future 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "530e1d624baae485bce12e6647acb76aafa253346ee8a16751974eed5a24b13d"
@@ -3056,10 +3077,10 @@ dependencies = [
 "checksum textwrap 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
 "checksum thread_local 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)" = "c6b53e329000edc2b34dbe8545fd20e55a333362d0a321909685a19bd28c3f1b"
 "checksum time 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)" = "db8dcfca086c1143c9270ac42a2bbd8a7ee477b78ac8e45b19abfb0cbede4b6f"
-"checksum timely 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
-"checksum timely_bytes 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
-"checksum timely_communication 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
-"checksum timely_logging 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely_communication 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
 "checksum timely_sort 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "f6e4b497ab85f6e09ea309d696342d198e444e93a4a55500bf3b0c3c53bdd4b3"
 "checksum tinytemplate 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "4574b75faccaacddb9b284faecdf0b544b80b6b294f3d062d325c5726a209c20"
 "checksum tokio 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)" = "5a09c0b5bb588872ab2f09afa13ee6e9dac11e10a0ec9e8e3ba39a5a5d530af6"
