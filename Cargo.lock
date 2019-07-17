@@ -625,7 +625,7 @@ dependencies = [
  "fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
- "timely 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "timely_sort 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -1125,7 +1125,7 @@ dependencies = [
  "smallvec 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "sqlparser 0.4.1-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
  "state_machine_future 0.2.0 (git+https://github.com/benesch/state_machine_future.git?branch=context-generic-bounds)",
- "timely 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "tokio 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-threadpool 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 1.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2349,27 +2349,27 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
 dependencies = [
  "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
- "timely_bytes 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
- "timely_communication 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
- "timely_logging 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_communication 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
 ]
 
 [[package]]
 name = "timely_bytes"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
 
 [[package]]
 name = "timely_communication"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
 dependencies = [
  "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2377,14 +2377,14 @@ dependencies = [
  "getopts 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
- "timely_bytes 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
- "timely_logging 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+ "timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
 ]
 
 [[package]]
 name = "timely_logging"
-version = "0.9.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#9430c46addfd33fc08b6063d2ecb916d35459a52"
+version = "0.10.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
 
 [[package]]
 name = "timely_sort"
@@ -3077,10 +3077,10 @@ dependencies = [
 "checksum textwrap 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)" = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
 "checksum thread_local 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)" = "c6b53e329000edc2b34dbe8545fd20e55a333362d0a321909685a19bd28c3f1b"
 "checksum time 0.1.42 (registry+https://github.com/rust-lang/crates.io-index)" = "db8dcfca086c1143c9270ac42a2bbd8a7ee477b78ac8e45b19abfb0cbede4b6f"
-"checksum timely 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
-"checksum timely_bytes 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
-"checksum timely_communication 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
-"checksum timely_logging 0.9.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely_communication 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
+"checksum timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)" = "<none>"
 "checksum timely_sort 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "f6e4b497ab85f6e09ea309d696342d198e444e93a4a55500bf3b0c3c53bdd4b3"
 "checksum tinytemplate 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "4574b75faccaacddb9b284faecdf0b544b80b6b294f3d062d325c5726a209c20"
 "checksum tokio 0.1.22 (registry+https://github.com/rust-lang/crates.io-index)" = "5a09c0b5bb588872ab2f09afa13ee6e9dac11e10a0ec9e8e3ba39a5a5d530af6"
