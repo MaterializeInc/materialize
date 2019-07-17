@@ -253,7 +253,10 @@ impl Datum {
                     }
                 }
                 (Value::Long(l), ScalarType::Int64) => Datum::Int64(l as i64), // TODO(benesch): safe conversion
-                (Value::Double(f), ScalarType::Float64) => Datum::Float64(f),
+                (Value::Decimal(d), ScalarType::Float64) => {
+                    let f: f64 = d.to_string().parse().unwrap();
+                    Datum::Float64(f.into())
+                }
                 (Value::SingleQuotedString(s), ScalarType::String)
                 | (Value::NationalStringLiteral(s), ScalarType::String) => Datum::String(s),
                 (Value::Boolean(b), ScalarType::Bool) => {
@@ -1663,7 +1666,10 @@ impl Planner {
     fn plan_literal<'a>(&self, l: &'a Value) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (datum, scalar_type) = match l {
             Value::Long(i) => (Datum::Int64(*i as i64), ScalarType::Int64), // TODO(benesch): safe conversion
-            Value::Double(f) => (Datum::Float64(*f), ScalarType::Float64),
+            Value::Decimal(d) => {
+                let f: f64 = d.to_string().parse().unwrap();
+                (Datum::Float64(f.into()), ScalarType::Float64)
+            }
             Value::SingleQuotedString(s) => (Datum::String(s.clone()), ScalarType::String),
             Value::NationalStringLiteral(_) => {
                 bail!("n'' string literals are not supported: {}", l.to_string())
