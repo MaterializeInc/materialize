@@ -3,7 +3,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-# This test my seem simple, but it is surprisingly good at verifying that
+# This test may seem simple, but it is surprisingly good at verifying that
 # logical timestamp handling for internal inputs is sane.
 
 statement ok
@@ -40,7 +40,7 @@ SELECT a FROM t NATURAL JOIN t2
 statement ok
 INSERT INTO t VALUES (3)
 
-query I
+query I rowsort
 SELECT a FROM t NATURAL JOIN t2
 ----
 1

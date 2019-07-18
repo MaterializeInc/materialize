@@ -28,6 +28,14 @@ pub struct CommandMeta {
     pub connection_uuid: Uuid,
 }
 
+impl CommandMeta {
+    pub fn nil() -> CommandMeta {
+        CommandMeta {
+            connection_uuid: Uuid::nil(),
+        }
+    }
+}
+
 /// Incoming raw SQL from users.
 pub type SqlCommand = String;
 
@@ -71,6 +79,8 @@ pub enum PeekWhen {
     Immediately,
     /// The peek should wait for all in-flight records at the moment of the
     /// peek to drain from the computation.
+    ///
+    /// TODO(benesch): remove this when INSERTs are no longer necessary.
     AfterFlush,
     /// The peek should occur at the specified timestamp.
     AtTimestamp(Timestamp),

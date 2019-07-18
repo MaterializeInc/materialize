@@ -13,8 +13,8 @@ use crate::sql;
 pub fn serve(
     sql_command_receiver: UnboundedReceiver<(SqlCommand, CommandMeta)>,
     sql_response_mux: SqlResponseMux,
-    dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
-    threads: Vec<std::thread::Thread>,
+    dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
+    worker0_thread: std::thread::Thread,
 ) {
     std::thread::spawn(move || {
         let mut planner = sql::Planner::default();
@@ -28,15 +28,12 @@ pub fn serve(
             };
 
             if let Some(dataflow_command) = dataflow_command {
-                for (index, dataflow_command_sender) in dataflow_command_senders.iter().enumerate()
-                {
-                    dataflow_command_sender
-                        .unbounded_send((dataflow_command.clone(), command_meta.clone()))
-                        // if the dataflow server has gone down, just explode
-                        .unwrap();
+                dataflow_command_sender
+                    .unbounded_send((dataflow_command.clone(), command_meta.clone()))
+                    // if the dataflow server has gone down, just explode
+                    .unwrap();
 
-                    threads[index].unpark();
-                }
+                worker0_thread.unpark();
             }
 
             // the response sender is allowed disappear at any time, so the error handling here is deliberately relaxed

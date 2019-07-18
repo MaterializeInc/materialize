@@ -18,6 +18,7 @@ use crate::dataflow;
 use crate::glue::*;
 use crate::pgwire;
 use crate::queue;
+use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::SniffingStream;
@@ -93,9 +94,8 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     let (sql_command_sender, sql_command_receiver) = unbounded::<(SqlCommand, CommandMeta)>();
     let sql_response_mux = SqlResponseMux::default();
-    let (dataflow_command_senders, dataflow_command_receivers) = (0..config.num_timely_workers)
-        .map(|_| unbounded::<(DataflowCommand, CommandMeta)>())
-        .unzip();
+    let (dataflow_command_sender, dataflow_command_receiver) =
+        unbounded::<(DataflowCommand, CommandMeta)>();
     let dataflow_results_mux = DataflowResultsMux::default();
 
     // timely dataflow
@@ -106,25 +106,20 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         DataflowResultsConfig::Remote => dataflow::DataflowResultsHandler::Remote,
     };
     let dd_workers = dataflow::serve(
-        dataflow_command_receivers,
+        dataflow_command_receiver,
         dataflow_results_handler,
         config.num_timely_workers,
     )?;
 
-    let threads = dd_workers
-        .guards()
-        .iter()
-        .map(|jh| jh.thread().clone())
-        .collect::<Vec<_>>();
-
     // queue and sql planner
     match &config.queue {
         QueueConfig::Transient => {
+            let worker0_thread = dd_workers.guards().into_first().thread();
             queue::transient::serve(
                 sql_command_receiver,
                 sql_response_mux.clone(),
-                dataflow_command_senders,
-                threads,
+                dataflow_command_sender,
+                worker0_thread.clone(),
             );
         }
     }
