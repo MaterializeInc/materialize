@@ -23,6 +23,7 @@ use materialize::dataflow;
 use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
 use materialize::sql::Planner;
+use ore::collections::CollectionExt;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -505,8 +506,8 @@ const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
     planner: Planner,
-    dataflow_command_senders: Vec<UnboundedSender<(DataflowCommand, CommandMeta)>>,
-    threads: Vec<std::thread::Thread>,
+    dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
+    worker0_thread: std::thread::Thread,
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<Drop>,
     dataflow_results_mux: DataflowResultsMux,
@@ -550,28 +551,22 @@ fn format_row(row: &[Datum], types: &[Type], mode: Mode) -> Vec<String> {
 impl FullState {
     fn start() -> Self {
         let planner = Planner::default();
-        let (dataflow_command_senders, dataflow_command_receivers) =
-            (0..NUM_TIMELY_WORKERS).map(|_| unbounded()).unzip();
+        let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
         let dataflow_results_mux = DataflowResultsMux::default();
         let dataflow_workers = dataflow::serve(
-            dataflow_command_receivers,
+            dataflow_command_receiver,
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone()),
             NUM_TIMELY_WORKERS,
         )
         .unwrap();
 
-        let threads = dataflow_workers
-            .guards()
-            .iter()
-            .map(|jh| jh.thread().clone())
-            .collect::<Vec<_>>();
-
+        let worker0_thread = dataflow_workers.guards().into_first().thread().clone();
         FullState {
             planner,
-            dataflow_command_senders,
+            dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
             dataflow_results_mux,
-            threads,
+            worker0_thread,
         }
     }
 
@@ -586,18 +581,16 @@ impl FullState {
             .unwrap()
             .channel(uuid)
             .unwrap();
-        for (index, dataflow_command_sender) in self.dataflow_command_senders.iter().enumerate() {
-            dataflow_command_sender
-                .unbounded_send((
-                    dataflow_command.clone(),
-                    CommandMeta {
-                        connection_uuid: uuid,
-                    },
-                ))
-                .unwrap();
+        self.dataflow_command_sender
+            .unbounded_send((
+                dataflow_command.clone(),
+                CommandMeta {
+                    connection_uuid: uuid,
+                },
+            ))
+            .unwrap();
 
-            self.threads[index].unpark();
-        }
+        self.worker0_thread.unpark();
         receiver
     }
 
@@ -844,16 +837,14 @@ impl RecordRunner for FullState {
 
 impl Drop for FullState {
     fn drop(&mut self) {
-        for (index, dataflow_command_sender) in self.dataflow_command_senders.iter().enumerate() {
-            drop(dataflow_command_sender.unbounded_send((
-                DataflowCommand::Shutdown,
-                CommandMeta {
-                    connection_uuid: Uuid::nil(),
-                },
-            )));
+        drop(self.dataflow_command_sender.unbounded_send((
+            DataflowCommand::Shutdown,
+            CommandMeta {
+                connection_uuid: Uuid::nil(),
+            },
+        )));
 
-            self.threads[index].unpark();
-        }
+        self.worker0_thread.unpark();
     }
 }
 
