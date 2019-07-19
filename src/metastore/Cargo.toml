@@ -17,7 +17,7 @@ linked-hash-map = "0.5.2"
 log = "0.4"
 ore = { path = "../ore" }
 serde = { version = "1.0.97", features = ["derive"] }
-slog = "2.4.1"
+slog = "2.5.0"
 slog-stdlog = "3.0.2"
 tokio = "0.1.22"
 tokio-zookeeper = { git = "https://github.com/jonhoo/tokio-zookeeper.git" }
