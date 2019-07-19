@@ -409,7 +409,7 @@ dependencies = [
  "rayon 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rayon-core 1.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)",
  "tinytemplate 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "walkdir 2.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -623,7 +623,7 @@ dependencies = [
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "timely_sort 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -1116,7 +1116,7 @@ dependencies = [
  "regex-syntax 0.6.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.9.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_regex 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "sha2 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1807,7 +1807,7 @@ dependencies = [
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "rdkafka-sys 1.0.0-1 (git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git)",
  "serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -2003,12 +2003,12 @@ name = "serde"
 version = "1.0.97"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.94"
+version = "1.0.97"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "proc-macro2 0.4.30 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2330,7 +2330,7 @@ dependencies = [
  "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "timely_communication 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
@@ -2351,7 +2351,7 @@ dependencies = [
  "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)",
  "timely_bytes 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "timely_logging 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
 ]
@@ -3017,7 +3017,7 @@ dependencies = [
 "checksum semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
 "checksum semver-parser 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 "checksum serde 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)" = "d46b3dfedb19360a74316866cef04687cd4d6a70df8e6a506c63512790769b72"
-"checksum serde_derive 1.0.94 (registry+https://github.com/rust-lang/crates.io-index)" = "ef45eb79d6463b22f5f9e16d283798b7c0175ba6050bc25c1a946c122727fe7b"
+"checksum serde_derive 1.0.97 (registry+https://github.com/rust-lang/crates.io-index)" = "c22a0820adfe2f257b098714323563dd06426502abbbce4f51b72ef544c5027f"
 "checksum serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)" = "051c49229f282f7c6f3813f8286cc1e3323e8051823fce42c7ea80fe13521704"
 "checksum serde_regex 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "f6df1bd02973c8c85e333287f6ac6c6a5fbed414e4be450fd6f52280b7c7b209"
 "checksum serde_urlencoded 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)" = "642dd69105886af2efd227f75a520ec9b44a820d65bc133a9131f7d229fd165a"
