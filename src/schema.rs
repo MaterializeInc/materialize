@@ -66,6 +66,14 @@ pub enum Schema {
     Float,
     /// A `double` Avro schema.
     Double,
+    /// A `bytes` or `fixed` Avro schema with a logical type of `decimal` and
+    /// the specified precision and scale. If the underlying type is `fixed`,
+    /// the `fixed_size` field specifies the size.
+    Decimal {
+        precision: usize,
+        scale: usize,
+        fixed_size: Option<usize>,
+    },
     /// A `bytes` Avro schema.
     /// `Bytes` represents a sequence of 8-bit unsigned bytes.
     Bytes,
@@ -117,6 +125,7 @@ pub(crate) enum SchemaKind {
     Long,
     Float,
     Double,
+    Decimal,
     Bytes,
     String,
     Array,
@@ -138,6 +147,7 @@ impl<'a> From<&'a Schema> for SchemaKind {
             Schema::Long => SchemaKind::Long,
             Schema::Float => SchemaKind::Float,
             Schema::Double => SchemaKind::Double,
+            Schema::Decimal { .. } => SchemaKind::Decimal,
             Schema::Bytes => SchemaKind::Bytes,
             Schema::String => SchemaKind::String,
             Schema::Array(_) => SchemaKind::Array,
@@ -160,6 +170,7 @@ impl<'a> From<&'a types::Value> for SchemaKind {
             types::Value::Long(_) => SchemaKind::Long,
             types::Value::Float(_) => SchemaKind::Float,
             types::Value::Double(_) => SchemaKind::Double,
+            types::Value::Decimal { .. } => SchemaKind::Decimal,
             types::Value::Bytes(_) => SchemaKind::Bytes,
             types::Value::String(_) => SchemaKind::String,
             types::Value::Array(_) => SchemaKind::Array,
@@ -447,6 +458,7 @@ impl Schema {
                 "array" => Schema::parse_array(complex),
                 "map" => Schema::parse_map(complex),
                 "fixed" => Schema::parse_fixed(complex),
+                "bytes" => Schema::parse_bytes(complex),
                 other => Schema::parse_primitive(other),
             },
             Some(&Value::Object(ref data)) => match data.get("type") {
@@ -545,6 +557,68 @@ impl Schema {
             .and_then(|schemas| Ok(Schema::Union(UnionSchema::new(schemas)?)))
     }
 
+    /// Parse a `serde_json::Value` representing a logical decimal type into a
+    /// `Schema`.
+    fn parse_decimal(
+        fixed_size: Option<usize>,
+        complex: &Map<String, Value>,
+    ) -> Result<Self, Error> {
+        let precision = complex
+            .get("precision")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ParseSchemaError::new("No `precision` in decimal"))?;
+
+        let scale = complex.get("scale").and_then(|v| v.as_i64()).unwrap_or(0);
+
+        if scale < 0 {
+            Err(ParseSchemaError::new(
+                "Decimal scale must be greater than zero",
+            ))?;
+        }
+
+        if precision < 0 {
+            Err(ParseSchemaError::new(
+                "Decimal precision must be greater than zero",
+            ))?;
+        }
+
+        if scale > precision {
+            Err(ParseSchemaError::new(
+                "Decimal scale is greater than precision",
+            ))?;
+        }
+
+        if let Some(fixed_size) = fixed_size {
+            let max = ((2_usize.pow((8 * fixed_size - 1) as u32) - 1) as f64).log10() as usize;
+            if precision as usize > max {
+                Err(ParseSchemaError::new(format!(
+                    "Decimal precision {} requires more than {} bytes of space",
+                    precision, fixed_size,
+                )))?
+            }
+        }
+
+        Ok(Schema::Decimal {
+            precision: precision as usize,
+            scale: scale as usize,
+            fixed_size,
+        })
+    }
+
+    /// Parse a `serde_json::Value` representing an Avro bytes type into a
+    /// `Schema`.
+    fn parse_bytes(complex: &Map<String, Value>) -> Result<Self, Error> {
+        let logical_type = complex.get("logicalType").and_then(|v| v.as_str());
+
+        match logical_type {
+            Some("decimal") => {
+                let fixed_size = None;
+                Schema::parse_decimal(fixed_size, complex)
+            }
+            _ => Ok(Schema::Bytes),
+        }
+    }
+
     /// Parse a `serde_json::Value` representing a Avro fixed type into a
     /// `Schema`.
     fn parse_fixed(complex: &Map<String, Value>) -> Result<Self, Error> {
@@ -555,10 +629,15 @@ impl Schema {
             .and_then(|v| v.as_i64())
             .ok_or_else(|| ParseSchemaError::new("No `size` in fixed"))?;
 
-        Ok(Schema::Fixed {
-            name,
-            size: size as usize,
-        })
+        let logical_type = complex.get("logicalType").and_then(|v| v.as_str());
+
+        match logical_type {
+            Some("decimal") => Schema::parse_decimal(Some(size as usize), complex),
+            _ => Ok(Schema::Fixed {
+                name,
+                size: size as usize,
+            }),
+        }
     }
 }
 
@@ -574,6 +653,22 @@ impl Serialize for Schema {
             Schema::Long => serializer.serialize_str("long"),
             Schema::Float => serializer.serialize_str("float"),
             Schema::Double => serializer.serialize_str("double"),
+            Schema::Decimal {
+                precision,
+                scale,
+                fixed_size,
+            } => {
+                let mut map = serializer.serialize_map(None)?;
+                if let Some(fixed_size) = fixed_size {
+                    map.serialize_entry("type", "fixed")?;
+                    map.serialize_entry("size", &fixed_size)?;
+                } else {
+                    map.serialize_entry("type", "bytes")?;
+                }
+                map.serialize_entry("precision", &precision)?;
+                map.serialize_entry("scale", &scale)?;
+                map.end()
+            }
             Schema::Bytes => serializer.serialize_str("bytes"),
             Schema::String => serializer.serialize_str("string"),
             Schema::Array(ref inner) => {
@@ -905,6 +1000,96 @@ mod tests {
         };
 
         assert_eq!(expected, schema);
+    }
+
+    #[test]
+    fn test_decimal_schemas() {
+        let schema = Schema::parse_str(
+            r#"{
+            "type": "fixed",
+            "name": "dec",
+            "size": 8,
+            "logicalType": "decimal",
+            "precision": 12,
+            "scale": 5
+        }"#,
+        )
+        .unwrap();
+        let expected = Schema::Decimal {
+            precision: 12,
+            scale: 5,
+            fixed_size: Some(8),
+        };
+        assert_eq!(schema, expected);
+
+        let schema = Schema::parse_str(
+            r#"{
+            "type": "bytes",
+            "logicalType": "decimal",
+            "precision": 12,
+            "scale": 5
+        }"#,
+        )
+        .unwrap();
+        let expected = Schema::Decimal {
+            precision: 12,
+            scale: 5,
+            fixed_size: None,
+        };
+        assert_eq!(schema, expected);
+
+        let res = Schema::parse_str(
+            r#"{
+            "type": "bytes",
+            "logicalType": "decimal",
+            "precision": 12,
+            "scale": 13
+        }"#,
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Failed to parse schema: Decimal scale is greater than precision"
+        );
+
+        let res = Schema::parse_str(
+            r#"{
+            "type": "bytes",
+            "logicalType": "decimal",
+            "precision": -12
+        }"#,
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Failed to parse schema: Decimal precision must be greater than zero"
+        );
+
+        let res = Schema::parse_str(
+            r#"{
+            "type": "bytes",
+            "logicalType": "decimal",
+            "precision": 12,
+            "scale": -5
+        }"#,
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Failed to parse schema: Decimal scale must be greater than zero"
+        );
+
+        let res = Schema::parse_str(
+            r#"{
+            "type": "fixed",
+            "name": "dec",
+            "size": 5,
+            "logicalType": "decimal",
+            "precision": 12,
+            "scale": 5
+        }"#,
+        );
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Failed to parse schema: Decimal precision 12 requires more than 5 bytes of space"
+        );
     }
 
     #[test]

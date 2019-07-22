@@ -49,6 +49,26 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             reader.read_exact(&mut buf[..])?;
             Ok(Value::Double(unsafe { transmute::<[u8; 8], f64>(buf) }))
         }
+        Schema::Decimal {
+            precision,
+            scale,
+            fixed_size,
+        } => {
+            let len = match fixed_size {
+                Some(len) => len,
+                None => decode_len(reader)?,
+            };
+            let mut buf = Vec::with_capacity(len);
+            unsafe {
+                buf.set_len(len);
+            }
+            reader.read_exact(&mut buf)?;
+            Ok(Value::Decimal {
+                unscaled: buf,
+                precision,
+                scale,
+            })
+        }
         Schema::Bytes => {
             let len = decode_len(reader)?;
             let mut buf = Vec::with_capacity(len);

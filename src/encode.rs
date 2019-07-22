@@ -40,6 +40,16 @@ pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
         Value::Long(i) => encode_long(*i, buffer),
         Value::Float(x) => buffer.extend_from_slice(&unsafe { transmute::<f32, [u8; 4]>(*x) }),
         Value::Double(x) => buffer.extend_from_slice(&unsafe { transmute::<f64, [u8; 8]>(*x) }),
+        Value::Decimal { unscaled, .. } => match *schema {
+            Schema::Decimal {
+                fixed_size: Some(_),
+                ..
+            } => buffer.extend(unscaled),
+            Schema::Decimal {
+                fixed_size: None, ..
+            } => encode_bytes(unscaled, buffer),
+            _ => (),
+        },
         Value::Bytes(bytes) => encode_bytes(bytes, buffer),
         Value::String(s) => match *schema {
             Schema::String => {

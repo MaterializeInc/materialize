@@ -10,7 +10,7 @@ use crate::schema::{RecordField, Schema, SchemaKind, UnionSchema};
 
 /// Describes errors happened while performing schema resolution on Avro data.
 #[derive(Fail, Debug)]
-#[fail(display = "Schema resoulution error: {}", _0)]
+#[fail(display = "Schema resolution error: {}", _0)]
 pub struct SchemaResolutionError(pub String);
 
 impl SchemaResolutionError {
@@ -39,6 +39,16 @@ pub enum Value {
     Float(f32),
     /// A `double` Avro value.
     Double(f64),
+    /// A `decimal` Avro value
+    ///
+    /// The value of the decimal can be computed as follows:
+    /// <em>unscaled</em> × 10<sup>-<em>scale</em></sup>.
+    Decimal {
+        /// An unscaled two's-complement integer value in big-endian byte order.
+        unscaled: Vec<u8>,
+        precision: usize,
+        scale: usize,
+    },
     /// A `bytes` Avro value.
     Bytes(Vec<u8>),
     /// A `string` Avro value.
@@ -262,6 +272,18 @@ impl Value {
             (&Value::Long(_), &Schema::Long) => true,
             (&Value::Float(_), &Schema::Float) => true,
             (&Value::Double(_), &Schema::Double) => true,
+            (
+                &Value::Decimal {
+                    precision: vp,
+                    scale: vs,
+                    ..
+                },
+                &Schema::Decimal {
+                    precision: sp,
+                    scale: ss,
+                    ..
+                },
+            ) => vp == sp && vs == ss,
             (&Value::Bytes(_), &Schema::Bytes) => true,
             (&Value::String(_), &Schema::String) => true,
             (&Value::Fixed(n, _), &Schema::Fixed { size, .. }) => n == size,
@@ -317,6 +339,9 @@ impl Value {
             Schema::Long => self.resolve_long(),
             Schema::Float => self.resolve_float(),
             Schema::Double => self.resolve_double(),
+            Schema::Decimal {
+                precision, scale, ..
+            } => self.resolve_decimal(precision, scale),
             Schema::Bytes => self.resolve_bytes(),
             Schema::String => self.resolve_string(),
             Schema::Fixed { size, .. } => self.resolve_fixed(size),
@@ -387,6 +412,21 @@ impl Value {
             other => {
                 Err(SchemaResolutionError::new(format!("Double expected, got {:?}", other)).into())
             }
+        }
+    }
+
+    fn resolve_decimal(self, p1: usize, s1: usize) -> Result<Self, Error> {
+        match self {
+            Value::Decimal {
+                precision: p2,
+                scale: s2,
+                ..
+            } if p1 == p2 && s1 == s2 => Ok(self),
+            other => Err(SchemaResolutionError::new(format!(
+                "Decimal({}, {}) expected, got {:?}",
+                p1, s1, other
+            ))
+            .into()),
         }
     }
 
@@ -734,6 +774,31 @@ mod tests {
     }
 
     #[test]
+    fn validate_decimal() {
+        assert!(Value::Decimal {
+            unscaled: vec![7],
+            precision: 12,
+            scale: 5
+        }
+        .validate(&Schema::Decimal {
+            precision: 12,
+            scale: 5,
+            fixed_size: None,
+        }));
+
+        assert!(!Value::Decimal {
+            unscaled: vec![7],
+            precision: 13,
+            scale: 5
+        }
+        .validate(&Schema::Decimal {
+            precision: 12,
+            scale: 5,
+            fixed_size: None,
+        }));
+    }
+
+    #[test]
     fn resolve_bytes_ok() {
         let value = Value::Array(vec![Value::Int(0), Value::Int(42)]);
         assert_eq!(
@@ -763,5 +828,41 @@ mod tests {
         let value = Value::Double(0.0);
         let reader_schema = Schema::parse_str(r#"["string", "long"]"#).unwrap();
         assert!(value.resolve(&reader_schema).is_err());
+    }
+
+    #[test]
+    fn resolve_decimal_ok() {
+        let value = Value::Decimal {
+            unscaled: vec![42],
+            precision: 12,
+            scale: 5,
+        };
+        assert_eq!(
+            value
+                .clone()
+                .resolve(&Schema::Decimal {
+                    precision: 12,
+                    scale: 5,
+                    fixed_size: None
+                })
+                .unwrap(),
+            value,
+        );
+    }
+
+    #[test]
+    fn resolve_decimal_err() {
+        let value = Value::Decimal {
+            unscaled: vec![42],
+            precision: 12,
+            scale: 5,
+        };
+        assert!(value
+            .resolve(&Schema::Decimal {
+                precision: 12,
+                scale: 6,
+                fixed_size: None
+            })
+            .is_err());
     }
 }
