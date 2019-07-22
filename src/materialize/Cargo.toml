@@ -38,7 +38,7 @@ ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 rand = "0.7"
 regex = "1.1.9"
-regex-syntax = "0.6.8"
+regex-syntax = "0.6.10"
 reqwest = "0.9.18"
 rdkafka = "0.20"
 serde = { version = "1.0", features = ["derive"] }
