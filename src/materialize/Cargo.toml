@@ -40,7 +40,7 @@ ore = { path = "../ore" }
 rand = "0.7"
 regex = "1.2.0"
 regex-syntax = "0.6.8"
-reqwest = "0.9.18"
+reqwest = "0.9.19"
 rdkafka = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
