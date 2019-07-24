@@ -1,5 +1,3 @@
-# this has to live outside the workspace until https://github.com/rust-fuzz/cargo-fuzz/issues/42 is fixed
-
 [package]
 name = "fuzz"
 version = "0.0.1"
@@ -28,12 +26,3 @@ path = "fuzz_targets/fuzz_sqllogictest.rs"
 [[bin]]
 name = "build_corpus"
 path = "bin/build_corpus.rs"
-
-# Prevent this from interfering with workspaces
-[workspace]
-members = ["."]
-
-[patch.crates-io]
-rdkafka = { git = "ssh://git@github.com/MaterializeInc/rust-rdkafka.git" }
-avro-rs = { git = "ssh://git@github.com/MaterializeInc/avro-rs.git" }
-futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch = "0.1" }
