@@ -6,7 +6,8 @@
 use bytes::Bytes;
 
 use super::types::PgType;
-use crate::repr::{Datum, RelationType};
+use crate::repr::decimal::Decimal;
+use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -53,7 +54,7 @@ pub enum BackendMessage {
     EmptyQueryResponse,
     ReadyForQuery,
     RowDescription(Vec<FieldDescription>),
-    DataRow(Vec<Datum>),
+    DataRow(Vec<Option<FieldValue>>),
     ErrorResponse {
         severity: Severity,
         code: &'static str,
@@ -81,6 +82,46 @@ pub enum FieldFormat {
     Binary = 1,
 }
 
+#[derive(Debug)]
+pub enum FieldValue {
+    Bool(bool),
+    Bytea(Vec<u8>),
+    Int4(i32),
+    Int8(i64),
+    Float4(f32),
+    Float8(f64),
+    Text(String),
+    Numeric(Decimal),
+}
+
+impl FieldValue {
+    pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<FieldValue> {
+        match datum {
+            Datum::Null => None,
+            Datum::True => Some(FieldValue::Bool(true)),
+            Datum::False => Some(FieldValue::Bool(false)),
+            Datum::Int32(i) => Some(FieldValue::Int4(i)),
+            Datum::Int64(i) => Some(FieldValue::Int8(i)),
+            Datum::Float32(f) => Some(FieldValue::Float4(*f)),
+            Datum::Float64(f) => Some(FieldValue::Float8(*f)),
+            Datum::Decimal(d) => {
+                let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
+                Some(FieldValue::Numeric(d.with_scale(scale)))
+            }
+            Datum::Bytes(b) => Some(FieldValue::Bytea(b)),
+            Datum::String(s) => Some(FieldValue::Text(s)),
+            Datum::Regex(_) => panic!("Datum::Regex cannot be converted into a FieldValue"),
+        }
+    }
+}
+
+pub fn field_values_from_row(row: Vec<Datum>, typ: &RelationType) -> Vec<Option<FieldValue>> {
+    row.into_iter()
+        .zip(typ.column_types.iter())
+        .map(|(col, typ)| FieldValue::from_datum(col, typ))
+        .collect()
+}
+
 pub fn row_description_from_type(typ: &RelationType) -> Vec<FieldDescription> {
     typ.column_types
         .iter()
@@ -92,7 +133,17 @@ pub fn row_description_from_type(typ: &RelationType) -> Vec<FieldDescription> {
                 column_id: 0,
                 type_oid: pg_type.oid,
                 type_len: pg_type.typlen,
-                type_mod: -1,
+                type_mod: match &typ.scalar_type {
+                    // NUMERIC types pack their precision and size into the
+                    // type_mod field. The high order bits store the precision
+                    // while the low order bits store the scale + 4 (!).
+                    //
+                    // https://github.com/postgres/postgres/blob/e435c1e7d/src/backend/utils/adt/numeric.c#L6364-L6367
+                    ScalarType::Decimal(precision, scale) => {
+                        ((i32::from(*precision) << 16) | i32::from(*scale)) + 4
+                    }
+                    _ => -1,
+                },
                 format: FieldFormat::Text,
             }
         })

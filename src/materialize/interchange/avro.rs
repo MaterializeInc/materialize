@@ -12,6 +12,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use url::Url;
 
+use crate::repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
 
@@ -91,6 +92,17 @@ fn validate_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
         Schema::Long => ScalarType::Int64,
         Schema::Float => ScalarType::Float32,
         Schema::Double => ScalarType::Float64,
+        Schema::Decimal {
+            precision, scale, ..
+        } => {
+            if *precision > MAX_DECIMAL_PRECISION as usize {
+                bail!(
+                    "decimals with precision greater than {} are not supported",
+                    MAX_DECIMAL_PRECISION
+                )
+            }
+            ScalarType::Decimal(*precision as u8, *scale as u8)
+        }
         Schema::Bytes | Schema::Fixed { .. } => ScalarType::Bytes,
         Schema::String | Schema::Enum { .. } => ScalarType::String,
 
@@ -203,6 +215,18 @@ fn eq_ignoring_names(a: &Schema, b: &Schema) -> bool {
         (Schema::Float, Schema::Float) => true,
         (Schema::Double, Schema::Double) => true,
         (Schema::Bytes, Schema::Bytes) => true,
+        (
+            Schema::Decimal {
+                precision: p1,
+                scale: s1,
+                fixed_size: fs1,
+            },
+            Schema::Decimal {
+                precision: p2,
+                scale: s2,
+                fixed_size: fs2,
+            },
+        ) => p1 == p2 && s1 == s2 && fs1 == fs2,
         (Schema::String, Schema::String) => true,
         (Schema::Array(a), Schema::Array(b)) => eq_ignoring_names(&*a, &*b),
         (Schema::Map(a), Schema::Map(b)) => eq_ignoring_names(&*a, &*b),
@@ -315,6 +339,9 @@ impl Decoder {
                 Value::Long(i) => Ok(Datum::Int64(i)),
                 Value::Float(f) => Ok(Datum::Float32(f.into())),
                 Value::Double(f) => Ok(Datum::Float64(f.into())),
+                Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
+                    Significand::from_twos_complement_be(&unscaled)?,
+                )),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
                 Value::String(s) => Ok(Datum::String(s)),
                 Value::Union(v) => value_to_datum(*v),

@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use crate::glue::*;
 use crate::pgwire::codec::Codec;
+use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
-use crate::repr::Datum;
+use crate::repr::{Datum, RelationType};
 use ore::future::{Recv, StreamExt};
 
 pub struct Context {
@@ -124,11 +125,15 @@ pub enum StateMachine<A: Conn + 'static> {
     HandleQuery { conn: A },
 
     #[state_machine_future(transitions(WaitForRows, Error))]
-    SendRowDescription { send: SinkSend<A> },
+    SendRowDescription {
+        send: SinkSend<A>,
+        row_type: RelationType,
+    },
 
     #[state_machine_future(transitions(WaitForRows, SendRows, Error))]
     WaitForRows {
         conn: A,
+        row_type: RelationType,
         peek_results: Vec<Vec<Datum>>,
         remaining_results: usize,
     },
@@ -290,6 +295,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
                         )),
+                        row_type: typ,
                     }),
                 }
             }
@@ -316,8 +322,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
+        let state = state.take();
         transition!(WaitForRows {
             conn,
+            row_type: state.row_type,
             peek_results: vec![],
             remaining_results: context.num_timely_workers,
         })
@@ -334,8 +342,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 state.peek_results.extend(results.unwrap_peeked());
                 state.remaining_results -= 1;
                 if state.remaining_results == 0 {
+                    let peek_results = state.peek_results;
+                    let row_type = state.row_type;
                     let stream: MessageStream = Box::new(futures::stream::iter_ok(
-                        state.peek_results.into_iter().map(BackendMessage::DataRow),
+                        peek_results.into_iter().map(move |row| {
+                            BackendMessage::DataRow(message::field_values_from_row(row, &row_type))
+                        }),
                     ));
                     transition!(SendRows {
                         send: Box::new(stream.forward(state.conn)),

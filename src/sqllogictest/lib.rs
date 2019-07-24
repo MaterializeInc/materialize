@@ -15,6 +15,7 @@ use std::str::FromStr;
 
 use failure::{bail, format_err, ResultExt};
 use futures::stream::Stream;
+use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
@@ -513,11 +514,14 @@ struct FullState {
     dataflow_results_mux: DataflowResultsMux,
 }
 
-fn format_row(row: &[Datum], types: &[Type], mode: Mode) -> Vec<String> {
-    types
-        .iter()
-        .zip(row.iter())
-        .map(|(typ, datum)| match (typ, datum) {
+fn format_row(
+    row: &[Datum],
+    col_types: &[ColumnType],
+    slt_types: &[Type],
+    mode: Mode,
+) -> Vec<String> {
+    izip!(slt_types, col_types, row)
+        .map(|(slt_typ, col_typ, datum)| match (slt_typ, datum) {
             // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
             (_, Datum::Null) => "NULL".to_owned(),
             (Type::Integer, Datum::Int64(i)) => format!("{}", i),
@@ -525,6 +529,14 @@ fn format_row(row: &[Datum], types: &[Type], mode: Mode) -> Vec<String> {
                 Mode::Standard => format!("{:.3}", f),
                 Mode::Cockroach => format!("{}", f),
             },
+            (Type::Real, Datum::Decimal(d)) => {
+                let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
+                let d = d.with_scale(scale);
+                match mode {
+                    Mode::Standard => format!("{:.3}", d),
+                    Mode::Cockroach => format!("{}", d),
+                }
+            }
             (Type::Text, Datum::String(string)) => {
                 if string.is_empty() {
                     "(empty)".to_owned()
@@ -771,7 +783,8 @@ impl RecordRunner for FullState {
                         let mut rows = results
                             .iter()
                             .map(|row| {
-                                let mut row = format_row(row, &**expected_types, *mode);
+                                let mut row =
+                                    format_row(row, &typ.column_types, &**expected_types, *mode);
                                 if *mode == Mode::Cockroach && *sort != Sort::No {
                                     row = row
                                         .into_iter()

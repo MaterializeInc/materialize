@@ -9,8 +9,7 @@ use std::borrow::Cow;
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FrontendMessage};
-use crate::repr::Datum;
+use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage};
 use ore::netio;
 
 /// A Tokio codec to encode and decode pgwire frames.
@@ -93,24 +92,23 @@ impl Encoder for Codec {
             BackendMessage::DataRow(fields) => {
                 buf.put_u16_be(fields.len() as u16);
                 for f in fields {
-                    if f == Datum::Null {
-                        buf.put_i32_be(-1);
-                        continue;
+                    if let Some(f) = f {
+                        let s: Cow<[u8]> = match f {
+                            FieldValue::Bool(false) => b"f"[..].into(),
+                            FieldValue::Bool(true) => b"t"[..].into(),
+                            FieldValue::Bytea(b) => b.into(),
+                            FieldValue::Int4(i) => format!("{}", i).into_bytes().into(),
+                            FieldValue::Int8(i) => format!("{}", i).into_bytes().into(),
+                            FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),
+                            FieldValue::Float8(f) => format!("{}", f).into_bytes().into(),
+                            FieldValue::Numeric(n) => format!("{}", n).into_bytes().into(),
+                            FieldValue::Text(ref s) => s.as_bytes().into(),
+                        };
+                        buf.put_u32_be(s.len() as u32);
+                        buf.put(&*s);
+                    } else {
+                        buf.put_i32_be(-1)
                     }
-                    let s: Cow<[u8]> = match f {
-                        Datum::Null => unreachable!(), // handled above
-                        Datum::False => b"f"[..].into(),
-                        Datum::True => b"t"[..].into(),
-                        Datum::Int32(i) => format!("{}", i).into_bytes().into(),
-                        Datum::Int64(i) => format!("{}", i).into_bytes().into(),
-                        Datum::Float32(f) => format!("{}", f).into_bytes().into(),
-                        Datum::Float64(f) => format!("{}", f).into_bytes().into(),
-                        Datum::Bytes(ref b) => b.into(),
-                        Datum::String(ref s) => s.as_bytes().into(),
-                        Datum::Regex(_) => panic!("Datum::Regex cannot be sent over pgwire"),
-                    };
-                    buf.put_u32_be(s.len() as u32);
-                    buf.put(&*s);
                 }
             }
             BackendMessage::CommandComplete { tag } => {

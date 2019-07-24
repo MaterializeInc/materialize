@@ -56,6 +56,12 @@ pub const FLOAT8: PgType = PgType {
     typlen: 8,
 };
 
+/// Arbitrary-precision decimal.
+pub const NUMERIC: PgType = PgType {
+    oid: 1700,
+    typlen: -1,
+};
+
 // /// A pseudo-type representing a composite record (i.e., a tuple) of any type.
 // pub const RECORD: PgType = PgType {
 //     oid: 2249,
@@ -77,7 +83,7 @@ impl From<&ScalarType> for PgType {
             ScalarType::Int64 => INT8,
             ScalarType::Float32 => FLOAT4,
             ScalarType::Float64 => FLOAT8,
-            ScalarType::Decimal(_, _) => unimplemented!(),
+            ScalarType::Decimal { .. } => NUMERIC,
             ScalarType::Date => unimplemented!(),
             ScalarType::Timestamp => unimplemented!(),
             ScalarType::Time => unimplemented!(),

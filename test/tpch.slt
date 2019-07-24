@@ -105,8 +105,8 @@ SELECT
 	l_linestatus,
 	sum(l_quantity) as sum_qty,
 	sum(l_extendedprice) as sum_base_price,
-	sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
-	sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
+	sum(l_extendedprice * (1.00 - l_discount)) as sum_disc_price,
+	sum(l_extendedprice * (1.00 - l_discount) * (1.00 + l_tax)) as sum_charge,
 	avg(l_quantity) as avg_qty,
 	avg(l_extendedprice) as avg_price,
 	avg(l_discount) as avg_disc,
@@ -115,7 +115,7 @@ FROM
 	lineitem
 WHERE
 --	l_shipdate <= date '1998-12-01' - interval ':1' day (3)
-    l_shipdate <= cast(904608000/86400 as smallint)
+    l_shipdate <= cast(10562 as smallint)
 GROUP BY
 	l_returnflag,
 	l_linestatus
@@ -165,7 +165,8 @@ query TTT valuesort
 -- Query 03
 select
     l_orderkey,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
+    sum(l_extendedprice * (1.00 - l_discount)) as revenue,
+    count(*) as number,
     o_orderdate,
     o_shippriority
 from
@@ -176,8 +177,10 @@ where
     c_mktsegment = 'BUILDING'
     and c_custkey = o_custkey
     and l_orderkey = o_orderkey
-    and o_orderdate < cast(795225600/86400 as smallint)
-    and l_shipdate > cast(795225600/86400 as smallint)
+--  and o_orderdate < date '1995-03-15'
+--  and l_shipdate > date '1995-03-15'
+    and o_orderdate < 9203
+    and l_shipdate > 9203
 group by
     l_orderkey,
     o_orderdate,
@@ -216,7 +219,7 @@ query TTT valuesort
 -- Query 05
 select
     n_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue
+    sum(l_extendedprice * (1.00 - l_discount)) as revenue
 from
     customer,
     orders,
@@ -232,6 +235,8 @@ where
     and s_nationkey = n_nationkey
     and n_regionkey = r_regionkey
     and r_name = 'ASIA'
+--  and o_orderdate >= date '1994-01-01'
+--  and o_orderdate < date '1995-01-01'
     and o_orderdate >= cast(8765 as smallint)
     and o_orderdate < cast(9130 as smallint)
 group by
@@ -247,7 +252,7 @@ select
 from
     lineitem
 where
-    l_quantity < 24
+    l_quantity < 24.00
 --  and l_shipdate >= date '1994-01-01'
 --  and l_shipdate < date '1994-01-01' + interval '1' year
     and l_shipdate >= cast(8765 as smallint)
@@ -380,7 +385,7 @@ query TTT valuesort
 select
     c_custkey,
     c_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
+    sum(l_extendedprice * (1.00 - l_discount)) as revenue,
     c_acctbal,
     n_name,
     c_address,
@@ -394,8 +399,10 @@ from
 where
     c_custkey = o_custkey
     and l_orderkey = o_orderkey
-    and o_orderdate >= cast(749433600/86400 as smallint)
-    and o_orderdate < cast(757382400/86400 as smallint)
+--  and o_orderdate >= date '1993-10-01'
+--  and o_orderdate < date '1993-10-01' + interval '3' month
+    and o_orderdate >= 8673
+    and o_orderdate < 8765
     and l_returnflag = 'R'
     and c_nationkey = n_nationkey
 group by
