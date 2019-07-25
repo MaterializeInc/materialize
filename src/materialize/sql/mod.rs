@@ -1176,6 +1176,20 @@ impl Planner {
             (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
             (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
             (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
+            (Decimal(_, s), Int32) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt32),
+            (Decimal(_, s), Int64) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt64),
+            (Decimal(_, s), Float32) => {
+                let factor = 10_f32.powi(i32::from(*s));
+                let factor = ScalarExpr::Literal(Datum::from(factor));
+                expr.call_unary(CastDecimalToFloat32)
+                    .call_binary(factor, BinaryFunc::DivFloat32)
+            }
+            (Decimal(_, s), Float64) => {
+                let factor = 10_f64.powi(i32::from(*s));
+                let factor = ScalarExpr::Literal(Datum::from(factor));
+                expr.call_unary(CastDecimalToFloat64)
+                    .call_binary(factor, BinaryFunc::DivFloat64)
+            }
             (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
             (Null, _) => expr,
             (from, to) if from == to => expr,

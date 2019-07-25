@@ -162,6 +162,34 @@ pub fn cast_float64_to_int64(a: Datum) -> Datum {
     Datum::from(a.unwrap_float64() as i64)
 }
 
+pub fn cast_decimal_to_int32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal().into_i128() as i32)
+}
+
+pub fn cast_decimal_to_int64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal().into_i128() as i64)
+}
+
+pub fn cast_decimal_to_float32(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal().into_i128() as f32)
+}
+
+pub fn cast_decimal_to_float64(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal().into_i128() as f64)
+}
+
 pub fn add_int32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -576,6 +604,10 @@ pub enum UnaryFunc {
     CastFloat32ToInt64,
     CastFloat32ToFloat64,
     CastFloat64ToInt64,
+    CastDecimalToInt32,
+    CastDecimalToInt64,
+    CastDecimalToFloat32,
+    CastDecimalToFloat64,
     BuildLikeRegex,
 }
 
@@ -603,6 +635,10 @@ impl UnaryFunc {
             UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64,
             UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64,
             UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64,
+            UnaryFunc::CastDecimalToInt32 => cast_decimal_to_int32,
+            UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
+            UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
+            UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
             UnaryFunc::BuildLikeRegex => build_like_regex,
         }
     }
