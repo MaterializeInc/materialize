@@ -41,16 +41,15 @@ pub struct Config {
     timely_configuration: timely::Configuration,
 }
 
-impl Config { 
+impl Config {
     /// Constructs a materialize configuration from a timely dataflow configuration.
     pub fn from_timely(timely_configuration: timely::Configuration) -> Self {
-
-        let num_timely_workers = match &timely_configuration { 
+        let num_timely_workers = match &timely_configuration {
             timely::Configuration::Thread => 1,
             timely::Configuration::Process(n) => *n,
-            timely::Configuration::Cluster{threads, addresses, ..} => {
-                threads * addresses.len()
-            },
+            timely::Configuration::Cluster {
+                threads, addresses, ..
+            } => threads * addresses.len(),
         };
 
         Self {
@@ -115,9 +114,9 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
-
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
-    let (sql_command_sender, sql_command_receiver) = crate::glue::unbounded::<(SqlCommand, CommandMeta)>();
+    let (sql_command_sender, sql_command_receiver) =
+        crate::glue::unbounded::<(SqlCommand, CommandMeta)>();
     let sql_response_mux = SqlResponseMux::default();
     let (dataflow_command_sender, dataflow_command_receiver) =
         crate::glue::unbounded::<(DataflowCommand, CommandMeta)>();
@@ -127,7 +126,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     let is_primary = match &config.timely_configuration {
         timely::Configuration::Thread => true,
         timely::Configuration::Process(_) => true,
-        timely::Configuration::Cluster{process, ..} => process == &0,
+        timely::Configuration::Cluster { process, .. } => process == &0,
     };
     let dataflow_results_handler = match config.dataflow_results {
         DataflowResultsConfig::Local => {
