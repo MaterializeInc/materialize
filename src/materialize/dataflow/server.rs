@@ -418,7 +418,7 @@ where
                 match self
                     .inputs
                     .get_mut(&insert.name)
-                    .expect(&format!("Failed to find input: {:?}", insert.name))
+                    .unwrap_or_else(|| panic!("Failed to find input: {:?}", insert.name))
                 {
                     InputCapability::Local { handle, .. } => {
                         let time = *insert.capability.time();
