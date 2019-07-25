@@ -568,7 +568,7 @@ impl FullState {
         let dataflow_workers = dataflow::serve(
             dataflow_command_receiver,
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone()),
-            NUM_TIMELY_WORKERS,
+            timely::Configuration::Process(NUM_TIMELY_WORKERS),
         )
         .unwrap();
 

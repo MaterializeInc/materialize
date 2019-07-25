@@ -38,6 +38,27 @@ pub struct Config {
     queue: QueueConfig,
     num_timely_workers: usize,
     dataflow_results: DataflowResultsConfig,
+    timely_configuration: timely::Configuration,
+}
+
+impl Config {
+    /// Constructs a materialize configuration from a timely dataflow configuration.
+    pub fn from_timely(timely_configuration: timely::Configuration) -> Self {
+        let num_timely_workers = match &timely_configuration {
+            timely::Configuration::Thread => 1,
+            timely::Configuration::Process(n) => *n,
+            timely::Configuration::Cluster {
+                threads, addresses, ..
+            } => threads * addresses.len(),
+        };
+
+        Self {
+            queue: QueueConfig::Transient,
+            num_timely_workers,
+            dataflow_results: DataflowResultsConfig::Remote,
+            timely_configuration,
+        }
+    }
 }
 
 impl Default for Config {
@@ -46,6 +67,7 @@ impl Default for Config {
             queue: QueueConfig::Transient,
             num_timely_workers: 4,
             dataflow_results: DataflowResultsConfig::Remote,
+            timely_configuration: timely::Configuration::Process(4),
         }
     }
 }
@@ -92,13 +114,20 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
-    let (sql_command_sender, sql_command_receiver) = unbounded::<(SqlCommand, CommandMeta)>();
+    // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
+    let (sql_command_sender, sql_command_receiver) =
+        crate::glue::unbounded::<(SqlCommand, CommandMeta)>();
     let sql_response_mux = SqlResponseMux::default();
     let (dataflow_command_sender, dataflow_command_receiver) =
-        unbounded::<(DataflowCommand, CommandMeta)>();
+        crate::glue::unbounded::<(DataflowCommand, CommandMeta)>();
     let dataflow_results_mux = DataflowResultsMux::default();
 
-    // timely dataflow
+    // Initialize timely dataflow computation.
+    let is_primary = match &config.timely_configuration {
+        timely::Configuration::Thread => true,
+        timely::Configuration::Process(_) => true,
+        timely::Configuration::Cluster { process, .. } => process == &0,
+    };
     let dataflow_results_handler = match config.dataflow_results {
         DataflowResultsConfig::Local => {
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone())
@@ -108,7 +137,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     let dd_workers = dataflow::serve(
         dataflow_command_receiver,
         dataflow_results_handler,
-        config.num_timely_workers,
+        config.timely_configuration,
     )?;
 
     // queue and sql planner
@@ -125,28 +154,30 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     }
 
     // pgwire / http server
-    let listen_addr: SocketAddr = "127.0.0.1:6875".parse()?;
-    let listener = TcpListener::bind(&listen_addr)?;
-    let start = future::lazy(move || {
-        let server = listener
-            .incoming()
-            .for_each(move |stream| {
-                tokio::spawn(handle_connection(
-                    stream,
-                    sql_command_sender.clone(),
-                    sql_response_mux.clone(),
-                    dataflow_results_mux.clone(),
-                    config.num_timely_workers,
-                ));
-                Ok(())
-            })
-            .map_err(|err| error!("error accepting connection: {}", err));
-        tokio::spawn(server);
+    if is_primary {
+        let listen_addr: SocketAddr = "127.0.0.1:6875".parse()?;
+        let listener = TcpListener::bind(&listen_addr)?;
+        let num_timely_workers = config.num_timely_workers;
+        let start = future::lazy(move || {
+            let server = listener
+                .incoming()
+                .for_each(move |stream| {
+                    tokio::spawn(handle_connection(
+                        stream,
+                        sql_command_sender.clone(),
+                        sql_response_mux.clone(),
+                        dataflow_results_mux.clone(),
+                        num_timely_workers,
+                    ));
+                    Ok(())
+                })
+                .map_err(|err| error!("error accepting connection: {}", err));
+            tokio::spawn(server);
 
-        Ok(())
-    });
-    tokio::run(start);
-    println!("materialized listening on {}...", listen_addr);
-
+            Ok(())
+        });
+        tokio::run(start);
+        println!("materialized listening on {}...", listen_addr);
+    }
     Ok(())
 }
