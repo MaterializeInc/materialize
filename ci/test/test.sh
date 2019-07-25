@@ -71,9 +71,6 @@ if [[ ! "$fast" ]]; then
     try target/debug/testdrive "${args[@]}" test/*.td
 fi
 
-cd fuzz
-try cargo check
-
 echo "+++ Status report"
 echo "$passed/$total commands passed"
 if ((passed != total)); then
