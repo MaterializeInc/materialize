@@ -196,7 +196,9 @@ where
                 self.handle_command(cmd, cmd_meta);
             }
 
-            self.process_peeks();
+            if !shutdown {
+                self.process_peeks();
+            }
         }
     }
 
@@ -416,7 +418,7 @@ where
                 match self
                     .inputs
                     .get_mut(&insert.name)
-                    .expect("Failed to find input")
+                    .unwrap_or_else(|| panic!("Failed to find input: {:?}", insert.name))
                 {
                     InputCapability::Local { handle, .. } => {
                         let time = *insert.capability.time();
