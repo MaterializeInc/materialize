@@ -33,11 +33,11 @@ use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
     dataflow_results_handler: DataflowResultsHandler,
-    num_workers: usize,
+    timely_configuration: timely::Configuration,
 ) -> Result<WorkerGuards<()>, String> {
     let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
 
-    timely::execute(timely::Configuration::Process(num_workers), move |worker| {
+    timely::execute(timely_configuration, move |worker| {
         let dataflow_command_receiver = if worker.index() == 0 {
             dataflow_command_receiver.lock().unwrap().take()
         } else {

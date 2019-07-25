@@ -14,6 +14,7 @@ path = "lib.rs"
 [dependencies]
 itertools = "0.8.0"
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", features = ["bincode"] }
 materialize = { path = "../materialize" }
 ore = { path = "../ore" }
 getopts = "0.2"

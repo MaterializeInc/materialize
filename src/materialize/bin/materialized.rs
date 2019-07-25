@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! The main Material server.
+//! The main Materialize server.
 //!
 //! The name is pronounced "materialize-dee." It listens on port 6875 (MTRL).
 //!
@@ -14,9 +14,9 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use backtrace::Backtrace;
-use getopts::Options;
+// use getopts::Options;
 use lazy_static::lazy_static;
-use std::env;
+// use std::env;
 use std::error::Error;
 use std::panic;
 use std::panic::PanicInfo;
@@ -24,24 +24,13 @@ use std::process;
 use std::sync::Mutex;
 use std::thread;
 
-use materialize::server;
-
 fn main() -> Result<(), Box<dyn Error>> {
     panic::set_hook(Box::new(handle_panic));
     ore::log::init();
 
-    let args: Vec<_> = env::args().collect();
-    let mut opts = Options::new();
-    opts.optflag("h", "help", "show this usage information");
-
-    let popts = opts.parse(&args[1..])?;
-
-    if popts.opt_present("h") {
-        print!("{}", opts.usage("usage: materialized [options]"));
-        return Ok(());
-    }
-
-    server::serve(server::Config::default())
+    let timely_configuration = timely::Configuration::from_args(std::env::args())?;
+    let materialize_configuration = materialize::server::Config::from_timely(timely_configuration);
+    materialize::server::serve(materialize_configuration)
 }
 
 lazy_static! {

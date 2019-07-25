@@ -2124,6 +2124,7 @@ dependencies = [
  "ore 0.1.0",
  "regex 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "sqlparser 0.4.1-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)",
+ "timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
  "uuid 0.7.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "walkdir 2.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
