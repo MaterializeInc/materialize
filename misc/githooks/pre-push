@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # Copyright 2019 Materialize, Inc. All rights reserved.
 #
 # This file is part of Materialize. Materialize may not be used or
@@ -10,22 +11,28 @@
 #
 #     $ ln -s ../../misc/githooks/pre-push .git/hooks/pre-push
 #
-# If this githook is too slow, try the faster version in pre-push.lite.
 
 set -euo pipefail
 
-if [[ "$1" != master ]]; then
-    exit 0
-fi
-
-oldlist=$(git stash list)
-git stash save -q -u
-newlist=$(git stash list)
-unstash() {
-  if [[ "$oldlist" != "$newlist" ]]; then
-    git stash pop -q --index || true
-  fi
-}
-trap unstash EXIT
-
-bin/ci-test --fast
+while read local_ref local_sha remote_ref remote_sha; do
+    if [[ "$remote_ref" = refs/heads/master ]]; then
+        oldlist=$(git stash list)
+        git stash save --quiet --include-untracked
+        newlist=$(git stash list)
+        oldref=$(git symbolic-ref --quiet HEAD)
+        if [[ -z "$oldref" ]]; then
+            oldref=$(git rev-parse HEAD)
+        fi
+        git checkout --quiet "$local_sha"
+        reset() {
+            if [[ "$oldlist" != "$newlist" ]]; then
+                git stash pop --quiet --index || true
+            fi
+            if [[ "$oldref" != "$local_sha" ]]; then
+                git checkout --quiet -
+            fi
+        }
+        trap reset EXIT
+        bin/ci-test --fast
+    fi
+done
