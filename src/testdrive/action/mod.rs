@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use lazy_static::lazy_static;
+use rand::Rng;
 use regex::{Captures, Regex};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -23,6 +24,7 @@ pub struct Config {
 }
 
 pub struct State {
+    seed: u32,
     pgconn: postgres::Client,
     schema_registry_url: String,
     ccsr_client: ccsr::Client,
@@ -51,6 +53,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
         "testdrive.schema-registry-url".into(),
         state.schema_registry_url.clone(),
     );
+    vars.insert("testdrive.seed".into(), state.seed.to_string());
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -115,6 +118,8 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
 }
 
 pub fn create_state(config: &Config) -> Result<State, Error> {
+    let seed = rand::thread_rng().gen();
+
     let pgconn = {
         let url = config
             .materialized_url
@@ -185,6 +190,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
     };
 
     Ok(State {
+        seed,
         pgconn,
         schema_registry_url,
         ccsr_client,

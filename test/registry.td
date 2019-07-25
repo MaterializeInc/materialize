@@ -77,7 +77,7 @@ $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v1} publish=true timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/data'
+> CREATE SOURCE data_v1 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > PEEK data_v1
@@ -91,7 +91,7 @@ $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp
 $ kafka-ingest format=avro topic=data schema=${schema_v2} publish=true timestamp=4
 {"before": null, "after": null}
 
-> CREATE SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/data'
+> CREATE SOURCE data_v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > PEEK data_v1

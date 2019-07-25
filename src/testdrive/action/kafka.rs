@@ -26,7 +26,6 @@ use rdkafka::producer::FutureRecord;
 use serde_json::Value as JsonValue;
 use std::convert::{TryFrom, TryInto};
 use std::num::TryFromIntError;
-use std::thread;
 use std::time::Duration;
 
 use crate::action::{Action, State};
@@ -35,16 +34,16 @@ use ore::collections::CollectionExt;
 use ore::future::StreamExt;
 
 pub struct IngestAction {
-    topic: String,
+    topic_prefix: String,
     schema: String,
     timestamp: Option<i64>,
-    ccsr_subject: Option<String>,
+    publish: bool,
     rows: Vec<String>,
 }
 
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = cmd.args.string("format")?;
-    let topic = cmd.args.string("topic")?;
+    let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let schema = cmd.args.string("schema")?;
     let timestamp = cmd.args.opt_parse("timestamp")?;
     let publish = cmd.args.opt_bool("publish")?;
@@ -52,94 +51,149 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     if format != "avro" {
         return Err("formats besides avro are not supported".into());
     }
-    let ccsr_subject = if publish {
-        Some(format!("{}-value", topic))
-    } else {
-        None
-    };
     Ok(IngestAction {
-        topic,
+        topic_prefix,
         schema,
         timestamp,
-        ccsr_subject,
+        publish,
         rows: cmd.input,
     })
 }
 
 impl Action for IngestAction {
     fn undo(&self, state: &mut State) -> Result<(), String> {
-        if let Some(subject) = &self.ccsr_subject {
-            println!("Deleting schema for {:?}", self.topic);
-            match state.ccsr_client.delete_subject(subject) {
-                Ok(()) | Err(ccsr::DeleteError::SubjectNotFound) => (),
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-
         let metadata = state
             .kafka_consumer
             .fetch_metadata(None, Some(Duration::from_secs(1)))
             .map_err(|e| e.to_string())?;
-        if !metadata.topics().iter().any(|t| t.name() == self.topic) {
-            // The topic is already deleted. Deleting it again will fire off an
-            // asynchronous deletion request that may interfere with our attempt
-            // to create the topic below.
-            return Ok(());
-        }
 
-        println!("Deleting Kafka topic {:?}", self.topic);
-        let res = state
-            .kafka_admin
-            .delete_topics(&[&self.topic], &state.kafka_admin_opts)
-            .wait();
-        let res = match res {
-            Err(err) => return Err(err.to_string()),
-            Ok(res) => res,
-        };
-        if res.len() != 1 {
-            return Err(format!(
-                "kafka topic deletion returned {} results, but exactly one result was expected",
-                res.len()
-            ));
-        }
-        match res.into_element() {
-            Ok(_) | Err((_, RDKafkaError::UnknownTopicOrPartition)) => (),
-            Err((_, err)) => Err(err.to_string())?,
-        }
+        let stale_kafka_topics: Vec<_> = metadata
+            .topics()
+            .iter()
+            .filter_map(|t| {
+                if t.name().starts_with(&self.topic_prefix) {
+                    Some(t.name())
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-        let mut backoff = ExponentialBackoff::default();
-        backoff.max_elapsed_time = Some(Duration::from_secs(5));
-        (|| {
-            let metadata = state
-                .kafka_consumer
-                // N.B. It is extremely important not to ask specifically
-                // about the topic here, even though the API supports it!
-                // Asking about the topic will create it automatically...
-                // with the wrong number of partitions. Yes, this is
-                // unbelievably horrible.
-                .fetch_metadata(None, Some(Duration::from_secs(1)))
-                .map_err(|e| e.to_string())?;
-            if metadata.topics().iter().any(|t| t.name() == self.topic) {
-                Err(format!("topic {} not deleted yet", self.topic))?
+        if !stale_kafka_topics.is_empty() {
+            println!(
+                "Deleting stale Kafka topics {}",
+                stale_kafka_topics.join(", ")
+            );
+            let res = state
+                .kafka_admin
+                .delete_topics(&stale_kafka_topics, &state.kafka_admin_opts)
+                .wait();
+            let res = match res {
+                Err(err) => return Err(err.to_string()),
+                Ok(res) => res,
+            };
+            if res.len() != stale_kafka_topics.len() {
+                return Err(format!(
+                    "kafka topic deletion returned {} results, but exactly {} expected",
+                    res.len(),
+                    stale_kafka_topics.len()
+                ));
             }
-            Ok(())
-        })
-        .retry(&mut backoff)
-        .map_err(|e| e.to_string())?;
+            for (res, topic) in res.iter().zip(stale_kafka_topics.iter()) {
+                match res {
+                    Ok(_) | Err((_, RDKafkaError::UnknownTopicOrPartition)) => (),
+                    Err((_, err)) => {
+                        eprintln!("warning: unable to delete {}: {}", topic, err.to_string())
+                    }
+                }
+            }
+        }
 
-        // Apparently Kafka lies about when the deletion is processed. Wait a
-        // bit so the deletion request doesn't nuke us when we create the topic
-        // later.
-        thread::sleep(Duration::from_millis(100));
+        if self.publish {
+            let subjects = state
+                .ccsr_client
+                .list_subjects()
+                .map_err(|e| format!("unable to list subjects in schema registry: {}", e))?;
+
+            let stale_subjects: Vec<_> = subjects
+                .iter()
+                .filter(|s| s.starts_with(&self.topic_prefix))
+                .collect();
+
+            for subject in stale_subjects {
+                println!("Deleting stale schema registry subject {}", subject);
+                match state.ccsr_client.delete_subject(&subject) {
+                    Ok(()) | Err(ccsr::DeleteError::SubjectNotFound) => (),
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+        }
 
         Ok(())
     }
 
     fn redo(&self, state: &mut State) -> Result<(), String> {
-        println!("Ingesting data into Kafka topic {:?}", self.topic);
+        // NOTE(benesch): it is critical that we invent a new topic name on
+        // every testdrive run. We previously tried to delete and recreate the
+        // topic with a fixed name, but ran into serious race conditions in
+        // Kafka that would regularly cause CI to hang. Details follow.
+        //
+        // Kafka topic creation and deletion is documented to be asynchronous.
+        // That seems fine at first, as the Kafka admin API exposes an
+        // `operation_timeout` option that would appear to allow you to opt into
+        // a synchronous request by setting a massive timeout. As it turns out,
+        // this parameter doesn't actually do anything [0].
+        //
+        // So, fine, we can implement our own polling for topic creation and
+        // deletion, since the Kafka API exposes the list of topics currently
+        // known to Kafka. This polling works well enough for topic creation.
+        // After issuing a CreateTopics request, we poll the metadata list until
+        // the topic appears with the requested number of partitions. (Yes,
+        // sometimes the topic will appear with the wrong number of partitions
+        // at first, and later sort itself out.)
+        //
+        // For deletion, though, there's another problem. Not only is deletion
+        // of the topic metadata asynchronous, but deletion of the
+        // topic data is *also* asynchronous, and independently so. As best as
+        // I can tell, the following sequence of events is not only plausible,
+        // but likely:
+        //
+        //     1. Client issues DeleteTopics(FOO).
+        //     2. Kafka launches garbage collection of topic FOO.
+        //     3. Kafka deletes metadata for topic FOO.
+        //     4. Client polls and discovers topic FOO's metadata is gone.
+        //     5. Client issues CreateTopics(FOO).
+        //     6. Client writes some data to topic FOO.
+        //     7. Kafka deletes data for topic FOO, including the data that was
+        //        written to the second incarnation of topic FOO.
+        //     8. Client attempts to read data written to topic FOO and waits
+        //        forever, since there is no longer any data in the topic.
+        //        Client becomes very confused and sad.
+        //
+        // There doesn't appear to be any sane way to poll to determine whether
+        // the data has been deleted, since Kafka doesn't expose how many
+        // messages are in a topic, and it's therefore impossible to distinguish
+        // an empty topic from a deleted topic. And that's not even accounting
+        // for the behavior when auto.create.topics.enable is true, which it
+        // is by default, where asking about a topic that doesn't exist will
+        // automatically create it.
+        //
+        // All this to say: please think twice before changing the topic naming
+        // strategy.
+        //
+        // [0]: https://github.com/confluentinc/confluent-kafka-python/issues/524#issuecomment-456783176
+        let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
+
+        let ccsr_subject = if self.publish {
+            Some(format!("{}-value", topic_name))
+        } else {
+            None
+        };
+
+        println!("Ingesting data into Kafka topic {:?}", topic_name);
         {
             let num_partitions = 1;
-            let new_topic = NewTopic::new(&self.topic, num_partitions, TopicReplication::Fixed(1));
+            let new_topic = NewTopic::new(&topic_name, num_partitions, TopicReplication::Fixed(1));
             let res = state
                 .kafka_admin
                 .create_topics(&[new_topic], &state.kafka_admin_opts)
@@ -179,11 +233,11 @@ impl Action for IngestAction {
                 if metadata.topics().is_empty() {
                     Err("metadata fetch returned no topics".to_string())?
                 }
-                let topic = match metadata.topics().iter().find(|t| t.name() == self.topic) {
+                let topic = match metadata.topics().iter().find(|t| t.name() == topic_name) {
                     Some(topic) => topic,
                     None => Err(format!(
                         "metadata fetch did not return topic {}",
-                        self.topic
+                        topic_name,
                     ))?,
                 };
                 if topic.partitions().is_empty() {
@@ -191,7 +245,7 @@ impl Action for IngestAction {
                 } else if topic.partitions().len() != 1 {
                     Err(format!(
                         "topic {} was created with {} partitions when exactly one was expected",
-                        self.topic,
+                        topic_name,
                         topic.partitions().len()
                     ))?
                 }
@@ -200,10 +254,10 @@ impl Action for IngestAction {
             .retry(&mut backoff)
             .map_err(|e| e.to_string())?
         }
-        let schema_id = if let Some(subject) = &self.ccsr_subject {
+        let schema_id = if let Some(subject) = ccsr_subject {
             state
                 .ccsr_client
-                .publish_schema(subject, &self.schema)
+                .publish_schema(&subject, &self.schema)
                 .map_err(|e| format!("schema registry error: {}", e))?
         } else {
             1
@@ -230,7 +284,7 @@ impl Action for IngestAction {
             buf.write_i32::<NetworkEndian>(schema_id).unwrap();
             buf.extend(avro_rs::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
 
-            let mut record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&self.topic).payload(&buf);
+            let mut record: FutureRecord<&Vec<u8>, _> = FutureRecord::to(&topic_name).payload(&buf);
             if let Some(timestamp) = self.timestamp {
                 record = record.timestamp(timestamp);
             }
