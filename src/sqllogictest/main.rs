@@ -24,6 +24,11 @@ fn main() {
     opts.optflagmulti("v", "verbose", "verbosity");
     opts.optflag("h", "help", "show this usage information");
     opts.optflag("", "only-parse", "only attempt to parse queries");
+    opts.optflag(
+        "",
+        "fail",
+        "exit with a failing code unless all queries successful",
+    );
     opts.optopt(
         "",
         "expect-outcomes",
@@ -42,6 +47,9 @@ fn main() {
     if popts.opt_present("h") || popts.free.is_empty() {
         eprint!("{}", opts.usage(USAGE));
         process::exit(1);
+    } else if popts.opt_present("fail") && popts.opt_present("expect-outcomes") {
+        eprint!("--fail and --expect-outcomes cannot be specified together");
+        process::exit(1)
     }
 
     let expected_outcomes: Option<Outcomes> = match popts.opt_str("expect-outcomes") {
@@ -59,7 +67,7 @@ fn main() {
     let only_parse = popts.opt_present("only-parse");
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
-    for path in popts.free {
+    for path in &popts.free {
         if path == "-" {
             outcomes += sqllogictest::run_stdin(verbosity, only_parse);
         } else {
@@ -101,6 +109,14 @@ fn main() {
             }
             eprintln!("outcomes did not match expectation");
             process::exit(1);
+        }
+    } else if popts.opt_present("fail") {
+        if outcomes.any_failed() {
+            eprintln!("FAIL");
+            process::exit(1);
+        } else {
+            eprintln!("PASS");
+            process::exit(0);
         }
     } else {
         process::exit(0);

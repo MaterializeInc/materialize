@@ -495,7 +495,7 @@ impl fmt::Display for Outcomes {
 
 impl Outcomes {
     pub fn any_failed(&self) -> bool {
-        self.0[0] + self.0[6] < self.0.iter().sum::<usize>()
+        self.0[9] < self.0.iter().sum::<usize>()
     }
 }
 
