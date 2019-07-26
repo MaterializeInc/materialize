@@ -35,16 +35,15 @@ is the documentation in the repository's README, at
 
 At the time of writing, we use EC2's c5.2xlarge instances, which have 8 vCPUs
 (i.e., hyperthreads) and 16GB of memory. These instances cost approximately $250
-per month, so the stack is configured to downscale aggressively. We leave one
-instance running at all times, however, to minimize latency; this agent will
-have a warm Cargo and Docker cache, and so will typically be much faster at
-running builds.
+per month, so the stack is configured to downscale aggressively.
 
-TODO(benesch): we should hook up sccache with a distributed storage engine,
-so that fresh build agents don't need to recompile the world from scratch.
-
-TODO(benesch): we could consider warming the Docker cache, so that fresh
-build agents don't need to waste time downloading the latest Docker images.
+We run two CloudFormation stacks, "buildkite" and "buildkite-builders." At the
+time of writing, the builders stack is configured to always run exactly one
+agent, though we may need to bump this in the future. Pipelines are written so
+that the builders stack is used to run `cargo build`, then immediately farm the
+resulting binaries out to agents on the other stack. That way agents in the
+builder stack have a warm Cargo and Docker cache, and will typically build
+much faster because they don't need to recompile all dependencies.
 
 ## Buildkite configuration
 
@@ -107,7 +106,7 @@ If you need the Docker hub password, it's in the company 1Password.
 
 Rust compilation is slow enough that we use [sccache], a distributed build cache
 from Mozilla, to share a build cache between agents. This dramatically speeds up
-the first build on a new agent.
+the first build on a new builder agent.
 
 At the time of writing, the build cache is stored in a memcached instance
 managed by ElastiCache. From a Buildkite agent, the memcached instance is

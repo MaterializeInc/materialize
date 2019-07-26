@@ -14,6 +14,8 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 while read local_ref local_sha remote_ref remote_sha; do
     if [[ "$remote_ref" = refs/heads/master ]]; then
         oldlist=$(git stash list)
@@ -33,6 +35,6 @@ while read local_ref local_sha remote_ref remote_sha; do
             fi
         }
         trap reset EXIT
-        bin/ci-test --fast
+        bin/pre-push
     fi
 done
