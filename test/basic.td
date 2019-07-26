@@ -59,7 +59,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
 
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/data' USING SCHEMA '${schema}'
+> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
 > PEEK data
 a b

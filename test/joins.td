@@ -89,9 +89,9 @@ $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
 $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/names' USING SCHEMA '${names-schema}'
+> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}' USING SCHEMA '${names-schema}'
 
-> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/mods' USING SCHEMA '${mods-schema}'
+> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}' USING SCHEMA '${mods-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names JOIN mods USING (num);
