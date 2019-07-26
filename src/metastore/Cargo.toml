@@ -18,6 +18,6 @@ log = "0.4"
 ore = { path = "../ore" }
 serde = { version = "1.0.97", features = ["derive"] }
 slog = "2.5.2"
-slog-stdlog = "3.0.2"
+slog-stdlog = "3.0.5"
 tokio = "0.1.22"
 tokio-zookeeper = { git = "https://github.com/jonhoo/tokio-zookeeper.git" }
