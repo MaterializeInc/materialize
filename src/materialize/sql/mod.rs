@@ -231,7 +231,7 @@ impl Planner {
         let mut project_exprs = vec![];
         let mut project_key = vec![];
         for (p, i) in permutation.iter().enumerate() {
-            let cast = self.plan_internal_cast(
+            let cast = plan_cast_internal(
                 "INSERT",
                 ScalarExpr::column(p),
                 &expr_cols[p],
@@ -1148,61 +1148,7 @@ impl Planner {
             _ => bail!("CAST ... AS {} is not yet supported", data_type.to_string()),
         };
         let (expr, from_type) = self.plan_expr(ctx, expr)?;
-        self.plan_internal_cast("CAST", expr, &from_type, to_scalar_type)
-    }
-
-    fn plan_internal_cast<'a>(
-        &self,
-        name: &'static str,
-        expr: ScalarExpr,
-        from_type: &'a ColumnType,
-        to_scalar_type: ScalarType,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        use ScalarType::*;
-        use UnaryFunc::*;
-        let to_type = ColumnType {
-            name: None,
-            nullable: from_type.nullable,
-            scalar_type: to_scalar_type,
-        };
-        let expr = match (&from_type.scalar_type, &to_type.scalar_type) {
-            (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
-            (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
-            (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
-            (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, *s),
-            (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, *s),
-            (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
-            (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
-            (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
-            (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
-            (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
-            (Decimal(_, s), Int32) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt32),
-            (Decimal(_, s), Int64) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt64),
-            (Decimal(_, s), Float32) => {
-                let factor = 10_f32.powi(i32::from(*s));
-                let factor = ScalarExpr::Literal(Datum::from(factor));
-                expr.call_unary(CastDecimalToFloat32)
-                    .call_binary(factor, BinaryFunc::DivFloat32)
-            }
-            (Decimal(_, s), Float64) => {
-                let factor = 10_f64.powi(i32::from(*s));
-                let factor = ScalarExpr::Literal(Datum::from(factor));
-                expr.call_unary(CastDecimalToFloat64)
-                    .call_binary(factor, BinaryFunc::DivFloat64)
-            }
-            (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
-            (Null, _) => expr,
-            (from, to) if from == to => expr,
-            (from, to) => {
-                bail!(
-                    "{} does not support casting from {:?} to {:?}",
-                    name,
-                    from,
-                    to
-                );
-            }
-        };
-        Ok((expr, to_type))
+        plan_cast_internal("CAST", expr, &from_type, to_scalar_type)
     }
 
     fn plan_aggregate(
@@ -1470,7 +1416,7 @@ impl Planner {
             || op == &BinaryOperator::NotEq
         {
             let ctx = op.to_string();
-            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], ctx)?;
+            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
             assert_eq!(exprs.len(), 2);
             rexpr = exprs.pop().unwrap();
             lexpr = exprs.pop().unwrap();
@@ -1847,7 +1793,7 @@ fn try_coalesce_types<C>(
     context: C,
 ) -> Result<(Vec<ScalarExpr>, ColumnType), failure::Error>
 where
-    C: fmt::Display,
+    C: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
 
@@ -1874,28 +1820,73 @@ where
         scalar_type: max_scalar_type,
     };
     for (expr, typ) in exprs {
-        use ScalarType::*;
-        use UnaryFunc::*;
-        let expr = match (&typ.scalar_type, &out_typ.scalar_type) {
-            (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
-            (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
-            (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
-            (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
-            (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
-            (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
-            (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
-            (Null, _) => expr,
-            (from, to) if from == to => expr,
-            (from, to) => bail!(
+        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
+            Ok((expr, _)) => out.push(expr),
+            Err(_) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
                 context,
-                from,
-                to,
+                typ,
+                out_typ
             ),
-        };
-        out.push(expr);
+        }
     }
     Ok((out, out_typ))
+}
+
+fn plan_cast_internal<C>(
+    context: C,
+    expr: ScalarExpr,
+    from_type: &ColumnType,
+    to_scalar_type: ScalarType,
+) -> Result<(ScalarExpr, ColumnType), failure::Error>
+where
+    C: fmt::Display + Copy,
+{
+    use ScalarType::*;
+    use UnaryFunc::*;
+    let to_type = ColumnType {
+        name: None,
+        nullable: from_type.nullable,
+        scalar_type: to_scalar_type,
+    };
+    let expr = match (&from_type.scalar_type, &to_type.scalar_type) {
+        (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
+        (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
+        (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
+        (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, *s),
+        (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, *s),
+        (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
+        (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
+        (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
+        (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
+        (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
+        (Decimal(_, s), Int32) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt32),
+        (Decimal(_, s), Int64) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt64),
+        (Decimal(_, s), Float32) => {
+            let factor = 10_f32.powi(i32::from(*s));
+            let factor = ScalarExpr::Literal(Datum::from(factor));
+            expr.call_unary(CastDecimalToFloat32)
+                .call_binary(factor, BinaryFunc::DivFloat32)
+        }
+        (Decimal(_, s), Float64) => {
+            let factor = 10_f64.powi(i32::from(*s));
+            let factor = ScalarExpr::Literal(Datum::from(factor));
+            expr.call_unary(CastDecimalToFloat64)
+                .call_binary(factor, BinaryFunc::DivFloat64)
+        }
+        (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
+        (Null, _) => expr,
+        (from, to) if from == to => expr,
+        (from, to) => {
+            bail!(
+                "{} does not support casting from {:?} to {:?}",
+                context,
+                from,
+                to
+            );
+        }
+    };
+    Ok((expr, to_type))
 }
 
 fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
