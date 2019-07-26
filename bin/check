@@ -125,4 +125,4 @@ disabled_lints=(
 
 pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,-p \1,p' Cargo.toml)
 run cargo clean $pkgspec
-run cargo clippy -- -D warnings $(printf -- "-A %s " "${disabled_lints[@]}")
+run cargo clippy --verbose -- -D warnings $(printf -- "-A %s " "${disabled_lints[@]}")

@@ -180,18 +180,20 @@ sqllogictests=(
 
 export RUST_BACKTRACE=full
 
+SCCACHE_START_SERVER=1 SCCACHE_NO_DAEMON=1 RUST_LOG=debug sccache &
+
 try bin/lint
-try cargo fmt -- --check
-try cargo test
+try cargo fmt --verbose -- --check
+try cargo test --verbose
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840
 try bin/check
 
 # TODO(benesch): maybe some subset of testdrive tests can be run in fast mode?
 if [[ ! "$fast" ]]; then
-    try cargo build --release
+    try cargo build --verbose --release
 
-    try cargo run --bin sqllogictest --release -- --fail -vv "${sqllogictests[@]}"
+    try cargo run --verbose --bin sqllogictest --release -- --fail -vv "${sqllogictests[@]}"
 
     target/release/materialized &
     materialized_pid=$!
