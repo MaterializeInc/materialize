@@ -52,10 +52,13 @@ pub fn serve(
     })
 }
 
+/// Options for how dataflow results return to those that posed the queries.
 #[derive(Clone)]
 pub enum DataflowResultsHandler {
+    /// A local exchange fabric.
     Local(DataflowResultsMux),
-    Remote,
+    /// An address to post results at.
+    Remote(String),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -447,10 +450,10 @@ where
                         drop(sender.unbounded_send(results))
                     }
                 }
-                DataflowResultsHandler::Remote => {
+                DataflowResultsHandler::Remote(response_address) => {
                     let encoded = bincode::serialize(&results).unwrap();
                     self.rpc_client
-                        .post("http://localhost:6875/api/dataflow-results")
+                        .post(response_address)
                         .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
                         .body(encoded)
                         .send()
