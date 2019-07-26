@@ -137,13 +137,25 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         crate::glue::unbounded::<(DataflowCommand, CommandMeta)>();
     let dataflow_results_mux = DataflowResultsMux::default();
 
-    // Initialize timely dataflow computation.
+    // Extract timely dataflow parameters.
     let num_timely_workers = config.num_timely_workers();
     let is_primary = match &config.timely_configuration {
         timely::Configuration::Thread => true,
         timely::Configuration::Process(_) => true,
         timely::Configuration::Cluster { process, .. } => process == &0,
     };
+
+    // Initialize pgwire / http listener.
+    let listener = if is_primary {
+        let listen_addr: SocketAddr = "0.0.0.0:6875".parse()?;
+        let listener = TcpListener::bind(&listen_addr)?;
+        println!("materialized listening on {}...", listen_addr);
+        Some(listener)
+    } else {
+        None
+    };
+
+    // Construct timely dataflow instance.
     let dataflow_results_handler = match config.dataflow_results {
         DataflowResultsConfig::Local => {
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone())
@@ -156,7 +168,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         config.timely_configuration,
     )?;
 
-    // queue and sql planner
+    // Initialize command queue and sql planner
     match &config.queue {
         QueueConfig::Transient => {
             let worker0_thread = dd_workers.guards().into_first().thread();
@@ -169,10 +181,8 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         }
     }
 
-    // pgwire / http server
-    if is_primary {
-        let listen_addr: SocketAddr = "127.0.0.1:6875".parse()?;
-        let listener = TcpListener::bind(&listen_addr)?;
+    // Draw connections off of the listener.
+    if let Some(listener) = listener {
         let start = future::lazy(move || {
             let server = listener
                 .incoming()
@@ -192,7 +202,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
             Ok(())
         });
         tokio::run(start);
-        println!("materialized listening on {}...", listen_addr);
     }
+
     Ok(())
 }
