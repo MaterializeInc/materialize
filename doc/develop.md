@@ -77,7 +77,7 @@ Materialize is fully integrated with Cargo, so building it is dead simple:
 ```shell
 git clone git@github.com:MaterializeInc/materialize.git
 cd materialize
-cargo run
+cargo run --bin materialized
 ```
 
 Note that we currently depend on a private GitHub repository,
