@@ -29,6 +29,8 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
+mod sqlite;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Text,
