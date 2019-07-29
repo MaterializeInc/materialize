@@ -15,7 +15,8 @@ Schema Registry].
 
 ## Installing dependencies with Nix
 
-The easiest way to install all the necessary dependencies is to use [Nix]:
+One way to install all the necessary dependencies is to use [Nix]. Note that this does not work for OS X users, as Nix on OS X 
+is bad.
 
 ```shell
 cd materialize
