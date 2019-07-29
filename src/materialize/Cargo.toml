@@ -54,7 +54,7 @@ state_machine_future = { git = "https://github.com/benesch/state_machine_future.
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", features = ["bincode"] }
 tokio = "0.1"
 tokio-threadpool = "0.1"
-url = "1.7.2"
+url = "2.0.0"
 url_serde = "0.2.0"
 uuid = { version = "0.7.4", features = ["serde", "v4"] }
 
