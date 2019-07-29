@@ -306,6 +306,42 @@ impl Planner {
     }
 }
 
+impl ScalarType {
+    pub fn from_sql(data_type: &DataType) -> Result<Self, failure::Error> {
+        Ok(match data_type {
+            DataType::Boolean => ScalarType::Bool,
+            DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
+            DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
+            DataType::Custom(name) if name.to_string().to_lowercase() == "string" => {
+                ScalarType::String
+            }
+            DataType::SmallInt => ScalarType::Int32,
+            DataType::Int | DataType::BigInt => ScalarType::Int64,
+            DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+            DataType::Decimal(precision, scale) => {
+                let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
+                let scale = scale.unwrap_or(0);
+                if precision > MAX_DECIMAL_PRECISION.into() {
+                    bail!(
+                        "decimal precision {} exceeds maximum precision {}",
+                        precision,
+                        MAX_DECIMAL_PRECISION
+                    );
+                }
+                if scale > precision {
+                    bail!("decimal scale {} exceeds precision {}", scale, precision);
+                }
+                ScalarType::Decimal(precision as u8, scale as u8)
+            }
+            DataType::Date => ScalarType::Date,
+            DataType::Timestamp => ScalarType::Timestamp,
+            DataType::Time => ScalarType::Time,
+            DataType::Bytea => ScalarType::Bytes,
+            other => bail!("Unexpected SQL type: {:?}", other),
+        })
+    }
+}
+
 impl Datum {
     pub fn from_sql(expr: Expr, typ: &ColumnType) -> Result<Self, failure::Error> {
         Ok(match expr {
@@ -465,56 +501,11 @@ impl Planner {
                     .map(|column| {
                         Ok(ColumnType {
                             name: Some(column.name.clone()),
-                            scalar_type: match &column.data_type {
-                                DataType::Boolean => ScalarType::Bool,
-                                DataType::Custom(name)
-                                    if name.to_string().to_lowercase() == "bool" =>
-                                {
-                                    ScalarType::Bool
-                                }
-                                DataType::Char(_) | DataType::Varchar(_) | DataType::Text => {
-                                    ScalarType::String
-                                }
-                                DataType::Custom(name)
-                                    if name.to_string().to_lowercase() == "string" =>
-                                {
-                                    ScalarType::String
-                                }
-                                DataType::SmallInt | DataType::Int | DataType::BigInt => {
-                                    ScalarType::Int64
-                                }
-                                DataType::Float(_) | DataType::Real | DataType::Double => {
-                                    ScalarType::Float64
-                                }
-                                DataType::Decimal(precision, scale) => {
-                                    let precision =
-                                        precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
-                                    let scale = scale.unwrap_or(0);
-                                    if precision > MAX_DECIMAL_PRECISION.into() {
-                                        bail!(
-                                            "decimal precision {} exceeds maximum precision {}",
-                                            precision,
-                                            MAX_DECIMAL_PRECISION
-                                        );
-                                    }
-                                    if scale > precision {
-                                        bail!(
-                                            "decimal scale {} exceeds precision {}",
-                                            scale,
-                                            precision
-                                        );
-                                    }
-                                    ScalarType::Decimal(precision as u8, scale as u8)
-                                }
-                                DataType::Date => ScalarType::Date,
-                                DataType::Timestamp => ScalarType::Timestamp,
-                                DataType::Time => ScalarType::Time,
-                                other => bail!("Unexpected SQL type: {:?}", other),
-                            },
+                            scalar_type: ScalarType::from_sql(&column.data_type)?,
                             nullable: true,
                         })
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>, failure::Error>>()?;
                 Ok(Dataflow::Source(Source {
                     name: extract_sql_object_name(name)?,
                     connector: SourceConnector::Local(LocalSourceConnector {}),
@@ -1183,22 +1174,7 @@ impl Planner {
         expr: &'a Expr,
         data_type: &'a DataType,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let to_scalar_type = match data_type {
-            DataType::Varchar(_) => ScalarType::String,
-            DataType::Text => ScalarType::String,
-            DataType::Bytea => ScalarType::Bytes,
-            DataType::Float(_) => ScalarType::Float64,
-            DataType::Real => ScalarType::Float64,
-            DataType::Double => ScalarType::Float64,
-            DataType::SmallInt => ScalarType::Int32,
-            DataType::Int => ScalarType::Int64,
-            DataType::BigInt => ScalarType::Int64,
-            DataType::Decimal(p, s) => {
-                ScalarType::Decimal(p.unwrap_or(0) as u8, s.unwrap_or(0) as u8)
-            }
-            DataType::Boolean => ScalarType::Bool,
-            _ => bail!("CAST ... AS {} is not yet supported", data_type.to_string()),
-        };
+        let to_scalar_type = ScalarType::from_sql(data_type)?;
         let (expr, from_type) = self.plan_expr(ctx, expr)?;
         plan_cast_internal("CAST", expr, &from_type, to_scalar_type)
     }
