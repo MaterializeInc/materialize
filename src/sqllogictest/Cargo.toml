@@ -27,3 +27,4 @@ futures = "0.1"
 uuid = "*"
 md5 = "*"
 rusqlite = { version = "0.20", features = ["bundled"] }
+ordered-float = "*"
