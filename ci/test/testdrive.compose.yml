@@ -1,0 +1,39 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+version: '3'
+services:
+  testdrive:
+    image: materialize/test-testdrive:${BUILDKITE_BUILD_NUMBER}
+    command:
+    - wait-for-it
+    - schema-registry:8081
+    - materialized:6875
+    - --
+    - testdrive
+    - --kafka-addr=kafka:9092
+    - --schema-registry-url=http://schema-registry:8081
+    - --materialized-url=postgres://ignored@materialized:6875
+    - test/*.td
+    working_dir: /workdir
+    volumes:
+    - ../../:/workdir
+    user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
+    depends_on: [kafka, zookeeper, schema-registry, materialized]
+  materialized:
+    image: materialize/test-materialized:${BUILDKITE_BUILD_NUMBER}
+  zookeeper:
+    image: zookeeper:3.4.13
+  kafka:
+    image: wurstmeister/kafka:2.12-2.2.0
+    environment:
+    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+    - KAFKA_ADVERTISED_HOST_NAME=kafka
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.2.1
+    environment:
+    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
+    - SCHEMA_REGISTRY_HOST_NAME=localhost
+    depends_on: [kafka, zookeeper]

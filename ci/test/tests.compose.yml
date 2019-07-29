@@ -6,18 +6,12 @@
 version: '3'
 services:
   app:
-    image: materialize/test:20190708-130850
+    image: materialize/test-tests:${BUILDKITE_BUILD_NUMBER}
+    command: ["wait-for-it", "schema-registry:8081", "--", "run-tests"]
     working_dir: /workdir
     volumes:
-    - $SSH_AUTH_SOCK:/tmp/ssh-agent.sock
     - ../../:/workdir
-    - $HOME/.cargo:/cargo
     environment:
-    - BUILDKITE
-    - SSH_AUTH_SOCK=/tmp/ssh-agent.sock
-    - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
-    - CARGO_HOME=/cargo
-    - RUSTC_WRAPPER=sccache
     - ZOOKEEPER_ADDR=zookeeper:2181
     - KAFKA_ADDR=kafka:9092
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081

@@ -9,7 +9,7 @@ steps:
       - docker#v3.1.0:
           # TODO(benesch): figure out how to share the image version with
           # the test job.
-          image: materialize/test:20190614-173729
+          image: materialize/test:20190726-152459
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:

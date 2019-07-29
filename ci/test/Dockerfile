@@ -12,6 +12,8 @@ RUN rustup component add clippy rustfmt
 
 COPY --from=materialize/sccache:0.2.8 /usr/local/bin/sccache /usr/local/bin/sccache
 
-RUN apt-get update && apt-get install -y clang libclang-dev
+RUN apt-get update && apt-get install -y clang libclang-dev jq
+
+WORKDIR /workdir
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]

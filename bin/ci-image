@@ -40,7 +40,7 @@ case "$cmd" in
         docker push "$full_img:$tag"
         ;;
     run)
-        docker run -itu "$uid:$gid" -v "$(pwd):/workdir" --workdir /workdir --rm "$full_img" "$@"
+        docker run -itu "$uid:$gid" -v "$(pwd):/workdir" --rm "$full_img" "$@"
         ;;
     *)
         printf "unknown command %q" "$cmd"
