@@ -3,10 +3,10 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-FROM rust:1.36
+FROM ubuntu:bionic
 
-RUN apt-get update && apt-get -qy install wait-for-it
+RUN apt-get update && apt-get -qy install libssl1.1 wait-for-it
 
-COPY tests/* /tests/
-COPY run-tests /usr/local/bin
-COPY shlib/* /usr/local/share/shlib/
+COPY testdrive /usr/local/bin
+
+WORKDIR /workdir

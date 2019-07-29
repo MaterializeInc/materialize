@@ -13,13 +13,18 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <build|push|run> <image> [<args>...]"
+    echo "usage: $0 <build|push|run> [stable|nightly] [<args>...]"
     exit 1
 fi
 
 cmd=$1 && shift
-img=$1 && shift
-full_img=materialize/$img
+channel=$1 && shift
+
+if [[ "$channel" = stable ]]; then
+    rust_version=$(<rust-toolchain)
+else
+    rust_version=nightly
+fi
 
 uid=$(id -u)
 gid=$(id -g)
@@ -27,7 +32,10 @@ gid=$(id -g)
 [[ "$gid" -lt 500 ]] && gid=$uid
 
 build() {
-    docker build --pull --tag "$full_img" "$@" ci/"$img"
+    docker build --pull \
+        --build-arg "RUST_VERSION=$rust_version" \
+        --tag materialize/ci-builder \
+        "$@" misc/docker/ci-builder
 }
 
 case "$cmd" in
@@ -35,12 +43,12 @@ case "$cmd" in
         build
         ;;
     push)
-        tag=$(date +%Y%m%d-%H%M%S)
-        build --tag "$full_img:$tag"
-        docker push "$full_img:$tag"
+        tag=$channel-$(date +%Y%m%d-%H%M%S)
+        build --tag materialize/ci-builder:"$tag"
+        docker push materialize/ci-builder:"$tag"
         ;;
     run)
-        docker run -itu "$uid:$gid" -v "$(pwd):/workdir" --rm "$full_img" "$@"
+        docker run -itu "$uid:$gid" -v "$(pwd):/workdir" --rm materialize/ci-builder "$@"
         ;;
     *)
         printf "unknown command %q" "$cmd"

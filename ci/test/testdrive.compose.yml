@@ -6,24 +6,20 @@
 version: '3'
 services:
   testdrive:
-    image: materialize/test-testdrive:${BUILDKITE_BUILD_NUMBER}
-    command:
-    - wait-for-it
-    - schema-registry:8081
-    - materialized:6875
-    - --
-    - testdrive
-    - --kafka-addr=kafka:9092
-    - --schema-registry-url=http://schema-registry:8081
-    - --materialized-url=postgres://ignored@materialized:6875
-    - test/*.td
-    working_dir: /workdir
+    image: materialize/ci-testdrive:${BUILDKITE_BUILD_NUMBER}
+    command: >-
+      bash -c "wait-for-it schema-registry:8081 materialized:6875 --
+      testdrive
+      --kafka-addr=kafka:9092
+      --schema-registry-url=http://schema-registry:8081
+      --materialized-url=postgres://ignored@materialized:6875
+      test/*.td"
     volumes:
     - ../../:/workdir
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
     depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
-    image: materialize/test-materialized:${BUILDKITE_BUILD_NUMBER}
+    image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
   zookeeper:
     image: zookeeper:3.4.13
   kafka:

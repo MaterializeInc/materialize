@@ -3,8 +3,8 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-FROM rust:1.36
+FROM ubuntu:bionic
 
-COPY materialized /usr/local/bin
+COPY materialized /usr/local/bin/materialized
 
-CMD ["materialized"]
+ENTRYPOINT ["materialized"]
