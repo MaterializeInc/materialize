@@ -9,7 +9,7 @@ Materialize provides streaming SQL materialized views on top of
 
 ## Documentation
 
-High level documentation is stored in the [docs](docs) folder of this
+High level documentation is stored in the [doc](doc) folder of this
 repository. Table of contents:
 
   * [Architecture overview](doc/architecture.md)
