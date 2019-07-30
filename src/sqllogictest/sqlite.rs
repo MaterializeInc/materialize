@@ -31,10 +31,14 @@ impl Sqlite {
         })
     }
 
-    pub fn run_statement(&mut self, statement: &Statement) -> Result<Outcome, failure::Error> {
-        Ok(match statement {
+    pub fn run_statement(
+        &mut self,
+        sql: &str,
+        parsed: &Statement,
+    ) -> Result<Outcome, failure::Error> {
+        Ok(match parsed {
             Statement::CreateTable { name, columns, .. } => {
-                self.connection.execute(&statement.to_string(), NO_PARAMS)?;
+                self.connection.execute(sql, NO_PARAMS)?;
                 let typ = RelationType {
                     column_types: columns
                         .iter()
@@ -55,7 +59,7 @@ impl Sqlite {
                 object_type: ObjectType::Table,
                 ..
             } => {
-                self.connection.execute(&statement.to_string(), NO_PARAMS)?;
+                self.connection.execute(sql, NO_PARAMS)?;
                 Outcome::Dropped(names.iter().map(|name| name.to_string()).collect())
             }
             Statement::Delete { table_name, .. }
@@ -68,7 +72,7 @@ impl Sqlite {
                     .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
                     .clone();
                 let before = self.select_all(&table_name)?;
-                self.connection.execute(&statement.to_string(), NO_PARAMS)?;
+                self.connection.execute(sql, NO_PARAMS)?;
                 let after = self.select_all(&table_name)?;
                 let mut diff = HashMap::new();
                 for row in before {
@@ -80,7 +84,7 @@ impl Sqlite {
                 diff.retain(|_, count| *count != 0);
                 Outcome::Changed(table_name, typ, diff.into_iter().collect())
             }
-            _ => bail!("Unsupported statement sent to sqlite: {:?}", statement),
+            _ => bail!("Unsupported statement sent to sqlite: {:?}", parsed),
         })
     }
 
@@ -113,6 +117,13 @@ impl Sqlite {
                         }
                         (ValueRef::Text(t), ScalarType::String) => {
                             Datum::String(String::from_utf8(t.to_vec())?)
+                        }
+                        (ValueRef::Integer(0), ScalarType::Bool) => Datum::False,
+                        (ValueRef::Integer(1), ScalarType::Bool) => Datum::True,
+                        (ValueRef::Real(r), ScalarType::Decimal(_precision, scale)) => {
+                            // TODO(jamii) lolwut
+                            let scaled_r = r * (10.0 as f64).powi(*scale as i32);
+                            Datum::from(scaled_r as i128)
                         }
                         // TODO(jamii) handle dates, decimals etc
                         (other, _) => bail!(

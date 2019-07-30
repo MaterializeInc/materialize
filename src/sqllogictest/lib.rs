@@ -691,7 +691,7 @@ impl RecordRunner for FullState {
                     | Statement::Delete { .. }
                     | Statement::Insert { .. }
                     | Statement::Update { .. } => {
-                        let outcome = self.sqlite.run_statement(statement)?;
+                        let outcome = self.sqlite.run_statement(&sql, statement)?;
                         let rows_inserted;
                         match outcome {
                             sqlite::Outcome::Created(name, typ) => {

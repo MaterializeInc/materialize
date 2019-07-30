@@ -193,7 +193,12 @@ impl RelationExpr {
             RelationExpr::Constant { rows, typ } => {
                 for row in rows {
                     for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
-                        assert!(datum.is_instance_of(column_typ));
+                        assert!(
+                            datum.is_instance_of(column_typ),
+                            "Expected datum of type {:?}, got value {:?}",
+                            column_typ,
+                            datum
+                        );
                     }
                 }
                 typ.clone()
