@@ -35,12 +35,12 @@ use ore::iter::{FallibleIteratorExt, IteratorExt};
 use ore::option::OptionExt;
 use store::{DataflowStore, RemoveMode};
 
-mod store;
+pub mod store;
 
 /// Converts raw SQL queries into dataflow commands.
 #[derive(Debug, Default)]
 pub struct Planner {
-    dataflows: DataflowStore,
+    pub dataflows: DataflowStore,
 }
 
 /// The result of planning a SQL query.
