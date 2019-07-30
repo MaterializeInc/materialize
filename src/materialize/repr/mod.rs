@@ -237,6 +237,12 @@ impl From<::regex::Regex> for Datum {
     }
 }
 
+impl From<Vec<u8>> for Datum {
+    fn from(b: Vec<u8>) -> Datum {
+        Datum::Bytes(b)
+    }
+}
+
 impl<T> From<Option<T>> for Datum
 where
     Datum: From<T>,

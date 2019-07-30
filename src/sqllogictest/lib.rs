@@ -33,8 +33,8 @@ use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
-mod sqlite;
-use sqlite::Sqlite;
+mod postgres;
+use crate::postgres::Postgres;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -529,7 +529,7 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
-    sqlite: Sqlite,
+    postgres: Postgres,
     planner: Planner,
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
@@ -586,7 +586,7 @@ fn format_row(
 
 impl FullState {
     fn start() -> Result<Self, failure::Error> {
-        let sqlite = Sqlite::open()?;
+        let postgres = Postgres::open_and_erase()?;
         let planner = Planner::default();
         let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
         let dataflow_results_mux = DataflowResultsMux::default();
@@ -599,7 +599,7 @@ impl FullState {
 
         let worker0_thread = dataflow_workers.guards().into_first().thread().clone();
         Ok(FullState {
-            sqlite,
+            postgres,
             planner,
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
@@ -692,9 +692,9 @@ impl RecordRunner for FullState {
                     | Statement::Insert { .. }
                     | Statement::Update { .. } => {
                         let outcome = match self
-                            .sqlite
+                            .postgres
                             .run_statement(&sql, statement)
-                            .context("Unsupported by sqlite")
+                            .context("Unsupported by postgres")
                         {
                             Ok(outcome) => outcome,
                             Err(error) => {
@@ -705,7 +705,7 @@ impl RecordRunner for FullState {
                         };
                         let rows_inserted;
                         match outcome {
-                            sqlite::Outcome::Created(name, typ) => {
+                            postgres::Outcome::Created(name, typ) => {
                                 let dataflow = Dataflow::Source(Source {
                                     name,
                                     connector: SourceConnector::Local(LocalSourceConnector {}),
@@ -717,7 +717,7 @@ impl RecordRunner for FullState {
                                 );
                                 rows_inserted = None;
                             }
-                            sqlite::Outcome::Dropped(names) => {
+                            postgres::Outcome::Dropped(names) => {
                                 let mut dataflows = vec![];
                                 // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
                                 for name in &names {
@@ -731,7 +731,7 @@ impl RecordRunner for FullState {
                                     .send_dataflow_command(DataflowCommand::DropDataflows(names));
                                 rows_inserted = None;
                             }
-                            sqlite::Outcome::Changed(name, typ, diff) => {
+                            postgres::Outcome::Changed(name, typ, diff) => {
                                 let mut rows = vec![];
                                 for (row, count) in diff {
                                     if count < 0 {
