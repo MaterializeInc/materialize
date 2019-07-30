@@ -21,15 +21,20 @@ use regex::Regex;
 use uuid::Uuid;
 
 use materialize::dataflow;
+use materialize::dataflow::{
+    Dataflow, LocalSourceConnector, RelationExpr, Source, SourceConnector,
+};
 use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
+use materialize::sql::store::RemoveMode;
 use materialize::sql::Planner;
 use ore::collections::CollectionExt;
-use sqlparser::ast::Statement;
+use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 mod sqlite;
+use sqlite::Sqlite;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -438,6 +443,7 @@ impl<'a> Outcome<'a> {
         }
     }
 }
+
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct Outcomes([usize; NUM_OUTCOMES]);
 
@@ -523,6 +529,7 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
+    sqlite: Sqlite,
     planner: Planner,
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
@@ -578,7 +585,8 @@ fn format_row(
 }
 
 impl FullState {
-    fn start() -> Self {
+    fn start() -> Result<Self, failure::Error> {
+        let sqlite = Sqlite::open()?;
         let planner = Planner::default();
         let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
         let dataflow_results_mux = DataflowResultsMux::default();
@@ -590,13 +598,14 @@ impl FullState {
         .unwrap();
 
         let worker0_thread = dataflow_workers.guards().into_first().thread().clone();
-        FullState {
+        Ok(FullState {
+            sqlite,
             planner,
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
             dataflow_results_mux,
             worker0_thread,
-        }
+        })
     }
 
     fn send_dataflow_command(
@@ -634,15 +643,6 @@ impl FullState {
         }
         results
     }
-
-    fn receive_insert_count(&self, receiver: UnboundedReceiver<DataflowResults>) -> usize {
-        let mut count = 0;
-        let mut receiver = receiver.wait();
-        for _ in 0..NUM_TIMELY_WORKERS {
-            count += receiver.next().unwrap().unwrap().unwrap_inserted();
-        }
-        count
-    }
 }
 
 impl RecordRunner for FullState {
@@ -653,49 +653,127 @@ impl RecordRunner for FullState {
                 rows_inserted: expected_rows_inserted,
                 sql,
             } => {
+                if !should_run {
+                    // sure, we totally checked it
+                    return Ok(Outcome::Success);
+                }
+
                 lazy_static! {
                     static ref INDEX_STATEMENT_REGEX: Regex =
                         Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
                 }
                 if INDEX_STATEMENT_REGEX.is_match(sql) {
-                    // sure, we totally made you an index...
+                    // sure, we totally made you an index
                     return Ok(Outcome::Success);
                 }
 
                 // we don't support non-materialized views
                 let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
-                let (response, dataflow_command) =
-                    match self.planner.handle_command(sql.to_string()) {
-                        Ok((response, dataflow_command)) => (response, dataflow_command),
-                        Err(error) => {
-                            if *should_run {
-                                return Ok(Outcome::PlanFailure { error });
-                            } else {
-                                return Ok(Outcome::Success);
+                // parse statement
+                let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
+                    Ok(statements) => statements,
+                    Err(error) => return Ok(Outcome::ParseFailure { error }),
+                };
+                let statement = match &*statements {
+                    [] => bail!("Got zero statements?"),
+                    [statement] => statement,
+                    _ => bail!("Got multiple statements: {:?}", statements),
+                };
+
+                match statement {
+                    // run through sqlite and send diffs to materialize
+                    Statement::CreateTable { .. }
+                    | Statement::Drop {
+                        object_type: ObjectType::Table,
+                        ..
+                    }
+                    | Statement::Delete { .. }
+                    | Statement::Insert { .. }
+                    | Statement::Update { .. } => {
+                        let outcome = self.sqlite.run_statement(statement)?;
+                        let rows_inserted;
+                        match outcome {
+                            sqlite::Outcome::Created(name, typ) => {
+                                let dataflow = Dataflow::Source(Source {
+                                    name,
+                                    connector: SourceConnector::Local(LocalSourceConnector {}),
+                                    typ,
+                                });
+                                self.planner.dataflows.insert(dataflow.clone())?;
+                                let _receiver = self.send_dataflow_command(
+                                    DataflowCommand::CreateDataflow(dataflow),
+                                );
+                                rows_inserted = None;
+                            }
+                            sqlite::Outcome::Dropped(names) => {
+                                let mut dataflows = vec![];
+                                // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
+                                for name in &names {
+                                    self.planner.dataflows.remove(
+                                        name,
+                                        RemoveMode::Cascade,
+                                        &mut dataflows,
+                                    )?;
+                                }
+                                let _receiver = self
+                                    .send_dataflow_command(DataflowCommand::DropDataflows(names));
+                                rows_inserted = None;
+                            }
+                            sqlite::Outcome::Changed(name, typ, diff) => {
+                                let mut rows = vec![];
+                                for (row, count) in diff {
+                                    assert!(count > 0, "TODO(jamii)");
+                                    for _ in 0..count {
+                                        rows.push(row.clone());
+                                    }
+                                }
+                                rows_inserted = Some(rows.len());
+                                let _receiver = self.send_dataflow_command(DataflowCommand::Peek {
+                                    source: RelationExpr::Constant { rows, typ },
+                                    when: PeekWhen::AfterFlush,
+                                    insert_into: Some(name),
+                                });
                             }
                         }
-                    };
-                let receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                let insert_count = if let SqlResponse::Inserting = response {
-                    Some(self.receive_insert_count(receiver))
-                } else {
-                    None
-                };
-                match (insert_count, expected_rows_inserted) {
-                    (None, Some(_)) => Ok(Outcome::PlanFailure {
-                        error: failure::format_err!(
-                            "Query did not result in Inserting, instead got {:?}",
-                            response
-                        ),
-                    }),
-                    (Some(actual), Some(expected)) if actual != *expected => {
-                        Ok(Outcome::WrongNumberOfRowsInserted {
-                            expected_count: *expected,
-                            actual_count: actual,
-                        })
+                        match (rows_inserted, expected_rows_inserted) {
+                            (None, Some(expected)) => Ok(Outcome::PlanFailure {
+                                error: failure::format_err!(
+                                    "Query did not insert any rows, expected {}",
+                                    expected,
+                                ),
+                            }),
+                            (Some(actual), Some(expected)) if actual != *expected => {
+                                Ok(Outcome::WrongNumberOfRowsInserted {
+                                    expected_count: *expected,
+                                    actual_count: actual,
+                                })
+                            }
+                            _ => Ok(Outcome::Success),
+                        }
                     }
-                    _ => Ok(Outcome::Success),
+
+                    // run through materialize directly
+                    Statement::CreateView { .. }
+                    | Statement::CreateSource { .. }
+                    | Statement::CreateSink { .. }
+                    | Statement::Drop { .. } => {
+                        let (_response, dataflow_command) =
+                            match self.planner.handle_command(sql.to_string()) {
+                                Ok((response, dataflow_command)) => (response, dataflow_command),
+                                Err(error) => {
+                                    if *should_run {
+                                        return Ok(Outcome::PlanFailure { error });
+                                    } else {
+                                        return Ok(Outcome::Success);
+                                    }
+                                }
+                            };
+                        let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
+                        Ok(Outcome::Success)
+                    }
+
+                    _ => bail!("Unsupported statement: {:?}", statement),
                 }
             }
             Record::Query { sql, output } => {
@@ -929,7 +1007,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
     let mut state: Box<RecordRunner> = if only_parse {
         Box::new(OnlyParseState::start())
     } else {
-        Box::new(FullState::start())
+        Box::new(FullState::start().unwrap())
     };
     if verbosity >= 1 {
         println!("==> {}", source);
@@ -1012,7 +1090,7 @@ pub fn run_stdin(verbosity: usize, only_parse: bool) -> Outcomes {
 }
 
 pub fn fuzz(sqls: &str) {
-    let mut state = FullState::start();
+    let mut state = FullState::start().unwrap();
     for sql in sqls.split(';') {
         if let Ok((sql_response, dataflow_command)) = state.planner.handle_command(sql.to_owned()) {
             if let Some(dataflow_command) = dataflow_command {
