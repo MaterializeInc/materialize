@@ -5,6 +5,7 @@
 
 steps:
   - command: ci/deploy/deploy.sh
+    timeout_in_minutes: 30
     plugins:
       - docker#v3.1.0:
           image: materialize/ci-builder:20190617-233706
