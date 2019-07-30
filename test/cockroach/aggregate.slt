@@ -705,7 +705,7 @@ CREATE TABLE xyz (
   x INT PRIMARY KEY,
   y INT,
   z FLOAT,
-  w INT,
+  w INT
 )
 
 statement ok
@@ -1048,7 +1048,7 @@ true
 statement OK
 CREATE TABLE ab (
   a INT PRIMARY KEY,
-  b INT,
+  b INT
 )
 
 statement ok
@@ -1081,7 +1081,7 @@ statement ok
 CREATE TABLE group_ord (
   x INT PRIMARY KEY,
   y INT,
-  z INT,
+  z INT
 )
 
 statement ok
