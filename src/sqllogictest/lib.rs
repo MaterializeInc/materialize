@@ -691,7 +691,18 @@ impl RecordRunner for FullState {
                     | Statement::Delete { .. }
                     | Statement::Insert { .. }
                     | Statement::Update { .. } => {
-                        let outcome = self.sqlite.run_statement(&sql, statement)?;
+                        let outcome = match self
+                            .sqlite
+                            .run_statement(&sql, statement)
+                            .context("Unsupported by sqlite")
+                        {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                return Ok(Outcome::Unsupported {
+                                    error: error.into(),
+                                });
+                            }
+                        };
                         let rows_inserted;
                         match outcome {
                             sqlite::Outcome::Created(name, typ) => {
@@ -762,7 +773,8 @@ impl RecordRunner for FullState {
                     }
 
                     // run through materialize directly
-                    Statement::CreateView { .. }
+                    Statement::Query { .. }
+                    | Statement::CreateView { .. }
                     | Statement::CreateSource { .. }
                     | Statement::CreateSink { .. }
                     | Statement::Drop { .. } => {
