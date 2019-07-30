@@ -53,6 +53,22 @@ pub struct Planner {
 /// from the dataflow server to the client.
 pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure::Error>;
 
+/// Whether a SQL object type can be interpreted as matching the type of the given Dataflow.
+/// For example, if `v` is a view, `DROP SOURCE v` should not work, since Source and View
+/// are non-matching types.
+///
+/// For now tables are treated as a special kind of source in Materialize, so just
+/// allow `TABLE` to refer to either.
+fn object_type_matches(object_type: &ObjectType, dataflow: &Dataflow) -> bool {
+    match dataflow {
+        Dataflow::Source { .. } => {
+            *object_type == ObjectType::Source || *object_type == ObjectType::Table
+        }
+        Dataflow::Sink { .. } => *object_type == ObjectType::Sink,
+        Dataflow::View { .. } => *object_type == ObjectType::View,
+    }
+}
+
 impl Planner {
     /// Parses and plans a raw SQL query. See the documentation for
     /// [`PlannerResult`] for details about the meaning of the return type.
@@ -114,15 +130,19 @@ impl Planner {
             } => (object_type, if_exists, names, cascade),
             _ => unreachable!(),
         };
-        // TODO(benesch): DROP <TYPE> should error if the named object is not
-        // of the correct type (#38).
         let names: Vec<String> = Result::from_iter(names.iter().map(extract_sql_object_name))?;
-        if !if_exists {
-            // Without IF EXISTS, we need to verify that every named
-            // dataflow exists before proceeding with the drop
-            // implementation.
-            for name in &names {
-                let _ = self.dataflows.get(name)?;
+        for name in &names {
+            match self.dataflows.get(name) {
+                Ok(dataflow) => {
+                    if !object_type_matches(&object_type, dataflow) {
+                        bail!("{} is not of type {}", name, object_type);
+                    }
+                }
+                Err(e) => {
+                    if !if_exists {
+                        return Err(e);
+                    }
+                }
             }
         }
         let mode = RemoveMode::from_cascade(cascade);
