@@ -6,11 +6,13 @@
 steps:
   - label: ":docker: build"
     command: ci/test/build.sh
+    timeout_in_minutes: 30
     agents:
       queue: builder
   - wait
   - label: ":bath: hygiene"
     command: ci/test/hygiene.sh
+    timeout_in_minutes: 30
     plugins:
       - docker#v3.1.0:
           image: materialize/ci-builder:stable-20190730-071508
@@ -26,18 +28,21 @@ steps:
     agents:
       queue: builder
   - label: ":cargo: cargo test"
+    timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
           config: ci/test/cargo-test.compose.yml
           run: app
   - label: ":racing_car: testdrive"
+    timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
           config: ci/test/testdrive.compose.yml
           run: testdrive
   - label: ":bulb: Short SQL logic tests"
+    timeout_in_minutes: 30
     command: >-
       sqllogictest --fail -vv
       sqllogictest/test/evidence/slt_lang_aggfunc.test

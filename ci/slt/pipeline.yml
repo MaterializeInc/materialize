@@ -6,6 +6,7 @@
 steps:
   - block: ":vertical_traffic_light: Go"
   - command: ci/slt/slt.sh
+    timeout_in_minutes: 120
     artifact_paths: target/slt.out
     plugins:
       - docker#v3.1.0:
@@ -16,6 +17,7 @@ steps:
           shell: false
   - wait
   - command: ci/slt/upload.sh
+    timeout_in_minutes: 10
     plugins:
       - docker#v3.1.0:
           image: materialize/ci-builder:stable-20190730-071508
