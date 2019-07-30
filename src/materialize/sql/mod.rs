@@ -56,12 +56,14 @@ pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure:
 /// Whether a SQL object type can be interpreted as matching the type of the given Dataflow.
 /// For example, if `v` is a view, `DROP SOURCE v` should not work, since Source and View
 /// are non-matching types.
-/// 
+///
 /// For now tables are treated as a special kind of source in Materialize, so just
 /// allow `TABLE` to refer to either.
 fn type_matches(object_type: &ObjectType, dataflow: &Dataflow) -> bool {
     match dataflow {
-        Dataflow::Source { .. } => *object_type == ObjectType::Source || *object_type == ObjectType::Table,
+        Dataflow::Source { .. } => {
+            *object_type == ObjectType::Source || *object_type == ObjectType::Table
+        }
         Dataflow::Sink { .. } => *object_type == ObjectType::Sink,
         Dataflow::View { .. } => *object_type == ObjectType::View,
     }
@@ -135,12 +137,12 @@ impl Planner {
                     if !type_matches(&object_type, dataflow) {
                         bail!("{} is not of type {}", name, object_type);
                     }
-                },
+                }
                 Err(e) => {
                     if !if_exists {
                         return Err(e);
                     }
-                },
+                }
             }
         }
         let mode = RemoveMode::from_cascade(cascade);
