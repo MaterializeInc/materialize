@@ -734,6 +734,8 @@ impl RecordRunner for FullState {
                                     when: PeekWhen::AfterFlush,
                                     insert_into: Some(name),
                                 });
+                                // TODO(jamii) there seems to be another race between inserts and peeks
+                                std::thread::sleep_ms(100);
                             }
                         }
                         match (rows_inserted, expected_rows_inserted) {
