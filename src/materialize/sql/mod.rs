@@ -59,7 +59,7 @@ pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure:
 ///
 /// For now tables are treated as a special kind of source in Materialize, so just
 /// allow `TABLE` to refer to either.
-fn type_matches(object_type: &ObjectType, dataflow: &Dataflow) -> bool {
+fn object_type_matches(object_type: &ObjectType, dataflow: &Dataflow) -> bool {
     match dataflow {
         Dataflow::Source { .. } => {
             *object_type == ObjectType::Source || *object_type == ObjectType::Table
@@ -134,7 +134,7 @@ impl Planner {
         for name in &names {
             match self.dataflows.get(name) {
                 Ok(dataflow) => {
-                    if !type_matches(&object_type, dataflow) {
+                    if !object_type_matches(&object_type, dataflow) {
                         bail!("{} is not of type {}", name, object_type);
                     }
                 }
