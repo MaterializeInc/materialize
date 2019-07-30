@@ -13,8 +13,7 @@ steps:
     command: ci/test/hygiene.sh
     plugins:
       - docker#v3.1.0:
-          # TODO(benesch): share with the other places that depend on this image.
-          image: materialize/test:20190727-014532
+          image: materialize/ci-builder:stable-20190730-071508
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
@@ -30,7 +29,7 @@ steps:
     plugins:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
-          config: ci/test/tests.compose.yml
+          config: ci/test/cargo-test.compose.yml
           run: app
   - label: ":racing_car: testdrive"
     plugins:
@@ -38,7 +37,7 @@ steps:
       - docker-compose#v3.0.3:
           config: ci/test/testdrive.compose.yml
           run: testdrive
-  - label: ":bulb: sqllogictest"
+  - label: ":bulb: Short SQL logic tests"
     command: >-
       sqllogictest --fail -vv
       sqllogictest/test/evidence/slt_lang_aggfunc.test
@@ -172,5 +171,12 @@ steps:
     # test/cockroach/zero.slt
     plugins:
       - docker#v3.1.0:
-          image: materialize/test-sqllogictest:$BUILDKITE_BUILD_NUMBER
+          image: materialize/ci-sqllogictest:$BUILDKITE_BUILD_NUMBER
           propagate-uid-gid: true
+  - label: ":bulb: :bulb: Full SQL logic tests"
+    trigger: sql-logic-tests
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER

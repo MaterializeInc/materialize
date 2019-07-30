@@ -11,15 +11,6 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-# If you add a new binary, add it to this array to have a Docker image named
-# materialize/test-BINARY created. You will also need to create a
-# Dockerfile.BINARY file that specifies how to build the docker image.
-binaries=(
-    materialized
-    sqllogictest
-    testdrive
-)
-
 docker_run() {
     docker run \
         --rm --interactive --tty \
@@ -32,7 +23,7 @@ docker_run() {
         --env RUSTC_WRAPPER=sccache \
         --env CARGO_HOME=/cargo \
         --user "$(id -u):$(id -g)" \
-        materialize/test:20190727-014532 bash -c "$1"
+        materialize/ci-builder:stable-20190730-071508 bash -c "$1"
 }
 
 ci_init
@@ -45,10 +36,13 @@ docker_run "cargo test --no-run --message-format=json > test-binaries.json"
 
 ci_collapsed_heading "Preparing Docker context"
 {
-    rm -rf docker-context
-    mkdir -p docker-context/{tests,shlib}
+    # NOTE(benesch): the debug information is large enough that it slows down CI,
+    # since we're packaging these binaries up into Docker images and shipping them
+    # around. A bit unfortunate, since it'd be nice to have useful backtraces if
+    # something crashes.
+    docker_run "find target -maxdepth 2 -type f -executable | xargs strip"
 
-    # Copy test binaries into docker-context/tests.
+    # Move test binaries into the context for the ci-cargo-test image.
     #
     # To make things a bit more readable, we name the test binaries after the
     # crate and target kind they come from, rather than the random hash that
@@ -61,9 +55,10 @@ ci_collapsed_heading "Preparing Docker context"
     # root of the crate they come from, and we need to emulate this behavior
     # since some of the test binaries attempt to find test data relative to
     # their CWD.
+    mkdir -p misc/docker/ci-cargo-test/{tests,shlib}
     while read -r executable cwd slug; do
-        echo "$slug $cwd" >> docker-context/tests/manifest
-        mv "$executable" docker-context/tests/"$slug"
+        echo "$slug $cwd" >> misc/docker/ci-cargo-test/tests/manifest
+        mv "$executable" misc/docker/ci-cargo-test/tests/"$slug"
     done < <(jq -r 'select(.profile.test)
         | . * {
             "crate_name": (.package_id | split(" ") | .[0]),
@@ -78,34 +73,21 @@ ci_collapsed_heading "Preparing Docker context"
                     + if (.target.kind != "lib") then ".\(.target.name)" else "" end)
         }
         | "\(.executable) \(.cwd) \(.slug)"' test-binaries.json)
+    cp target/release/testdrive misc/docker/ci-cargo-test/tests
+    cp misc/shlib/* misc/docker/ci-cargo-test/shlib
 
-    # Copy standalone binaries into docker-context.
-    for binary in "${binaries[@]}"; do
-        mv "target/release/$binary" docker-context
-    done
-
-    # Special-case testdrive, which gets packaged into the test image because
-    # some unit tests depend upon it being available.
-    cp docker-context/testdrive docker-context/tests
-
-    # NOTE(benesch): the debug information is large enough that it slows down CI,
-    # since we're packaging these binaries up into Docker images and shipping them
-    # around. A bit unfortunate, since it'd be nice to have useful backtraces if
-    # something crashes.
-    docker_run "find docker-context -type f -executable | xargs strip"
-
-    # Copy other miscellaneous scripts into the context.
-    cp ci/test/run-tests docker-context/run-tests
-    cp misc/shlib/* docker-context/shlib
+    # Move standalone binaries into the contexts for their respective images.
+    mv target/release/materialized misc/docker/ci-materialized
+    mv target/release/testdrive misc/docker/ci-testdrive
+    mv target/release/sqllogictest misc/docker/ci-sqllogictest
 }
 
-for image in "${binaries[@]}" tests; do
+for image in materialized testdrive sqllogictest cargo-test; do
     ci_collapsed_heading "Building Docker image $image"
-    tag=materialize/test-$image:${BUILDKITE_BUILD_NUMBER}
+    tag=materialize/ci-$image:${BUILDKITE_BUILD_NUMBER}
     docker build \
         --tag "$tag" \
-        --file "ci/test/Dockerfile.$image" \
-        --pull --stream \
-        docker-context
+        --pull \
+        misc/docker/ci-$image
     docker push "$tag"
 done

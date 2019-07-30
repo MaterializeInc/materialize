@@ -4,21 +4,23 @@
 # distributed without the express permission of Materialize, Inc.
 
 steps:
+  - block: ":vertical_traffic_light: Go"
   - command: ci/slt/slt.sh
+    artifact_paths: target/slt.out
     plugins:
       - docker#v3.1.0:
-          # TODO(benesch): figure out how to share the image version with
-          # the test job.
-          image: materialize/test:20190726-152459
+          image: materialize/ci-sqllogictest:$SQLLOGICTEST_IMAGE_ID
           propagate-uid-gid: true
-          mount-ssh-agent: true
-          volumes:
-          - "$HOME/.cache/sccache:/sccache"
-          - "$HOME/.cargo:/cargo"
           environment:
           - BUILDKITE
+          shell: false
+  - wait
+  - command: ci/slt/upload.sh
+    plugins:
+      - docker#v3.1.0:
+          image: materialize/ci-builder:stable-20190730-071508
+          propagate-uid-gid: true
+          mount-ssh-agent: true
+          environment:
           - BUILDKITE_BRANCH
           - BUILDKITE_COMMIT
-          - RUSTC_WRAPPER=sccache
-          - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
-          - CARGO_HOME=/cargo

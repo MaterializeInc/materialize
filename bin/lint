@@ -38,6 +38,7 @@ copyright_files=$(grep -vE \
     -e '^rustfmt.toml$' \
     -e '\.md$' \
     -e '\.json$' \
+    -e '^misc/docker/ci-builder/(rust.asc|ssh_known_hosts)$' \
     <<< "$files"
 )
 
