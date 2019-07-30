@@ -723,7 +723,13 @@ impl RecordRunner for FullState {
                             sqlite::Outcome::Changed(name, typ, diff) => {
                                 let mut rows = vec![];
                                 for (row, count) in diff {
-                                    assert!(count > 0, "TODO(jamii)");
+                                    if count < 0 {
+                                        return Ok(Outcome::Unsupported {
+                                            error: format_err!(
+                                                "Can't yet send deletes to dataflow"
+                                            ),
+                                        });
+                                    }
                                     for _ in 0..count {
                                         rows.push(row.clone());
                                     }
@@ -735,7 +741,7 @@ impl RecordRunner for FullState {
                                     insert_into: Some(name),
                                 });
                                 // TODO(jamii) there seems to be another race between inserts and peeks
-                                std::thread::sleep_ms(100);
+                                std::thread::sleep(std::time::Duration::from_millis(100));
                             }
                         }
                         match (rows_inserted, expected_rows_inserted) {
