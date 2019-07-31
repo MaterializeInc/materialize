@@ -95,7 +95,7 @@ pub struct Update {
 pub enum LocalInput {
     /// Send a batch of updates to the input
     Updates(Vec<Update>),
-    /// All future updates with have timestamps greater than or equal to this timestamp
+    /// All future updates will have timestamps >= this timestamp
     Watermark(u64),
 }
 
