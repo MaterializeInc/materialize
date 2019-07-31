@@ -1080,17 +1080,8 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
     if verbosity >= 1 {
         println!("==> {}", source);
     }
-    let mut last_record = None;
     for record in parse_records(&input) {
         let record = record.unwrap();
-
-        match (&last_record, &record) {
-            (Some(Record::Statement { .. }), Record::Query { .. }) => {
-                // TODO(jamii) there seems to be another race between inserts and peeks
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            _ => (),
-        }
 
         if verbosity >= 3 {
             match &record {
@@ -1142,8 +1133,6 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
         if let Outcome::Bail { .. } = outcome {
             break;
         }
-
-        last_record = Some(record);
     }
     outcomes
 }
