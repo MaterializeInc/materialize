@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::error::Error;
 use std::io::Cursor;
 
 use ::postgres::rows::Row as PostgresRow;
@@ -8,7 +7,7 @@ use ::postgres::types::{FromSql, Type as PostgresType};
 use ::postgres::{Connection, TlsMode};
 use byteorder::{NetworkEndian, ReadBytesExt};
 use failure::{bail, ensure, format_err};
-use sqlparser::ast::{ObjectType, Statement};
+use sqlparser::ast::{DataType, ObjectType, Statement};
 
 use materialize::repr::decimal::Significand;
 use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -16,7 +15,7 @@ use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
 #[derive(Debug)]
 pub struct Postgres {
     connection: Connection,
-    table_types: HashMap<String, RelationType>,
+    table_types: HashMap<String, (Vec<DataType>, RelationType)>,
 }
 
 pub type Row = Vec<Datum>;
@@ -64,6 +63,10 @@ END $$;
         Ok(match parsed {
             Statement::CreateTable { name, columns, .. } => {
                 self.connection.execute(sql, &[])?;
+                let sql_types = columns
+                    .iter()
+                    .map(|column| column.data_type.clone())
+                    .collect::<Vec<_>>();
                 let typ = RelationType {
                     column_types: columns
                         .iter()
@@ -76,7 +79,8 @@ END $$;
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
                 };
-                self.table_types.insert(name.to_string(), typ.clone());
+                self.table_types
+                    .insert(name.to_string(), (sql_types, typ.clone()));
                 Outcome::Created(name.to_string(), typ)
             }
             Statement::Drop {
@@ -91,14 +95,14 @@ END $$;
             | Statement::Insert { table_name, .. }
             | Statement::Update { table_name, .. } => {
                 let table_name = table_name.to_string();
-                let typ = self
+                let (sql_types, typ) = self
                     .table_types
                     .get(&table_name)
                     .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
                     .clone();
-                let before = self.select_all(&table_name, &typ)?;
+                let before = self.select_all(&table_name, &sql_types, &typ)?;
                 self.connection.execute(sql, &[])?;
-                let after = self.select_all(&table_name, &typ)?;
+                let after = self.select_all(&table_name, &sql_types, &typ)?;
                 let mut diff = HashMap::new();
                 for row in before {
                     *diff.entry(row).or_insert(0) -= 1;
@@ -116,6 +120,7 @@ END $$;
     fn select_all(
         &mut self,
         table_name: &str,
+        sql_types: &[DataType],
         typ: &RelationType,
     ) -> Result<Vec<Row>, failure::Error> {
         let mut rows = vec![];
@@ -124,7 +129,21 @@ END $$;
             .query(&format!("select * from {}", table_name), &[])?;
         for postgres_row in postgres_rows.iter() {
             let row = (0..postgres_row.len())
-                .map(|c| get_column(&postgres_row, c, &typ.column_types[c]))
+                .map(|c| {
+                    let datum = get_column(
+                        &postgres_row,
+                        c,
+                        &sql_types[c],
+                        typ.column_types[c].nullable,
+                    )?;
+                    ensure!(
+                        datum.is_instance_of(&typ.column_types[c]),
+                        "Expected value of type {:?}, got {:?}",
+                        typ.column_types[c],
+                        datum
+                    );
+                    Ok(datum)
+                })
                 .collect::<Result<_, _>>()?;
             rows.push(row);
         }
@@ -135,40 +154,59 @@ END $$;
 fn get_column(
     postgres_row: &PostgresRow,
     i: usize,
-    column_type: &ColumnType,
+    sql_type: &DataType,
+    nullable: bool,
 ) -> Result<Datum, failure::Error> {
-    Ok(match &column_type.scalar_type {
-        ScalarType::Bool => get_column_inner::<bool>(postgres_row, i, column_type.nullable)?.into(),
-        ScalarType::Bytes => {
-            get_column_inner::<Vec<u8>>(postgres_row, i, column_type.nullable)?.into()
+    // NOTE this needs to stay in sync with ScalarType::from_sql
+    // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
+    Ok(match sql_type {
+        DataType::Boolean => get_column_inner::<bool>(postgres_row, i, nullable)?.into(),
+        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => {
+            get_column_inner::<bool>(postgres_row, i, nullable)?.into()
         }
-        ScalarType::Float32 => {
-            get_column_inner::<f32>(postgres_row, i, column_type.nullable)?.into()
+        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => {
+            get_column_inner::<String>(postgres_row, i, nullable)?.into()
         }
-        ScalarType::Float64 => {
-            get_column_inner::<f64>(postgres_row, i, column_type.nullable)?.into()
+        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => {
+            get_column_inner::<String>(postgres_row, i, nullable)?.into()
         }
-        ScalarType::Int32 => get_column_inner::<i32>(postgres_row, i, column_type.nullable)?.into(),
-        ScalarType::Int64 => get_column_inner::<i64>(postgres_row, i, column_type.nullable)?.into(),
-        ScalarType::Null => {
-            postgres_row.get_opt::<usize, Null>(i).unwrap()?;
-            Datum::Null
+        DataType::SmallInt => get_column_inner::<i16>(postgres_row, i, nullable)?
+            .map(|i| i as i32)
+            .into(),
+        DataType::Int => get_column_inner::<i32>(postgres_row, i, nullable)?
+            .map(|i| i as i64)
+            .into(),
+        DataType::BigInt => get_column_inner::<i64>(postgres_row, i, nullable)?.into(),
+        DataType::Float(p) => {
+            if p.unwrap_or(53) <= 24 {
+                get_column_inner::<f32>(postgres_row, i, nullable)?
+                    .map(|f| f as f64)
+                    .into()
+            } else {
+                get_column_inner::<f64>(postgres_row, i, nullable)?.into()
+            }
         }
-        ScalarType::String => {
-            get_column_inner::<String>(postgres_row, i, column_type.nullable)?.into()
-        }
-        ScalarType::Decimal(_, type_scale) => {
-            match get_column_inner::<DecimalWrapper>(postgres_row, i, column_type.nullable)? {
+        DataType::Real => get_column_inner::<f32>(postgres_row, i, nullable)?
+            .map(|f| f as f64)
+            .into(),
+        DataType::Double => get_column_inner::<f64>(postgres_row, i, nullable)?.into(),
+        DataType::Decimal(_, _) => {
+            let desired_scale = match ScalarType::from_sql(sql_type).unwrap() {
+                ScalarType::Decimal(_precision, desired_scale) => desired_scale,
+
+                _ => unreachable!(),
+            };
+            match get_column_inner::<DecimalWrapper>(postgres_row, i, nullable)? {
                 None => Datum::Null,
                 Some(DecimalWrapper {
                     mut significand,
                     scale: current_scale,
                 }) => {
                     // TODO(jamii) lots of potential for unchecked edge cases here eg 10^scale_correction could overflow
-                    // Current representation is `significand * 10^current_scale`
-                    // Want to get to `significand2 * 10^type_scale`
-                    // So `significand2 = significand * 10^(current_scale - type_scale)`
-                    let scale_correction = current_scale - (*type_scale as i64);
+                    // current representation is `significand * 10^current_scale`
+                    // want to get to `significand2 * 10^desired_scale`
+                    // so `significand2 = significand * 10^(current_scale - desired_scale)`
+                    let scale_correction = current_scale - (desired_scale as i64);
                     if scale_correction > 0 {
                         significand *= 10i128.pow(scale_correction.try_into()?);
                     } else {
@@ -178,13 +216,11 @@ fn get_column(
                 }
             }
         }
-        ScalarType::Regex | ScalarType::Time | ScalarType::Date | ScalarType::Timestamp => {
-            // TODO(jamii)
-            bail!(
-                "Postgres to materialize conversion not yet supported for {:?}",
-                column_type.scalar_type
-            )
-        }
+        DataType::Bytea => get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?.into(),
+        _ => bail!(
+            "Postgres to materialize conversion not yet supported for {:?}",
+            sql_type
+        ),
     })
 }
 
@@ -243,7 +279,7 @@ impl FromSql for DecimalWrapper {
             _ => Err(format_err!("Got an invalid sign byte: {:?}", sign))?,
         };
 
-        // First digit got factor 10_000^(digits.len() - 1), but should get 10_000^weight
+        // first digit got factor 10_000^(digits.len() - 1), but should get 10_000^weight
         let current_scale = -(4 * (i64::from(weight) - count + 1));
 
         Ok(DecimalWrapper {
@@ -257,24 +293,5 @@ impl FromSql for DecimalWrapper {
             &postgres::types::NUMERIC => true,
             _ => false,
         }
-    }
-}
-
-struct Null();
-
-impl FromSql for Null {
-    fn from_sql(
-        ty: &PostgresType,
-        _raw: &[u8],
-    ) -> Result<Self, Box<std::error::Error + Sync + Send>> {
-        Err(format_err!("Expected null, got a value of type: {:?}", ty))?
-    }
-
-    fn from_sql_null(_: &PostgresType) -> Result<Self, Box<std::error::Error + Sync + Send>> {
-        Ok(Null())
-    }
-
-    fn accepts(_ty: &PostgresType) -> bool {
-        true
     }
 }

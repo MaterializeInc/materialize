@@ -308,6 +308,7 @@ impl Planner {
 
 impl ScalarType {
     pub fn from_sql(data_type: &DataType) -> Result<Self, failure::Error> {
+        // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
         Ok(match data_type {
             DataType::Boolean => ScalarType::Bool,
             DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
