@@ -12,7 +12,6 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
-use timely::dataflow::operators::unordered_input::{ActivateCapability, UnorderedHandle};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
@@ -28,10 +27,6 @@ use crate::glue::LocalInputMux;
 use crate::repr::Datum;
 
 pub enum InputCapability {
-    Local {
-        handle: UnorderedHandle<Timestamp, (Vec<Datum>, Timestamp, Diff)>,
-        capability: ActivateCapability<Timestamp>,
-    },
     External(SharedCapability),
 }
 
@@ -40,7 +35,6 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
-    input_time: u64,
     local_input_mux: &mut LocalInputMux,
 ) {
     let worker_timer = worker.timer();

@@ -98,7 +98,6 @@ where
     traces: TraceManager,
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputCapability>,
-    input_time: u64,
     dataflows: HashMap<String, Dataflow>,
     sequencer: Sequencer<(SequencedCommand, CommandMeta)>,
 }
@@ -123,7 +122,6 @@ where
             traces: TraceManager::default(),
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
-            input_time: 1,
             dataflows: HashMap::new(),
             sequencer,
         }
@@ -242,7 +240,6 @@ where
                     &mut self.traces,
                     self.inner,
                     &mut self.inputs,
-                    self.input_time,
                     &mut self.local_input_mux,
                 );
                 self.dataflows.insert(dataflow.name().to_owned(), dataflow);
