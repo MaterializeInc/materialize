@@ -4,7 +4,7 @@
 # distributed without the express permission of Materialize, Inc.
 
 steps:
-  - command: ci/deploy/deploy.sh
+  - command: ci/deploy/deploy.sh --no-rustup
     timeout_in_minutes: 30
     plugins:
       - docker#v3.1.0:
