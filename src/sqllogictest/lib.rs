@@ -6,6 +6,7 @@
 //! https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
 use std::borrow::ToOwned;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
@@ -21,9 +22,7 @@ use regex::Regex;
 use uuid::Uuid;
 
 use materialize::dataflow;
-use materialize::dataflow::{
-    Dataflow, LocalSourceConnector, RelationExpr, Source, SourceConnector,
-};
+use materialize::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
 use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
 use materialize::sql::store::RemoveMode;
@@ -535,6 +534,9 @@ struct FullState {
     worker0_thread: std::thread::Thread,
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<Drop>,
+    current_timestamp: u64,
+    local_input_uuids: HashMap<String, Uuid>,
+    local_input_mux: LocalInputMux,
     dataflow_results_mux: DataflowResultsMux,
 }
 
@@ -589,9 +591,11 @@ impl FullState {
         let postgres = Postgres::open_and_erase()?;
         let planner = Planner::default();
         let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
+        let local_input_mux = LocalInputMux::default();
         let dataflow_results_mux = DataflowResultsMux::default();
         let dataflow_workers = dataflow::serve(
             dataflow_command_receiver,
+            local_input_mux.clone(),
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone()),
             timely::Configuration::Process(NUM_TIMELY_WORKERS),
         )
@@ -603,6 +607,9 @@ impl FullState {
             planner,
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
+            current_timestamp: 0,
+            local_input_uuids: HashMap::new(),
+            local_input_mux,
             dataflow_results_mux,
             worker0_thread,
         })
@@ -613,12 +620,11 @@ impl FullState {
         dataflow_command: DataflowCommand,
     ) -> UnboundedReceiver<DataflowResults> {
         let uuid = Uuid::new_v4();
-        let receiver = self
-            .dataflow_results_mux
-            .write()
-            .unwrap()
-            .channel(uuid)
-            .unwrap();
+        let receiver = {
+            let mut mux = self.dataflow_results_mux.write().unwrap();
+            mux.channel(uuid).unwrap();
+            mux.receiver(&uuid).unwrap()
+        };
         self.dataflow_command_sender
             .unbounded_send((
                 dataflow_command.clone(),
@@ -627,7 +633,6 @@ impl FullState {
                 },
             ))
             .unwrap();
-
         self.worker0_thread.unpark();
         receiver
     }
@@ -706,21 +711,40 @@ impl RecordRunner for FullState {
                         let rows_inserted;
                         match outcome {
                             postgres::Outcome::Created(name, typ) => {
+                                let uuid = Uuid::new_v4();
+                                self.local_input_uuids.insert(name.clone(), uuid);
+                                {
+                                    self.local_input_mux.write().unwrap().channel(uuid).unwrap();
+                                }
                                 let dataflow = Dataflow::Source(Source {
                                     name,
-                                    connector: SourceConnector::Local(LocalSourceConnector {}),
+                                    connector: SourceConnector::Local(LocalSourceConnector {
+                                        uuid,
+                                    }),
                                     typ,
                                 });
                                 self.planner.dataflows.insert(dataflow.clone())?;
                                 let _receiver = self.send_dataflow_command(
                                     DataflowCommand::CreateDataflow(dataflow),
                                 );
+                                {
+                                    self.local_input_mux
+                                        .read()
+                                        .unwrap()
+                                        .sender(&uuid)
+                                        .unwrap()
+                                        .unbounded_send(LocalInput::Watermark(
+                                            self.current_timestamp,
+                                        ))
+                                        .unwrap();
+                                }
                                 rows_inserted = None;
                             }
                             postgres::Outcome::Dropped(names) => {
                                 let mut dataflows = vec![];
                                 // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
                                 for name in &names {
+                                    self.local_input_uuids.remove(name);
                                     self.planner.dataflows.remove(
                                         name,
                                         RemoveMode::Cascade,
@@ -731,26 +755,38 @@ impl RecordRunner for FullState {
                                     .send_dataflow_command(DataflowCommand::DropDataflows(names));
                                 rows_inserted = None;
                             }
-                            postgres::Outcome::Changed(name, typ, diff) => {
-                                let mut rows = vec![];
-                                for (row, count) in diff {
-                                    if count < 0 {
-                                        return Ok(Outcome::Unsupported {
-                                            error: format_err!(
-                                                "Can't yet send deletes to dataflow"
-                                            ),
-                                        });
-                                    }
-                                    for _ in 0..count {
-                                        rows.push(row.clone());
+                            postgres::Outcome::Changed(name, _typ, updates) => {
+                                let updates = updates
+                                    .into_iter()
+                                    .map(|(row, diff)| Update {
+                                        row,
+                                        diff,
+                                        timestamp: self.current_timestamp,
+                                    })
+                                    .collect::<Vec<_>>();
+                                let updated_uuid = self
+                                    .local_input_uuids
+                                    .get(&name)
+                                    .expect("Unknown table in update");
+                                {
+                                    let mux = self.local_input_mux.read().unwrap();
+                                    self.current_timestamp += 1;
+                                    for (uuid, sender) in &mux.senders {
+                                        if uuid == updated_uuid {
+                                            sender
+                                                .unbounded_send(LocalInput::Updates(
+                                                    updates.clone(),
+                                                ))
+                                                .unwrap();
+                                        }
+                                        sender
+                                            .unbounded_send(LocalInput::Watermark(
+                                                self.current_timestamp,
+                                            ))
+                                            .unwrap();
                                     }
                                 }
-                                rows_inserted = Some(rows.len());
-                                let _receiver = self.send_dataflow_command(DataflowCommand::Peek {
-                                    source: RelationExpr::Constant { rows, typ },
-                                    when: PeekWhen::AfterFlush,
-                                    insert_into: Some(name),
-                                });
+                                rows_inserted = Some(updates.len());
                             }
                         }
                         match (rows_inserted, expected_rows_inserted) {
@@ -777,7 +813,7 @@ impl RecordRunner for FullState {
                     | Statement::CreateSink { .. }
                     | Statement::Drop { .. } => {
                         let (_response, dataflow_command) =
-                            match self.planner.handle_command(sql.to_string()) {
+                            match self.planner.handle_command(sql.to_owned()) {
                                 Ok((response, dataflow_command)) => (response, dataflow_command),
                                 Err(error) => return Ok(Outcome::PlanFailure { error }),
                             };

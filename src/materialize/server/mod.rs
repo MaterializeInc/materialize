@@ -10,7 +10,6 @@ use log::error;
 use std::boxed::Box;
 use std::error::Error as StdError;
 use std::net::SocketAddr;
-use std::sync::{Arc, RwLock};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
@@ -157,7 +156,7 @@ pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
     };
 
     // Construct timely dataflow instance.
-    let local_input_mux = Arc::new(RwLock::new(Mux::default()));
+    let local_input_mux = LocalInputMux::default();
     let dataflow_results_handler = match config.dataflow_results {
         DataflowResultsConfig::Local => {
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone())

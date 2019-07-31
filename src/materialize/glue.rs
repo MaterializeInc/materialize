@@ -124,8 +124,8 @@ pub struct Mux<K, T>
 where
     K: Hash + Eq,
 {
-    receivers: HashMap<K, UnboundedReceiver<T>>,
-    senders: HashMap<K, UnboundedSender<T>>,
+    pub receivers: HashMap<K, UnboundedReceiver<T>>,
+    pub senders: HashMap<K, UnboundedSender<T>>,
 }
 
 impl<K, T> Default for Mux<K, T>

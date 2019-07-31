@@ -103,15 +103,15 @@ END $$;
                 let before = self.select_all(&table_name, &sql_types, &typ)?;
                 self.connection.execute(sql, &[])?;
                 let after = self.select_all(&table_name, &sql_types, &typ)?;
-                let mut diff = HashMap::new();
+                let mut update = HashMap::new();
                 for row in before {
-                    *diff.entry(row).or_insert(0) -= 1;
+                    *update.entry(row).or_insert(0) -= 1;
                 }
                 for row in after {
-                    *diff.entry(row).or_insert(0) += 1;
+                    *update.entry(row).or_insert(0) += 1;
                 }
-                diff.retain(|_, count| *count != 0);
-                Outcome::Changed(table_name, typ, diff.into_iter().collect())
+                update.retain(|_, count| *count != 0);
+                Outcome::Changed(table_name, typ, update.into_iter().collect())
             }
             _ => bail!("Unsupported statement: {:?}", parsed),
         })

@@ -125,7 +125,6 @@ impl Sqlite {
                             let scaled_r = r * (10.0 as f64).powi(*scale as i32);
                             Datum::from(scaled_r as i128)
                         }
-                        // TODO(jamii) handle dates, decimals etc
                         (other, _) => bail!(
                             "Unsupported sqlite->materialize conversion: {:?} to {:?}",
                             other,
