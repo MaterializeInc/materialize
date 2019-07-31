@@ -779,13 +779,7 @@ impl RecordRunner for FullState {
                         let (_response, dataflow_command) =
                             match self.planner.handle_command(sql.to_string()) {
                                 Ok((response, dataflow_command)) => (response, dataflow_command),
-                                Err(error) => {
-                                    if *should_run {
-                                        return Ok(Outcome::PlanFailure { error });
-                                    } else {
-                                        return Ok(Outcome::Success);
-                                    }
-                                }
+                                Err(error) => return Ok(Outcome::PlanFailure { error }),
                             };
                         let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
                         Ok(Outcome::Success)
