@@ -817,6 +817,16 @@ impl RecordRunner for FullState {
                                 Ok((response, dataflow_command)) => (response, dataflow_command),
                                 Err(error) => return Ok(Outcome::PlanFailure { error }),
                             };
+                        // make sure we peek at the correct time
+                        let dataflow_command = match dataflow_command {
+                            Some(DataflowCommand::Peek { source, .. }) => {
+                                Some(DataflowCommand::Peek {
+                                    source,
+                                    when: PeekWhen::AtTimestamp(self.current_timestamp),
+                                })
+                            }
+                            other => other,
+                        };
                         let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
                         Ok(Outcome::Success)
                     }
@@ -920,6 +930,16 @@ impl RecordRunner for FullState {
                             }
                         }
 
+                        // make sure we peek at the correct time
+                        let dataflow_command = match dataflow_command {
+                            Some(DataflowCommand::Peek { source, .. }) => {
+                                Some(DataflowCommand::Peek {
+                                    source,
+                                    when: PeekWhen::AtTimestamp(self.current_timestamp),
+                                })
+                            }
+                            other => other,
+                        };
                         let receiver = self.send_dataflow_command(dataflow_command.unwrap());
                         let results = self.receive_peek_results(receiver);
 
