@@ -19,7 +19,7 @@ do
     case "$arg" in
         --rustup) rustup=1 ;;
         --rustup=*) die "--rustup option does not take an argument" ;;
-        --no-rustup) rustup=0 ;;
+        --no-rustup) rustup= ;;
         --no-rustup=*) die "--no-rustup option does not take an argument" ;;
         -*) die "unknown option $arg" ;;
         *) die "usage: $0 [--rustup|--no-rustup]" ;;

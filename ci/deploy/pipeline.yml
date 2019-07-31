@@ -4,7 +4,7 @@
 # distributed without the express permission of Materialize, Inc.
 
 steps:
-  - command: ci/deploy/deploy.sh --no-rustup
+  - command: ci/deploy/docs.sh
     timeout_in_minutes: 30
     plugins:
       - docker#v3.1.0:
@@ -18,3 +18,5 @@ steps:
           - RUSTC_WRAPPER=sccache
           - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
           - CARGO_HOME=/cargo
+  - command: ci/deploy/docker.sh
+    timeout_in_minutes: 10

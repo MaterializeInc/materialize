@@ -5,7 +5,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 #
-# deploy.sh — deploys docs to mtrlz.dev in CI.
+# docs.sh — deploys docs to mtrlz.dev in CI.
 
 set -euo pipefail
 

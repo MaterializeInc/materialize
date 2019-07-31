@@ -5,7 +5,7 @@
 
 FROM ubuntu:bionic
 
-RUN apt-get update && apt-get -qy install libssl1.1 wait-for-it
+RUN apt-get update && apt-get -qy install wait-for-it
 
 COPY sqllogictest /usr/local/bin
 

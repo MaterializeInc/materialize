@@ -185,3 +185,12 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
+  - label: ":rocket: Deploy"
+    trigger: deploy
+    async: true
+    branches: master
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        MATERIALIZED_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
