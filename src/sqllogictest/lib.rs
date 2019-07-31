@@ -822,7 +822,7 @@ impl RecordRunner for FullState {
                             Some(DataflowCommand::Peek { source, .. }) => {
                                 Some(DataflowCommand::Peek {
                                     source,
-                                    when: PeekWhen::AtTimestamp(self.current_timestamp),
+                                    when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
                                 })
                             }
                             other => other,
@@ -935,7 +935,7 @@ impl RecordRunner for FullState {
                             Some(DataflowCommand::Peek { source, .. }) => {
                                 Some(DataflowCommand::Peek {
                                     source,
-                                    when: PeekWhen::AtTimestamp(self.current_timestamp),
+                                    when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
                                 })
                             }
                             other => other,
