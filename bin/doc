@@ -28,17 +28,18 @@ done
 
 cargo() {
     if [[ "$rustup" ]]; then
-        cargo +nightly "$@"
+        command cargo +nightly "$@"
     else
-        cargo "$@"
+        command cargo "$@"
     fi
 }
 
 # Use nightly until stable supports intra-Rustdoc links.
 # https://github.com/rust-lang/rust/issues/43466
 #
-# Consider removing `--no-deps` when num-traits no longer causes rustdoc to
-# overflow its stack: https://github.com/rust-lang/rust/issues/59502.
+# TODO(benesch): consider removing --no-deps when Cargo doesn't get thoroughly
+# confused by having multiple versions of the same crate.
+# https://github.com/rust-lang/rust/issues/56169
 cargo doc --no-deps
 
 crates=$(cargo metadata --format-version=1 \
