@@ -22,7 +22,7 @@ CREATE TABLE kv (
   k INT PRIMARY KEY,
   v INT,
   w INT,
-  s STRING
+  s TEXT
 )
 
 # Aggregate functions return NULL if there are no rows.
@@ -1055,7 +1055,7 @@ statement ok
 INSERT INTO ab(a,b) VALUES (1,2), (3,4);
 
 statement ok
-CREATE TABLE xy(x STRING, y STRING);
+CREATE TABLE xy(x TEXT, y TEXT);
 
 statement ok
 INSERT INTO xy(x, y) VALUES ('a', 'b'), ('c', 'd')
@@ -1193,7 +1193,7 @@ statement OK
 CREATE TABLE string_agg_test (
   id INT PRIMARY KEY,
   company_id INT,
-  employee STRING
+  employee TEXT
 )
 
 query IT colnames
@@ -1331,7 +1331,7 @@ company_id  string_agg
 4           DDDD
 
 query IT colnames
-SELECT company_id, string_agg(NULL::STRING, ',')
+SELECT company_id, string_agg(NULL::TEXT, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
@@ -1355,7 +1355,7 @@ company_id  string_agg
 4           NULL
 
 query IT colnames
-SELECT company_id, string_agg(NULL::STRING, NULL)
+SELECT company_id, string_agg(NULL::TEXT, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
@@ -1495,7 +1495,7 @@ company_id  string_agg
 4           DDDD
 
 query IT colnames
-SELECT company_id, string_agg(NULL::STRING, employee)
+SELECT company_id, string_agg(NULL::TEXT, employee)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
@@ -1531,7 +1531,7 @@ company_id  string_agg
 4           NULL
 
 query IT colnames
-SELECT company_id, string_agg(NULL::STRING, NULL)
+SELECT company_id, string_agg(NULL::TEXT, NULL)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
@@ -1567,7 +1567,7 @@ company_id  string_agg
 4           NULL
 
 query IT colnames
-SELECT company_id, string_agg(NULL, NULL::STRING)
+SELECT company_id, string_agg(NULL, NULL::TEXT)
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
@@ -1660,7 +1660,7 @@ statement OK
 CREATE TABLE string_agg_test2 (
   id INT PRIMARY KEY,
   company_id INT,
-  employee STRING
+  employee TEXT
 )
 
 statement OK
