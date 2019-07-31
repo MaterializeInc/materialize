@@ -39,6 +39,7 @@ copyright_files=$(grep -vE \
     -e '\.md$' \
     -e '\.json$' \
     -e '^misc/docker/ci-builder/(rust.asc|ssh_known_hosts)$' \
+    -e '^.github/' \
     <<< "$files"
 )
 
