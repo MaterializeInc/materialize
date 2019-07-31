@@ -84,6 +84,7 @@ pub enum PeekWhen {
 }
 
 #[derive(Debug, Clone)]
+/// A batch of updates to be fed to a local input
 pub struct Update {
     pub row: Vec<Datum>,
     pub timestamp: u64,
@@ -92,7 +93,9 @@ pub struct Update {
 
 #[derive(Debug, Clone)]
 pub enum LocalInput {
+    /// Send a batch of updates to the input
     Updates(Vec<Update>),
+    /// All future updates with have timestamps greater than or equal to this timestamp
     Watermark(u64),
 }
 

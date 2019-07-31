@@ -756,7 +756,6 @@ impl RecordRunner for FullState {
                                 rows_inserted = None;
                             }
                             postgres::Outcome::Changed(name, _typ, updates) => {
-                                self.current_timestamp += 1;
                                 let updates = updates
                                     .into_iter()
                                     .map(|(row, diff)| Update {
@@ -781,11 +780,12 @@ impl RecordRunner for FullState {
                                         }
                                         sender
                                             .unbounded_send(LocalInput::Watermark(
-                                                self.current_timestamp,
+                                                self.current_timestamp + 1,
                                             ))
                                             .unwrap();
                                     }
                                 }
+                                self.current_timestamp += 1;
                                 rows_inserted = Some(updates.len());
                             }
                         }

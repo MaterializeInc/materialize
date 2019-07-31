@@ -57,7 +57,7 @@ where
                             }
                         }
                         LocalInput::Watermark(timestamp) => {
-                            cap.downgrade(&(timestamp + 1));
+                            cap.downgrade(&(timestamp));
                         }
                     }
                 }
