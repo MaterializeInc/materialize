@@ -607,7 +607,7 @@ impl FullState {
             planner,
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
-            current_timestamp: 0,
+            current_timestamp: 1,
             local_input_uuids: HashMap::new(),
             local_input_mux,
             dataflow_results_mux,
