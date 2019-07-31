@@ -108,8 +108,8 @@ SELECT
 	l_linestatus,
 	sum(l_quantity) as sum_qty,
 	sum(l_extendedprice) as sum_base_price,
-	sum(l_extendedprice * (1.00 - l_discount)) as sum_disc_price,
-	sum(l_extendedprice * (1.00 - l_discount) * (1.00 + l_tax)) as sum_charge,
+	sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
+	sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
 	avg(l_quantity) as avg_qty,
 	avg(l_extendedprice) as avg_price,
 	avg(l_discount) as avg_disc,
@@ -168,8 +168,7 @@ query TTT valuesort
 -- Query 03
 select
     l_orderkey,
-    sum(l_extendedprice * (1.00 - l_discount)) as revenue,
-    count(*) as number,
+    sum(l_extendedprice * (1 - l_discount)) as revenue,
     o_orderdate,
     o_shippriority
 from
@@ -222,7 +221,7 @@ query TTT valuesort
 -- Query 05
 select
     n_name,
-    sum(l_extendedprice * (1.00 - l_discount)) as revenue
+    sum(l_extendedprice * (1 - l_discount)) as revenue
 from
     customer,
     orders,
@@ -255,7 +254,7 @@ select
 from
     lineitem
 where
-    l_quantity < 24.00
+    l_quantity < 24
 --  and l_shipdate >= date '1994-01-01'
 --  and l_shipdate < date '1994-01-01' + interval '1' year
     and l_shipdate >= cast(8765 as smallint)
@@ -388,7 +387,7 @@ query TTT valuesort
 select
     c_custkey,
     c_name,
-    sum(l_extendedprice * (1.00 - l_discount)) as revenue,
+    sum(l_extendedprice * (1 - l_discount)) as revenue,
     c_acctbal,
     n_name,
     c_address,
