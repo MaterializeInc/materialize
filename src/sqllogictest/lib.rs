@@ -687,7 +687,7 @@ impl RecordRunner for FullState {
                 };
 
                 match statement {
-                    // run through sqlite and send diffs to materialize
+                    // run through postgres and send diffs to materialize
                     Statement::CreateTable { .. }
                     | Statement::Drop {
                         object_type: ObjectType::Table,
