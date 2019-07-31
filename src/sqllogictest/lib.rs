@@ -756,6 +756,7 @@ impl RecordRunner for FullState {
                                 rows_inserted = None;
                             }
                             postgres::Outcome::Changed(name, _typ, updates) => {
+                                self.current_timestamp += 1;
                                 let updates = updates
                                     .into_iter()
                                     .map(|(row, diff)| Update {
@@ -770,7 +771,6 @@ impl RecordRunner for FullState {
                                     .expect("Unknown table in update");
                                 {
                                     let mux = self.local_input_mux.read().unwrap();
-                                    self.current_timestamp += 1;
                                     for (uuid, sender) in &mux.senders {
                                         if uuid == updated_uuid {
                                             sender

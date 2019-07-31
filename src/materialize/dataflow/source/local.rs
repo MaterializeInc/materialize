@@ -49,13 +49,15 @@ where
                             for update in updates {
                                 assert!(
                                     update.timestamp >= *cap.time(),
-                                    "Local input went backwards in time"
+                                    "Local input went backwards in time: update.timestamp={}, cap.time={}",
+                                    update.timestamp,
+                                    cap.time()
                                 );
                                 session.give((update.row, update.timestamp, update.diff));
                             }
                         }
                         LocalInput::Watermark(timestamp) => {
-                            cap.downgrade(&timestamp);
+                            cap.downgrade(&(timestamp + 1));
                         }
                     }
                 }
