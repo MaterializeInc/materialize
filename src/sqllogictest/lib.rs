@@ -752,7 +752,7 @@ impl RecordRunner for FullState {
                                     insert_into: Some(name),
                                 });
                                 // TODO(jamii) there seems to be another race between inserts and peeks
-                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                std::thread::sleep(std::time::Duration::from_millis(10));
                             }
                         }
                         match (rows_inserted, expected_rows_inserted) {
