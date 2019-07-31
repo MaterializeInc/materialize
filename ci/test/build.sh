@@ -12,6 +12,9 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 
 docker_run() {
+    # NOTE(benesch): we need to explicitly specify OPENSSL_LIB_DIR and
+    # OPENSSL_INCLUDE_DIR to work around a bug in pkg-config-rs:
+    # https://github.com/rust-lang/pkg-config-rs/pull/37.
     docker run \
         --rm --interactive --tty \
         --volume "$SSH_AUTH_SOCK:/tmp/ssh-agent.sock" \
@@ -22,6 +25,9 @@ docker_run() {
         --env SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211 \
         --env RUSTC_WRAPPER=sccache \
         --env CARGO_HOME=/cargo \
+        --env OPENSSL_STATIC=1 \
+        --env OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
+        --env OPENSSL_INCLUDE_DIR=/usr/include \
         --user "$(id -u):$(id -g)" \
         materialize/ci-builder:stable-20190730-071508 bash -c "$1"
 }
