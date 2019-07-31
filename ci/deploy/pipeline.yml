@@ -6,6 +6,8 @@
 steps:
   - command: ci/deploy/docs.sh
     timeout_in_minutes: 30
+    agents:
+      queue: builder
     plugins:
       - docker#v3.1.0:
           image: materialize/ci-builder:nightly-20190731-030202
