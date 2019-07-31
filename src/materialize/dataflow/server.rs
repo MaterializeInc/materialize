@@ -29,6 +29,7 @@ use crate::glue::*;
 
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    local_input_mux: LocalInputMux,
     dataflow_results_handler: DataflowResultsHandler,
     timely_configuration: timely::Configuration,
 ) -> Result<WorkerGuards<()>, String> {
@@ -43,6 +44,7 @@ pub fn serve(
         Worker::new(
             worker,
             dataflow_command_receiver,
+            local_input_mux.clone(),
             dataflow_results_handler.clone(),
         )
         .run()
@@ -90,6 +92,7 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
+    local_input_mux: LocalInputMux,
     dataflow_results_handler: DataflowResultsHandler,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
@@ -107,12 +110,14 @@ where
     fn new(
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
+        local_input_mux: LocalInputMux,
         dataflow_results_handler: DataflowResultsHandler,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
         Worker {
             inner: w,
             dataflow_command_receiver,
+            local_input_mux,
             dataflow_results_handler,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
@@ -238,6 +243,7 @@ where
                     self.inner,
                     &mut self.inputs,
                     self.input_time,
+                    &mut self.local_input_mux,
                 );
                 self.dataflows.insert(dataflow.name().to_owned(), dataflow);
             }

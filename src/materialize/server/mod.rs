@@ -10,6 +10,7 @@ use log::error;
 use std::boxed::Box;
 use std::error::Error as StdError;
 use std::net::SocketAddr;
+use std::sync::{Arc, RwLock};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
@@ -128,7 +129,7 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 }
 
 /// Start the materialized server.
-pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
+pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
     let (sql_command_sender, sql_command_receiver) =
         crate::glue::unbounded::<(SqlCommand, CommandMeta)>();
@@ -156,6 +157,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     };
 
     // Construct timely dataflow instance.
+    let local_input_mux = Arc::new(RwLock::new(Mux::default()));
     let dataflow_results_handler = match config.dataflow_results {
         DataflowResultsConfig::Local => {
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone())
@@ -164,6 +166,7 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
     };
     let dd_workers = dataflow::serve(
         dataflow_command_receiver,
+        local_input_mux.clone(),
         dataflow_results_handler,
         config.timely_configuration,
     )?;
@@ -204,5 +207,5 @@ pub fn serve(config: Config) -> Result<(), Box<dyn StdError>> {
         tokio::run(start);
     }
 
-    Ok(())
+    Ok(local_input_mux)
 }

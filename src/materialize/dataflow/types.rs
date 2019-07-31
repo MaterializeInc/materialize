@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use url::Url;
+use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -94,7 +95,9 @@ pub struct KafkaSourceConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LocalSourceConnector {}
+pub struct LocalSourceConnector {
+    pub uuid: Uuid,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnector {

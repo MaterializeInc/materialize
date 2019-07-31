@@ -83,6 +83,21 @@ pub enum PeekWhen {
     AtTimestamp(Timestamp),
 }
 
+#[derive(Debug, Clone)]
+pub struct Update {
+    pub row: Vec<Datum>,
+    pub timestamp: u64,
+    pub diff: isize,
+}
+
+#[derive(Debug, Clone)]
+pub enum LocalInput {
+    Updates(Vec<Update>),
+    Watermark(u64),
+}
+
+pub type LocalInputMux = Arc<RwLock<Mux<Uuid, LocalInput>>>;
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DataflowResults {
     Peeked(Vec<Vec<Datum>>),
@@ -109,6 +124,7 @@ pub struct Mux<K, T>
 where
     K: Hash + Eq,
 {
+    receivers: HashMap<K, UnboundedReceiver<T>>,
     senders: HashMap<K, UnboundedSender<T>>,
 }
 
@@ -118,6 +134,7 @@ where
 {
     fn default() -> Self {
         Mux {
+            receivers: Default::default(),
             senders: Default::default(),
         }
     }
@@ -125,10 +142,10 @@ where
 
 impl<K, T> Mux<K, T>
 where
-    K: Hash + Eq + Debug,
+    K: Clone + Hash + Eq + Debug,
 {
     /// Registers a new channel for the specified key.
-    pub fn channel(&mut self, key: K) -> Result<UnboundedReceiver<T>, failure::Error> {
+    pub fn channel(&mut self, key: K) -> Result<(), failure::Error> {
         // We might hold onto closed senders for arbitrary amounts of time, but
         // by GCing on channel creation we limit the *growth* of wasted memory.
         self.gc();
@@ -138,8 +155,16 @@ where
             key
         );
         let (sender, receiver) = unbounded();
-        self.senders.insert(key, sender);
-        Ok(receiver)
+        self.senders.insert(key.clone(), sender);
+        self.receivers.insert(key, receiver);
+        Ok(())
+    }
+
+    /// Takes (and consumes) the receiver for the specified key
+    pub fn receiver(&mut self, key: &K) -> Result<UnboundedReceiver<T>, failure::Error> {
+        self.receivers
+            .remove(key)
+            .ok_or_else(|| format_err!("Key {:?} is not registered", key))
     }
 
     /// Gets a sender for the specified key.
