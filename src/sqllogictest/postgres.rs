@@ -208,9 +208,9 @@ fn get_column(
                     // so `significand2 = significand * 10^(current_scale - desired_scale)`
                     let scale_correction = current_scale - (desired_scale as i64);
                     if scale_correction > 0 {
-                        significand *= 10i128.pow(scale_correction.try_into()?);
+                        significand /= 10i128.pow(scale_correction.try_into()?);
                     } else {
-                        significand /= 10i128.pow((-scale_correction).try_into()?);
+                        significand *= 10i128.pow((-scale_correction).try_into()?);
                     };
                     Significand::new(significand).into()
                 }
