@@ -12,7 +12,7 @@ set -euo pipefail
 set -x
 if [[ "${BUILDKITE_BRANCH-}" = master && "${BUILDKITE_COMMIT-}" ]]; then
     mkdir -p target
-    buildkite-agent artifact download target/slt.out target/slt.out
+    buildkite-agent artifact download target/slt.out target
     # TODO(benesch): handle the new fields in the output, rather than just
     # ignoring them.
     template="INSERT INTO slt (commit, unsupported, parse_failure, plan_failure, inference_failure, output_failure, bail, success) VALUES ('$BUILDKITE_COMMIT', \\1, \\2, \\3, \\4, \\5, \\6, \\7);"

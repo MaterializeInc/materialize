@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <build|push|run> [stable|nightly] [<args>...]"
+    echo "usage: $0 <build|push|run> <stable|nightly> [<args>...]"
     exit 1
 fi
 
@@ -22,8 +22,11 @@ channel=$1 && shift
 
 if [[ "$channel" = stable ]]; then
     rust_version=$(<rust-toolchain)
-else
+elif [[ "$channel" = nightly ]]; then
     rust_version=nightly
+else
+    printf "unknown rust channel %q\n" "$channel"
+    exit 1
 fi
 
 uid=$(id -u)
@@ -51,7 +54,7 @@ case "$cmd" in
         docker run -itu "$uid:$gid" -v "$(pwd):/workdir" --rm materialize/ci-builder "$@"
         ;;
     *)
-        printf "unknown command %q" "$cmd"
+        printf "unknown command %q\n" "$cmd"
         exit 1
         ;;
 esac
