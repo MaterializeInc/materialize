@@ -4,7 +4,7 @@
 # distributed without the express permission of Materialize, Inc.
 
 steps:
-  - command: ci/deploy/docs.sh
+  - command: ci/deploy/devsite.sh
     timeout_in_minutes: 30
     agents:
       queue: builder
