@@ -120,10 +120,9 @@ impl DataflowStore {
 
 impl Default for DataflowStore {
     fn default() -> DataflowStore {
-        let mut store = DataflowStore {
+        DataflowStore {
             inner: HashMap::new(),
-        };
-        store
+        }
     }
 }
 

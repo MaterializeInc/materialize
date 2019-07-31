@@ -41,8 +41,8 @@ where
                 // Indicate that we should run again.
                 activator.activate();
 
-                // TODO(jamii) if we crash here, might need some graceful shutdown logic
-                while let Some(local_input) = receiver.try_next().unwrap() {
+                // TODO(jamii) we should gracefully wind these down once the sender is gone
+                while let Ok(Some(local_input)) = receiver.try_next() {
                     match local_input {
                         LocalInput::Updates(updates) => {
                             let mut session = output.session(&cap);
