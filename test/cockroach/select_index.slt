@@ -40,7 +40,10 @@ statement ok
 CREATE TABLE ab (
   s STRING,
   i INT
-); INSERT INTO ab VALUES ('a', 1), ('b', 1), ('c', 1)
+)
+
+statement ok
+INSERT INTO ab VALUES ('a', 1), ('b', 1), ('c', 1)
 
 query IT rowsort
 SELECT i, s FROM ab WHERE (i, s) < (1, 'c')
