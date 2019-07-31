@@ -45,12 +45,9 @@ pub enum SqlResponse {
     CreatedSink,
     CreatedSource,
     CreatedView,
-    CreatedTable,
     DroppedSource,
     DroppedView,
-    DroppedTable,
     EmptyQuery,
-    Inserting,
     Peeking {
         typ: RelationType,
     },
@@ -71,7 +68,6 @@ pub enum DataflowCommand {
     Peek {
         source: RelationExpr,
         when: PeekWhen,
-        insert_into: Option<String>,
     },
     Tail(String),
     Shutdown,
@@ -83,11 +79,6 @@ pub enum PeekWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
     Immediately,
-    /// The peek should wait for all in-flight records at the moment of the
-    /// peek to drain from the computation.
-    ///
-    /// TODO(benesch): remove this when INSERTs are no longer necessary.
-    AfterFlush,
     /// The peek should occur at the specified timestamp.
     AtTimestamp(Timestamp),
 }
@@ -95,27 +86,16 @@ pub enum PeekWhen {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DataflowResults {
     Peeked(Vec<Vec<Datum>>),
-    Inserted(usize),
 }
 
 impl DataflowResults {
     pub fn unwrap_peeked(self) -> Vec<Vec<Datum>> {
         match self {
             DataflowResults::Peeked(v) => v,
-            _ => panic!(
-                "DataflowResults::unwrap_peeked called on a {:?} variant",
-                self
-            ),
-        }
-    }
-
-    pub fn unwrap_inserted(self) -> usize {
-        match self {
-            DataflowResults::Inserted(v) => v,
-            _ => panic!(
-                "DataflowResults::unwrap_inserted called on a {:?} variant",
-                self
-            ),
+            // _ => panic!(
+            //     "DataflowResults::unwrap_peeked called on a {:?} variant",
+            //     self
+            // ),
         }
     }
 }

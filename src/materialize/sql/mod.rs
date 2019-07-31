@@ -8,9 +8,9 @@
 use failure::{bail, ensure, format_err};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
-    BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
-    ObjectType, Query, Select, SelectItem, SetExpr, SetOperator, SourceSchema, Statement,
-    TableAlias, TableConstraint, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    BinaryOperator, DataType, Expr, Function, JoinConstraint, JoinOperator, ObjectName, ObjectType,
+    Query, Select, SelectItem, SetExpr, SetOperator, SourceSchema, Statement, TableAlias,
+    TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
@@ -23,8 +23,8 @@ use url::Url;
 
 use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::dataflow::{
-    AggregateExpr, Dataflow, KafkaSinkConnector, KafkaSourceConnector, LocalSourceConnector,
-    RelationExpr, ScalarExpr, Sink, SinkConnector, Source, SourceConnector, View,
+    AggregateExpr, Dataflow, KafkaSinkConnector, KafkaSourceConnector, RelationExpr, ScalarExpr,
+    Sink, SinkConnector, Source, SourceConnector, View,
 };
 use crate::glue::*;
 use crate::interchange::avro;
@@ -96,17 +96,9 @@ impl Planner {
             Statement::Tail { .. } => bail!("TAIL is not implemented yet"),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
-            | Statement::CreateView { .. }
-            | Statement::CreateTable { .. } => self.handle_create_dataflow(stmt),
+            | Statement::CreateView { .. } => self.handle_create_dataflow(stmt),
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
-
-            // these are intended mostly for testing:
             Statement::Query(query) => self.handle_select(*query),
-            Statement::Insert {
-                table_name,
-                columns,
-                source,
-            } => self.handle_insert(table_name, columns, *source),
             Statement::Show { object_type: ot } => self.handle_show_objects(ot),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
@@ -141,7 +133,6 @@ impl Planner {
             Statement::CreateSource { .. } => SqlResponse::CreatedSource,
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
             Statement::CreateView { .. } => SqlResponse::CreatedView,
-            Statement::CreateTable { .. } => SqlResponse::CreatedTable,
             _ => unreachable!(),
         };
 
@@ -184,7 +175,6 @@ impl Planner {
         }
         let sql_response = match object_type {
             ObjectType::Source => SqlResponse::DroppedSource,
-            ObjectType::Table => SqlResponse::DroppedTable,
             ObjectType::View => SqlResponse::DroppedView,
             _ => unreachable!(),
         };
@@ -205,7 +195,6 @@ impl Planner {
                     typ: dataflow.typ().clone(),
                 },
                 when: PeekWhen::Immediately,
-                insert_into: None,
             }),
         ))
     }
@@ -218,89 +207,7 @@ impl Planner {
             },
             Some(DataflowCommand::Peek {
                 source: relation_expr,
-                when: PeekWhen::AfterFlush,
-                insert_into: None,
-            }),
-        ))
-    }
-
-    fn handle_insert(
-        &mut self,
-        name: ObjectName,
-        columns: Vec<Ident>,
-        source: Query,
-    ) -> PlannerResult {
-        let name = name.to_string();
-        let typ = match self.dataflows.get(&name)? {
-            Dataflow::Source(Source {
-                connector: SourceConnector::Local(_),
-                typ,
-                ..
-            }) => typ,
-            other => bail!("Can only insert into tables - {} is a {:?}", name, other),
-        };
-        let permutation = if columns.is_empty() {
-            // if not specified, just insert in natural order
-            (0..typ.column_types.len()).collect::<Vec<_>>()
-        } else {
-            // otherwise, check that we have a sensible list of columns
-            if HashSet::<&String>::from_iter(&columns).len() != columns.len() {
-                bail!(
-                    "Duplicate column in INSERT INTO ... COLUMNS ({})",
-                    columns.join(", ")
-                );
-            }
-            let expected_columns = typ
-                .column_types
-                .iter()
-                .map(|typ| typ.name.clone().expect("Table columns should all be named"))
-                .collect::<Vec<_>>();
-            if HashSet::<&String>::from_iter(&columns).len()
-                != HashSet::<&String>::from_iter(&expected_columns).len()
-            {
-                bail!(
-                    "Missing column in INSERT INTO ... COLUMNS ({}), expected {}",
-                    columns.join(", "),
-                    expected_columns.join(", ")
-                );
-            }
-            expected_columns
-                .iter()
-                .map(|name| columns.iter().position(|name2| name == name2).unwrap())
-                .collect::<Vec<_>>()
-        };
-
-        let expr = self.plan_query(&source)?;
-        let expr_cols = expr.typ().column_types;
-        if expr_cols.len() != permutation.len() {
-            bail!(
-                "INSERT has {} expression(s) but {} target column(s)",
-                expr_cols.len(),
-                permutation.len()
-            );
-        }
-
-        let mut project_exprs = vec![];
-        let mut project_key = vec![];
-        for (p, i) in permutation.iter().enumerate() {
-            let cast = plan_cast_internal(
-                "INSERT",
-                ScalarExpr::column(p),
-                &expr_cols[p],
-                typ.column_types[p].scalar_type.clone(),
-            )?;
-            project_exprs.push(cast);
-            project_key.push(permutation.len() + i);
-        }
-
-        let expr = expr.map(project_exprs).project(project_key);
-
-        Ok((
-            SqlResponse::Inserting,
-            Some(DataflowCommand::Peek {
-                source: expr,
-                when: PeekWhen::AfterFlush,
-                insert_into: Some(name),
+                when: PeekWhen::Immediately,
             }),
         ))
     }
@@ -339,41 +246,6 @@ impl ScalarType {
             DataType::Time => ScalarType::Time,
             DataType::Bytea => ScalarType::Bytes,
             other => bail!("Unexpected SQL type: {:?}", other),
-        })
-    }
-}
-
-impl Datum {
-    pub fn from_sql(expr: Expr, typ: &ColumnType) -> Result<Self, failure::Error> {
-        Ok(match expr {
-            Expr::Value(value) => match (value, &typ.scalar_type) {
-                (Value::Null, _) => {
-                    if typ.nullable {
-                        Datum::Null
-                    } else {
-                        bail!("Tried to insert null into non-nullable column")
-                    }
-                }
-                (Value::Long(l), ScalarType::Int64) => Datum::Int64(l as i64), // TODO(benesch): safe conversion
-                (Value::Decimal(d), ScalarType::Float64) => {
-                    Datum::Float64(d.to_string().parse::<f64>().unwrap().into())
-                }
-                (Value::SingleQuotedString(s), ScalarType::String)
-                | (Value::NationalStringLiteral(s), ScalarType::String) => Datum::String(s),
-                (Value::Boolean(b), ScalarType::Bool) => {
-                    if b {
-                        Datum::True
-                    } else {
-                        Datum::False
-                    }
-                }
-                (value, scalar_type) => bail!(
-                    "Don't know how to insert value {:?} into column of type {:?}",
-                    value,
-                    scalar_type
-                ),
-            },
-            other => bail!("Can only insert plain values, not {:?}", other),
         })
     }
 }
@@ -467,52 +339,6 @@ impl Planner {
                         topic,
                         schema_id: 0,
                     }),
-                }))
-            }
-            Statement::CreateTable {
-                name,
-                columns,
-                constraints,
-                with_options,
-                external,
-                file_format,
-                location,
-            } => {
-                if *external || file_format.is_some() || location.is_some() {
-                    bail!("EXTERNAL tables are not supported");
-                }
-                if !with_options.is_empty() {
-                    bail!("WITH options are not supported");
-                }
-                for constraint in constraints {
-                    match constraint {
-                        TableConstraint::Check { .. } => {
-                            bail!("CHECK constraints are not supported")
-                        }
-                        TableConstraint::ForeignKey { .. } => {
-                            bail!("FOREIGN KEY constraints are not supported")
-                        }
-                        // TODO(benesch): we should probably actually enforce
-                        // this, if we're going to allow it.
-                        TableConstraint::Unique { .. } => (),
-                    }
-                }
-                let types = columns
-                    .iter()
-                    .map(|column| {
-                        Ok(ColumnType {
-                            name: Some(column.name.clone()),
-                            scalar_type: ScalarType::from_sql(&column.data_type)?,
-                            nullable: true,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, failure::Error>>()?;
-                Ok(Dataflow::Source(Source {
-                    name: extract_sql_object_name(name)?,
-                    connector: SourceConnector::Local(LocalSourceConnector {}),
-                    typ: RelationType {
-                        column_types: types,
-                    },
                 }))
             }
             other => bail!("Unsupported statement: {:?}", other),
@@ -647,14 +473,17 @@ impl Planner {
                 )
             })
             .unwrap_or_else(|| {
-                let name = "dual";
-                let typ = self.dataflows.get_type(&name)?;
+                let typ = RelationType::new(vec![ColumnType {
+                    name: None,
+                    nullable: false,
+                    scalar_type: ScalarType::String,
+                }]);
                 Ok((
-                    RelationExpr::Get {
-                        name: name.to_owned(),
+                    RelationExpr::Constant {
+                        rows: vec![vec![Datum::String("X".into())]],
                         typ: typ.clone(),
                     },
-                    Scope::from_source(name, typ.clone()),
+                    Scope::from_source("dual", typ),
                 ))
             })?;
 
