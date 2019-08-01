@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use super::render;
 use super::render::InputCapability;
-use super::trace::{KeysOnlyHandle, TraceManager};
+use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use super::{LocalSourceConnector, RelationExpr, Source, SourceConnector};
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
@@ -159,7 +159,7 @@ where
             dataflow_results_handler,
             pending_peeks: Vec::new(),
             pending_inserts: HashMap::new(),
-            traces: TraceManager::new(),
+            traces: TraceManager::default(),
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
             input_time: 1,
@@ -178,6 +178,9 @@ where
 
         let mut shutdown = false;
         while !shutdown {
+            // Enable trace compaction.
+            self.traces.maintenance();
+
             // Ask Timely to execute a unit of work.
             // Can either yield tastefully, or busy-wait.
             // self.inner.step_or_park(None);
@@ -238,7 +241,7 @@ where
 
                 let timestamp = match when {
                     PeekWhen::Immediately => {
-                        match self.traces.get_trace(&name) {
+                        match self.traces.get_by_self(&name) {
                             Some(trace) => {
                                 // Ask the trace for the latest time it knows about. The latest
                                 // "committed" time (i.e., the time at which we know results can
@@ -350,7 +353,7 @@ where
                     }
                 }
 
-                let trace = self.traces.get_trace(&name).unwrap();
+                let trace = self.traces.get_by_self(&name).unwrap();
                 let pending_peek = PendingPeek {
                     name,
                     connection_uuid: cmd_meta.connection_uuid,
