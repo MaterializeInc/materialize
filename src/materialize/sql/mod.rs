@@ -176,7 +176,7 @@ impl Planner {
         let sql_response = match object_type {
             ObjectType::Source => SqlResponse::DroppedSource,
             ObjectType::View => SqlResponse::DroppedView,
-            _ => unreachable!(),
+            _ => bail!("unsupported SQL statement: DROP {}", object_type),
         };
         let removed = removed.iter().map(|d| d.name().to_owned()).collect();
         Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
