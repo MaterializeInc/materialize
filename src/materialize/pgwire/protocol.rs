@@ -342,7 +342,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 state.peek_results.extend(results.unwrap_peeked());
                 state.remaining_results -= 1;
                 if state.remaining_results == 0 {
-                    let peek_results = state.peek_results;
+                    let mut peek_results = state.peek_results;
+                    peek_results.sort();
                     let row_type = state.row_type;
                     let stream: MessageStream = Box::new(futures::stream::iter_ok(
                         peek_results.into_iter().map(move |row| {
