@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::env;
 use std::io::Cursor;
 
-use ::postgres::rows::Row as PostgresRow;
+use ::postgres::row::Row as PostgresRow;
 use ::postgres::types::{FromSql, Type as PostgresType};
-use ::postgres::{Connection, TlsMode};
+use ::postgres::{Client, NoTls};
 use byteorder::{NetworkEndian, ReadBytesExt};
 use failure::{bail, ensure, format_err};
 use sqlparser::ast::{DataType, ObjectType, Statement};
@@ -12,9 +13,8 @@ use sqlparser::ast::{DataType, ObjectType, Statement};
 use materialize::repr::decimal::Significand;
 use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
 
-#[derive(Debug)]
 pub struct Postgres {
-    connection: Connection,
+    client: Client,
     table_types: HashMap<String, (Vec<DataType>, RelationType)>,
 }
 
@@ -30,14 +30,24 @@ pub enum Outcome {
 
 impl Postgres {
     pub fn open_and_erase() -> Result<Self, failure::Error> {
-        // TODO(jamii) figure out CI setup
-        // "alter role postgres password password"
-        let connection = Connection::connect(
-            "postgresql://postgres:password@localhost/sqllogictest_throwaway_database",
-            TlsMode::None,
-        )?;
+        // This roughly matches the environment variables that the official C
+        // library for PostgreSQL, libpq, uses [0]. It would be nice if this
+        // hunk of code lived in the Rust PostgreSQL library.
+        //
+        // [0]: https://www.postgresql.org/docs/current/libpq-envars.html
+        let user = env::var("PGUSER").unwrap_or_else(|_| whoami::username());
+        let mut client = postgres::config::Config::new()
+            .user(&user)
+            .password(env::var("PGPASSWORD").unwrap_or("".into()))
+            .dbname(&env::var("PGDATABASE").unwrap_or(user))
+            .port(match env::var("PGPORT") {
+                Ok(port) => port.parse()?,
+                Err(_) => 5432,
+            })
+            .host(&env::var("PGHOST").unwrap_or("localhost".into()))
+            .connect(NoTls)?;
         // drop all tables
-        connection.execute(
+        client.execute(
             r#"
 DO $$ DECLARE
     r RECORD;
@@ -50,7 +60,7 @@ END $$;
             &[],
         )?;
         Ok(Self {
-            connection,
+            client,
             table_types: HashMap::new(),
         })
     }
@@ -62,7 +72,7 @@ END $$;
     ) -> Result<Outcome, failure::Error> {
         Ok(match parsed {
             Statement::CreateTable { name, columns, .. } => {
-                self.connection.execute(sql, &[])?;
+                self.client.execute(sql, &[])?;
                 let sql_types = columns
                     .iter()
                     .map(|column| column.data_type.clone())
@@ -88,7 +98,7 @@ END $$;
                 object_type: ObjectType::Table,
                 ..
             } => {
-                self.connection.execute(sql, &[])?;
+                self.client.execute(sql, &[])?;
                 Outcome::Dropped(names.iter().map(|name| name.to_string()).collect())
             }
             Statement::Delete { table_name, .. }
@@ -101,7 +111,7 @@ END $$;
                     .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
                     .clone();
                 let before = self.select_all(&table_name, &sql_types, &typ)?;
-                self.connection.execute(sql, &[])?;
+                self.client.execute(sql, &[])?;
                 let after = self.select_all(&table_name, &sql_types, &typ)?;
                 let mut update = HashMap::new();
                 for row in before {
@@ -125,8 +135,8 @@ END $$;
     ) -> Result<Vec<Row>, failure::Error> {
         let mut rows = vec![];
         let postgres_rows = self
-            .connection
-            .query(&format!("select * from {}", table_name), &[])?;
+            .client
+            .query(&*format!("SELECT * FROM {}", table_name), &[])?;
         for postgres_row in postgres_rows.iter() {
             let row = (0..postgres_row.len())
                 .map(|c| {
@@ -224,19 +234,19 @@ fn get_column(
     })
 }
 
-fn get_column_inner<T>(
-    postgres_row: &PostgresRow,
+fn get_column_inner<'a, T>(
+    postgres_row: &'a PostgresRow,
     i: usize,
     nullable: bool,
 ) -> Result<Option<T>, failure::Error>
 where
-    T: FromSql,
+    T: FromSql<'a>,
 {
     if nullable {
-        let value: Option<T> = postgres_row.get_opt(i).unwrap()?;
+        let value: Option<T> = postgres_row.try_get(i)?;
         Ok(value)
     } else {
-        let value: T = postgres_row.get_opt(i).unwrap()?;
+        let value: T = postgres_row.try_get(i)?;
         Ok(Some(value))
     }
 }
@@ -246,7 +256,7 @@ struct DecimalWrapper {
     scale: i64,
 }
 
-impl FromSql for DecimalWrapper {
+impl FromSql<'_> for DecimalWrapper {
     fn from_sql(
         _ty: &PostgresType,
         raw: &[u8],
@@ -290,7 +300,7 @@ impl FromSql for DecimalWrapper {
 
     fn accepts(ty: &PostgresType) -> bool {
         match ty {
-            &postgres::types::NUMERIC => true,
+            &PostgresType::NUMERIC => true,
             _ => false,
         }
     }

@@ -27,6 +27,7 @@ futures = "0.1"
 uuid = "*"
 md5 = "*"
 rusqlite = { version = "0.20", features = ["bundled"] }
-postgres = { version = "0.15", features = ["with-openssl"] }
+postgres = "0.16.0-rc.2"
 byteorder = "*"
 ordered-float = "*"
+whoami = "0.5.3"
