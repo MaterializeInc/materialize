@@ -51,7 +51,13 @@ pub enum SqlResponse {
     DroppedTable,
     EmptyQuery,
     Inserting,
-    Peeking { typ: RelationType },
+    Peeking {
+        typ: RelationType,
+    },
+    SendRows {
+        typ: RelationType,
+        rows: Vec<Vec<Datum>>,
+    },
 }
 
 pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Error>>>>;
