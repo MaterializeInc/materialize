@@ -69,6 +69,15 @@ fn object_type_matches(object_type: ObjectType, dataflow: &Dataflow) -> bool {
     }
 }
 
+fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
+    match object_type {
+        ObjectType::Table => "TABLES",
+        ObjectType::View => "VIEWS",
+        ObjectType::Source => "SOURCES",
+        ObjectType::Sink => "SINKS",
+    }
+}
+
 impl Planner {
     /// Parses and plans a raw SQL query. See the documentation for
     /// [`PlannerResult`] for details about the meaning of the return type.
@@ -98,9 +107,32 @@ impl Planner {
                 columns,
                 source,
             } => self.handle_insert(table_name, columns, *source),
+            Statement::Show { object_type: ot } => self.handle_show_objects(ot),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
+    }
+
+    fn handle_show_objects(&mut self, object_type: ObjectType) -> PlannerResult {
+        let rows: Vec<Vec<Datum>> = self
+            .dataflows
+            .iter()
+            .filter(|(_k, v)| object_type_matches(object_type, &v))
+            .map(|(k, _v)| vec![Datum::from(k.to_owned())])
+            .collect();
+        Ok((
+            SqlResponse::SendRows {
+                typ: RelationType {
+                    column_types: vec![ColumnType {
+                        name: Some(object_type_as_plural_str(object_type).to_owned()),
+                        nullable: false,
+                        scalar_type: ScalarType::String,
+                    }],
+                },
+                rows,
+            },
+            None,
+        ))
     }
 
     fn handle_create_dataflow(&mut self, stmt: Statement) -> PlannerResult {
