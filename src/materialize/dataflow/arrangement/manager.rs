@@ -100,7 +100,7 @@ impl TraceManager {
     ) {
         self.traces
             .entry(name)
-            .or_insert(CollectionTraces::default())
+            .or_insert_with(CollectionTraces::default)
             .by_self = Some((trace, delete_callback));
     }
 
@@ -139,7 +139,7 @@ impl TraceManager {
     ) {
         self.traces
             .entry(name)
-            .or_insert(CollectionTraces::default())
+            .or_insert_with(CollectionTraces::default)
             .by_keys
             .insert(keys.to_vec(), (trace, delete_callback));
     }
