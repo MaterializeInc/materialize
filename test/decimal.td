@@ -6,16 +6,6 @@
 # This test exercises decimals at the boundary (e.g., by sending them through
 # pgwire). Operations on decimals are more thoroughly tested in decimal.slt.
 
-# TODO(benesch): fix this test.
-#
-# > CREATE TABLE t (a decimal(15, 2))
-#
-# > INSERT INTO t VALUES (0.10), (1.23), (999999.0)
-#
-# > SELECT * FROM t
-# 0.10
-# 1.23
-
 $ set schema={
     "type": "record",
     "name": "envelope",

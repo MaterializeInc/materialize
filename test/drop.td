@@ -3,13 +3,6 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-> CREATE TABLE t
-
-> DROP TABLE t
-
-! PEEK t
-dataflow t does not exist
-
 > CREATE MATERIALIZED VIEW v AS SELECT 42
 
 ! DROP SOURCE v

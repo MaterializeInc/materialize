@@ -6,12 +6,6 @@
 > SELECT 1
 1
 
-> CREATE TABLE empty (a int)
-
-> PEEK empty
-
-> SELECT * FROM empty
-
 > VALUES (1)
 1
 
@@ -50,6 +44,15 @@ $ set schema={
     ]
   }
 
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
+{"before": null, "after": null}
+
+> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+
+> PEEK data
+a b
+---
+
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 {"before": null, "after": {"a": 1, "b": 1}}
 {"before": null, "after": {"a": 2, "b": 1}}
@@ -58,8 +61,6 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=42
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=43
 {"before": null, "after": null}
-
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
 > PEEK data
 a b
