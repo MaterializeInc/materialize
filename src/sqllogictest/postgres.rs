@@ -1,3 +1,8 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::env;
@@ -38,13 +43,13 @@ impl Postgres {
         let user = env::var("PGUSER").unwrap_or_else(|_| whoami::username());
         let mut client = postgres::config::Config::new()
             .user(&user)
-            .password(env::var("PGPASSWORD").unwrap_or("".into()))
+            .password(env::var("PGPASSWORD").unwrap_or_else(|_| "".into()))
             .dbname(&env::var("PGDATABASE").unwrap_or(user))
             .port(match env::var("PGPORT") {
                 Ok(port) => port.parse()?,
                 Err(_) => 5432,
             })
-            .host(&env::var("PGHOST").unwrap_or("localhost".into()))
+            .host(&env::var("PGHOST").unwrap_or_else(|_| "localhost".into()))
             .connect(NoTls)?;
         // drop all tables
         client.execute(
@@ -181,23 +186,23 @@ fn get_column(
             get_column_inner::<String>(postgres_row, i, nullable)?.into()
         }
         DataType::SmallInt => get_column_inner::<i16>(postgres_row, i, nullable)?
-            .map(|i| i as i32)
+            .map(|i| i32::from(i))
             .into(),
         DataType::Int => get_column_inner::<i32>(postgres_row, i, nullable)?
-            .map(|i| i as i64)
+            .map(|i| i64::from(i))
             .into(),
         DataType::BigInt => get_column_inner::<i64>(postgres_row, i, nullable)?.into(),
         DataType::Float(p) => {
             if p.unwrap_or(53) <= 24 {
                 get_column_inner::<f32>(postgres_row, i, nullable)?
-                    .map(|f| f as f64)
+                    .map(|f| f64::from(f))
                     .into()
             } else {
                 get_column_inner::<f64>(postgres_row, i, nullable)?.into()
             }
         }
         DataType::Real => get_column_inner::<f32>(postgres_row, i, nullable)?
-            .map(|f| f as f64)
+            .map(|f| f64::from(f))
             .into(),
         DataType::Double => get_column_inner::<f64>(postgres_row, i, nullable)?.into(),
         DataType::Decimal(_, _) => {
@@ -216,7 +221,7 @@ fn get_column(
                     // current representation is `significand * 10^current_scale`
                     // want to get to `significand2 * 10^desired_scale`
                     // so `significand2 = significand * 10^(current_scale - desired_scale)`
-                    let scale_correction = current_scale - (desired_scale as i64);
+                    let scale_correction = current_scale - (i64::from(desired_scale));
                     if scale_correction > 0 {
                         significand /= 10i128.pow(scale_correction.try_into()?);
                     } else {
@@ -280,7 +285,7 @@ impl FromSql<'_> for DecimalWrapper {
         let count = digits.len() as i64;
         for digit in digits {
             significand *= 10_000i128;
-            significand += digit as i128;
+            significand += i128::from(digit);
         }
         significand *= match sign {
             0 => 1,
@@ -299,8 +304,8 @@ impl FromSql<'_> for DecimalWrapper {
     }
 
     fn accepts(ty: &PostgresType) -> bool {
-        match ty {
-            &PostgresType::NUMERIC => true,
+        match *ty {
+            PostgresType::NUMERIC => true,
             _ => false,
         }
     }
