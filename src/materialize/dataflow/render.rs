@@ -45,13 +45,18 @@ pub fn build_dataflow<A: Allocate>(
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
+    let worker_peers = worker.peers();
 
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
             let relation_expr = match &src.connector {
                 SourceConnector::Kafka(c) => {
-                    let (stream, capability) =
-                        source::kafka(scope, &src.name, &c, worker_index == 0);
+                    // Distribute read responsibility among workers.
+                    use differential_dataflow::hashable::Hashable;
+                    let hash = src.name.hashed() as usize;
+                    let read_from_kafka = hash % worker_peers == worker_index;
+
+                    let (stream, capability) = source::kafka(scope, &src.name, &c, read_from_kafka);
                     if let Some(capability) = capability {
                         inputs.insert(src.name.clone(), InputCapability::External(capability));
                     }
