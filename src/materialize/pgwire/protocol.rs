@@ -124,10 +124,12 @@ pub enum StateMachine<A: Conn + 'static> {
     ))]
     HandleQuery { conn: A },
 
-    #[state_machine_future(transitions(WaitForRows, Error))]
+    #[state_machine_future(transitions(WaitForRows, SendRows, Error))]
     SendRowDescription {
         send: SinkSend<A>,
         row_type: RelationType,
+        /// To be sent immediately
+        rows: Option<Vec<Vec<Datum>>>,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendRows, Error))]
@@ -296,6 +298,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             super::message::row_description_from_type(&typ)
                         )),
                         row_type: typ,
+                        rows: None,
+                    }),
+                    SqlResponse::SendRows { typ, rows } => transition!(SendRowDescription {
+                        send: state.conn.send(BackendMessage::RowDescription(
+                            super::message::row_description_from_type(&typ)
+                        )),
+                        row_type: typ,
+                        rows: Some(rows),
                     }),
                 }
             }
@@ -323,12 +333,23 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        transition!(WaitForRows {
-            conn,
-            row_type: state.row_type,
-            peek_results: vec![],
-            remaining_results: context.num_timely_workers,
-        })
+        let row_type = state.row_type;
+        if let Some(rows) = state.rows {
+            let stream: MessageStream =
+                Box::new(futures::stream::iter_ok(rows.into_iter().map(move |row| {
+                    BackendMessage::DataRow(message::field_values_from_row(row, &row_type))
+                })));
+            transition!(SendRows {
+                send: Box::new(stream.forward(conn))
+            })
+        } else {
+            transition!(WaitForRows {
+                conn,
+                row_type,
+                peek_results: vec![],
+                remaining_results: context.num_timely_workers,
+            })
+        }
     }
 
     fn poll_wait_for_rows<'s, 'c>(
