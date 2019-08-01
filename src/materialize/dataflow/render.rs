@@ -22,8 +22,8 @@ use timely::worker::Worker as TimelyWorker;
 use super::sink;
 use super::source;
 use super::source::SharedCapability;
-use crate::dataflow::arrangement::TraceManager;
 use super::types::*;
+use crate::dataflow::arrangement::TraceManager;
 use crate::dataflow::arrangement::{context::ArrangementFlavor, Context};
 use crate::dataflow::types::RelationExpr;
 use crate::repr::Datum;
@@ -89,13 +89,11 @@ pub fn build_dataflow<A: Allocate>(
             }
         }
         Dataflow::View(view) => {
-
             // The scope.clone() occurs to allow import in the region.
             // We build a region here to establish a pattern of a scope inside the dataflow,
             // so that other similar uses (e.g. with iterative scopes) do not require weird
             // alternate type signatures.
             scope.clone().region(|region| {
-
                 let mut buttons = Vec::new();
                 let mut context = Context::new();
                 view.relation_expr.visit(&mut |e| {

@@ -24,8 +24,8 @@ use std::time::Instant;
 
 use super::render;
 use super::render::InputCapability;
-use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use super::{LocalSourceConnector, RelationExpr, Source, SourceConnector};
+use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};

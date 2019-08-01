@@ -8,5 +8,5 @@
 pub mod context;
 pub mod manager;
 
-pub use manager::TraceManager;
 pub use context::Context;
+pub use manager::TraceManager;
