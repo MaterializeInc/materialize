@@ -112,6 +112,10 @@ impl DataflowStore {
 
         Ok(())
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Dataflow)> {
+        self.inner.iter().map(|(k, v)| (k.as_str(), &v.inner))
+    }
 }
 
 impl Default for DataflowStore {
