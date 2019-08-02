@@ -1189,7 +1189,7 @@ mod test {
         let mut input = String::new();
         for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
-            if entry.path().is_file() {
+            if entry.path().is_file() && entry.file_name() != ".gitignore" {
                 input.clear();
                 File::open(&entry.path())
                     .unwrap()
