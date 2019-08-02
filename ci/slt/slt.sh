@@ -24,4 +24,5 @@ RUST_BACKTRACE=full sqllogictest \
     sqllogictest/test/ \
     test/*.slt \
     test/cockroach/*.slt \
+    --json-summary-file=target/slt-summary.json \
     "$verbosity" "$@" | tee target/slt.out

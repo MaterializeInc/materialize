@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::env;
+use std::fs::File;
 use std::process;
 
 use getopts::Options;
@@ -35,6 +36,12 @@ fn main() {
         "specify expected outcomes",
         "OUTCOMES",
     );
+    opts.optopt(
+        "",
+        "json-summary-file",
+        "save JSON-formatted summary to file",
+        "FILE",
+    );
 
     let popts = match opts.parse(&args[1..]) {
         Ok(popts) => popts,
@@ -57,6 +64,17 @@ fn main() {
             Ok(outcomes) => Some(outcomes),
             Err(err) => {
                 eprintln!("{}", err);
+                process::exit(1);
+            }
+        },
+        None => None,
+    };
+
+    let json_summary_file = match popts.opt_str("json-summary-file") {
+        Some(filename) => match File::create(&filename) {
+            Ok(file) => Some(file),
+            Err(err) => {
+                eprintln!("creating {}: {}", filename, err);
                 process::exit(1);
             }
         },
@@ -101,6 +119,7 @@ fn main() {
         println!("{}", outcomes);
     }
 
+    let mut exit_code = 0;
     if let Some(expected_outcomes) = expected_outcomes {
         if expected_outcomes != outcomes {
             if verbosity == 0 {
@@ -108,17 +127,24 @@ fn main() {
                 println!("{}", outcomes);
             }
             eprintln!("outcomes did not match expectation");
-            process::exit(1);
+            exit_code = 1;
         }
     } else if popts.opt_present("fail") {
         if outcomes.any_failed() {
             eprintln!("FAIL");
-            process::exit(1);
+            exit_code = 1;
         } else {
             eprintln!("PASS");
-            process::exit(0);
         }
-    } else {
-        process::exit(0);
     }
+    if let Some(json_summary_file) = json_summary_file {
+        match serde_json::to_writer(json_summary_file, &outcomes.as_json()) {
+            Ok(()) => (),
+            Err(err) => {
+                eprintln!("error: unable to write summary file: {}", err);
+                exit_code = 2;
+            }
+        }
+    }
+    process::exit(exit_code);
 }

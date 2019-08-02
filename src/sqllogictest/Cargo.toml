@@ -20,6 +20,7 @@ ore = { path = "../ore" }
 getopts = "0.2"
 walkdir = "2"
 regex = "1"
+serde_json = "1"
 lazy_static = "1"
 failure = "0.1.5"
 futures = "0.1"
