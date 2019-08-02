@@ -18,7 +18,7 @@ def upgrade():
         "slt",
         sa.Column("commit", sa.Text, primary_key=True),
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False,
-            default=sa.func.now()),
+            server_default=sa.func.now()),
         sa.Column("unsupported", sa.BigInteger, nullable=False),
         sa.Column("parse_failure", sa.BigInteger, nullable=False),
         sa.Column("plan_failure", sa.BigInteger, nullable=False),

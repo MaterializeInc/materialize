@@ -7,7 +7,9 @@ steps:
   - block: ":vertical_traffic_light: Go"
   - command: ci/slt/slt.sh
     timeout_in_minutes: 120
-    artifact_paths: target/slt.out
+    artifact_paths:
+    - target/slt.log
+    - target/slt-summary.json
     plugins:
       - docker#v3.1.0:
           image: materialize/ci-sqllogictest:$SQLLOGICTEST_IMAGE_ID

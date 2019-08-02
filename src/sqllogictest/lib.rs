@@ -497,6 +497,21 @@ impl Outcomes {
     pub fn any_failed(&self) -> bool {
         self.0[9] < self.0.iter().sum::<usize>()
     }
+
+    pub fn as_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "unsupported": self.0[0],
+            "parse_failure": self.0[1],
+            "plan_failure": self.0[2],
+            "unexpected_plan_success": self.0[3],
+            "wrong_number_of_rows_inserted": self.0[4],
+            "inference_failure": self.0[5],
+            "wrong_column_names": self.0[6],
+            "output_failure": self.0[7],
+            "bail": self.0[8],
+            "success": self.0[9],
+        })
+    }
 }
 
 trait RecordRunner {
