@@ -22,9 +22,9 @@ use timely::worker::Worker as TimelyWorker;
 use super::sink;
 use super::source;
 use super::source::SharedCapability;
-use super::trace::TraceManager;
 use super::types::*;
-use crate::dataflow::context::{ArrangementFlavor, Context};
+use crate::dataflow::arrangement::TraceManager;
+use crate::dataflow::arrangement::{context::ArrangementFlavor, Context};
 use crate::dataflow::types::RelationExpr;
 use crate::repr::Datum;
 
@@ -74,12 +74,12 @@ pub fn build_dataflow<A: Allocate>(
             };
             let arrangement = relation_expr.as_collection().arrange_by_self();
             let on_delete = Box::new(|| ());
-            manager.set_trace(src.name.to_owned(), arrangement.trace, on_delete);
+            manager.set_by_self(src.name.to_owned(), arrangement.trace, on_delete);
         }
         Dataflow::Sink(sink) => {
             let done = Rc::new(Cell::new(false));
             let (arrangement, _) = manager
-                .get_trace(&sink.from.0)
+                .get_by_self(&sink.from.0)
                 .unwrap_or_else(|| panic!(format!("unable to find dataflow {:?}", sink.from)))
                 .import_core(scope, &format!("Import({:?})", sink.from));
             match &sink.connector {
@@ -89,57 +89,73 @@ pub fn build_dataflow<A: Allocate>(
             }
         }
         Dataflow::View(view) => {
-            let mut buttons = Vec::new();
-            let mut context = Context::new();
-            view.relation_expr.visit(&mut |e| {
-                if let RelationExpr::Get { name, typ: _ } = e {
-                    if let Some(mut trace) = manager.get_trace(&name) {
-                        // TODO(frankmcsherry) do the thing
-                        let (arranged, button) = trace.import_core(scope, name);
-                        context
-                            .collections
-                            .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
-                        buttons.push(button);
+            // The scope.clone() occurs to allow import in the region.
+            // We build a region here to establish a pattern of a scope inside the dataflow,
+            // so that other similar uses (e.g. with iterative scopes) do not require weird
+            // alternate type signatures.
+            scope.clone().region(|region| {
+                let mut buttons = Vec::new();
+                let mut context = Context::new();
+                view.relation_expr.visit(&mut |e| {
+                    if let RelationExpr::Get { name, typ: _ } = e {
+                        // Import the believed-to-exist base arrangement.
+                        if let Some(mut trace) = manager.get_by_self(&name) {
+                            let (arranged, button) = trace.import_core(scope, name);
+                            let arranged = arranged.enter(region);
+                            context
+                                .collections
+                                .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
+                            buttons.push(button);
+                        }
+                        // // Experimental: add all indexed collections.
+                        // if let Some(traces) = manager.get_all_keyed(&name) {
+                        //     for (key, trace) in traces {
+                        //         let (arranged, button) = trace.import_core(scope, name);
+                        //         let arranged = arranged.enter(region);
+                        //         context.set_trace(e.clone(), key, arranged);
+                        //         buttons.push(button);
+                        //     }
+                        // }
                     }
+                });
+
+                // Push predicates down a few times.
+                let mut view = view.clone();
+
+                use crate::dataflow::transform;
+                let transforms: Vec<Box<dyn transform::Transform>> = vec![
+                    Box::new(transform::reduction::FoldConstants),
+                    Box::new(transform::reduction::DeMorgans),
+                    Box::new(transform::reduction::UndistributeAnd),
+                    Box::new(transform::split_predicates::SplitPredicates),
+                    Box::new(transform::fusion::join::Join),
+                    Box::new(transform::predicate_pushdown::PredicatePushdown),
+                    Box::new(transform::fusion::filter::Filter),
+                    Box::new(transform::join_order::JoinOrder),
+                    Box::new(transform::empty_map::EmptyMap),
+                    // Box::new(transform::aggregation::FractureReduce),
+                ];
+                for transform in transforms.iter() {
+                    transform.transform(&mut view.relation_expr, &view.typ);
                 }
+
+                let arrangement = build_relation_expr(
+                    view.relation_expr.clone(),
+                    region,
+                    &mut context,
+                    worker_index,
+                )
+                .arrange_by_self();
+                manager.set_by_self(
+                    view.name,
+                    arrangement.trace,
+                    Box::new(move || {
+                        for mut button in buttons.drain(..) {
+                            button.press();
+                        }
+                    }),
+                );
             });
-
-            // Push predicates down a few times.
-            let mut view = view.clone();
-
-            use crate::dataflow::transform;
-            let transforms: Vec<Box<dyn transform::Transform>> = vec![
-                Box::new(transform::reduction::FoldConstants),
-                Box::new(transform::reduction::DeMorgans),
-                Box::new(transform::reduction::UndistributeAnd),
-                Box::new(transform::split_predicates::SplitPredicates),
-                Box::new(transform::fusion::join::Join),
-                Box::new(transform::predicate_pushdown::PredicatePushdown),
-                Box::new(transform::fusion::filter::Filter),
-                Box::new(transform::join_order::JoinOrder),
-                Box::new(transform::empty_map::EmptyMap),
-                // Box::new(transform::aggregation::FractureReduce),
-            ];
-            for transform in transforms.iter() {
-                transform.transform(&mut view.relation_expr, &view.typ);
-            }
-
-            let arrangement = build_relation_expr(
-                view.relation_expr.clone(),
-                scope,
-                &mut context,
-                worker_index,
-            )
-            .arrange_by_self();
-            manager.set_trace(
-                view.name,
-                arrangement.trace,
-                Box::new(move || {
-                    for mut button in buttons.drain(..) {
-                        button.press();
-                    }
-                }),
-            );
         }
     })
 }

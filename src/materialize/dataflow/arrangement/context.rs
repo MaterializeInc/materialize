@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+//! Management of arrangements while building a dataflow.
+
 use std::collections::HashMap;
 
 use timely::dataflow::{Scope, ScopeParent};
@@ -27,6 +29,10 @@ type ArrangementImport<S, V, T> =
     Arranged<S, TraceEnter<TraceValHandle<Vec<V>, Vec<V>, T, Diff>, <S as ScopeParent>::Timestamp>>;
 
 /// Dataflow-local collections and arrangements.
+///
+/// A context means to wrap available data assets and present them in an easy-to-use manner.
+/// These assets include dataflow-local collections and arrangements, as well as imported
+/// arrangements from outside the dataflow.
 pub struct Context<S: Scope, P: Eq + std::hash::Hash, V: Data, T>
 where
     T: Timestamp + Lattice,
@@ -97,22 +103,21 @@ where
         relation_expr: &P,
         keys: &[usize],
     ) -> Option<ArrangementFlavor<S, V, T>> {
-        if let Some(local) = self.local.get(relation_expr).and_then(|x| x.get(keys)) {
+        if let Some(local) = self.get_local(relation_expr, keys) {
             Some(ArrangementFlavor::Local(local.clone()))
-        } else if let Some(trace) = self.trace.get(relation_expr).and_then(|x| x.get(keys)) {
+        } else if let Some(trace) = self.get_trace(relation_expr, keys) {
             Some(ArrangementFlavor::Trace(trace.clone()))
         } else {
             None
         }
     }
 
-    /// Retrieves an arrangement from a relation_expr and keys.
-    #[allow(dead_code)]
+    /// Retrieves a local arrangement from a relation_expr and keys.
     pub fn get_local(&self, relation_expr: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
         self.local.get(relation_expr).and_then(|x| x.get(keys))
     }
 
-    /// Binds a relation_expr and keys to an arrangement.
+    /// Binds a relation_expr and keys to a local arrangement.
     pub fn set_local(&mut self, relation_expr: P, keys: &[usize], arranged: Arrangement<S, V>) {
         self.local
             .entry(relation_expr)
@@ -120,8 +125,7 @@ where
             .insert(keys.to_vec(), arranged);
     }
 
-    /// Retrieves an arrangement from a relation_expr and keys.
-    #[allow(dead_code)]
+    /// Retrieves an imported arrangement from a relation_expr and keys.
     pub fn get_trace(
         &self,
         relation_expr: &P,
@@ -130,7 +134,7 @@ where
         self.trace.get(relation_expr).and_then(|x| x.get(keys))
     }
 
-    /// Binds a relation_expr and keys to an arrangement.
+    /// Binds a relation_expr and keys to an imported arrangement.
     #[allow(dead_code)]
     pub fn set_trace(
         &mut self,

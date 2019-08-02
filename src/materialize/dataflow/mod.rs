@@ -5,12 +5,11 @@
 
 //! Driver for timely/differential dataflow.
 
-mod context;
+mod arrangement;
 mod optimize;
 mod render;
 mod sink;
 mod source;
-mod trace;
 mod types;
 
 pub mod func;
