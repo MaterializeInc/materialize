@@ -6,6 +6,7 @@
 //! https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
 
 use std::borrow::ToOwned;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
@@ -21,13 +22,18 @@ use regex::Regex;
 use uuid::Uuid;
 
 use materialize::dataflow;
+use materialize::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
 use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
+use materialize::sql::store::RemoveMode;
 use materialize::sql::Planner;
 use ore::collections::CollectionExt;
-use sqlparser::ast::Statement;
+use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
+
+mod postgres;
+use crate::postgres::Postgres;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
@@ -436,6 +442,7 @@ impl<'a> Outcome<'a> {
         }
     }
 }
+
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct Outcomes([usize; NUM_OUTCOMES]);
 
@@ -521,11 +528,15 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
+    postgres: Postgres,
     planner: Planner,
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<Drop>,
+    current_timestamp: u64,
+    local_input_uuids: HashMap<String, Uuid>,
+    local_input_mux: LocalInputMux,
     dataflow_results_mux: DataflowResultsMux,
 }
 
@@ -576,25 +587,32 @@ fn format_row(
 }
 
 impl FullState {
-    fn start() -> Self {
+    fn start() -> Result<Self, failure::Error> {
+        let postgres = Postgres::open_and_erase()?;
         let planner = Planner::default();
         let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
+        let local_input_mux = LocalInputMux::default();
         let dataflow_results_mux = DataflowResultsMux::default();
         let dataflow_workers = dataflow::serve(
             dataflow_command_receiver,
+            local_input_mux.clone(),
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone()),
             timely::Configuration::Process(NUM_TIMELY_WORKERS),
         )
         .unwrap();
 
         let worker0_thread = dataflow_workers.guards().into_first().thread().clone();
-        FullState {
+        Ok(FullState {
+            postgres,
             planner,
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
+            current_timestamp: 1,
+            local_input_uuids: HashMap::new(),
+            local_input_mux,
             dataflow_results_mux,
             worker0_thread,
-        }
+        })
     }
 
     fn send_dataflow_command(
@@ -602,12 +620,11 @@ impl FullState {
         dataflow_command: DataflowCommand,
     ) -> UnboundedReceiver<DataflowResults> {
         let uuid = Uuid::new_v4();
-        let receiver = self
-            .dataflow_results_mux
-            .write()
-            .unwrap()
-            .channel(uuid)
-            .unwrap();
+        let receiver = {
+            let mut mux = self.dataflow_results_mux.write().unwrap();
+            mux.channel(uuid).unwrap();
+            mux.receiver(&uuid).unwrap()
+        };
         self.dataflow_command_sender
             .unbounded_send((
                 dataflow_command.clone(),
@@ -616,7 +633,6 @@ impl FullState {
                 },
             ))
             .unwrap();
-
         self.worker0_thread.unpark();
         receiver
     }
@@ -632,15 +648,6 @@ impl FullState {
         }
         results
     }
-
-    fn receive_insert_count(&self, receiver: UnboundedReceiver<DataflowResults>) -> usize {
-        let mut count = 0;
-        let mut receiver = receiver.wait();
-        for _ in 0..NUM_TIMELY_WORKERS {
-            count += receiver.next().unwrap().unwrap().unwrap_inserted();
-        }
-        count
-    }
 }
 
 impl RecordRunner for FullState {
@@ -651,49 +658,180 @@ impl RecordRunner for FullState {
                 rows_inserted: expected_rows_inserted,
                 sql,
             } => {
+                if !should_run {
+                    // sure, we totally checked it
+                    return Ok(Outcome::Success);
+                }
+
                 lazy_static! {
                     static ref INDEX_STATEMENT_REGEX: Regex =
                         Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
                 }
                 if INDEX_STATEMENT_REGEX.is_match(sql) {
-                    // sure, we totally made you an index...
+                    // sure, we totally made you an index
                     return Ok(Outcome::Success);
                 }
 
                 // we don't support non-materialized views
                 let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
 
-                let (response, dataflow_command) =
-                    match self.planner.handle_command(sql.to_string()) {
-                        Ok((response, dataflow_command)) => (response, dataflow_command),
-                        Err(error) => {
-                            if *should_run {
-                                return Ok(Outcome::PlanFailure { error });
-                            } else {
-                                return Ok(Outcome::Success);
+                // parse statement
+                let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
+                    Ok(statements) => statements,
+                    Err(error) => return Ok(Outcome::ParseFailure { error }),
+                };
+                let statement = match &*statements {
+                    [] => bail!("Got zero statements?"),
+                    [statement] => statement,
+                    _ => bail!("Got multiple statements: {:?}", statements),
+                };
+
+                match statement {
+                    // run through postgres and send diffs to materialize
+                    Statement::CreateTable { .. }
+                    | Statement::Drop {
+                        object_type: ObjectType::Table,
+                        ..
+                    }
+                    | Statement::Delete { .. }
+                    | Statement::Insert { .. }
+                    | Statement::Update { .. } => {
+                        let outcome = match self
+                            .postgres
+                            .run_statement(&sql, statement)
+                            .context("Unsupported by postgres")
+                        {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                return Ok(Outcome::Unsupported {
+                                    error: error.into(),
+                                });
+                            }
+                        };
+                        let rows_inserted;
+                        match outcome {
+                            postgres::Outcome::Created(name, typ) => {
+                                let uuid = Uuid::new_v4();
+                                self.local_input_uuids.insert(name.clone(), uuid);
+                                {
+                                    self.local_input_mux.write().unwrap().channel(uuid).unwrap();
+                                }
+                                let dataflow = Dataflow::Source(Source {
+                                    name,
+                                    connector: SourceConnector::Local(LocalSourceConnector {
+                                        uuid,
+                                    }),
+                                    typ,
+                                });
+                                self.planner.dataflows.insert(dataflow.clone())?;
+                                let _receiver = self.send_dataflow_command(
+                                    DataflowCommand::CreateDataflow(dataflow),
+                                );
+                                {
+                                    self.local_input_mux
+                                        .read()
+                                        .unwrap()
+                                        .sender(&uuid)
+                                        .unwrap()
+                                        .unbounded_send(LocalInput::Watermark(
+                                            self.current_timestamp,
+                                        ))
+                                        .unwrap();
+                                }
+                                rows_inserted = None;
+                            }
+                            postgres::Outcome::Dropped(names) => {
+                                let mut dataflows = vec![];
+                                // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
+                                for name in &names {
+                                    self.local_input_uuids.remove(name);
+                                    self.planner.dataflows.remove(
+                                        name,
+                                        RemoveMode::Cascade,
+                                        &mut dataflows,
+                                    )?;
+                                }
+                                let _receiver = self
+                                    .send_dataflow_command(DataflowCommand::DropDataflows(names));
+                                rows_inserted = None;
+                            }
+                            postgres::Outcome::Changed(name, _typ, updates) => {
+                                let updates = updates
+                                    .into_iter()
+                                    .map(|(row, diff)| Update {
+                                        row,
+                                        diff,
+                                        timestamp: self.current_timestamp,
+                                    })
+                                    .collect::<Vec<_>>();
+                                let updated_uuid = self
+                                    .local_input_uuids
+                                    .get(&name)
+                                    .expect("Unknown table in update");
+                                {
+                                    let mux = self.local_input_mux.read().unwrap();
+                                    for (uuid, sender) in &mux.senders {
+                                        if uuid == updated_uuid {
+                                            sender
+                                                .unbounded_send(LocalInput::Updates(
+                                                    updates.clone(),
+                                                ))
+                                                .unwrap();
+                                        }
+                                        sender
+                                            .unbounded_send(LocalInput::Watermark(
+                                                self.current_timestamp + 1,
+                                            ))
+                                            .unwrap();
+                                    }
+                                }
+                                self.current_timestamp += 1;
+                                rows_inserted = Some(updates.len());
                             }
                         }
-                    };
-                let receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                let insert_count = if let SqlResponse::Inserting = response {
-                    Some(self.receive_insert_count(receiver))
-                } else {
-                    None
-                };
-                match (insert_count, expected_rows_inserted) {
-                    (None, Some(_)) => Ok(Outcome::PlanFailure {
-                        error: failure::format_err!(
-                            "Query did not result in Inserting, instead got {:?}",
-                            response
-                        ),
-                    }),
-                    (Some(actual), Some(expected)) if actual != *expected => {
-                        Ok(Outcome::WrongNumberOfRowsInserted {
-                            expected_count: *expected,
-                            actual_count: actual,
-                        })
+                        match (rows_inserted, expected_rows_inserted) {
+                            (None, Some(expected)) => Ok(Outcome::PlanFailure {
+                                error: failure::format_err!(
+                                    "Query did not insert any rows, expected {}",
+                                    expected,
+                                ),
+                            }),
+                            (Some(actual), Some(expected)) if actual != *expected => {
+                                Ok(Outcome::WrongNumberOfRowsInserted {
+                                    expected_count: *expected,
+                                    actual_count: actual,
+                                })
+                            }
+                            _ => Ok(Outcome::Success),
+                        }
                     }
-                    _ => Ok(Outcome::Success),
+
+                    // run through materialize directly
+                    Statement::Query { .. }
+                    | Statement::CreateView { .. }
+                    | Statement::CreateSource { .. }
+                    | Statement::CreateSink { .. }
+                    | Statement::Drop { .. } => {
+                        let (_response, dataflow_command) =
+                            match self.planner.handle_command(sql.to_owned()) {
+                                Ok((response, dataflow_command)) => (response, dataflow_command),
+                                Err(error) => return Ok(Outcome::PlanFailure { error }),
+                            };
+                        // make sure we peek at the correct time
+                        let dataflow_command = match dataflow_command {
+                            Some(DataflowCommand::Peek { source, .. }) => {
+                                Some(DataflowCommand::Peek {
+                                    source,
+                                    when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
+                                })
+                            }
+                            other => other,
+                        };
+                        let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
+                        Ok(Outcome::Success)
+                    }
+
+                    _ => bail!("Unsupported statement: {:?}", statement),
                 }
             }
             Record::Query { sql, output } => {
@@ -792,6 +930,16 @@ impl RecordRunner for FullState {
                             }
                         }
 
+                        // make sure we peek at the correct time
+                        let dataflow_command = match dataflow_command {
+                            Some(DataflowCommand::Peek { source, .. }) => {
+                                Some(DataflowCommand::Peek {
+                                    source,
+                                    when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
+                                })
+                            }
+                            other => other,
+                        };
                         let receiver = self.send_dataflow_command(dataflow_command.unwrap());
                         let results = self.receive_peek_results(receiver);
 
@@ -927,7 +1075,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
     let mut state: Box<RecordRunner> = if only_parse {
         Box::new(OnlyParseState::start())
     } else {
-        Box::new(FullState::start())
+        Box::new(FullState::start().unwrap())
     };
     if verbosity >= 1 {
         println!("==> {}", source);
@@ -1010,7 +1158,7 @@ pub fn run_stdin(verbosity: usize, only_parse: bool) -> Outcomes {
 }
 
 pub fn fuzz(sqls: &str) {
-    let mut state = FullState::start();
+    let mut state = FullState::start().unwrap();
     for sql in sqls.split(';') {
         if let Ok((sql_response, dataflow_command)) = state.planner.handle_command(sql.to_owned()) {
             if let Some(dataflow_command) = dataflow_command {
@@ -1041,7 +1189,7 @@ mod test {
         let mut input = String::new();
         for entry in WalkDir::new("../../fuzz/artifacts/fuzz_sqllogictest/") {
             let entry = entry.unwrap();
-            if entry.path().is_file() {
+            if entry.path().is_file() && entry.file_name() != ".gitignore" {
                 input.clear();
                 File::open(&entry.path())
                     .unwrap()

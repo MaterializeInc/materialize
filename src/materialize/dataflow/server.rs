@@ -10,12 +10,10 @@ use differential_dataflow::trace::TraceReader;
 
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
-use timely::dataflow::operators::unordered_input::ActivateCapability;
 use timely::progress::frontier::Antichain;
 use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem;
@@ -24,14 +22,14 @@ use std::time::Instant;
 
 use super::render;
 use super::render::InputCapability;
-use super::{LocalSourceConnector, RelationExpr, Source, SourceConnector};
+use super::RelationExpr;
 use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
-use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    local_input_mux: LocalInputMux,
     dataflow_results_handler: DataflowResultsHandler,
     timely_configuration: timely::Configuration,
 ) -> Result<WorkerGuards<()>, String> {
@@ -46,6 +44,7 @@ pub fn serve(
         Worker::new(
             worker,
             dataflow_command_receiver,
+            local_input_mux.clone(),
             dataflow_results_handler.clone(),
         )
         .run()
@@ -69,7 +68,6 @@ enum SequencedCommand {
     Peek {
         name: String,
         timestamp: Timestamp,
-        insert_into: Option<String>,
         drop_after_peek: bool,
     },
     Tail(String),
@@ -88,57 +86,18 @@ struct PendingPeek {
     drop_after_peek: bool,
 }
 
-struct PendingInsert {
-    /// The name of the dataflow to insert into.
-    name: String,
-    /// The capability to use to perform the insert.
-    capability: ActivateCapability<Timestamp>,
-}
-
-lazy_static! {
-    // Bootstrapping adds a dummy table, "dual", with one row, which the SQL
-    // planner depends upon.
-    //
-    // TODO(benesch): perhaps the SQL layer should be responsible for installing
-    // it, then? It's not fundamental to this module.
-    static ref BOOTSTRAP_COMMANDS: Vec<DataflowCommand> = vec![
-        DataflowCommand::CreateDataflow(Dataflow::Source(Source {
-            name: "dual".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {}),
-            typ: RelationType::new(vec![ColumnType {
-                name: Some("x".into()),
-                nullable: false,
-                scalar_type: ScalarType::String,
-            }]),
-        })),
-        DataflowCommand::Peek {
-            source: RelationExpr::Constant {
-                rows: vec![vec![Datum::String("X".into())]],
-                typ: RelationType::new(vec![ColumnType {
-                    name: None,
-                    nullable: false,
-                    scalar_type: ScalarType::String,
-                }]),
-            },
-            when: PeekWhen::AfterFlush,
-            insert_into: Some("dual".into()),
-        },
-    ];
-}
-
 struct Worker<'w, A>
 where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
     dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
+    local_input_mux: LocalInputMux,
     dataflow_results_handler: DataflowResultsHandler,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
-    pending_inserts: HashMap<String, PendingInsert>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputCapability>,
-    input_time: u64,
     dataflows: HashMap<String, Dataflow>,
     sequencer: Sequencer<(SequencedCommand, CommandMeta)>,
 }
@@ -150,19 +109,19 @@ where
     fn new(
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
+        local_input_mux: LocalInputMux,
         dataflow_results_handler: DataflowResultsHandler,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
         Worker {
             inner: w,
             dataflow_command_receiver,
+            local_input_mux,
             dataflow_results_handler,
             pending_peeks: Vec::new(),
-            pending_inserts: HashMap::new(),
             traces: TraceManager::default(),
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
-            input_time: 1,
             dataflows: HashMap::new(),
             sequencer,
         }
@@ -170,12 +129,6 @@ where
 
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
-        if self.inner.index() == 0 {
-            for cmd in BOOTSTRAP_COMMANDS.iter() {
-                self.sequence_command(cmd.clone(), CommandMeta::nil());
-            }
-        }
-
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -213,11 +166,7 @@ where
             DataflowCommand::CreateDataflow(dataflow) => SequencedCommand::CreateDataflow(dataflow),
             DataflowCommand::DropDataflows(dataflows) => SequencedCommand::DropDataflows(dataflows),
             DataflowCommand::Tail(name) => SequencedCommand::Tail(name),
-            DataflowCommand::Peek {
-                source,
-                when,
-                insert_into,
-            } => {
+            DataflowCommand::Peek { source, when } => {
                 let (name, drop) = if let RelationExpr::Get { name, typ: _ } = source {
                     // Fast path. We can just look at the existing dataflow
                     // directly.
@@ -270,19 +219,11 @@ where
                             None => 0,
                         }
                     }
-                    // Choose the lastest time that is committed by all inputs.
-                    // Peeking at this time may involve waiting for the outputs
-                    // to catch up.
-                    //
-                    // TODO(benesch): remove this bit of complexity when INSERTs
-                    // go away.
-                    PeekWhen::AfterFlush => self.input_time.saturating_sub(1),
                     PeekWhen::AtTimestamp(timestamp) => timestamp,
                 };
                 SequencedCommand::Peek {
                     name,
                     timestamp,
-                    insert_into,
                     drop_after_peek: drop,
                 }
             }
@@ -299,7 +240,7 @@ where
                     &mut self.traces,
                     self.inner,
                     &mut self.inputs,
-                    self.input_time,
+                    &mut self.local_input_mux,
                 );
                 self.dataflows.insert(dataflow.name().to_owned(), dataflow);
             }
@@ -315,44 +256,8 @@ where
             SequencedCommand::Peek {
                 name,
                 timestamp,
-                insert_into,
                 drop_after_peek,
             } => {
-                if let Some(insert_into) = insert_into {
-                    // This results of this peek should be inserted into an existing
-                    // dataflow. Stash away the capability to insert as the current
-                    // time, because it might be a while before the peek completes.
-                    match self
-                        .inputs
-                        .get_mut(&insert_into)
-                        .expect("Failed to find input")
-                    {
-                        InputCapability::Local { capability, .. } => self.pending_inserts.insert(
-                            name.clone(),
-                            PendingInsert {
-                                name: insert_into,
-                                capability: capability.clone(),
-                            },
-                        ),
-                        InputCapability::External(_) => {
-                            panic!("attempted to insert into external source")
-                        }
-                    };
-
-                    // Unconditionally advance time after an insertion to allow the
-                    // computation to make progress. Importantly, this occurs on *all*
-                    // internal inputs.
-                    self.input_time += 1;
-                    for handle in self.inputs.values_mut() {
-                        match handle {
-                            InputCapability::Local { capability, .. } => {
-                                capability.downgrade(&self.input_time);
-                            }
-                            InputCapability::External(_) => (),
-                        }
-                    }
-                }
-
                 let trace = self.traces.get_by_self(&name).unwrap();
                 let pending_peek = PendingPeek {
                     name,
@@ -419,28 +324,7 @@ where
 
                 cur.step_key(&storage)
             }
-            let results = if let Some(insert) = self.pending_inserts.remove(&peek.name) {
-                let n = results.len();
-                match self
-                    .inputs
-                    .get_mut(&insert.name)
-                    .unwrap_or_else(|| panic!("Failed to find input: {:?}", insert.name))
-                {
-                    InputCapability::Local { handle, .. } => {
-                        let time = *insert.capability.time();
-                        let mut session = handle.session(insert.capability);
-                        for row in results {
-                            session.give((row, time, 1));
-                        }
-                    }
-                    InputCapability::External(_) => {
-                        panic!("attempted to insert into external source")
-                    }
-                }
-                DataflowResults::Inserted(n)
-            } else {
-                DataflowResults::Peeked(results)
-            };
+            let result = DataflowResults::Peeked(results);
             match &self.dataflow_results_handler {
                 DataflowResultsHandler::Local(peek_results_mux) => {
                     // The sender is allowed disappear at any time, so the
@@ -450,11 +334,11 @@ where
                         .unwrap()
                         .sender(&peek.connection_uuid)
                     {
-                        drop(sender.unbounded_send(results))
+                        drop(sender.unbounded_send(result))
                     }
                 }
                 DataflowResultsHandler::Remote(response_address) => {
-                    let encoded = bincode::serialize(&results).unwrap();
+                    let encoded = bincode::serialize(&result).unwrap();
                     self.rpc_client
                         .post(response_address)
                         .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())

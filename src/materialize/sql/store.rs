@@ -8,8 +8,8 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
-use crate::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
-use crate::repr::{ColumnType, RelationType, ScalarType};
+use crate::dataflow::Dataflow;
+use crate::repr::RelationType;
 
 #[derive(Debug)]
 pub struct DataflowStore {
@@ -120,25 +120,9 @@ impl DataflowStore {
 
 impl Default for DataflowStore {
     fn default() -> DataflowStore {
-        let mut store = DataflowStore {
+        DataflowStore {
             inner: HashMap::new(),
-        };
-
-        // https://en.wikipedia.org/wiki/DUAL_table
-        let dual_dataflow = Dataflow::Source(Source {
-            name: "dual".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {}),
-            typ: RelationType {
-                column_types: vec![ColumnType {
-                    name: Some("x".into()),
-                    nullable: false,
-                    scalar_type: ScalarType::String,
-                }],
-            },
-        });
-        store.insert(dual_dataflow).unwrap();
-
-        store
+        }
     }
 }
 

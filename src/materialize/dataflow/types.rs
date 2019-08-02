@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use url::Url;
+use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -94,7 +95,9 @@ pub struct KafkaSourceConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LocalSourceConnector {}
+pub struct LocalSourceConnector {
+    pub uuid: Uuid,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnector {
@@ -193,7 +196,12 @@ impl RelationExpr {
             RelationExpr::Constant { rows, typ } => {
                 for row in rows {
                     for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
-                        assert!(datum.is_instance_of(column_typ));
+                        assert!(
+                            datum.is_instance_of(column_typ),
+                            "Expected datum of type {:?}, got value {:?}",
+                            column_typ,
+                            datum
+                        );
                     }
                 }
                 typ.clone()

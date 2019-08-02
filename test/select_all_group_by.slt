@@ -1,0 +1,92 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+mode cockroach
+
+statement ok
+create table foo (a integer)
+
+statement ok
+insert into foo values (37)
+
+statement ok
+create table bar (a integer, b integer)
+
+statement ok
+insert into bar values (37, 42), (37, 42);
+
+query II
+select *, count(*) from foo group by a
+----
+37 1
+
+query II
+select *, count(*) from foo group by a, a, a+1
+----
+37 1
+
+query I
+select a from foo group by a, foo.a
+----
+37
+
+statement error no column named bar.b in scope
+select *, count(*) from bar group by a;
+
+query II
+select a, count(*) from bar group by a;
+----
+37 2
+
+query II
+select * from bar group by a, b;
+----
+37 42
+
+statement ok
+create table quux(a integer);
+
+query I
+select count(a) from quux where a < 0;
+----
+0
+
+query I
+select count(*) from quux where a < 0;
+----
+0
+
+statement ok
+insert into quux values (37), (null)
+
+query I
+select count(*) from quux;
+----
+2
+
+query I
+select count(a) from quux
+----
+1
+
+query I
+select count(a) from quux where a < 0
+----
+0
+
+query I
+select count(*) from quux where a < 0
+----
+0
+
+query I
+select sum(a) from quux
+----
+37
+
+query I
+select sum(a) from quux where a < 0
+----
+NULL

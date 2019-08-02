@@ -39,13 +39,23 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
 ) -> impl Future<Item = (), Error = failure::Error> {
     let uuid = Uuid::new_v4();
     let stream = Framed::new(a, codec::Codec::new());
+    let sql_response_receiver = {
+        let mut mux = sql_response_mux.write().unwrap();
+        mux.channel(uuid).unwrap();
+        mux.receiver(&uuid).unwrap()
+    };
+    let dataflow_results_receiver = {
+        let mut mux = dataflow_results_mux.write().unwrap();
+        mux.channel(uuid).unwrap();
+        mux.receiver(&uuid).unwrap()
+    };
     protocol::StateMachine::start(
         stream,
         protocol::Context {
             uuid,
             sql_command_sender,
-            sql_response_receiver: sql_response_mux.write().unwrap().channel(uuid).unwrap(),
-            dataflow_results_receiver: dataflow_results_mux.write().unwrap().channel(uuid).unwrap(),
+            sql_response_receiver,
+            dataflow_results_receiver,
             num_timely_workers,
         },
     )

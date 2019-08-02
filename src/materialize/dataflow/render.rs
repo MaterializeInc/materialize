@@ -12,9 +12,6 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
-use timely::dataflow::operators::unordered_input::{
-    ActivateCapability, UnorderedHandle, UnorderedInput,
-};
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
@@ -26,13 +23,10 @@ use super::types::*;
 use crate::dataflow::arrangement::TraceManager;
 use crate::dataflow::arrangement::{context::ArrangementFlavor, Context};
 use crate::dataflow::types::RelationExpr;
+use crate::glue::LocalInputMux;
 use crate::repr::Datum;
 
 pub enum InputCapability {
-    Local {
-        handle: UnorderedHandle<Timestamp, (Vec<Datum>, Timestamp, Diff)>,
-        capability: ActivateCapability<Timestamp>,
-    },
     External(SharedCapability),
 }
 
@@ -41,7 +35,7 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
-    input_time: u64,
+    local_input_mux: &mut LocalInputMux,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
@@ -62,13 +56,12 @@ pub fn build_dataflow<A: Allocate>(
                     }
                     stream
                 }
-                SourceConnector::Local(_) => {
-                    let ((handle, mut capability), stream) = scope.new_unordered_input();
-                    capability.downgrade(&input_time);
-                    inputs.insert(
-                        src.name.clone(),
-                        InputCapability::Local { handle, capability },
-                    );
+                SourceConnector::Local(c) => {
+                    let (stream, capability) =
+                        source::local(scope, &src.name, &c, worker_index == 0, local_input_mux);
+                    if let Some(capability) = capability {
+                        inputs.insert(src.name.clone(), InputCapability::External(capability));
+                    }
                     stream
                 }
             };

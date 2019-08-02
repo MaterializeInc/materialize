@@ -37,13 +37,13 @@ statement ok
 INSERT INTO a VALUES (0, 1), (1, 2), (2, 0)
 
 statement ok
-CREATE TABLE b (a INT, b INT, c STRING)
+CREATE TABLE b (a INT, b INT, c TEXT)
 
 statement ok
 INSERT INTO b VALUES (0, 1, 'a'), (2, 1, 'b'), (0, 2, 'c'), (0, 1, 'd')
 
 statement ok
-CREATE TABLE c (a INT, b STRING)
+CREATE TABLE c (a INT, b TEXT)
 
 statement ok
 INSERT INTO c VALUES (1, 'a'), (1, 'b'), (2, 'c')

@@ -16,13 +16,13 @@
 mode cockroach
 
 statement ok
-CREATE TABLE t (k INT PRIMARY KEY, str STRING);
+CREATE TABLE t (k INT PRIMARY KEY, str TEXT);
 
 statement ok
-CREATE TABLE u (l INT PRIMARY KEY, str2 STRING);
+CREATE TABLE u (l INT PRIMARY KEY, str2 TEXT);
 
 statement ok
-CREATE TABLE v (m INT PRIMARY KEY, str3 STRING);
+CREATE TABLE v (m INT PRIMARY KEY, str3 TEXT);
 
 statement ok
 INSERT INTO t SELECT i, to_english(i) FROM generate_series(1, 5) AS g(i);
@@ -61,7 +61,7 @@ CREATE TABLE table9 (
     _int8 INT8,
     _interval INTERVAL,
     _jsonb JSONB,
-    _string STRING,
+    _string TEXT,
     _time TIME,
     _timestamp TIMESTAMP,
     _timestamptz TIMESTAMPTZ,

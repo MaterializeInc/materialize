@@ -30,7 +30,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let timely_configuration = timely::Configuration::from_args(std::env::args())?;
     let materialize_configuration = materialize::server::Config::from_timely(timely_configuration);
-    materialize::server::serve(materialize_configuration)
+    materialize::server::serve(materialize_configuration)?;
+    Ok(())
 }
 
 lazy_static! {

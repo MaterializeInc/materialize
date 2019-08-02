@@ -19,7 +19,7 @@ mode cockroach
 
 statement ok
 CREATE TABLE p (
-  a STRING COLLATE en_u_ks_level1 PRIMARY KEY
+  a TEXT COLLATE en_u_ks_level1 PRIMARY KEY
 )
 
 statement ok
@@ -33,8 +33,8 @@ INSERT INTO p VALUES ('b' COLLATE en_u_ks_level1)
 
 statement ok
 CREATE TABLE c1 (
-  a STRING COLLATE en_u_ks_level1 PRIMARY KEY,
-  b STRING COLLATE en_u_ks_level1
+  a TEXT COLLATE en_u_ks_level1 PRIMARY KEY,
+  b TEXT COLLATE en_u_ks_level1
 ) INTERLEAVE IN PARENT p (a)
 
 statement ok
@@ -68,8 +68,8 @@ pear
 
 statement ok
 CREATE TABLE c2 (
-  a STRING COLLATE en_u_ks_level1 PRIMARY KEY,
-  b STRING COLLATE en_u_ks_level1,
+  a TEXT COLLATE en_u_ks_level1 PRIMARY KEY,
+  b TEXT COLLATE en_u_ks_level1,
   CONSTRAINT fk_p FOREIGN KEY (a) REFERENCES p
 ) INTERLEAVE IN PARENT p (a)
 

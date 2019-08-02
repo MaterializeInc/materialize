@@ -119,7 +119,6 @@ pub enum StateMachine<A: Conn + 'static> {
         SendCommandComplete,
         SendRowDescription,
         SendError,
-        WaitForInserted,
         Error
     ))]
     HandleQuery { conn: A },
@@ -137,13 +136,6 @@ pub enum StateMachine<A: Conn + 'static> {
         conn: A,
         row_type: RelationType,
         peek_results: Vec<Vec<Datum>>,
-        remaining_results: usize,
-    },
-
-    #[state_machine_future(transitions(WaitForInserted, SendCommandComplete, Error))]
-    WaitForInserted {
-        conn: A,
-        count: usize,
         remaining_results: usize,
     },
 
@@ -281,17 +273,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     SqlResponse::CreatedSource => command_complete!("CREATE SOURCE"),
                     SqlResponse::CreatedSink => command_complete!("CREATE SINK"),
                     SqlResponse::CreatedView => command_complete!("CREATE VIEW"),
-                    SqlResponse::CreatedTable => command_complete!("CREATE TABLE"),
                     SqlResponse::DroppedSource => command_complete!("DROP SOURCE"),
                     SqlResponse::DroppedView => command_complete!("DROP VIEW"),
-                    SqlResponse::DroppedTable => command_complete!("DROP TABLE"),
                     SqlResponse::EmptyQuery => transition!(SendCommandComplete {
                         send: state.conn.send(BackendMessage::EmptyQueryResponse),
-                    }),
-                    SqlResponse::Inserting => transition!(WaitForInserted {
-                        conn: state.conn,
-                        count: 0,
-                        remaining_results: context.num_timely_workers,
                     }),
                     SqlResponse::Peeking { typ } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
@@ -373,39 +358,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     ));
                     transition!(SendRows {
                         send: Box::new(stream.forward(state.conn)),
-                    })
-                } else {
-                    transition!(state)
-                }
-            }
-            Ok(Async::Ready(None)) | Err(()) => {
-                panic!("Connection to dataflow server closed unexpectedly")
-            }
-        }
-    }
-
-    fn poll_wait_for_inserted<'s, 'c>(
-        state: &'s mut RentToOwn<'s, WaitForInserted<A>>,
-        context: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterWaitForInserted<A>, failure::Error> {
-        match context.dataflow_results_receiver.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(Some(results))) => {
-                let mut state = state.take();
-                state.count += results.unwrap_inserted();
-                state.remaining_results -= 1;
-                if state.remaining_results == 0 {
-                    // "On successful completion, an INSERT command returns a
-                    // command tag of the form `INSERT <oid> <count>`."
-                    //     -- https://www.postgresql.org/docs/11/sql-insert.html
-                    //
-                    // OIDs are a PostgreSQL-specific historical quirk, but we
-                    // can return a 0 OID to indicate that the table does not
-                    // have OIDs.
-                    transition!(SendCommandComplete {
-                        send: state.conn.send(BackendMessage::CommandComplete {
-                            tag: format!("INSERT 0 {}", state.count),
-                        }),
                     })
                 } else {
                     transition!(state)

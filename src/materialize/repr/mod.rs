@@ -158,6 +158,7 @@ impl Datum {
             (Datum::Int64(_), ScalarType::Int64) => true,
             (Datum::Float32(_), ScalarType::Float32) => true,
             (Datum::Float64(_), ScalarType::Float64) => true,
+            (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
             (Datum::Bytes(_), ScalarType::Bytes) => true,
             (Datum::String(_), ScalarType::String) => true,
             (Datum::Regex(_), ScalarType::Regex) => true,
@@ -233,6 +234,12 @@ impl From<String> for Datum {
 impl From<::regex::Regex> for Datum {
     fn from(r: ::regex::Regex) -> Datum {
         Datum::Regex(Regex(r))
+    }
+}
+
+impl From<Vec<u8>> for Datum {
+    fn from(b: Vec<u8>) -> Datum {
+        Datum::Bytes(b)
     }
 }
 
