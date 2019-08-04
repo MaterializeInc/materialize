@@ -11,5 +11,6 @@ set -euo pipefail
 
 if [[ "${BUILDKITE_BRANCH-}" = master && "${BUILDKITE_COMMIT-}" ]]; then
     buildkite-agent artifact download target/slt-summary.json .
-    ssh buildkite@mtrlz.dev psql < <(jq -r parse-summary.jq slt-summary.json)
+    jq --arg commit "$BUILDKITE_COMMIT" -rf ci/slt/parse-summary.jq slt-summary.json \
+        | ssh buildkite@mtrlz.dev psql
 fi
