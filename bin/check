@@ -123,6 +123,12 @@ disabled_lints=(
     clippy::unneeded_field_pattern
 )
 
+# NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
+# splitting below. It's substantially clearer than doing things "properly,"
+# and the inputs to this script are trusted.
+
 pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,-p \1,p' Cargo.toml)
+# shellcheck disable=SC2086
 run cargo clean $pkgspec
+# shellcheck disable=SC2046
 run cargo clippy -- -D warnings $(printf -- "-A %s " "${disabled_lints[@]}")

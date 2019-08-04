@@ -8,11 +8,14 @@
 
 set -euo pipefail
 
+# ShellCheck cannot follow this path, as it is only valid inside the Docker
+# container.
+# shellcheck disable=SC1091
 . /usr/local/share/shlib/shlib.bash
 
 ci_init
 
-while read binary cwd; do
+while read -r binary cwd; do
     cd "$cwd"
     ci_try "/tests/$binary"
     cd "$OLDPWD"

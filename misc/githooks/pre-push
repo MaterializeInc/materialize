@@ -16,7 +16,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-while read local_ref local_sha remote_ref remote_sha; do
+# We declare some unused variables here to make it clear what fields
+# are provided to us as input.
+# shellcheck disable=SC2034
+while read -r local_ref local_sha remote_ref remote_sha; do
     if [[ "$remote_ref" = refs/heads/master ]]; then
         oldlist=$(git stash list)
         git stash save --quiet --include-untracked
