@@ -15,11 +15,11 @@ ci_init() {
 }
 
 ci_collapsed_heading() {
-    echo "--- $@"
+    echo "---" "$@"
 }
 
 ci_uncollapsed_heading() {
-    echo "+++ $@"
+    echo "+++" "$@"
 }
 
 ci_uncollapse_current_section() {
@@ -49,4 +49,18 @@ ci_status_report() {
     if ((ci_try_passed != ci_try_total)); then
         exit 1
     fi
+}
+
+# mapfile_shim [array]
+#
+# A limited backport of the Bash 4.0 `mapfile` built-in. Reads lines from the
+# standard input into the indexed array variable ARRAY. If ARRAY is unspecified,
+# the variable MAPFILE is used instead. Other options of `mapfile` are not
+# supported.
+mapfile_shim() {
+    local -n var=${1:-MAPFILE}
+    var=()
+    while IFS= read -r line; do
+        var+=("$line")
+    done
 }
