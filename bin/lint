@@ -45,7 +45,7 @@ copyright_files=$(grep -vE \
 shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.md'))
 
 try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
-try xargs -n1 misc/lint/trailing-newline.sh <<< "$files"
+try xargs misc/lint/trailing-newline.sh <<< "$files"
 try xargs shellcheck <<< "$shell_files"
 
 if $failed; then
