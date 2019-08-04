@@ -42,13 +42,23 @@ steps:
           config: ci/test/testdrive.compose.yml
           run: testdrive
   - label: ":bulb: Short SQL logic tests"
+    command: ci/test/slt-fast.sh
+    timeout_in_minutes: 10
+    env:
+      SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
+    plugins:
+      - MaterializeInc/uid#master: ~
+      - docker-compose#v3.0.3:
+          config: ci/slt/docker-compose.yml
+          run: sqllogictest
+  - label: ":bulb: :bulb: Full SQL logic tests"
     trigger: sql-logic-tests
+    async: true
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
       env:
         SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
-        SQLLOGICTEST_FAST: 1
   - label: ":rocket: Deploy"
     trigger: deploy
     async: true
@@ -58,12 +68,3 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         MATERIALIZED_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
-  - block: ":vertical_traffic_light: Run full SQL logic tests"
-  - label: ":bulb: :bulb: Full SQL logic tests"
-    trigger: sql-logic-tests
-    async: true
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
