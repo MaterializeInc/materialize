@@ -8,4 +8,4 @@
 {
     "keys": keys | join(", "),
     "values": values | join(", ")
-} | "INSERT INTO slt (commit, \(.keys)) VALUES ('$BUILDKITE_COMMIT', \(.values))"
+} | "INSERT INTO slt (commit, \(.keys)) VALUES ('\($commit)', \(.values))"
