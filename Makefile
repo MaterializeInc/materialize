@@ -13,16 +13,29 @@
 #limitations under the License.
 
 CC=g++
-CXXFLAGS=-c -std=c++11 -O2 -Wall 
+CXXFLAGS=-c -std=c++11 -O2 -Wall
 LDFLAGS=-lodbc
 
-SOURCES=src/AnalyticalStatistic.cpp src/TransactionalStatistic.cpp src/dialect/DialectStrategy.cpp src/Config.cpp src/Log.cpp src/DbcTools.cpp src/DataSource.cpp src/TupleGen.cpp src/Schema.cpp src/Queries.cpp src/Transactions.cpp chBenchmark.cpp
+SOURCES = \
+	src/AnalyticalStatistic.cpp \
+	src/TransactionalStatistic.cpp \
+	src/dialect/DialectStrategy.cpp \
+	src/Config.cpp \
+	src/Log.cpp \
+	src/DbcTools.cpp \
+	src/DataSource.cpp \
+	src/TupleGen.cpp \
+	src/Schema.cpp \
+	src/Queries.cpp \
+	src/Transactions.cpp \
+	chBenchmark.cpp \
+	pthread_shim.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=chBenchmark
 
 all: $(SOURCES) $(EXECUTABLE)
-	
-$(EXECUTABLE): $(OBJECTS) 
+
+$(EXECUTABLE): $(OBJECTS)
 	$(CC) $(LDFLAGS) $(OBJECTS) -o $@
 
 .cpp.o:

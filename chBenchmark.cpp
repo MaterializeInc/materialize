@@ -24,6 +24,7 @@ limitations under the License.
 #include "src/TransactionalStatistic.h"
 #include "src/Transactions.h"
 #include "src/TupleGen.h"
+#include "pthread_shim.h"
 
 #include <fstream>
 #include <iostream>
