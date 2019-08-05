@@ -17,6 +17,8 @@ limitations under the License.
 #include "Config.h"
 #include "TupleGen.h"
 
+#include <err.h>
+
 using namespace std;
 
 ofstream TupleGen::warehouseStream;
@@ -32,19 +34,27 @@ ofstream TupleGen::nationStream;
 ofstream TupleGen::supplierStream;
 ofstream TupleGen::regionStream;
 
+void ofopen(const char* name, ofstream& f, std::string path) {
+	f.open(path);
+	if (f.fail()) {
+		err(1, "opening %s", name);
+	}
+}
+
+
 void TupleGen::openOutputFiles(){
-	warehouseStream.open( (Config::getInitialDbCreationPath()+"/WAREHOUSE.tbl").c_str() );
-	districtStream.open( (Config::getInitialDbCreationPath()+"/DISTRICT.tbl").c_str() );
-	customerStream.open( (Config::getInitialDbCreationPath()+"/CUSTOMER.tbl").c_str() );
-	historyStream.open( (Config::getInitialDbCreationPath()+"/HISTORY.tbl").c_str() );
-	neworderStream.open( (Config::getInitialDbCreationPath()+"/NEWORDER.tbl").c_str() );
-	orderStream.open( (Config::getInitialDbCreationPath()+"/ORDER.tbl").c_str() );
-	orderlineStream.open( (Config::getInitialDbCreationPath()+"/ORDERLINE.tbl").c_str() );
-	itemStream.open( (Config::getInitialDbCreationPath()+"/ITEM.tbl").c_str() );
-	stockStream.open( (Config::getInitialDbCreationPath()+"/STOCK.tbl").c_str() );
-	nationStream.open( (Config::getInitialDbCreationPath()+"/NATION.tbl").c_str() );
-	supplierStream.open( (Config::getInitialDbCreationPath()+"/SUPPLIER.tbl").c_str() );
-	regionStream.open( (Config::getInitialDbCreationPath()+"/REGION.tbl").c_str() );
+	ofopen("warehouse", warehouseStream, Config::getInitialDbCreationPath()+"/WAREHOUSE.tbl");
+	ofopen("district", districtStream, Config::getInitialDbCreationPath()+"/DISTRICT.tbl");
+	ofopen("customer", customerStream, Config::getInitialDbCreationPath()+"/CUSTOMER.tbl");
+	ofopen("history", historyStream, Config::getInitialDbCreationPath()+"/HISTORY.tbl");
+	ofopen("neworder", neworderStream, Config::getInitialDbCreationPath()+"/NEWORDER.tbl");
+	ofopen("order", orderStream, Config::getInitialDbCreationPath()+"/ORDER.tbl");
+	ofopen("orderline", orderlineStream, Config::getInitialDbCreationPath()+"/ORDERLINE.tbl");
+	ofopen("item", itemStream, Config::getInitialDbCreationPath()+"/ITEM.tbl");
+	ofopen("stock", stockStream, Config::getInitialDbCreationPath()+"/STOCK.tbl");
+	ofopen("nation", nationStream, Config::getInitialDbCreationPath()+"/NATION.tbl");
+	ofopen("supplier", supplierStream, Config::getInitialDbCreationPath()+"/SUPPLIER.tbl");
+	ofopen("region", regionStream, Config::getInitialDbCreationPath()+"/REGION.tbl");
 }
 
 void TupleGen::closeOutputFiles(){
@@ -174,7 +184,7 @@ void TupleGen::genOrderline(int& oId, int& dId, int& wId, int& olNumber, string&
 	DataSource::addAlphanumeric64(24,orderlineStream,0);											//OL_DIST_INFO
 	orderlineStream << endl;
 }
-		
+
 void TupleGen::genItem(int& iId){
 	itemStream << iId << Config::getCsvDelim();														//I_ID
 	DataSource::addInt(1,10000,itemStream,1);														//I_IM_ID
@@ -186,7 +196,7 @@ void TupleGen::genItem(int& iId){
 		DataSource::addAlphanumeric64(26,50,itemStream,0);
 	itemStream << endl;
 }
-		
+
 void TupleGen::genStock(int& iId, int& wId){
 	stockStream << iId << Config::getCsvDelim();													//S_I_ID
 	stockStream << wId << Config::getCsvDelim();													//S_W_ID
