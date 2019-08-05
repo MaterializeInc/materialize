@@ -454,6 +454,71 @@ impl<'a> Outcome<'a> {
     }
 }
 
+impl fmt::Display for Outcome<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use Outcome::*;
+        match self {
+            Unsupported { error } => write!(f, "Unsupported: {0} ({0:?})", error),
+            ParseFailure { error } => write!(f, "ParseFailure: {:?}", error),
+            PlanFailure { error } => write!(f, "PlanFailure: {0} ({0:?})", error),
+            UnexpectedPlanSuccess { expected_error } => write!(
+                f,
+                "UnexpectedPlanSuccess! expected error: {}",
+                expected_error
+            ),
+            WrongNumberOfRowsInserted {
+                expected_count,
+                actual_count,
+            } => write!(
+                f,
+                "WrongNumberOfRowsInserted!\n    expected: {}\n    actually: {}",
+                expected_count, actual_count
+            ),
+            InferenceFailure {
+                expected_types,
+                inferred_types,
+            } => write!(
+                f,
+                "Inference Failure!\n    expected types: {}\n    inferred types: {}",
+                expected_types
+                    .iter()
+                    .map(|s| format!("{:?}", s))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                inferred_types
+                    .iter()
+                    .map(|s| format!("{:?}", s))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            WrongColumnNames {
+                expected_column_names,
+                inferred_column_names,
+            } => write!(
+                f,
+                "Wrong Column Names:\n    expected column names: {}\n    inferred column names: {}",
+                expected_column_names.join(" "),
+                inferred_column_names
+                    .iter()
+                    .map(|s| format!("{:?}", s))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            OutputFailure {
+                expected_output,
+                actual_raw_output,
+                actual_output,
+            } => write!(
+                f,
+                "OutputFailure!\n    expected: {:?}\n    actually: {:?}\n    actual raw: {:?}",
+                expected_output, actual_output, actual_raw_output
+            ),
+            Bail { cause } => write!(f, "Bail! caused by: {}", cause),
+            Success => f.write_str("Success"),
+        }
+    }
+}
+
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct Outcomes([usize; NUM_OUTCOMES]);
 
@@ -1168,7 +1233,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
                             _ => (),
                         }
                     }
-                    println!("{:?}", outcome);
+                    println!("{}", outcome);
                     println!("In {}", source);
                 }
             }
