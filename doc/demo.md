@@ -7,13 +7,18 @@ Registry on their default ports. You can find setup instructions in the
 
 ## Basic demo
 
-```bash
-zookeeper-shell localhost:2181 <<< 'rmr /materialized'
-kafka-topics --zookeeper localhost:2181 --delete --topic quotes
-curl -X DELETE http://localhost:8081/subjects/quotes-value
-confluent status
-schema=
-kafka-avro-console-producer --topic quotes --broker-list localhost:9092 --property value.schema='{
+Initialize using the demo-utils script
+
+```bash session
+$ source doc/demo-utils.sh
+$ mtrz-startup
+confluent is running
+```
+
+Then:
+
+```bash session
+$ mtrz-produce quotes '{
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -46,7 +51,7 @@ kafka-avro-console-producer --topic quotes --broker-list localhost:9092 --proper
 Then, in another shell:
 
 ```bash
-psql -h localhost -p 6875 sslmode=disable
+$ psql -h localhost -p 6875 sslmode=disable
 > CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA REGISTRY 'http://localhost:8081';
 > PEEK quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
@@ -55,8 +60,8 @@ psql -h localhost -p 6875 sslmode=disable
 
 ## Aggregate demo
 
-```bash
-kafka-avro-console-producer --topic aggdata --broker-list localhost:9092 --property value.schema='{
+```bash session
+$ mtrz-produce aggdata '{
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -80,13 +85,15 @@ kafka-avro-console-producer --topic aggdata --broker-list localhost:9092 --prope
         }
     ]
 }'
-# {"before": null, "after": {"row": {"a": 1, "b": 1}}}
-# {"before": null, "after": {"row": {"a": 2, "b": 1}}}
-# {"before": null, "after": {"row": {"a": 3, "b": 1}}}
-# {"before": null, "after": {"row": {"a": 1, "b": 2}}}
-# {"before": null, "after": null}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}}
+{"before": null, "after": null}
+```
 
-psql -h localhost -p 6875 sslmode=disable
+```bash session
+$ psql -h localhost -p 6875 sslmode=disable
 > CREATE SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
 > PEEK aggtest;
@@ -94,8 +101,9 @@ psql -h localhost -p 6875 sslmode=disable
 
 ## Join demo
 
-```bash
-src1_schema='{
+```bash session
+# we need to use this schema twice
+$ mtrz-produce src1 '{
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -119,13 +127,14 @@ src1_schema='{
         }
     ]
 }'
-kafka-avro-console-producer --topic src1 --broker-list localhost:9092 --property value.schema="$src1_schema"
 # {"before": null, "after": {"row": {"a": 1, "b": 1}}}
 # {"before": null, "after": {"row": {"a": 2, "b": 1}}}
 # {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 # {"before": null, "after": {"row": {"a": 1, "b": 3}}}
+# {"before": null, "after": null}
 
-kafka-avro-console-producer --topic src2 --broker-list localhost:9092 --property value.schema='{
+# in another terminal
+$ mtrz-produce src2 '{
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -154,11 +163,10 @@ kafka-avro-console-producer --topic src2 --broker-list localhost:9092 --property
 # {"before": null, "after": {"row": {"c": 1, "d": 3}}}
 # {"before": null, "after": {"row": {"c": 3, "d": 1}}}
 # {"before": null, "after": null}
+```
 
-kafka-avro-console-producer --topic src1 --broker-list localhost:9092 --property value.schema="$src1_schema"
-# {"before": null, "after": null}
-
-psql -h localhost -p 6875 sslmode=disable
+```bash session
+$ psql -h localhost -p 6875 sslmode=disable
 > CREATE SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW jointest AS SELECT a, b, d FROM src1 JOIN src2 ON c = b;
