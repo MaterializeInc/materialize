@@ -2,7 +2,7 @@
 # It is not intended for manual editing.
 [[package]]
 name = "abomonation"
-version = "0.7.2"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -623,7 +623,7 @@ name = "differential-dataflow"
 version = "0.10.0"
 source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#ada2c48aff200c158928b83e71601a324c837f30"
 dependencies = [
- "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.98 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2406,9 +2406,9 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
 dependencies = [
- "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.98 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.98 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2420,14 +2420,14 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
 
 [[package]]
 name = "timely_communication"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
 dependencies = [
- "abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2440,7 +2440,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#a1a3702a5229fcfaf5bc8440a0808791ab43df35"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
 
 [[package]]
 name = "timely_sort"
@@ -2896,7 +2896,7 @@ dependencies = [
 ]
 
 [metadata]
-"checksum abomonation 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)" = "73bb6320a687a588889f569ab26b96f1ddd0ea8f43331615e29dc504b25f6127"
+"checksum abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)" = "56e72913c99b1f927aa7bd59a41518fdd9995f63ffc8760f211609e0241c4fb2"
 "checksum abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e0bb1889db0b87cd8ef839c56b5283e28c8db68cac904b400a6170c9af1e673c"
 "checksum abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "0847ef820f2699bfaa7ceef120588946823806112974fb7a46eca946180049f7"
 "checksum adler32 1.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "7e522997b529f05601e05166c07ed17789691f562762c7f3b987263d2dedee5c"
