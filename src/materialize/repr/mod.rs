@@ -20,6 +20,8 @@
 //! [`Datum`]: repr::Datum
 //! [`Datum::Tuple`]: repr::Datum::Tuple
 
+use std::fmt;
+
 pub mod decimal;
 
 mod regex;
@@ -297,6 +299,27 @@ impl ScalarType {
     }
 }
 
+impl fmt::Display for ScalarType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ScalarType::*;
+        match self {
+            Null => f.write_str("null"),
+            Bool => f.write_str("bool"),
+            Int32 => f.write_str("int32"),
+            Int64 => f.write_str("int64"),
+            Float32 => f.write_str("float32"),
+            Float64 => f.write_str("float64"),
+            Decimal(scale, precision) => write!(f, "decimal({}, {})", scale, precision),
+            Date => f.write_str("date"),
+            Time => f.write_str("time"),
+            Timestamp => f.write_str("timestamp"),
+            Bytes => f.write_str("bytes"),
+            String => f.write_str("string"),
+            Regex => f.write_str("regex"),
+        }
+    }
+}
+
 /// The type of a [`Datum`].
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
@@ -313,6 +336,9 @@ pub struct ColumnType {
     pub scalar_type: ScalarType,
 }
 
+/// The type for a relation
+///
+/// aka a View, this is a vec of [`ColumnType`]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationType {
     pub column_types: Vec<ColumnType>,
