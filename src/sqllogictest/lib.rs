@@ -51,6 +51,17 @@ pub enum Sort {
     Value,
 }
 
+impl Sort {
+    /// Is true if any kind of sorting should happen
+    fn yes(&self) -> bool {
+        use Sort::*;
+        match self {
+            No => false,
+            Row | Value => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output<'a> {
     Values(Vec<&'a str>),
@@ -545,9 +556,10 @@ fn format_row(
     col_types: &[ColumnType],
     slt_types: &[Type],
     mode: Mode,
+    sort: &Sort,
 ) -> Vec<String> {
-    izip!(slt_types, col_types, row)
-        .map(|(slt_typ, col_typ, datum)| match (slt_typ, datum) {
+    let row =
+        izip!(slt_types, col_types, row).map(|(slt_typ, col_typ, datum)| match (slt_typ, datum) {
             // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
             (_, Datum::Null) => "NULL".to_owned(),
             (Type::Integer, Datum::Int64(i)) => format!("{}", i),
@@ -582,8 +594,17 @@ fn format_row(
             (Type::Text, Datum::Int64(i)) => format!("{}", i),
             (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
             other => panic!("Don't know how to format {:?}", other),
+        });
+    if mode == Mode::Cockroach && sort.yes() {
+        row.flat_map(|s| {
+            s.split_whitespace()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
         })
         .collect()
+    } else {
+        row.collect()
+    }
 }
 
 impl FullState {
@@ -860,33 +881,38 @@ impl RecordRunner for FullState {
                     }
                 }
 
-                let (typ, dataflow_command) = match self.planner.handle_command(sql.to_string()) {
-                    Ok((SqlResponse::Peeking { typ }, dataflow_command)) => (typ, dataflow_command),
-                    Ok(other) => {
-                        return Ok(Outcome::PlanFailure {
-                            error: failure::format_err!(
-                                "Query did not result in Peeking, instead got {:?}",
-                                other
-                            ),
-                        });
-                    }
-                    Err(error) => {
-                        // TODO(jamii) check error messages, once ours stabilize
-                        if output.is_err() {
-                            return Ok(Outcome::Success);
-                        } else {
-                            let error_string = format!("{}", error);
-                            if error_string.contains("supported")
-                                || error_string.contains("overload")
-                            {
-                                // this is a failure, but it's caused by lack of support rather than by bugs
-                                return Ok(Outcome::Unsupported { error });
+                let (typ, dataflow_command, immediate_rows) =
+                    match self.planner.handle_command(sql.to_string()) {
+                        Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
+                            (typ, dataflow_command, None)
+                        }
+                        // impossible for there to be a dataflow command
+                        Ok((SqlResponse::SendRows { typ, rows }, None)) => (typ, None, Some(rows)),
+                        Ok(other) => {
+                            return Ok(Outcome::PlanFailure {
+                                error: failure::format_err!(
+                                    "Query did not result in Peeking, instead got {:?}",
+                                    other
+                                ),
+                            });
+                        }
+                        Err(error) => {
+                            // TODO(jamii) check error messages, once ours stabilize
+                            if output.is_err() {
+                                return Ok(Outcome::Success);
                             } else {
-                                return Ok(Outcome::PlanFailure { error });
+                                let error_string = format!("{}", error);
+                                if error_string.contains("supported")
+                                    || error_string.contains("overload")
+                                {
+                                    // this is a failure, but it's caused by lack of support rather than by bugs
+                                    return Ok(Outcome::Unsupported { error });
+                                } else {
+                                    return Ok(Outcome::PlanFailure { error });
+                                }
                             }
                         }
-                    }
-                };
+                    };
 
                 match output {
                     Err(expected_error) => Ok(Outcome::UnexpectedPlanSuccess { expected_error }),
@@ -931,40 +957,60 @@ impl RecordRunner for FullState {
                         }
 
                         // make sure we peek at the correct time
-                        let dataflow_command = match dataflow_command {
-                            Some(DataflowCommand::Peek { source, .. }) => {
-                                Some(DataflowCommand::Peek {
-                                    source,
-                                    when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
-                                })
-                            }
-                            other => other,
-                        };
-                        let receiver = self.send_dataflow_command(dataflow_command.unwrap());
-                        let results = self.receive_peek_results(receiver);
-
-                        let mut rows = results
-                            .iter()
-                            .map(|row| {
-                                let mut row =
-                                    format_row(row, &typ.column_types, &**expected_types, *mode);
-                                if *mode == Mode::Cockroach && *sort != Sort::No {
-                                    row = row
-                                        .into_iter()
-                                        .flat_map(|s| {
-                                            s.split_whitespace()
-                                                .map(ToOwned::to_owned)
-                                                .collect::<Vec<_>>()
+                        let (mut formatted_rows, raw_output) = match immediate_rows {
+                            Some(rows) => (
+                                rows.iter()
+                                    .map(|row| {
+                                        format_row(
+                                            row,
+                                            &typ.column_types,
+                                            &**expected_types,
+                                            *mode,
+                                            sort,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>(),
+                                rows,
+                            ),
+                            None => {
+                                let dataflow_command = match dataflow_command {
+                                    Some(DataflowCommand::Peek { source, .. }) => {
+                                        Some(DataflowCommand::Peek {
+                                            source,
+                                            when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
                                         })
-                                        .collect();
-                                }
-                                row
-                            })
-                            .collect::<Vec<_>>();
+                                    }
+                                    other => other,
+                                };
+                                let receiver =
+                                    self.send_dataflow_command(dataflow_command.unwrap());
+                                let results = self.receive_peek_results(receiver);
+
+                                (
+                                    results
+                                        .iter()
+                                        .map(|row| {
+                                            format_row(
+                                                row,
+                                                &typ.column_types,
+                                                &**expected_types,
+                                                *mode,
+                                                sort,
+                                            )
+                                        })
+                                        .collect::<Vec<_>>(),
+                                    results,
+                                )
+                            }
+                        };
+
                         if let Sort::Row = sort {
-                            rows.sort();
+                            formatted_rows.sort();
                         }
-                        let mut values = rows.into_iter().flat_map(|row| row).collect::<Vec<_>>();
+                        let mut values = formatted_rows
+                            .into_iter()
+                            .flat_map(|row| row)
+                            .collect::<Vec<_>>();
                         if let Sort::Value = sort {
                             values.sort();
                         }
@@ -974,7 +1020,7 @@ impl RecordRunner for FullState {
                                 if values != *expected_values {
                                     return Ok(Outcome::OutputFailure {
                                         expected_output,
-                                        actual_raw_output: results,
+                                        actual_raw_output: raw_output,
                                         actual_output: OwnedOutput::Values(values),
                                     });
                                 }
@@ -992,7 +1038,7 @@ impl RecordRunner for FullState {
                                 if values.len() != *num_values || md5 != *expected_md5 {
                                     return Ok(Outcome::OutputFailure {
                                         expected_output,
-                                        actual_raw_output: results,
+                                        actual_raw_output: raw_output,
                                         actual_output: OwnedOutput::Hashed {
                                             num_values: values.len(),
                                             md5,
