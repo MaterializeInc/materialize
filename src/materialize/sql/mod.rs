@@ -96,7 +96,8 @@ impl Planner {
             Statement::Tail { .. } => bail!("TAIL is not implemented yet"),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
-            | Statement::CreateView { .. } => self.handle_create_dataflow(stmt),
+            | Statement::CreateView { .. }
+            | Statement::CreateSources { .. } => self.handle_create_dataflow(stmt),
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
             Statement::Query(query) => self.handle_select(*query),
             Statement::Show { object_type: ot } => self.handle_show_objects(ot),
@@ -161,6 +162,7 @@ impl Planner {
             Statement::CreateSource { .. } => SqlResponse::CreatedSource,
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
             Statement::CreateView { .. } => SqlResponse::CreatedView,
+            Statement::CreateSources { .. } => SqlResponse::CreatedSink, // FIXME
             _ => unreachable!(),
         };
         for dataflow in &dataflows {
@@ -374,8 +376,8 @@ impl Planner {
                     }
                 });
                 let (addr, topic) = parse_kafka_url(url)?;
-                if let Some(_) = topic {
-                    bail!("CREATE SOURCES statement should not take a topic path");
+                if let Some(s) = topic {
+                    bail!("CREATE SOURCES statement should not take a topic path: {}", s);
                 }
                 let results: Result<Vec<_>, failure::Error> = topic_names.map(|name| {
                     Ok(Dataflow::Source(build_source(
@@ -1797,6 +1799,8 @@ fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::E
                 None
             } else if segments.len() != 1 {
                 bail!("source URL should have at most one path segment: {}", url);
+            } else if segments[0].len() == 0 {
+                None
             } else {
                 Some(segments[0].to_owned())
             }
