@@ -16,11 +16,12 @@ limitations under the License.
 
 #include "DialectStrategy.h"
 #include "HanaDialect.h"
+#include "MySqlDialect.h"
 
-Dialect* DialectStrategy::instance = 0;
+Dialect* DialectStrategy::instance = nullptr;
 
 Dialect* DialectStrategy::getInstance(){
-if(instance == 0)
-	instance = new HanaDialect();
+	if (instance == 0)
+		instance = new MySqlDialect();
 	return instance;
 }
