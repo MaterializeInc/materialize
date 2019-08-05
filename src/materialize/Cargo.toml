@@ -19,7 +19,7 @@ harness = false
 
 [dependencies]
 avro-rs = "0.6.5"
-backtrace = "0.3.33"
+backtrace = "0.3.34"
 bincode = "1.1.4"
 bytes = "0.4"
 byteorder = "1.3"
