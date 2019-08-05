@@ -13,3 +13,14 @@ steps:
       - docker-compose#v3.0.3:
           config: ci/slt/docker-compose.yml
           run: sqllogictest
+  - wait
+  - command: ci/slt/upload.sh
+    timeout_in_minutes: 10
+    plugins:
+      - docker#v3.1.0:
+          image: materialize/ci-builder:stable-20190804-154651
+          propagate-uid-gid: true
+          mount-ssh-agent: true
+          environment:
+          - BUILDKITE_BRANCH
+          - BUILDKITE_COMMIT

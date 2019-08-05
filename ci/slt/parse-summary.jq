@@ -6,6 +6,6 @@
 # parse-summary.jq — helper to parse SLT summary for upload to civiz.
 
 {
-    "keys": keys | join(", "),
+    "keys": keys_unsorted | join(", "),
     "values": values | join(", ")
 } | "INSERT INTO slt (commit, \(.keys)) VALUES ('\($commit)', \(.values))"
