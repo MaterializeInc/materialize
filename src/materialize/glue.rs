@@ -63,7 +63,7 @@ pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Erro
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {
-    CreateDataflow(Dataflow),
+    CreateDataflows(Vec<Dataflow>),
     DropDataflows(Vec<String>),
     Peek {
         source: RelationExpr,

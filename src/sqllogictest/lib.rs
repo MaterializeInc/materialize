@@ -817,7 +817,7 @@ impl RecordRunner for FullState {
                                 });
                                 self.planner.dataflows.insert(dataflow.clone())?;
                                 let _receiver = self.send_dataflow_command(
-                                    DataflowCommand::CreateDataflow(dataflow),
+                                    DataflowCommand::CreateDataflows(vec![dataflow]),
                                 );
                                 {
                                     self.local_input_mux

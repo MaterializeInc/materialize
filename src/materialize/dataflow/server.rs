@@ -66,7 +66,7 @@ pub enum DataflowResultsHandler {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum SequencedCommand {
-    CreateDataflow(Dataflow),
+    CreateDataflows(Vec<Dataflow>),
     DropDataflows(Vec<String>),
     Peek {
         name: String,
@@ -297,7 +297,7 @@ where
 
     fn sequence_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
         let sequenced_cmd = match cmd {
-            DataflowCommand::CreateDataflow(dataflow) => SequencedCommand::CreateDataflow(dataflow),
+            DataflowCommand::CreateDataflows(dataflows) => SequencedCommand::CreateDataflows(dataflows),
             DataflowCommand::DropDataflows(dataflows) => SequencedCommand::DropDataflows(dataflows),
             DataflowCommand::Tail(name) => SequencedCommand::Tail(name),
             DataflowCommand::Peek { source, when } => {
@@ -354,11 +354,11 @@ where
                     let name = format!("<temp_{}>", Uuid::new_v4());
                     let typ = source.typ();
                     self.sequencer.push((
-                        SequencedCommand::CreateDataflow(Dataflow::View(View {
+                        SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
                             name: name.clone(),
                             relation_expr: source,
                             typ,
-                        })),
+                        })]),
                         CommandMeta::nil(),
                     ));
                     (name, true)
@@ -377,15 +377,17 @@ where
 
     fn handle_command(&mut self, cmd: SequencedCommand, cmd_meta: CommandMeta) {
         match cmd {
-            SequencedCommand::CreateDataflow(dataflow) => {
-                render::build_dataflow(
-                    &dataflow,
-                    &mut self.traces,
-                    self.inner,
-                    &mut self.inputs,
-                    &mut self.local_input_mux,
-                );
-                self.dataflows.insert(dataflow.name().to_owned(), dataflow);
+            SequencedCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows {
+                    render::build_dataflow(
+                        &dataflow,
+                        &mut self.traces,
+                        self.inner,
+                        &mut self.inputs,
+                        &mut self.local_input_mux,
+                    );
+                    self.dataflows.insert(dataflow.name().to_owned(), dataflow);
+                }
             }
 
             SequencedCommand::DropDataflows(dataflows) => {
