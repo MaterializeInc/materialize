@@ -7,7 +7,6 @@ version: '3'
 services:
   sqllogictest:
     image: materialize/ci-sqllogictest:$SQLLOGICTEST_IMAGE_ID
-    command: ci/slt/slt.sh
     volumes:
     - ../../:/workdir
     user: $BUILDKITE_AGENT_UID:$BUILDKITE_AGENT_GID
