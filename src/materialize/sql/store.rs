@@ -30,7 +30,8 @@ impl DataflowStore {
     }
 
     pub fn get(&self, name: &str) -> Result<&Dataflow, failure::Error> {
-        self.try_get(name).ok_or_else(|| failure::err_msg(format!("dataflow {} does not exist", name)))
+        self.try_get(name)
+            .ok_or_else(|| failure::err_msg(format!("dataflow {} does not exist", name)))
     }
 
     pub fn get_type(&self, name: &str) -> Result<&RelationType, failure::Error> {
