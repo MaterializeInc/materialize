@@ -163,10 +163,17 @@ impl Planner {
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
             Statement::CreateView { .. } => SqlResponse::CreatedView,
             Statement::CreateSources { .. } => SqlResponse::SendRows {
-                typ: RelationType { column_types: vec![ColumnType { name: Some("Topic".to_owned()), nullable: false, scalar_type: ScalarType::String } ] },
-                rows: dataflows.iter().map(|df| {
-                    vec![Datum::from(df.name().to_owned())]
-                }).collect(),
+                typ: RelationType {
+                    column_types: vec![ColumnType {
+                        name: Some("Topic".to_owned()),
+                        nullable: false,
+                        scalar_type: ScalarType::String,
+                    }],
+                },
+                rows: dataflows
+                    .iter()
+                    .map(|df| vec![Datum::from(df.name().to_owned())])
+                    .collect(),
             },
             _ => unreachable!(),
         };
@@ -286,7 +293,12 @@ impl ScalarType {
     }
 }
 
-fn build_source(schema: &SourceSchema, kafka_addr: SocketAddr, name: String, topic: String) -> Result<Source, failure::Error> {
+fn build_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    name: String,
+    topic: String,
+) -> Result<Source, failure::Error> {
     let (raw_schema, schema_registry_url) = match schema {
         SourceSchema::Raw(schema) => (schema.to_owned(), None),
         SourceSchema::Registry(url) => {
@@ -356,8 +368,10 @@ impl Planner {
                 }
                 let name = extract_sql_object_name(name)?;
                 let (addr, topic) = parse_kafka_topic_url(url)?;
-                
-                Ok(vec![Dataflow::Source(build_source(schema, addr, topic, name)?)])
+
+                Ok(vec![Dataflow::Source(build_source(
+                    schema, addr, topic, name,
+                )?)])
             }
             Statement::CreateSources {
                 url,
@@ -382,19 +396,23 @@ impl Planner {
                 });
                 let (addr, topic) = parse_kafka_url(url)?;
                 if let Some(s) = topic {
-                    bail!("CREATE SOURCES statement should not take a topic path: {}", s);
+                    bail!(
+                        "CREATE SOURCES statement should not take a topic path: {}",
+                        s
+                    );
                 }
-                let results: Result<Vec<_>, failure::Error> = topic_names.map(|name| {
-                    Ok(Dataflow::Source(build_source(
-                        &SourceSchema::Registry(schema_registry.to_owned()),
-                        addr,
-                        name.to_owned(),
-                        name.to_owned(),
-                    )?))
-                }).collect();
-                
+                let results: Result<Vec<_>, failure::Error> = topic_names
+                    .map(|name| {
+                        Ok(Dataflow::Source(build_source(
+                            &SourceSchema::Registry(schema_registry.to_owned()),
+                            addr,
+                            name.to_owned(),
+                            name.to_owned(),
+                        )?))
+                    })
+                    .collect();
+
                 Ok(results?)
-                
             }
             Statement::CreateSink {
                 name,

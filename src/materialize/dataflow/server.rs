@@ -297,7 +297,9 @@ where
 
     fn sequence_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
         let sequenced_cmd = match cmd {
-            DataflowCommand::CreateDataflows(dataflows) => SequencedCommand::CreateDataflows(dataflows),
+            DataflowCommand::CreateDataflows(dataflows) => {
+                SequencedCommand::CreateDataflows(dataflows)
+            }
             DataflowCommand::DropDataflows(dataflows) => SequencedCommand::DropDataflows(dataflows),
             DataflowCommand::Tail(name) => SequencedCommand::Tail(name),
             DataflowCommand::Peek { source, when } => {
