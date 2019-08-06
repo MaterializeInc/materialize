@@ -297,8 +297,17 @@ where
 
     fn sequence_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
         let sequenced_cmd = match cmd {
-            DataflowCommand::CreateDataflow(dataflow) => SequencedCommand::CreateDataflow(dataflow),
-            DataflowCommand::DropDataflows(dataflows) => SequencedCommand::DropDataflows(dataflows),
+            DataflowCommand::CreateDataflow(dataflow) => {
+                self.dataflows
+                    .insert(dataflow.name().to_owned(), dataflow.clone());
+                SequencedCommand::CreateDataflow(dataflow)
+            }
+            DataflowCommand::DropDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    self.dataflows.remove(dataflow);
+                }
+                SequencedCommand::DropDataflows(dataflows)
+            }
             DataflowCommand::Tail(name) => SequencedCommand::Tail(name),
             DataflowCommand::Peek { source, when } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
@@ -311,22 +320,42 @@ where
                 // We minimize over all participating views, to ensure that the query will not
                 // need to block on the arrival of further input data.
                 let timestamp = match when {
+                    // Explicitly requested timestamps should be respected.
                     PeekWhen::AtTimestamp(timestamp) => timestamp,
-                    PeekWhen::Immediately => {
+
+                    // We should produce the minimum accepted time among inputs sources that
+                    // `source` depends on transitively, ignoring the accepted times of
+                    // intermediate views.
+                    PeekWhen::EarliestSource | PeekWhen::Immediately => {
                         let mut bound = Antichain::new(); // lower bound on available data.
                         let mut upper = Antichain::new(); // temporary storage for batches.
+
+                        // TODO : RelationExpr has a `uses_inner` method, but it wasn't
+                        // clear what it does (it suppresses let bound names, for example).
+                        // Dataflow not yet installed, so we should visit the RelationExpr
+                        // manually and then call `self.sources_frontier`
                         source.visit(&mut |e| {
                             if let RelationExpr::Get { name, typ: _ } = e {
-                                if let Some(mut trace) = self.traces.get_by_self(&name).cloned() {
-                                    trace.read_upper(&mut upper);
-                                    bound.extend(upper.elements().iter().cloned());
-                                } else {
-                                    // A missing relation *should* mean one that has been
-                                    // sequenced for insertion but not yet handled. That
-                                    // relation can be treated as having frontier zero,
-                                    // in the absence of any other information about it.
-                                    bound.insert(0);
-                                }
+                                match when {
+                                    PeekWhen::EarliestSource => {
+                                        self.sources_frontier(name, &mut bound, &mut upper);
+                                    }
+                                    PeekWhen::Immediately => {
+                                        if let Some(mut trace) =
+                                            self.traces.get_by_self(&name).cloned()
+                                        {
+                                            trace.read_upper(&mut upper);
+                                            bound.extend(upper.elements().iter().cloned());
+                                        } else {
+                                            // A missing relation *should* mean one that has been
+                                            // sequenced for insertion but not yet handled. That
+                                            // relation can be treated as having frontier zero,
+                                            // in the absence of any other information about it.
+                                            bound.insert(0);
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                };
                             }
                         });
 
@@ -375,6 +404,38 @@ where
         self.sequencer.push((sequenced_cmd, cmd_meta));
     }
 
+    /// Introduces all frontier elements from sources (not views) into `bound`.
+    ///
+    /// This method transitively traverses view definitions until it finds sources, and incorporates
+    /// the accepted frontiers of each source into `bound`.
+    fn sources_frontier(
+        &self,
+        name: &str,
+        bound: &mut Antichain<Timestamp>,
+        upper: &mut Antichain<Timestamp>,
+    ) {
+        match &self.dataflows[name] {
+            Dataflow::Source(_) => {
+                if let Some(mut trace) = self.traces.get_by_self(&name).cloned() {
+                    trace.read_upper(upper);
+                    bound.extend(upper.elements().iter().cloned());
+                } else {
+                    // A missing relation *should* mean one that has been
+                    // sequenced for insertion but not yet handled. That
+                    // relation can be treated as having frontier zero,
+                    // in the absence of any other information about it.
+                    bound.insert(0);
+                }
+            }
+            Dataflow::Sink(_) => unreachable!(),
+            v @ Dataflow::View(_) => {
+                for name in v.uses() {
+                    self.sources_frontier(name, bound, upper);
+                }
+            }
+        }
+    }
+
     fn handle_command(&mut self, cmd: SequencedCommand, cmd_meta: CommandMeta) {
         match cmd {
             SequencedCommand::CreateDataflow(dataflow) => {
@@ -385,13 +446,11 @@ where
                     &mut self.inputs,
                     &mut self.local_input_mux,
                 );
-                self.dataflows.insert(dataflow.name().to_owned(), dataflow);
             }
 
             SequencedCommand::DropDataflows(dataflows) => {
                 for name in &dataflows {
                     self.inputs.remove(name);
-                    self.dataflows.remove(name);
                     self.traces.del_trace(name);
                 }
             }

@@ -92,7 +92,7 @@ impl Planner {
 
     fn handle_statement(&mut self, stmt: Statement) -> PlannerResult {
         match stmt {
-            Statement::Peek { name } => self.handle_peek(name),
+            Statement::Peek { name, immediate } => self.handle_peek(name, immediate),
             Statement::Tail { .. } => bail!("TAIL is not implemented yet"),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
@@ -210,7 +210,7 @@ impl Planner {
         Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
     }
 
-    fn handle_peek(&mut self, name: ObjectName) -> PlannerResult {
+    fn handle_peek(&mut self, name: ObjectName, immediate: bool) -> PlannerResult {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
         Ok((
@@ -222,7 +222,11 @@ impl Planner {
                     name: dataflow.name().to_owned(),
                     typ: dataflow.typ().clone(),
                 },
-                when: PeekWhen::Immediately,
+                when: if immediate {
+                    PeekWhen::Immediately
+                } else {
+                    PeekWhen::EarliestSource
+                },
             }),
         ))
     }
