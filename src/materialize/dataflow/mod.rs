@@ -6,6 +6,7 @@
 //! Driver for timely/differential dataflow.
 
 mod arrangement;
+mod logging;
 mod optimize;
 mod render;
 mod sink;

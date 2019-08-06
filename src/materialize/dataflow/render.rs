@@ -5,7 +5,6 @@
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::{AsCollection, Collection};
 use std::cell::Cell;
@@ -65,7 +64,16 @@ pub fn build_dataflow<A: Allocate>(
                     stream
                 }
             };
-            let arrangement = relation_expr.as_collection().arrange_by_self();
+
+            use crate::dataflow::arrangement::manager::KeysOnlySpine;
+            use differential_dataflow::operators::arrange::arrangement::Arrange;
+
+            let arrangement = relation_expr
+                .as_collection()
+                // .arrange_by_self();
+                .map(|x| (x, ()))
+                .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
+
             let on_delete = Box::new(|| ());
             manager.set_by_self(src.name.to_owned(), arrangement.trace, on_delete);
         }
@@ -73,6 +81,7 @@ pub fn build_dataflow<A: Allocate>(
             let done = Rc::new(Cell::new(false));
             let (arrangement, _) = manager
                 .get_by_self(&sink.from.0)
+                .cloned()
                 .unwrap_or_else(|| panic!(format!("unable to find dataflow {:?}", sink.from)))
                 .import_core(scope, &format!("Import({:?})", sink.from));
             match &sink.connector {
@@ -92,7 +101,7 @@ pub fn build_dataflow<A: Allocate>(
                 view.relation_expr.visit(&mut |e| {
                     if let RelationExpr::Get { name, typ: _ } = e {
                         // Import the believed-to-exist base arrangement.
-                        if let Some(mut trace) = manager.get_by_self(&name) {
+                        if let Some(mut trace) = manager.get_by_self(&name).cloned() {
                             let (arranged, button) = trace.import_core(scope, name);
                             let arranged = arranged.enter(region);
                             context
@@ -132,13 +141,18 @@ pub fn build_dataflow<A: Allocate>(
                     transform.transform(&mut view.relation_expr, &view.typ);
                 }
 
+                use crate::dataflow::arrangement::manager::KeysOnlySpine;
+                use differential_dataflow::operators::arrange::arrangement::Arrange;
+
                 let arrangement = build_relation_expr(
                     view.relation_expr.clone(),
                     region,
                     &mut context,
                     worker_index,
                 )
-                .arrange_by_self();
+                // .arrange_by_self();
+                .map(|x| (x, ()))
+                .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", view.name));
                 manager.set_by_self(
                     view.name,
                     arrangement.trace,

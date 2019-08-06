@@ -27,11 +27,13 @@ use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 
+/// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
     local_input_mux: LocalInputMux,
     dataflow_results_handler: DataflowResultsHandler,
     timely_configuration: timely::Configuration,
+    log_granularity_ns: Option<u128>, // None disables logging, Some(ns) refreshes logging each ns nanoseconds.
 ) -> Result<WorkerGuards<()>, String> {
     let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
 
@@ -47,6 +49,7 @@ pub fn serve(
             local_input_mux.clone(),
             dataflow_results_handler.clone(),
         )
+        .logging(log_granularity_ns)
         .run()
     })
 }
@@ -100,6 +103,8 @@ where
     inputs: HashMap<String, InputCapability>,
     dataflows: HashMap<String, Dataflow>,
     sequencer: Sequencer<(SequencedCommand, CommandMeta)>,
+    system_probe: timely::dataflow::ProbeHandle<Timestamp>,
+    logging_granularity_ns: Option<u128>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -124,11 +129,142 @@ where
             inputs: HashMap::new(),
             dataflows: HashMap::new(),
             sequencer,
+            system_probe: timely::dataflow::ProbeHandle::new(),
+            logging_granularity_ns: None,
         }
+    }
+
+    /// Enables or
+    pub fn logging(mut self, granularity_ns: Option<u128>) -> Self {
+        self.logging_granularity_ns = granularity_ns;
+        self
+    }
+
+    /// Initializes timely dataflow logging and publishes as a view.
+    fn initialize_logging(&mut self, granularity_ns: u128) {
+        use crate::dataflow::logging;
+
+        // Construct logging dataflows and endpoints before registering any.
+        let (mut t_logger, t_traces) =
+            logging::timely::construct(&mut self.inner, &mut self.system_probe, granularity_ns);
+        let (mut d_logger, d_traces) = logging::differential::construct(
+            &mut self.inner,
+            &mut self.system_probe,
+            granularity_ns,
+        );
+        let (mut m_logger, m_traces) = logging::materialized::construct(
+            &mut self.inner,
+            &mut self.system_probe,
+            granularity_ns,
+        );
+
+        // Register each logger endpoint.
+        self.inner
+            .log_register()
+            .insert::<timely::logging::TimelyEvent, _>("timely", move |time, data| {
+                t_logger.publish_batch(time, data)
+            });
+
+        self.inner
+            .log_register()
+            .insert::<differential_dataflow::logging::DifferentialEvent, _>(
+                "differential/arrange",
+                move |time, data| d_logger.publish_batch(time, data),
+            );
+
+        self.inner
+            .log_register()
+            .insert::<logging::materialized::Peek, _>("materialized/peeks", move |time, data| {
+                m_logger.publish_batch(time, data)
+            });
+
+        // Install traces as maintained views.
+        let [operates, channels, shutdown, text, elapsed, histogram] = t_traces;
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_operates".to_owned(), operates, on_delete);
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_channels".to_owned(), channels, on_delete);
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_shutdown".to_owned(), shutdown, on_delete);
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_text".to_owned(), text, on_delete);
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_elapsed".to_owned(), elapsed, on_delete);
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_histogram".to_owned(), histogram, on_delete);
+
+        let [arrangement] = d_traces;
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_arrangement".to_owned(), arrangement, on_delete);
+
+        let [duration, active] = m_traces;
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_peek_duration".to_owned(), duration, on_delete);
+        let on_delete = Box::new(|| ());
+        self.traces
+            .set_by_self("logs_peek_active".to_owned(), active, on_delete);
+    }
+
+    /// Maintenance operations on logging traces.
+    ///
+    /// This method advances logging traces, ensuring that they can be compacted as new data arrive.
+    /// The traces are compacted using the least time accepted by any of the traces, which should
+    /// ensure that each can be joined with the others.
+    fn maintain_logging(&mut self) {
+        let logs = [
+            "logs_operates",
+            "logs_channels",
+            "logs_shutdown",
+            "logs_text",
+            "logs_elapsed",
+            "logs_histogram",
+            "logs_arrangement",
+            "logs_peek_duration",
+            "logs_peek_active",
+        ];
+
+        let mut lower = Antichain::new();
+        self.system_probe.with_frontier(|frontier| {
+            for element in frontier.iter() {
+                lower.insert(element.saturating_sub(1_000_000_000));
+            }
+        });
+
+        for log in logs.iter() {
+            if let Some(trace) = self.traces.get_by_self_mut(log) {
+                trace.advance_by(lower.elements());
+            }
+        }
+    }
+
+    /// Disables timely dataflow logging.
+    ///
+    /// This does not unpublish views and is only useful to terminate logging streams to ensure that
+    /// materialized can terminate cleanly.
+    fn shutdown_logging(&mut self) {
+        self.inner.log_register().remove("timely");
+        self.inner.log_register().remove("differential/arrange");
+        self.inner.log_register().remove("materialized/peeks");
     }
 
     /// Draws from `dataflow_command_receiver` until shutdown.
     fn run(&mut self) {
+        // Logging can be initialized with a "granularity" in nanoseconds, so that events are only
+        // produced at logical times that are multiples of this many nanoseconds, which can reduce
+        // the churn of the underlying computation.
+
+        if let Some(granularity_ns) = self.logging_granularity_ns {
+            self.initialize_logging(granularity_ns);
+        }
+
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -138,6 +274,7 @@ where
             // Can either yield tastefully, or busy-wait.
             // self.inner.step_or_park(None);
             self.inner.step();
+            self.maintain_logging();
 
             if self.dataflow_command_receiver.is_some() {
                 while let Ok(Some((cmd, cmd_meta))) =
@@ -258,7 +395,9 @@ where
                 timestamp,
                 drop_after_peek,
             } => {
-                let trace = self.traces.get_by_self(&name).unwrap();
+                let mut trace = self.traces.get_by_self(&name).unwrap().clone();
+                trace.advance_by(&[timestamp]);
+                trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
                     name,
                     connection_uuid: cmd_meta.connection_uuid,
@@ -274,6 +413,7 @@ where
                 // this should lead timely to wind down eventually
                 self.inputs.clear();
                 self.traces.del_all_traces();
+                self.shutdown_logging();
             }
         }
     }

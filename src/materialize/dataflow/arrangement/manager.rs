@@ -13,6 +13,9 @@ use std::collections::HashMap;
 use crate::dataflow::types::{Diff, Timestamp};
 use crate::repr::Datum;
 
+pub type KeysOnlySpine = OrdKeySpine<Vec<Datum>, Timestamp, Diff>;
+#[allow(dead_code)]
+pub type KeysValsSpine = OrdValSpine<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
 pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysOnlyHandle = TraceKeyHandle<Vec<Datum>, Timestamp, Diff>;
@@ -66,28 +69,22 @@ impl TraceManager {
     /// of differential dataflow, which requires users to perform this explicitly; if that changes we may
     /// be able to remove this code.
     pub fn maintenance(&mut self) {
-        use differential_dataflow::trace::TraceReader;
-        let mut upper = timely::progress::frontier::Antichain::new();
+        let mut antichain = timely::progress::frontier::Antichain::new();
         for collection_traces in self.traces.values_mut() {
-            if let Some((handle, _d)) = &mut collection_traces.by_self {
-                handle.read_upper(&mut upper);
-                handle.distinguish_since(upper.elements());
-            }
-            for (handle, _d) in collection_traces.by_keys.values_mut() {
-                handle.read_upper(&mut upper);
-                handle.distinguish_since(upper.elements());
-            }
+            collection_traces.merge_physical(&mut antichain);
         }
     }
 
     /// Returns a copy of the by_self arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_self(&self, name: &str) -> Option<KeysOnlyHandle> {
-        self.traces
-            .get(name)?
-            .by_self
-            .as_ref()
-            .map(|(t, _d)| t.clone())
+    pub fn get_by_self(&self, name: &str) -> Option<&KeysOnlyHandle> {
+        self.traces.get(name)?.by_self.as_ref().map(|(t, _d)| t)
+    }
+
+    /// Returns a copy of the by_self arrangement, should it exist.
+    #[allow(dead_code)]
+    pub fn get_by_self_mut(&mut self, name: &str) -> Option<&mut KeysOnlyHandle> {
+        self.traces.get_mut(name)?.by_self.as_mut().map(|(t, _d)| t)
     }
 
     /// Binds the by_self arrangement.
@@ -106,12 +103,18 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(&self, name: &str, keys: &[usize]) -> Option<KeysValsHandle> {
+    pub fn get_by_keys(&self, name: &str, keys: &[usize]) -> Option<&KeysValsHandle> {
+        self.traces.get(name)?.by_keys.get(keys).map(|(t, _d)| t)
+    }
+
+    /// Returns a copy of a by_key arrangement, should it exist.
+    #[allow(dead_code)]
+    pub fn get_by_keys_mut(&mut self, name: &str, keys: &[usize]) -> Option<&mut KeysValsHandle> {
         self.traces
-            .get(name)?
+            .get_mut(name)?
             .by_keys
-            .get(keys)
-            .map(|(t, _d)| t.clone())
+            .get_mut(keys)
+            .map(|(t, _d)| t)
     }
 
     #[allow(dead_code)]
@@ -161,6 +164,24 @@ struct CollectionTraces {
     by_self: Option<(KeysOnlyHandle, DeleteCallback)>,
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
     by_keys: HashMap<Vec<usize>, (KeysValsHandle, DeleteCallback)>,
+}
+
+impl CollectionTraces {
+    /// Advances the frontiers for physical mergeing to their current limits.
+    pub fn merge_physical(
+        &mut self,
+        antichain: &mut timely::progress::frontier::Antichain<Timestamp>,
+    ) {
+        use differential_dataflow::trace::TraceReader;
+        if let Some((handle, _d)) = &mut self.by_self {
+            handle.read_upper(antichain);
+            handle.distinguish_since(antichain.elements());
+        }
+        for (handle, _d) in self.by_keys.values_mut() {
+            handle.read_upper(antichain);
+            handle.distinguish_since(antichain.elements());
+        }
+    }
 }
 
 impl Default for CollectionTraces {
