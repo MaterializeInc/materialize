@@ -100,6 +100,7 @@ impl Planner {
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
             Statement::Query(query) => self.handle_select(*query),
             Statement::Show { object_type: ot } => self.handle_show_objects(ot),
+            Statement::ShowColumns { table_name } => self.handle_show_columns(&table_name),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
@@ -119,6 +120,36 @@ impl Planner {
                         .name(object_type_as_plural_str(object_type).to_owned())],
                 },
                 rows,
+            },
+            None,
+        ))
+    }
+
+    /// Create an immediate result that describes all the columns for the given table
+    pub fn handle_show_columns(&mut self, table_name: &ObjectName) -> PlannerResult {
+        use Datum::String as DString;
+
+        let column_descriptions: Vec<_> = self
+            .dataflows
+            .get_type(&table_name.to_string())?
+            .column_types
+            .iter()
+            .map(|colty| {
+                vec![
+                    DString(colty.name.as_ref().map(|n| &**n).unwrap_or("?").to_string()),
+                    DString(if colty.nullable { "YES" } else { "NO" }.to_string()),
+                    DString(colty.scalar_type.to_string()),
+                ]
+            })
+            .collect();
+
+        let col_name = |s: &str| ColumnType::new(ScalarType::String).name(s.to_string());
+        Ok((
+            SqlResponse::SendRows {
+                typ: RelationType {
+                    column_types: vec![col_name("Field"), col_name("Nullable"), col_name("Type")],
+                },
+                rows: column_descriptions,
             },
             None,
         ))

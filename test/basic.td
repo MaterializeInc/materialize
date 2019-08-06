@@ -73,11 +73,17 @@ a b
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT b, sum(a) FROM data GROUP BY b;
 
-> PEEK test1
+> PEEK test1;
 b  sum
 ------
 1  6
 2  1
+
+> SHOW COLUMNS FROM test1;
+Field Nullable Type
+-------------------
+b     NO       i64
+sum   YES      i64
 
 > CREATE MATERIALIZED VIEW test2 AS
   SELECT b, 1 + sum(a + 1) FROM data GROUP BY b;

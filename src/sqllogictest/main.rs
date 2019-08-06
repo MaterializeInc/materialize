@@ -22,7 +22,13 @@ fn main() {
 
     let args: Vec<_> = env::args().collect();
     let mut opts = Options::new();
-    opts.optflagmulti("v", "verbose", "verbosity");
+    opts.optflagmulti(
+        "v",
+        "verbose",
+        "-v: print every source file. \
+         -vv: show each error description. \
+         -vvv: show all queries executed",
+    );
     opts.optflag("h", "help", "show this usage information");
     opts.optflag("", "only-parse", "only attempt to parse queries");
     opts.optflag(

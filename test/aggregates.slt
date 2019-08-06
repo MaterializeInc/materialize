@@ -3,6 +3,8 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+mode cockroach
+
 statement ok
 CREATE TABLE t (a int, b int)
 
@@ -17,3 +19,10 @@ SELECT a FROM t GROUP BY a HAVING sum(b) = 3;
 ----
 1
 2
+
+query TTT colnames
+SHOW COLUMNS FROM t
+----
+ Field Nullable Type
+ a     YES      i64
+ b     YES      i64
