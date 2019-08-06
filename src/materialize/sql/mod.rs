@@ -316,9 +316,9 @@ fn build_source(
         name,
         connector: SourceConnector::Kafka(KafkaSourceConnector {
             addr: kafka_addr,
-            topic: topic,
-            raw_schema: raw_schema,
-            schema_registry_url: schema_registry_url,
+            topic,
+            raw_schema,
+            schema_registry_url,
         }),
         typ,
     })
@@ -1820,11 +1820,11 @@ fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::E
         None => None,
         Some(segments) => {
             let segments: Vec<_> = segments.collect();
-            if segments.len() == 0 {
+            if segments.is_empty() {
                 None
             } else if segments.len() != 1 {
                 bail!("source URL should have at most one path segment: {}", url);
-            } else if segments[0].len() == 0 {
+            } else if segments[0].is_empty() {
                 None
             } else {
                 Some(segments[0].to_owned())
