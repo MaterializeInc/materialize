@@ -82,6 +82,11 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
             }
             Command::Sql(mut sql) => {
                 sql.query = subst(&sql.query)?;
+                for row in &mut sql.expected_rows {
+                    for col in row {
+                        *col = subst(col)?;
+                    }
+                }
                 Box::new(sql::build_sql(sql).map_err(wrap_err)?)
             }
             Command::FailSql(mut sql) => {
