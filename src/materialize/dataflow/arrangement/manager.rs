@@ -18,7 +18,7 @@ pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysOnlyHandle = TraceKeyHandle<Vec<Datum>, Timestamp, Diff>;
 pub type KeysValsHandle = TraceValHandle<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
 
-pub type DeleteCallback = Box<FnOnce()>;
+pub type DeleteCallback = Box<dyn FnOnce()>;
 
 /// A map from collection names to cached arrangements.
 ///

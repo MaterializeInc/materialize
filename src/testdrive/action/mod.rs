@@ -37,7 +37,7 @@ pub struct State {
 
 pub struct PosAction {
     pub pos: usize,
-    pub action: Box<Action>,
+    pub action: Box<dyn Action>,
 }
 
 pub trait Action {
@@ -58,7 +58,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
         let subst = |msg: &str| substitute_vars(msg, &vars).map_err(wrap_err);
-        let action: Box<Action> = match cmd.command {
+        let action: Box<dyn Action> = match cmd.command {
             Command::Builtin(mut builtin) => {
                 for val in builtin.args.values_mut() {
                     *val = subst(val)?;

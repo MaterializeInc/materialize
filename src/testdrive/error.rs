@@ -96,7 +96,7 @@ impl Error {
         self,
         filename: &str,
         contents: &str,
-        positioner: &Positioner,
+        positioner: &dyn Positioner,
     ) -> Self {
         match self {
             Error::Input { err, .. } => {

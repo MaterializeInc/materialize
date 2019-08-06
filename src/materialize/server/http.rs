@@ -12,7 +12,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::glue::*;
 use ore::future::FutureExt;
 
-struct FutureResponse(Box<Future<Item = Response<Body>, Error = failure::Error> + Send>);
+struct FutureResponse(Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send>);
 
 impl From<Response<Body>> for FutureResponse {
     fn from(res: Response<Body>) -> FutureResponse {
