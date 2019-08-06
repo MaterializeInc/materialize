@@ -24,5 +24,5 @@ query TTT colnames
 SHOW COLUMNS FROM t
 ----
  Field Nullable Type
- a     YES       int64
- b     YES       int64
+ a     YES      i64
+ b     YES      i64

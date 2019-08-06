@@ -82,8 +82,8 @@ b  sum
 > SHOW COLUMNS FROM test1;
 Field Nullable Type
 -------------------
-b     NO       int64
-sum   YES      int64
+b     NO       i64
+sum   YES      i64
 
 > CREATE MATERIALIZED VIEW test2 AS
   SELECT b, 1 + sum(a + 1) FROM data GROUP BY b;

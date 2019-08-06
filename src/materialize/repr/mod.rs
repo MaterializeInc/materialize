@@ -300,15 +300,20 @@ impl ScalarType {
 }
 
 impl fmt::Display for ScalarType {
+    /// Arbitrary display name for scalars
+    ///
+    /// Right now the names correspond most closely to rust names (e.g. i32
+    /// instead of int4), but we will want to make them more like some other
+    /// system at some point.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ScalarType::*;
         match self {
             Null => f.write_str("null"),
             Bool => f.write_str("bool"),
-            Int32 => f.write_str("int32"),
-            Int64 => f.write_str("int64"),
-            Float32 => f.write_str("float32"),
-            Float64 => f.write_str("float64"),
+            Int32 => f.write_str("i32"),
+            Int64 => f.write_str("i64"),
+            Float32 => f.write_str("f32"),
+            Float64 => f.write_str("f64"),
             Decimal(scale, precision) => write!(f, "decimal({}, {})", scale, precision),
             Date => f.write_str("date"),
             Time => f.write_str("time"),
