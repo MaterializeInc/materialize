@@ -507,49 +507,50 @@ mod tests {
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = Dataflow::View(View {
-            name: "report".into(),
-            relation_expr: RelationExpr::Project {
-                outputs: vec![1, 2],
-                input: Box::new(RelationExpr::Join {
-                    inputs: vec![
-                        RelationExpr::Get {
-                            name: "orders".into(),
-                            typ: RelationType {
-                                column_types: vec![ColumnType::new(ScalarType::Int64).name("id".into())],
+        let dataflow =
+            Dataflow::View(View {
+                name: "report".into(),
+                relation_expr: RelationExpr::Project {
+                    outputs: vec![1, 2],
+                    input: Box::new(RelationExpr::Join {
+                        inputs: vec![
+                            RelationExpr::Get {
+                                name: "orders".into(),
+                                typ: RelationType {
+                                    column_types: vec![
+                                        ColumnType::new(ScalarType::Int64).name("id".into())
+                                    ],
+                                },
                             },
-                        },
-                        RelationExpr::Distinct {
-                            input: Box::new(RelationExpr::Union {
-                                left: Box::new(RelationExpr::Get {
-                                    name: "customers2018".into(),
-                                    typ: RelationType {
-                                        column_types: vec![
-                                            ColumnType::new(ScalarType::Int64).name("id".into())
-                                        ],
-                                    },
+                            RelationExpr::Distinct {
+                                input: Box::new(RelationExpr::Union {
+                                    left: Box::new(RelationExpr::Get {
+                                        name: "customers2018".into(),
+                                        typ: RelationType {
+                                            column_types: vec![ColumnType::new(ScalarType::Int64)
+                                                .name("id".into())],
+                                        },
+                                    }),
+                                    right: Box::new(RelationExpr::Get {
+                                        name: "customers2019".into(),
+                                        typ: RelationType {
+                                            column_types: vec![ColumnType::new(ScalarType::Int64)
+                                                .name("id".into())],
+                                        },
+                                    }),
                                 }),
-                                right: Box::new(RelationExpr::Get {
-                                    name: "customers2019".into(),
-                                    typ: RelationType {
-                                        column_types: vec![
-                                            ColumnType::new(ScalarType::Int64).name("id".into())
-                                        ],
-                                    },
-                                }),
-                            }),
-                        },
+                            },
+                        ],
+                        variables: vec![vec![(0, 0), (1, 0)]],
+                    }),
+                },
+                typ: RelationType {
+                    column_types: vec![
+                        ColumnType::new(ScalarType::String).name("name".into()),
+                        ColumnType::new(ScalarType::Int32).name("quantity".into()),
                     ],
-                    variables: vec![vec![(0, 0), (1, 0)]],
-                }),
-            },
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("name".into()),
-                    ColumnType::new(ScalarType::Int32).name("quantity".into()),
-                ],
-            },
-        });
+                },
+            });
 
         let decoded: Dataflow = serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
         assert_eq!(decoded, dataflow);
