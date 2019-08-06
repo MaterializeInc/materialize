@@ -196,10 +196,14 @@ impl Default for CollectionTraces {
 impl Drop for CollectionTraces {
     fn drop(&mut self) {
         for (_keys, (_handle, mut on_delete)) in self.by_keys.drain() {
-            on_delete.take().map(|func| func());
+            if let Some(func) = on_delete.take() {
+                func()
+            }
         }
         if let Some((_handle, mut on_delete)) = self.by_self.take() {
-            on_delete.take().map(|func| func());
+            if let Some(func) = on_delete.take() {
+                func()
+            }
         }
     }
 }
