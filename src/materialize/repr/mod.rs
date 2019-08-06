@@ -309,7 +309,7 @@ pub struct ColumnType {
     pub name: Option<String>,
     /// Whether this datum can be null.
     pub nullable: bool,
-    /// The fundamental type (e.g., Int32 or String) of this datum.
+    /// The underlying scalar type (e.g., Int32 or String) of this column.
     pub scalar_type: ScalarType,
 }
 
@@ -325,6 +325,9 @@ impl RelationType {
 }
 
 impl ColumnType {
+    /// Constructs a new `ColumnType` with the specified [`ScalarType`] as its
+    /// underlying type. If desired, the `name` and `nullable` properties can
+    /// be set with the methods of the same name.
     pub fn new(scalar_type: ScalarType) -> Self {
         ColumnType {
             name: None,
@@ -350,13 +353,17 @@ impl ColumnType {
         })
     }
 
+    /// Consumes this `ColumnType` and returns a new `ColumnType` with its name
+    /// set to the specified string.
     pub fn name(mut self, name: String) -> Self {
         self.name = Some(name);
         self
     }
 
-    pub fn nullable(mut self) -> Self {
-        self.nullable = true;
+    /// Consumes this `ColumnType` and returns a new `ColumnType` with its
+    /// nullability set to the specified boolean.
+    pub fn nullable(mut self, nullable: bool) -> Self {
+        self.nullable = nullable;
         self
     }
 }

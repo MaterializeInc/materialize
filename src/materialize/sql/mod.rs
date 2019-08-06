@@ -115,11 +115,8 @@ impl Planner {
         Ok((
             SqlResponse::SendRows {
                 typ: RelationType {
-                    column_types: vec![ColumnType {
-                        name: Some(object_type_as_plural_str(object_type).to_owned()),
-                        nullable: false,
-                        scalar_type: ScalarType::String,
-                    }],
+                    column_types: vec![ColumnType::new(ScalarType::String)
+                        .name(object_type_as_plural_str(object_type).to_owned())],
                 },
                 rows,
             },
@@ -473,11 +470,7 @@ impl Planner {
                 )
             })
             .unwrap_or_else(|| {
-                let typ = RelationType::new(vec![ColumnType {
-                    name: None,
-                    nullable: false,
-                    scalar_type: ScalarType::String,
-                }]);
+                let typ = RelationType::new(vec![ColumnType::new(ScalarType::String)]);
                 Ok((
                     RelationExpr::Constant {
                         rows: vec![vec![Datum::String("X".into())]],
@@ -1040,11 +1033,9 @@ impl Planner {
                 (expr, func, scalar_type)
             }
         };
-        let typ = ColumnType {
-            name: Some(ident.clone()),
-            nullable: func.is_nullable(),
-            scalar_type,
-        };
+        let typ = ColumnType::new(scalar_type)
+            .name(ident.clone())
+            .nullable(func.is_nullable());
         Ok((
             AggregateExpr {
                 func,
@@ -1126,11 +1117,7 @@ impl Planner {
                         then: Box::new(ScalarExpr::Literal(Datum::Null)),
                         els: Box::new(else_expr),
                     };
-                    let typ = ColumnType {
-                        name: None,
-                        nullable: true,
-                        scalar_type: else_type.scalar_type,
-                    };
+                    let typ = ColumnType::new(else_type.scalar_type).nullable(true);
                     Ok((expr, typ))
                 }
 
@@ -1156,11 +1143,7 @@ impl Planner {
                 expr: Box::new(expr),
             }
         }
-        let typ = ColumnType {
-            name: None,
-            nullable: false,
-            scalar_type: ScalarType::Bool,
-        };
+        let typ = ColumnType::new(ScalarType::Bool);
         Ok((expr, typ))
     }
 
@@ -1186,11 +1169,7 @@ impl Planner {
             func,
             expr: Box::new(expr),
         };
-        let typ = ColumnType {
-            name: None,
-            nullable: typ.nullable,
-            scalar_type,
-        };
+        let typ = ColumnType::new(scalar_type).nullable(typ.nullable);
         Ok((expr, typ))
     }
 
@@ -1221,11 +1200,8 @@ impl Planner {
                     BinaryFunc::SubDecimal
                 };
                 let expr = lexpr.call_binary(rexpr, func);
-                let typ = ColumnType {
-                    name: None,
-                    nullable: ltype.nullable || rtype.nullable,
-                    scalar_type: ScalarType::Decimal(p, *so),
-                };
+                let typ = ColumnType::new(ScalarType::Decimal(p, *so))
+                    .nullable(ltype.nullable || rtype.nullable);
                 return Ok((expr, typ));
             }
             (
@@ -1238,11 +1214,8 @@ impl Planner {
                 let expr = lexpr.call_binary(rexpr, BinaryFunc::MulDecimal);
                 let expr = rescale_decimal(expr, si, so);
                 let p = (p1 - s1) + (p2 - s2) + so;
-                let typ = ColumnType {
-                    name: None,
-                    nullable: ltype.nullable || rtype.nullable,
-                    scalar_type: ScalarType::Decimal(p, so),
-                };
+                let typ = ColumnType::new(ScalarType::Decimal(p, so))
+                    .nullable(ltype.nullable || rtype.nullable);
                 return Ok((expr, typ));
             }
             (BinaryOperator::Divide, ScalarType::Decimal(p1, s1), ScalarType::Decimal(_, s2)) => {
@@ -1252,11 +1225,7 @@ impl Planner {
                 let expr = lexpr.call_binary(rexpr, BinaryFunc::DivDecimal);
                 let expr = rescale_decimal(expr, si - s2, s);
                 let p = (p1 - s1) + s2 + s;
-                let typ = ColumnType {
-                    name: None,
-                    nullable: true,
-                    scalar_type: ScalarType::Decimal(p, s),
-                };
+                let typ = ColumnType::new(ScalarType::Decimal(p, s)).nullable(true);
                 return Ok((expr, typ));
             }
             _ => (),
@@ -1433,11 +1402,8 @@ impl Planner {
                             expr: Box::new(expr),
                         };
                     }
-                    let typ = ColumnType {
-                        name: None,
-                        nullable: ltype.nullable || rtype.nullable,
-                        scalar_type: ScalarType::Bool,
-                    };
+                    let typ = ColumnType::new(ScalarType::Bool)
+                        .nullable(ltype.nullable || rtype.nullable);
                     return Ok((expr, typ));
                 }
             }
@@ -1451,11 +1417,8 @@ impl Planner {
             expr1: Box::new(lexpr),
             expr2: Box::new(rexpr),
         };
-        let typ = ColumnType {
-            name: None,
-            nullable: ltype.nullable || rtype.nullable || is_integer_div,
-            scalar_type,
-        };
+        let typ = ColumnType::new(scalar_type)
+            .nullable(ltype.nullable || rtype.nullable || is_integer_div);
         Ok((expr, typ))
     }
 
@@ -1559,11 +1522,7 @@ impl Planner {
             Some(else_result) => self.plan_expr(ctx, else_result)?,
             None => {
                 let expr = ScalarExpr::Literal(Datum::Null);
-                let typ = ColumnType {
-                    name: None,
-                    nullable: false,
-                    scalar_type: ScalarType::Null,
-                };
+                let typ = ColumnType::new(ScalarType::Null);
                 (expr, typ)
             }
         };
@@ -1627,11 +1586,7 @@ impl Planner {
         };
         let nullable = datum == Datum::Null;
         let expr = ScalarExpr::Literal(datum);
-        let typ = ColumnType {
-            name: None,
-            nullable,
-            scalar_type,
-        };
+        let typ = ColumnType::new(scalar_type).nullable(nullable);
         Ok((expr, typ))
     }
 }
@@ -1672,11 +1627,7 @@ where
         .clone();
     let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
     let mut out = Vec::new();
-    let out_typ = ColumnType {
-        name: None,
-        nullable,
-        scalar_type: max_scalar_type,
-    };
+    let out_typ = ColumnType::new(max_scalar_type).nullable(nullable);
     for (expr, typ) in exprs {
         match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
             Ok((expr, _)) => out.push(expr),
@@ -1702,11 +1653,7 @@ where
 {
     use ScalarType::*;
     use UnaryFunc::*;
-    let to_type = ColumnType {
-        name: None,
-        nullable: from_type.nullable,
-        scalar_type: to_scalar_type,
-    };
+    let to_type = ColumnType::new(to_scalar_type).nullable(from_type.nullable);
     let expr = match (&from_type.scalar_type, &to_type.scalar_type) {
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
         (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),

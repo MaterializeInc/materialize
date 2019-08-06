@@ -37,8 +37,17 @@ ci_init
 ci_collapsed_heading "Building standalone binaries"
 docker_run "cargo build --release"
 
+# NOTE(benesch): The two invocations of `cargo test --no-run` here deserve some
+# explanation. The first invocation prints error messages to stdout in a human
+# readable form. If that succeeds, the second invocation instructs Cargo to dump
+# the locations of the test binaries it built in a machine readable form.
+# Without the first invocation, the error messages would also be sent to the
+# output file in JSON, and the user would only see a vague "could not compile
+# <package>" error. Note that the `cargo build` above doesn't guarantee that the
+# tests will build, since errors may be present in test code but not in release
+# code.
 ci_collapsed_heading "Building test binaries"
-docker_run "cargo test --no-run --message-format=json > test-binaries.json"
+docker_run "cargo test --no-run && cargo test --no-run --message-format=json > test-binaries.json"
 
 ci_collapsed_heading "Preparing Docker context"
 {
