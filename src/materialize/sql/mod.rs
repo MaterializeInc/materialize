@@ -370,7 +370,7 @@ impl Planner {
                 let (addr, topic) = parse_kafka_topic_url(url)?;
 
                 Ok(vec![Dataflow::Source(build_source(
-                    schema, addr, topic, name,
+                    schema, addr, name, topic,
                 )?)])
             }
             Statement::CreateSources {
