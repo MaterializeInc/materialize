@@ -162,7 +162,12 @@ impl Planner {
             Statement::CreateSource { .. } => SqlResponse::CreatedSource,
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
             Statement::CreateView { .. } => SqlResponse::CreatedView,
-            Statement::CreateSources { .. } => SqlResponse::CreatedSink, // FIXME
+            Statement::CreateSources { .. } => SqlResponse::SendRows {
+                typ: RelationType { column_types: vec![ColumnType { name: Some("Topic".to_owned()), nullable: false, scalar_type: ScalarType::String } ] },
+                rows: dataflows.iter().map(|df| {
+                    vec![Datum::from(df.name().to_owned())]
+                }).collect(),
+            },
             _ => unreachable!(),
         };
         for dataflow in &dataflows {
