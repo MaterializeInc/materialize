@@ -457,6 +457,7 @@ impl<'a> Outcome<'a> {
 impl fmt::Display for Outcome<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use Outcome::*;
+        const INDENT: &str = "\n        ";
         match self {
             Unsupported { error } => write!(f, "Unsupported: {0} ({0:?})", error),
             ParseFailure { error } => write!(f, "ParseFailure: {:?}", error),
@@ -471,20 +472,22 @@ impl fmt::Display for Outcome<'_> {
                 actual_count,
             } => write!(
                 f,
-                "WrongNumberOfRowsInserted!\n    expected: {}\n    actually: {}",
-                expected_count, actual_count
+                "WrongNumberOfRowsInserted!{}expected: {}{}actually: {}",
+                INDENT, expected_count, INDENT, actual_count
             ),
             InferenceFailure {
                 expected_types,
                 inferred_types,
             } => write!(
                 f,
-                "Inference Failure!\n    expected types: {}\n    inferred types: {}",
+                "Inference Failure!{}expected types: {}{}inferred types: {}",
+                INDENT,
                 expected_types
                     .iter()
                     .map(|s| format!("{:?}", s))
                     .collect::<Vec<_>>()
                     .join(" "),
+                INDENT,
                 inferred_types
                     .iter()
                     .map(|s| format!("{:?}", s))
@@ -496,8 +499,10 @@ impl fmt::Display for Outcome<'_> {
                 inferred_column_names,
             } => write!(
                 f,
-                "Wrong Column Names:\n    expected column names: {}\n    inferred column names: {}",
+                "Wrong Column Names:{}expected column names: {}{}inferred column names: {}",
+                INDENT,
                 expected_column_names.join(" "),
+                INDENT,
                 inferred_column_names
                     .iter()
                     .map(|s| format!("{:?}", s))
@@ -510,8 +515,8 @@ impl fmt::Display for Outcome<'_> {
                 actual_output,
             } => write!(
                 f,
-                "OutputFailure!\n    expected: {:?}\n    actually: {:?}\n    actual raw: {:?}",
-                expected_output, actual_output, actual_raw_output
+                "OutputFailure!{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
+                INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
             Bail { cause } => write!(f, "Bail! caused by: {}", cause),
             Success => f.write_str("Success"),
@@ -1194,14 +1199,6 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
     for record in parse_records(&input) {
         let record = record.unwrap();
 
-        if verbosity >= 3 {
-            match &record {
-                Record::Statement { sql, .. } => println!("{}", sql),
-                Record::Query { sql, .. } => println!("{}", sql),
-                _ => (),
-            }
-        }
-
         let mut outcome = state
             .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", source, err))
@@ -1223,18 +1220,23 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
 
         // print failures in verbose mode
         match &outcome {
-            Outcome::Success => (),
+            Outcome::Success => {
+                if verbosity >= 3 {
+                    match &record {
+                        Record::Statement { sql, .. } => println!("    {}", sql),
+                        Record::Query { sql, .. } => println!("    {}", sql),
+                        _ => (),
+                    }
+                }
+            }
             _ => {
                 if verbosity >= 2 {
-                    if verbosity < 3 {
-                        match &record {
-                            Record::Statement { sql, .. } => println!("{}", sql),
-                            Record::Query { sql, .. } => println!("{}", sql),
-                            _ => (),
-                        }
+                    match &record {
+                        Record::Statement { sql, .. } => println!("    error for: {}", sql),
+                        Record::Query { sql, .. } => println!("    error for: {}", sql),
+                        _ => (),
                     }
-                    println!("{}", outcome);
-                    println!("In {}", source);
+                    println!("    {}", outcome);
                 }
             }
         }
