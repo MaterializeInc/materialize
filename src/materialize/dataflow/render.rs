@@ -70,12 +70,11 @@ pub fn build_dataflow<A: Allocate>(
 
             let arrangement = relation_expr
                 .as_collection()
-                // .arrange_by_self();
+                // The following two lines implement `arrange_by_self` with a name.
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
-            let on_delete = Box::new(|| ());
-            manager.set_by_self(src.name.to_owned(), arrangement.trace, on_delete);
+            manager.set_by_self(src.name.to_owned(), arrangement.trace, None);
         }
         Dataflow::Sink(sink) => {
             let done = Rc::new(Cell::new(false));
@@ -150,17 +149,17 @@ pub fn build_dataflow<A: Allocate>(
                     &mut context,
                     worker_index,
                 )
-                // .arrange_by_self();
+                // The following two lines implement `arrange_by_self` with a name.
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", view.name));
                 manager.set_by_self(
                     view.name,
                     arrangement.trace,
-                    Box::new(move || {
+                    Some(Box::new(move || {
                         for mut button in buttons.drain(..) {
                             button.press();
                         }
-                    }),
+                    })),
                 );
             });
         }

@@ -93,7 +93,7 @@ impl TraceManager {
         &mut self,
         name: String,
         trace: KeysOnlyHandle,
-        delete_callback: DeleteCallback,
+        delete_callback: Option<DeleteCallback>,
     ) {
         self.traces
             .entry(name)
@@ -138,7 +138,7 @@ impl TraceManager {
         name: String,
         keys: &[usize],
         trace: KeysValsHandle,
-        delete_callback: DeleteCallback,
+        delete_callback: Option<DeleteCallback>,
     ) {
         self.traces
             .entry(name)
@@ -161,13 +161,13 @@ impl TraceManager {
 /// Maintained traces for a collection.
 struct CollectionTraces {
     /// The collection arranged "by self", where the key is the record.
-    by_self: Option<(KeysOnlyHandle, DeleteCallback)>,
+    by_self: Option<(KeysOnlyHandle, Option<DeleteCallback>)>,
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    by_keys: HashMap<Vec<usize>, (KeysValsHandle, DeleteCallback)>,
+    by_keys: HashMap<Vec<usize>, (KeysValsHandle, Option<DeleteCallback>)>,
 }
 
 impl CollectionTraces {
-    /// Advances the frontiers for physical mergeing to their current limits.
+    /// Advances the frontiers for physical merging to their current limits.
     pub fn merge_physical(
         &mut self,
         antichain: &mut timely::progress::frontier::Antichain<Timestamp>,
@@ -195,11 +195,11 @@ impl Default for CollectionTraces {
 
 impl Drop for CollectionTraces {
     fn drop(&mut self) {
-        for (_keys, (_handle, on_delete)) in self.by_keys.drain() {
-            on_delete();
+        for (_keys, (_handle, mut on_delete)) in self.by_keys.drain() {
+            on_delete.take().map(|func| func());
         }
-        if let Some((_handle, on_delete)) = self.by_self.take() {
-            on_delete();
+        if let Some((_handle, mut on_delete)) = self.by_self.take() {
+            on_delete.take().map(|func| func());
         }
     }
 }

@@ -134,7 +134,14 @@ where
         }
     }
 
-    /// Enables or
+    /// Enables or disables logging.
+    ///
+    /// The argument disables logging by setting it to `None`, and otherwise contains
+    /// the granularity of log messages in nanoseconds. All log events will be rounded
+    /// up to the nearest multiple of this amount once produced, and should result in
+    /// view updates only at these times.
+    ///
+    /// Coarsening the granularity, with a larger number, may reduce logging overhead.
     pub fn logging(mut self, granularity_ns: Option<u128>) -> Self {
         self.logging_granularity_ns = granularity_ns;
         self
@@ -180,37 +187,27 @@ where
 
         // Install traces as maintained views.
         let [operates, channels, shutdown, text, elapsed, histogram] = t_traces;
-        let on_delete = Box::new(|| ());
         self.traces
-            .set_by_self("logs_operates".to_owned(), operates, on_delete);
-        let on_delete = Box::new(|| ());
+            .set_by_self("logs_operates".to_owned(), operates, None);
         self.traces
-            .set_by_self("logs_channels".to_owned(), channels, on_delete);
-        let on_delete = Box::new(|| ());
+            .set_by_self("logs_channels".to_owned(), channels, None);
         self.traces
-            .set_by_self("logs_shutdown".to_owned(), shutdown, on_delete);
-        let on_delete = Box::new(|| ());
+            .set_by_self("logs_shutdown".to_owned(), shutdown, None);
+        self.traces.set_by_self("logs_text".to_owned(), text, None);
         self.traces
-            .set_by_self("logs_text".to_owned(), text, on_delete);
-        let on_delete = Box::new(|| ());
+            .set_by_self("logs_elapsed".to_owned(), elapsed, None);
         self.traces
-            .set_by_self("logs_elapsed".to_owned(), elapsed, on_delete);
-        let on_delete = Box::new(|| ());
-        self.traces
-            .set_by_self("logs_histogram".to_owned(), histogram, on_delete);
+            .set_by_self("logs_histogram".to_owned(), histogram, None);
 
         let [arrangement] = d_traces;
-        let on_delete = Box::new(|| ());
         self.traces
-            .set_by_self("logs_arrangement".to_owned(), arrangement, on_delete);
+            .set_by_self("logs_arrangement".to_owned(), arrangement, None);
 
         let [duration, active] = m_traces;
-        let on_delete = Box::new(|| ());
         self.traces
-            .set_by_self("logs_peek_duration".to_owned(), duration, on_delete);
-        let on_delete = Box::new(|| ());
+            .set_by_self("logs_peek_duration".to_owned(), duration, None);
         self.traces
-            .set_by_self("logs_peek_active".to_owned(), active, on_delete);
+            .set_by_self("logs_peek_active".to_owned(), active, None);
     }
 
     /// Maintenance operations on logging traces.
