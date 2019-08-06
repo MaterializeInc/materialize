@@ -164,11 +164,9 @@ impl Planner {
             Statement::CreateView { .. } => SqlResponse::CreatedView,
             Statement::CreateSources { .. } => SqlResponse::SendRows {
                 typ: RelationType {
-                    column_types: vec![ColumnType {
-                        name: Some("Topic".to_owned()),
-                        nullable: false,
-                        scalar_type: ScalarType::String,
-                    }],
+                    column_types: vec![
+                        ColumnType::new(ScalarType::String).name("Topic")
+                    ],
                 },
                 rows: dataflows
                     .iter()

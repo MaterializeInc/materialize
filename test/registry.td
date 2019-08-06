@@ -118,3 +118,8 @@ Topic
 ---
 testdrive-my_topic-${testdrive.seed}
 testdrive-data-${testdrive.seed}
+
+> CREATE SOURCES FROM 'kafka://${testdrive.kafka-addr}/'
+  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Topic
+---
