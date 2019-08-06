@@ -105,3 +105,16 @@ a b
 ----
 1 42
 2 -1
+
+$ kafka-ingest format=avro topic=tpc schema=${schema_v2} publish=true timestamp=5
+{"before": null, "after": {"a": 2, "b": -1}}
+
+$ kafka-ingest format=avro topic=tpc schema=${schema_v2} publish=true timestamp=6
+{"before": null, "after": null}
+
+> CREATE SOURCES FROM 'kafka://${testdrive.kafka-addr}/'
+  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Topic
+---
+tpc
+data
