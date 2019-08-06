@@ -533,7 +533,7 @@ struct FullState {
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
     // this is only here to avoid dropping it too early
-    _dataflow_workers: Box<Drop>,
+    _dataflow_workers: Box<dyn Drop>,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: LocalInputMux,
@@ -1072,7 +1072,7 @@ impl RecordRunner for OnlyParseState {
 
 pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool) -> Outcomes {
     let mut outcomes = Outcomes::default();
-    let mut state: Box<RecordRunner> = if only_parse {
+    let mut state: Box<dyn RecordRunner> = if only_parse {
         Box::new(OnlyParseState::start())
     } else {
         Box::new(FullState::start().unwrap())

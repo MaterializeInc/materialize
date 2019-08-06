@@ -265,7 +265,7 @@ impl FromSql<'_> for DecimalWrapper {
     fn from_sql(
         _ty: &PostgresType,
         raw: &[u8],
-    ) -> Result<Self, Box<std::error::Error + 'static + Send + Sync>> {
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
         // TODO(jamii) how do we attribute this?
         // based on:
         //   https://docs.diesel.rs/src/diesel/pg/types/floats/mod.rs.html#55-82

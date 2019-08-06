@@ -123,6 +123,13 @@ disabled_lints=(
     clippy::unneeded_field_pattern
 )
 
+extra_lints=(
+    # Upstream description: https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html#bare-trait-object
+    #
+    # Omitting `dyn` on a trait object will become deprecated in the near future
+    bare_trait_objects
+)
+
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
 # splitting below. It's substantially clearer than doing things "properly,"
 # and the inputs to this script are trusted.
@@ -131,4 +138,4 @@ pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,-p \1,p' Cargo.toml)
 # shellcheck disable=SC2086
 run cargo clean $pkgspec
 # shellcheck disable=SC2046
-run cargo clippy -- -D warnings $(printf -- "-A %s " "${disabled_lints[@]}")
+run cargo clippy -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")
