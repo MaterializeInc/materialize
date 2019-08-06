@@ -355,7 +355,6 @@ where
                     (name, true)
                 };
 
-                println!("Timestamp picked: {:?}", timestamp);
                 SequencedCommand::Peek {
                     name,
                     timestamp,
