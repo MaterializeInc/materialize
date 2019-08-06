@@ -25,8 +25,3 @@ sqllogictest \
     test/*.slt \
     test/cockroach/*.slt \
     | tee target/slt.log
-
-if [[ "${BUILDKITE_BRANCH-}" = master && "${BUILDKITE_COMMIT-}" ]]; then
-    jq --arg commit "$BUILDKITE_COMMIT" -rf ci/slt/parse-summary.jq target/slt-summary.json \
-        | ssh buildkite@mtrlz.dev psql
-fi
