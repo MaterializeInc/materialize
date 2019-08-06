@@ -386,8 +386,8 @@ impl ColumnType {
 
     /// Consumes this `ColumnType` and returns a new `ColumnType` with its name
     /// set to the specified string.
-    pub fn name(mut self, name: String) -> Self {
-        self.name = Some(name);
+    pub fn name<T: Into<String>>(mut self, name: T) -> Self {
+        self.name = Some(name.into());
         self
     }
 

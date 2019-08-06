@@ -689,6 +689,7 @@ impl FullState {
             local_input_mux.clone(),
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone()),
             timely::Configuration::Process(NUM_TIMELY_WORKERS),
+            None, // disable logging
         )
         .unwrap();
 

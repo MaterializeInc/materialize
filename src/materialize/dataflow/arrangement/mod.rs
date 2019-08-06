@@ -9,4 +9,4 @@ pub mod context;
 pub mod manager;
 
 pub use context::Context;
-pub use manager::TraceManager;
+pub use manager::{KeysOnlyHandle, KeysValsHandle, TraceManager};
