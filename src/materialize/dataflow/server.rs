@@ -301,9 +301,42 @@ where
             DataflowCommand::DropDataflows(dataflows) => SequencedCommand::DropDataflows(dataflows),
             DataflowCommand::Tail(name) => SequencedCommand::Tail(name),
             DataflowCommand::Peek { source, when } => {
+                // Peeks describe a source of data and a timestamp at which to view its contents.
+                //
+                // We need to determine both an appropriate timestamp from the description, and
+                // also to ensure that there is a view in place to query, if the source of data
+                // for the peek is not a base relation.
+
+                // Choose a timestamp for all workers to use in the peek.
+                // We minimize over all participating views, to ensure that the query will not
+                // need to block on the arrival of further input data.
+                let timestamp = match when {
+                    PeekWhen::AtTimestamp(timestamp) => timestamp,
+                    PeekWhen::Immediately => {
+                        let mut bound = Antichain::new(); // lower bound on available data.
+                        let mut upper = Antichain::new(); // temporary storage for batches.
+                        source.visit(&mut |e| {
+                            if let RelationExpr::Get { name, typ: _ } = e {
+                                if let Some(mut trace) = self.traces.get_by_self(&name).cloned() {
+                                    trace.read_upper(&mut upper);
+                                    bound.extend(upper.elements().iter().cloned());
+                                }
+                            }
+                        });
+
+                        // Pick the first time strictly less than `bound` to ensure that the
+                        // peek can respond without further input advances.
+                        if let Some(bound) = bound.elements().get(0) {
+                            bound.saturating_sub(1)
+                        } else {
+                            Timestamp::max_value()
+                        }
+                    }
+                };
+
+                //
                 let (name, drop) = if let RelationExpr::Get { name, typ: _ } = source {
-                    // Fast path. We can just look at the existing dataflow
-                    // directly.
+                    // Fast path. We can just look at the existing dataflow directly.
                     (name, false)
                 } else {
                     // Slow path. We need to perform some computation, so build
@@ -322,39 +355,7 @@ where
                     (name, true)
                 };
 
-                let timestamp = match when {
-                    PeekWhen::Immediately => {
-                        match self.traces.get_by_self(&name) {
-                            Some(trace) => {
-                                // Ask the trace for the latest time it knows about. The latest
-                                // "committed" time (i.e., the time at which we know results can
-                                // never change) is one less than that.
-                                //
-                                // TODO(benesch, fms): this approach does not work for arbitrary
-                                // timestamp types, where a predecessor operation may not exist.
-                                //
-                                // TODO(benesch): this is perhaps not the correct means of
-                                // determining a timestamp that is "immediately" available, as this
-                                // only considers the view from worker 0. The other workers may be
-                                // farther behind. A better approach would involve using a probe,
-                                // which considers the view from all workers. However, this isn't
-                                // much of a big deal in the meantime, since if this worker has
-                                // progressed to time T, the other workers are guaranteed to
-                                // progress to T "very soon."
-                                let mut upper = Antichain::new();
-                                trace.clone().read_upper(&mut upper);
-                                if upper.elements().is_empty() {
-                                    Timestamp::max_value()
-                                } else {
-                                    assert_eq!(upper.elements().len(), 1);
-                                    upper.elements()[0].saturating_sub(1)
-                                }
-                            }
-                            None => 0,
-                        }
-                    }
-                    PeekWhen::AtTimestamp(timestamp) => timestamp,
-                };
+                println!("Timestamp picked: {:?}", timestamp);
                 SequencedCommand::Peek {
                     name,
                     timestamp,
