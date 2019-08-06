@@ -131,7 +131,6 @@ $ mtrz-produce src1 '{
 # {"before": null, "after": {"row": {"a": 2, "b": 1}}}
 # {"before": null, "after": {"row": {"a": 1, "b": 2}}}
 # {"before": null, "after": {"row": {"a": 1, "b": 3}}}
-# {"before": null, "after": null}
 
 # in another terminal
 $ mtrz-produce src2 '{
@@ -162,6 +161,9 @@ $ mtrz-produce src2 '{
 # {"before": null, "after": {"row": {"c": 1, "d": 2}}}
 # {"before": null, "after": {"row": {"c": 1, "d": 3}}}
 # {"before": null, "after": {"row": {"c": 3, "d": 1}}}
+# {"before": null, "after": null}
+
+# now go back to src1 and
 # {"before": null, "after": null}
 ```
 
