@@ -18,3 +18,7 @@ pub mod queue;
 pub mod repr;
 pub mod server;
 pub mod sql;
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+

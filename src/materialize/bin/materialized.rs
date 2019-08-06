@@ -14,9 +14,6 @@
 //!
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
-#[global_allocator]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
-
 use backtrace::Backtrace;
 // use getopts::Options;
 use lazy_static::lazy_static;
