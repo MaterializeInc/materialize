@@ -320,12 +320,21 @@ where
                                 if let Some(mut trace) = self.traces.get_by_self(&name).cloned() {
                                     trace.read_upper(&mut upper);
                                     bound.extend(upper.elements().iter().cloned());
+                                } else {
+                                    // A missing relation *should* mean one that has been
+                                    // sequenced for insertion but not yet handled. That
+                                    // relation can be treated as having frontier zero,
+                                    // in the absence of any other information about it.
+                                    bound.insert(0);
                                 }
                             }
                         });
 
                         // Pick the first time strictly less than `bound` to ensure that the
                         // peek can respond without further input advances.
+                        // TODO : the subtraction saturates to not wrap zero around, but if
+                        // we get this far with a zero we are at risk of a peek that may not
+                        // immediately return.
                         if let Some(bound) = bound.elements().get(0) {
                             bound.saturating_sub(1)
                         } else {
@@ -334,7 +343,7 @@ where
                     }
                 };
 
-                //
+                // Create a transient view if the peek is not of a base relation.
                 let (name, drop) = if let RelationExpr::Get { name, typ: _ } = source {
                     // Fast path. We can just look at the existing dataflow directly.
                     (name, false)
