@@ -386,7 +386,7 @@ impl Planner {
                 }
                 let results: Result<Vec<_>, failure::Error> = topic_names.map(|name| {
                     Ok(Dataflow::Source(build_source(
-                        &SourceSchema::Registry(schema_registry.to_owned()), // FIXME
+                        &SourceSchema::Registry(schema_registry.to_owned()),
                         addr,
                         name.to_owned(),
                         name.to_owned(),
