@@ -393,6 +393,8 @@ impl Planner {
                     } else {
                         None
                     }
+                }).filter(|topic| {
+                    self.dataflows.try_get(topic).is_none()
                 });
                 let (addr, topic) = parse_kafka_url(url)?;
                 if let Some(s) = topic {
