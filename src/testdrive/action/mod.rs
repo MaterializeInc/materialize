@@ -82,6 +82,14 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
             }
             Command::Sql(mut sql) => {
                 sql.query = subst(&sql.query)?;
+                let mut old_rows = std::mem::replace(&mut sql.expected_rows, vec![]);
+                for row in &mut old_rows {
+                    let mut new_row = vec![];
+                    for datum in row {
+                        new_row.push(subst(datum)?);
+                    }
+                    sql.expected_rows.push(new_row);
+                }
                 Box::new(sql::build_sql(sql).map_err(wrap_err)?)
             }
             Command::FailSql(mut sql) => {

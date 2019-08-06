@@ -387,9 +387,9 @@ impl Planner {
                 let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
                 let subjects = ccsr_client.list_subjects()?;
                 let topic_names = subjects.iter().filter_map(|s| {
-                    let parts: Vec<&str> = s.split('-').collect();
-                    if parts.len() == 2 && parts[1] == "value" {
-                        Some(parts[0])
+                    let parts: Vec<&str> = s.rsplitn(2, '-').collect();
+                    if parts.len() == 2 && parts[0] == "value" {
+                        Some(parts[1])
                     } else {
                         None
                     }
