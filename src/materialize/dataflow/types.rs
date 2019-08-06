@@ -367,11 +367,7 @@ impl RelationExpr {
                     rows: vec![vec![Datum::Null; both_arity - left_arity]],
                     typ: RelationType {
                         column_types: vec![
-                            ColumnType {
-                                name: None,
-                                nullable: true,
-                                scalar_type: ScalarType::Null
-                            };
+                            ColumnType::new(ScalarType::Null).nullable(true);
                             both_arity - left_arity
                         ],
                     },
@@ -393,11 +389,7 @@ impl RelationExpr {
                     rows: vec![vec![Datum::Null; both_arity - right_arity]],
                     typ: RelationType {
                         column_types: vec![
-                            ColumnType {
-                                name: None,
-                                nullable: true,
-                                scalar_type: ScalarType::Null
-                            };
+                            ColumnType::new(ScalarType::Null).nullable(true);
                             both_arity - right_arity
                         ],
                     },
@@ -524,11 +516,7 @@ mod tests {
                         RelationExpr::Get {
                             name: "orders".into(),
                             typ: RelationType {
-                                column_types: vec![ColumnType {
-                                    name: Some("id".into()),
-                                    nullable: false,
-                                    scalar_type: ScalarType::Int64,
-                                }],
+                                column_types: vec![ColumnType::new(ScalarType::Int64).name("id".into())],
                             },
                         },
                         RelationExpr::Distinct {
@@ -536,21 +524,17 @@ mod tests {
                                 left: Box::new(RelationExpr::Get {
                                     name: "customers2018".into(),
                                     typ: RelationType {
-                                        column_types: vec![ColumnType {
-                                            name: Some("id".into()),
-                                            nullable: false,
-                                            scalar_type: ScalarType::Int64,
-                                        }],
+                                        column_types: vec![
+                                            ColumnType::new(ScalarType::Int64).name("id".into())
+                                        ],
                                     },
                                 }),
                                 right: Box::new(RelationExpr::Get {
                                     name: "customers2019".into(),
                                     typ: RelationType {
-                                        column_types: vec![ColumnType {
-                                            name: Some("id".into()),
-                                            nullable: false,
-                                            scalar_type: ScalarType::Int64,
-                                        }],
+                                        column_types: vec![
+                                            ColumnType::new(ScalarType::Int64).name("id".into())
+                                        ],
                                     },
                                 }),
                             }),
@@ -561,16 +545,8 @@ mod tests {
             },
             typ: RelationType {
                 column_types: vec![
-                    ColumnType {
-                        name: Some("name".into()),
-                        nullable: false,
-                        scalar_type: ScalarType::String,
-                    },
-                    ColumnType {
-                        name: Some("quantity".into()),
-                        nullable: false,
-                        scalar_type: ScalarType::Int32,
-                    },
+                    ColumnType::new(ScalarType::String).name("name".into()),
+                    ColumnType::new(ScalarType::Int32).name("quantity".into()),
                 ],
             },
         });
