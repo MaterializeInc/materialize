@@ -2,6 +2,7 @@
 //
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
+//
 
 //! The main Materialize server.
 //!
@@ -12,6 +13,9 @@
 //! to those with access to the Material Dropbox Paper folder.
 //!
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use backtrace::Backtrace;
 // use getopts::Options;
