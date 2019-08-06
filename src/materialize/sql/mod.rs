@@ -96,7 +96,8 @@ impl Planner {
             Statement::Tail { .. } => bail!("TAIL is not implemented yet"),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
-            | Statement::CreateView { .. } => self.handle_create_dataflow(stmt),
+            | Statement::CreateView { .. }
+            | Statement::CreateSources { .. } => self.handle_create_dataflow(stmt),
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
             Statement::Query(query) => self.handle_select(*query),
             Statement::Show { object_type: ot } => self.handle_show_objects(ot),
@@ -156,18 +157,28 @@ impl Planner {
     }
 
     fn handle_create_dataflow(&mut self, stmt: Statement) -> PlannerResult {
-        let dataflow = self.plan_statement(&stmt)?;
+        let dataflows = self.plan_statement(&stmt)?;
         let sql_response = match stmt {
             Statement::CreateSource { .. } => SqlResponse::CreatedSource,
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
             Statement::CreateView { .. } => SqlResponse::CreatedView,
+            Statement::CreateSources { .. } => SqlResponse::SendRows {
+                typ: RelationType {
+                    column_types: vec![ColumnType::new(ScalarType::String).name("Topic")],
+                },
+                rows: dataflows
+                    .iter()
+                    .map(|df| vec![Datum::from(df.name().to_owned())])
+                    .collect(),
+            },
             _ => unreachable!(),
         };
-
-        self.dataflows.insert(dataflow.clone())?;
+        for dataflow in &dataflows {
+            self.dataflows.insert(dataflow.clone())?;
+        }
         Ok((
             sql_response,
-            Some(DataflowCommand::CreateDataflow(dataflow)),
+            Some(DataflowCommand::CreateDataflows(dataflows)),
         ))
     }
 
@@ -282,8 +293,39 @@ impl ScalarType {
     }
 }
 
+fn build_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    name: String,
+    topic: String,
+) -> Result<Source, failure::Error> {
+    let (raw_schema, schema_registry_url) = match schema {
+        SourceSchema::Raw(schema) => (schema.to_owned(), None),
+        SourceSchema::Registry(url) => {
+            // TODO(benesch): we need to fetch this schema
+            // asynchronously to avoid blocking the command
+            // processing thread.
+            let url: Url = url.parse()?;
+            let ccsr_client = ccsr::Client::new(url.clone());
+            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
+            (res.raw, Some(url))
+        }
+    };
+    let typ = avro::validate_schema(&raw_schema)?;
+    Ok(Source {
+        name,
+        connector: SourceConnector::Kafka(KafkaSourceConnector {
+            addr: kafka_addr,
+            topic,
+            raw_schema,
+            schema_registry_url,
+        }),
+        typ,
+    })
+}
+
 impl Planner {
-    fn plan_statement(&self, stmt: &Statement) -> Result<Dataflow, failure::Error> {
+    fn plan_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
         match stmt {
             Statement::CreateView {
                 name,
@@ -309,11 +351,11 @@ impl Planner {
                         typ.name = Some(name.clone());
                     }
                 }
-                Ok(Dataflow::View(View {
+                Ok(vec![Dataflow::View(View {
                     name: extract_sql_object_name(name)?,
                     relation_expr,
                     typ,
-                }))
+                })])
             }
             Statement::CreateSource {
                 name,
@@ -325,30 +367,55 @@ impl Planner {
                     bail!("WITH options are not yet supported");
                 }
                 let name = extract_sql_object_name(name)?;
+                let (addr, topic) = parse_kafka_topic_url(url)?;
+
+                Ok(vec![Dataflow::Source(build_source(
+                    schema, addr, name, topic,
+                )?)])
+            }
+            Statement::CreateSources {
+                url,
+                schema_registry,
+                with_options,
+            } => {
+                if !with_options.is_empty() {
+                    bail!("WITH options are not yet supported");
+                }
+                // TODO(brennan): This shouldn't be synchronous either (see CreateSource above),
+                // but for now we just want it working for demo purposes...
+                let schema_registry_url: Url = schema_registry.parse()?;
+                let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
+                let subjects = ccsr_client.list_subjects()?;
+                let topic_names = subjects
+                    .iter()
+                    .filter_map(|s| {
+                        let parts: Vec<&str> = s.rsplitn(2, '-').collect();
+                        if parts.len() == 2 && parts[0] == "value" {
+                            Some(parts[1])
+                        } else {
+                            None
+                        }
+                    })
+                    .filter(|topic| self.dataflows.try_get(topic).is_none());
                 let (addr, topic) = parse_kafka_url(url)?;
-                let (raw_schema, schema_registry_url) = match schema {
-                    SourceSchema::Raw(schema) => (schema.to_owned(), None),
-                    SourceSchema::Registry(url) => {
-                        // TODO(benesch): we need to fetch this schema
-                        // asynchronously to avoid blocking the command
-                        // processing thread.
-                        let url: Url = url.parse()?;
-                        let ccsr_client = ccsr::Client::new(url.clone());
-                        let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-                        (res.raw, Some(url))
-                    }
-                };
-                let typ = avro::validate_schema(&raw_schema)?;
-                Ok(Dataflow::Source(Source {
-                    name,
-                    connector: SourceConnector::Kafka(KafkaSourceConnector {
-                        addr,
-                        topic,
-                        raw_schema,
-                        schema_registry_url,
-                    }),
-                    typ,
-                }))
+                if let Some(s) = topic {
+                    bail!(
+                        "CREATE SOURCES statement should not take a topic path: {}",
+                        s
+                    );
+                }
+                let results: Result<Vec<_>, failure::Error> = topic_names
+                    .map(|name| {
+                        Ok(Dataflow::Source(build_source(
+                            &SourceSchema::Registry(schema_registry.to_owned()),
+                            addr,
+                            name.to_owned(),
+                            name.to_owned(),
+                        )?))
+                    })
+                    .collect();
+
+                Ok(results?)
             }
             Statement::CreateSink {
                 name,
@@ -362,8 +429,8 @@ impl Planner {
                 let name = extract_sql_object_name(name)?;
                 let from = extract_sql_object_name(from)?;
                 let dataflow = self.dataflows.get(&from)?;
-                let (addr, topic) = parse_kafka_url(url)?;
-                Ok(Dataflow::Sink(Sink {
+                let (addr, topic) = parse_kafka_topic_url(url)?;
+                Ok(vec![Dataflow::Sink(Sink {
                     name,
                     from: (from, dataflow.typ().clone()),
                     connector: SinkConnector::Kafka(KafkaSinkConnector {
@@ -371,7 +438,7 @@ impl Planner {
                         topic,
                         schema_id: 0,
                     }),
-                }))
+                })])
             }
             other => bail!("Unsupported statement: {:?}", other),
         }
@@ -1743,7 +1810,7 @@ fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     }
 }
 
-fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
+fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::Error> {
     let url: Url = url.parse()?;
     if url.scheme() != "kafka" {
         bail!("only kafka:// sources are supported: {}", url);
@@ -1751,13 +1818,18 @@ fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
         bail!("source URL missing hostname: {}", url)
     }
     let topic = match url.path_segments() {
-        None => bail!("source URL missing topic path: {}"),
+        None => None,
         Some(segments) => {
             let segments: Vec<_> = segments.collect();
-            if segments.len() != 1 {
-                bail!("source URL should have exactly one path segment: {}", url);
+            if segments.is_empty() {
+                None
+            } else if segments.len() != 1 {
+                bail!("source URL should have at most one path segment: {}", url);
+            } else if segments[0].is_empty() {
+                None
+            } else {
+                Some(segments[0].to_owned())
             }
-            segments[0].to_owned()
         }
     };
     // We already checked for kafka scheme above, so it's safe to assume port
@@ -1768,6 +1840,15 @@ fn parse_kafka_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
         .next()
         .unwrap();
     Ok((addr, topic))
+}
+
+fn parse_kafka_topic_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
+    let (addr, topic) = parse_kafka_url(url)?;
+    if let Some(topic) = topic {
+        Ok((addr, topic))
+    } else {
+        bail!("source URL missing topic path: {}")
+    }
 }
 
 struct AggregateFuncVisitor<'ast> {

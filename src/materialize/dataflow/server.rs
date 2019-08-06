@@ -66,7 +66,7 @@ pub enum DataflowResultsHandler {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum SequencedCommand {
-    CreateDataflow(Dataflow),
+    CreateDataflows(Vec<Dataflow>),
     DropDataflows(Vec<String>),
     Peek {
         name: String,
@@ -383,11 +383,11 @@ where
                     let name = format!("<temp_{}>", Uuid::new_v4());
                     let typ = source.typ();
                     self.sequencer.push((
-                        SequencedCommand::CreateDataflow(Dataflow::View(View {
+                        SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
                             name: name.clone(),
                             relation_expr: source,
                             typ,
-                        })),
+                        })]),
                         CommandMeta::nil(),
                     ));
                     (name, true)

@@ -25,11 +25,13 @@ struct DataflowAndMetadata {
 }
 
 impl DataflowStore {
+    pub fn try_get(&self, name: &str) -> Option<&Dataflow> {
+        self.inner.get(name).map(|dm| &dm.inner)
+    }
+
     pub fn get(&self, name: &str) -> Result<&Dataflow, failure::Error> {
-        match self.inner.get(name) {
-            Some(metadata) => Ok(&metadata.inner),
-            None => bail!("dataflow {} does not exist", name),
-        }
+        self.try_get(name)
+            .ok_or_else(|| failure::err_msg(format!("dataflow {} does not exist", name)))
     }
 
     pub fn get_type(&self, name: &str) -> Result<&RelationType, failure::Error> {
