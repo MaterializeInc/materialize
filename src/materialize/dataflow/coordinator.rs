@@ -173,12 +173,8 @@ impl CommandCoordinator {
     fn sources_frontier(&self, name: &str, bound: &mut Antichain<Timestamp>) {
         match &self.views[name].dataflow {
             Dataflow::Source(_) => {
-                if let Some(upper) = self.upper_of(name) {
-                    bound.extend(upper.elements().iter().cloned());
-                } else {
-                    eprintln!("Alarming! Absent relation in view");
-                    bound.insert(0);
-                }
+                let upper = self.upper_of(name).expect("Name missing at coordinator");
+                bound.extend(upper.elements().iter().cloned());
             }
             Dataflow::Sink(_) => unreachable!(),
             v @ Dataflow::View(_) => {
@@ -200,6 +196,19 @@ impl CommandCoordinator {
     /// The upper frontier of a maintained view, if it exists.
     pub fn upper_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.upper)
+    }
+
+    /// Updates the since frontier of a named view.
+    ///
+    /// This frontier tracks compaction frontier, and represents a lower bound on times for
+    /// which the associated trace is certain to produce valid results. For times greater
+    /// or equal to some element of the since frontier the accumulation will be correct,
+    /// and for other times no such guarantee holds.
+    pub fn update_since(&mut self, name: &str, since: &[Timestamp]) {
+        if let Some(entry) = self.views.get_mut(name) {
+            entry.since.clear();
+            entry.since.extend(since.iter().cloned());
+        }
     }
 
     /// The since frontier of a maintained view, if it exists.
