@@ -33,17 +33,16 @@ struct Nation {
 class DataSource {
 
   private:
-    static std::vector<const char*> cLastParts;
-    static std::vector<const char*> tpchNouns;
-    static std::vector<const char*> tpchVerbs;
-    static std::vector<const char*> tpchAdjectives;
-    static std::vector<const char*> tpchAdverbs;
-    static std::vector<const char*> tpchPrepositions;
-    static std::vector<const char*> tpchTerminators;
-    static std::vector<const char*> tpchAuxiliaries;
+    static const std::vector<const char*> cLastParts;
+    static const std::vector<const char*> tpchNouns;
+    static const std::vector<const char*> tpchVerbs;
+    static const std::vector<const char*> tpchAdjectives;
+    static const std::vector<const char*> tpchAdverbs;
+    static const std::vector<const char*> tpchPrepositions;
+    static const std::vector<const char*> tpchTerminators;
+    static const std::vector<const char*> tpchAuxiliaries;
     static const Nation nations[];
     static const char* regions[];
-    static int lastOlCount;
     static int warehouseCount;
 
     static std::string tpchText(int length);
@@ -55,17 +54,12 @@ class DataSource {
   public:
     static void initialize(int warehouseCount);
     static bool randomTrue(double probability);
-    static int randomUniformInt(int minValue, int maxValue);
-    static void randomUniformInt(int minValue, int maxValue, int& ret);
-    static void randomNonUniformInt(int A, int x, int y, int C, int& ret);
-    static void randomDouble(double minValue, double maxValue, int decimals,
-                             double& ret);
     static int permute(int value, int low, int high);
     static void getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret);
     static void genCLast(int value, std::string& ret);
     static void randomCLast(std::string& ret);
     static void getRemoteWId(int& currentWId, int& ret);
-    static int nextOderlineCount();
+    static int nextOrderlineCount();
     static void addNumeric(int length, std::ofstream& stream, bool delimiter);
     static void addAlphanumeric62(int length, std::ofstream& stream,
                                   bool delimiter);

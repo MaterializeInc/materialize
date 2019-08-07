@@ -19,6 +19,7 @@ limitations under the License.
 #include "DataSource.h"
 #include "DbcTools.h"
 #include "Log.h"
+#include "Random.h"
 #include "dialect/DialectStrategy.h"
 
 #include <cstdlib>
@@ -239,19 +240,14 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     };
 
     // 2.4.1.1
-    int wId = 0;
-    DataSource::randomUniformInt(1, warehouseCount, wId);
+    int wId = chRandom::uniformInt(1, warehouseCount);
     // 2.4.1.2
-    int dId = 0;
-    DataSource::randomUniformInt(1, 10, dId);
-    int cId = 0;
-    DataSource::randomNonUniformInt(1023, 1, 3000, 867, cId);
+    int dId = chRandom::uniformInt(1, 10);
+    int cId = chRandom::nonUniformInt(1023, 1, 3000, 867);
     // 2.4.1.3
-    int olCount = 0;
-    DataSource::randomUniformInt(5, 15, olCount);
+    int olCount = chRandom::uniformInt(5, 15);
     // 2.4.1.4
-    int randomRollback = 0;
-    DataSource::randomUniformInt(1, 100, randomRollback);
+    int randomRollback = chRandom::uniformInt(1, 100);
     // 2.4.1.5
     int allLocal = 1;
     OrderLine oLines[olCount];
@@ -260,10 +256,9 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         if (i == olCount - 1 && randomRollback == 1)
             oLines[i].olIId = 100001;
         else
-            DataSource::randomNonUniformInt(8191, 1, 100000, 5867,
-                                            oLines[i].olIId);
+            oLines[i].olIId = chRandom::nonUniformInt(8191, 1, 100000, 5867);
         // 2.
-        if (DataSource::randomUniformInt(1, 100) == 1) {
+        if (chRandom::uniformInt(1, 100) == 1) {
             DataSource::getRemoteWId(wId, oLines[i].olSupplyWId);
             oLines[i].olIsRemote = 1;
             allLocal = 0;
@@ -272,7 +267,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
             oLines[i].olIsRemote = 0;
         }
         // 3.
-        DataSource::randomUniformInt(1, 10, oLines[i].olQuantity);
+        oLines[i].olQuantity = chRandom::uniformInt(1, 10);
     }
     // 2.4.1.6
     SQL_TIMESTAMP_STRUCT oEntryD;
@@ -449,37 +444,32 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
 bool Transactions::executePayment(SQLHDBC& hDBC) {
 
     // 2.5.1.1
-    int wId = 0;
-    DataSource::randomUniformInt(1, warehouseCount, wId);
+    int wId = chRandom::uniformInt(1, warehouseCount);
     // 2.5.1.2
-    int dId = 0;
-    DataSource::randomUniformInt(1, 10, dId);
+    int dId = chRandom::uniformInt(1, 10);
 
-    int x = 0;
-    DataSource::randomUniformInt(1, 100, x);
+    int x = chRandom::uniformInt(1, 100);
     int cDId = 0;
     int cWId = 0;
     if (x <= 85) {
         cDId = dId;
         cWId = wId;
     } else {
-        DataSource::randomUniformInt(1, 10, cDId);
+        cDId = chRandom::uniformInt(1, 10);
         DataSource::getRemoteWId(wId, cWId);
     }
 
-    int y = 0;
-    DataSource::randomUniformInt(1, 100, y);
+    int y = chRandom::uniformInt(1, 100);
     int cId = 0;
     std::string cLast = "";
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {
-        DataSource::randomNonUniformInt(1023, 1, 3000, 867, cId);
+        cId = chRandom::nonUniformInt(1023, 1, 3000, 867);
     }
 
     // 2.5.1.3
-    double hAmount = 0;
-    DataSource::randomDouble(1.00, 5000.00, 2, hAmount);
+    double hAmount = chRandom::uniformDouble(1.00, 5000.00, 2);
 
     // 2.5.1.4
     SQL_TIMESTAMP_STRUCT hDate;
@@ -672,19 +662,16 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
 bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
 
     // 2.6.1.1
-    int wId = 0;
-    DataSource::randomUniformInt(1, warehouseCount, wId);
+    int wId = chRandom::uniformInt(1, warehouseCount);
     // 2.6.1.2
-    int dId = 0;
-    DataSource::randomUniformInt(1, 10, dId);
-    int y = 0;
-    DataSource::randomUniformInt(1, 100, y);
+    int dId = chRandom::uniformInt(1, 10);
+    int y = chRandom::uniformInt(1, 100);
     int cId = 0;
     std::string cLast = "";
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {
-        DataSource::randomNonUniformInt(1023, 1, 3000, 867, cId);
+        cId = chRandom::nonUniformInt(1023, 1, 3000, 867);
     }
 
     SQLLEN nIdicator = 0;
@@ -774,11 +761,9 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
 bool Transactions::executeDelivery(SQLHDBC& hDBC) {
 
     // 2.7.1.1
-    int wId = 0;
-    DataSource::randomUniformInt(1, warehouseCount, wId);
+    int wId = chRandom::uniformInt(1, warehouseCount);
     // 2.7.1.2
-    int oCarrierId = 0;
-    DataSource::randomUniformInt(1, 10, oCarrierId);
+    int oCarrierId = chRandom::uniformInt(1, 10);
     // 2.7.1.3
     SQL_TIMESTAMP_STRUCT olDeliveryD;
     DataSource::getCurrentTimestamp(olDeliveryD);
@@ -893,13 +878,10 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
 bool Transactions::executeStockLevel(SQLHDBC& hDBC) {
 
     // 2.8.1.1
-    int wId = 0;
-    DataSource::randomUniformInt(1, warehouseCount, wId);
-    int dId = 0;
-    DataSource::randomUniformInt(1, 10, dId);
+    int wId = chRandom::uniformInt(1, warehouseCount);
+    int dId = chRandom::uniformInt(1, 10);
     // 2.8.1.2
-    int threshold = 0;
-    DataSource::randomUniformInt(10, 20, threshold);
+    int threshold = chRandom::uniformInt(10, 20);
 
     SQLLEN nIdicator = 0;
     SQLCHAR buf[1024] = {0};

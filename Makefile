@@ -24,13 +24,14 @@ SOURCES = \
 	src/Log.cc \
 	src/PthreadShim.cc \
 	src/Queries.cc \
+	src/Random.cc \
 	src/Schema.cc \
 	src/TransactionalStatistic.cc \
 	src/Transactions.cc \
 	src/TupleGen.cc
 
 chBenchmark: $(SOURCES:.cc=.o)
-	$(CXX) $(LDFLAGS) $(LDLIBS) $^ -o $@
+	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
 clean:
 	find . -name '*.o' -delete
