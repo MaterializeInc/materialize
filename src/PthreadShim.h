@@ -33,6 +33,7 @@
 #pragma once
 
 #include <pthread.h>
+#include <unistd.h>
 
 #ifndef _POSIX_BARRIERS
 

@@ -13,7 +13,7 @@
 #limitations under the License.
 
 CXXFLAGS = -c -std=c++17 -O2 -Wall -Wextra -Werror
-LDLIBS = -lodbc
+LDLIBS = -lodbc -lpthread
 
 SOURCES = \
 	src/AnalyticalStatistic.cc \

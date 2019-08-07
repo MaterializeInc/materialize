@@ -127,7 +127,6 @@ const std::vector<const char*> DataSource::tpchAuxiliaries = {"do",
                                                         "need to",
                                                         "try to"};
 
-int DataSource::lastOlCount = 0;
 int DataSource::warehouseCount = 0;
 
 std::string DataSource::tpchText(int length) {

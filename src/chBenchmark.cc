@@ -36,9 +36,10 @@ limitations under the License.
 #include <sql.h>
 #include <sqlext.h>
 #include <sqltypes.h>
+#include <string.h>
 #include <unistd.h>
 
-enum class runState {
+enum class RunState {
     off,
     warmup,
     run,
@@ -46,7 +47,7 @@ enum class runState {
 
 typedef struct {
     pthread_barrier_t* barStart;
-    std::atomic<runState>& runState;
+    std::atomic<RunState>& runState;
     int threadId;
     SQLHDBC hDBC;
     void* stat;
@@ -70,7 +71,7 @@ static void* analyticalThread(void* args) {
 
     Log::l1() << Log::tm() << "-analytical " << prm->threadId
               << ":  start warmup\n";
-    while (prm->runState == runState::warmup) {
+    while (prm->runState == RunState::warmup) {
         q = (query % 22) + 1;
 
         Log::l1() << Log::tm() << "-analytical " << prm->threadId << ": TPC-H "
@@ -81,7 +82,7 @@ static void* analyticalThread(void* args) {
 
     Log::l1() << Log::tm() << "-analytical " << prm->threadId
               << ": start test\n";
-    while (prm->runState == runState::run) {
+    while (prm->runState == RunState::run) {
         q = (query % 22) + 1;
 
         Log::l1() << Log::tm() << "-analytical " << prm->threadId << ": TPC-H "
@@ -113,7 +114,7 @@ static void* transactionalThread(void* args) {
 
         Log::l1() << Log::tm() << "-transactional " << prm->threadId
                   << ": start warmup\n";
-        while (prm->runState == runState::warmup) {
+        while (prm->runState == RunState::warmup) {
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
@@ -148,37 +149,37 @@ static void* transactionalThread(void* args) {
 
         Log::l1() << Log::tm() << "-transactional " << prm->threadId
                   << ": start test\n";
-        while (prm->runState == runState::run) {
+        while (prm->runState == RunState::run) {
             decision = chRandom::uniformInt(1, 100);
-            if (decision <= 44 && prm->runState == runState::run) {
+            if (decision <= 44 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
                 b = transactions->executeNewOrder(prm->hDBC);
                 tStat->executeTPCCSuccess(1, b);
             }
             decision = chRandom::uniformInt(1, 100);
-            if (decision <= 44 && prm->runState == runState::run) {
+            if (decision <= 44 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
                 b = transactions->executePayment(prm->hDBC);
                 tStat->executeTPCCSuccess(2, b);
             }
             decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4 && prm->runState == runState::run) {
+            if (decision <= 4 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": OrderStatus\n";
                 b = transactions->executeOrderStatus(prm->hDBC);
                 tStat->executeTPCCSuccess(3, b);
             }
             decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4 && prm->runState == runState::run) {
+            if (decision <= 4 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
                 b = transactions->executeDelivery(prm->hDBC);
                 tStat->executeTPCCSuccess(4, b);
             }
             decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4 && prm->runState == runState::run) {
+            if (decision <= 4 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": StockLevel\n";
                 b = transactions->executeStockLevel(prm->hDBC);
@@ -357,7 +358,7 @@ static int run(int argc, char* argv[]) {
 
     DataSource::initialize(warehouseCount);
 
-    std::atomic<runState> runState = runState::off;
+    std::atomic<RunState> runState = RunState::off;
     unsigned int count = analyticThreads + transactionalThreads + 1;
     pthread_barrier_t barStart;
     pthread_barrier_init(&barStart, NULL, count);
@@ -392,7 +393,7 @@ static int run(int argc, char* argv[]) {
         pthread_create(&tpt[i], NULL, transactionalThread, &tprm[i]);
     }
 
-    runState = runState::warmup;
+    runState = RunState::warmup;
     Log::l2() << Log::tm() << "Wait for threads to initialize:\n";
     pthread_barrier_wait(&barStart);
     Log::l2() << Log::tm() << "-all threads initialized\n";
@@ -402,12 +403,12 @@ static int run(int argc, char* argv[]) {
     Log::l2() << Log::tm() << "-start warmup\n";
     sleep(warmupSeconds);
 
-    runState = runState::run;
+    runState = RunState::run;
     Log::l2() << Log::tm() << "-start test\n";
     sleep(runSeconds);
 
     Log::l2() << Log::tm() << "-stop\n";
-    runState = runState::off;
+    runState = RunState::off;
 
     // write results to file
     unsigned long long analyticalResults = 0;
