@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+if [[ "$#" -ne 1 ]]; then
+    echo "usage: $0 SQL" >&2
+    exit 1
+fi
+
+while :; do
+    out=$(psql -q -h materialized -p 6875 sslmode=disable -c '\timing' -c "$1")
+    clear
+    echo "$out"
+done
