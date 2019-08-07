@@ -44,6 +44,7 @@ class DataSource {
     static const Nation nations[];
     static const char* regions[];
     static int lastOlCount;
+    static int warehouseCount;
 
     static std::string tpchText(int length);
     static std::string tpchSentence();
@@ -52,7 +53,7 @@ class DataSource {
     static std::string tpchPrepositionalPhrase();
 
   public:
-    static void initialize();
+    static void initialize(int warehouseCount);
     static bool randomTrue(double probability);
     static int randomUniformInt(int minValue, int maxValue);
     static void randomUniformInt(int minValue, int maxValue, int& ret);

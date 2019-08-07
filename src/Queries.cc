@@ -16,7 +16,6 @@ limitations under the License.
 
 #include "Queries.h"
 
-#include "Config.h"
 #include "DbcTools.h"
 #include "Log.h"
 #include "dialect/DialectStrategy.h"

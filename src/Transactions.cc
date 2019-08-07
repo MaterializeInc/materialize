@@ -16,7 +16,6 @@ limitations under the License.
 
 #include "Transactions.h"
 
-#include "Config.h"
 #include "DataSource.h"
 #include "DbcTools.h"
 #include "Log.h"
@@ -243,7 +242,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
 
     // 2.4.1.1
     int wId = 0;
-    DataSource::randomUniformInt(1, Config::getWarehouseCount(), wId);
+    DataSource::randomUniformInt(1, warehouseCount, wId);
     // 2.4.1.2
     int dId = 0;
     DataSource::randomUniformInt(1, 10, dId);
@@ -453,7 +452,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
 
     // 2.5.1.1
     int wId = 0;
-    DataSource::randomUniformInt(1, Config::getWarehouseCount(), wId);
+    DataSource::randomUniformInt(1, warehouseCount, wId);
     // 2.5.1.2
     int dId = 0;
     DataSource::randomUniformInt(1, 10, dId);
@@ -675,7 +674,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
 
     // 2.6.1.1
     int wId = 0;
-    DataSource::randomUniformInt(1, Config::getWarehouseCount(), wId);
+    DataSource::randomUniformInt(1, warehouseCount, wId);
     // 2.6.1.2
     int dId = 0;
     DataSource::randomUniformInt(1, 10, dId);
@@ -777,7 +776,7 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
 
     // 2.7.1.1
     int wId = 0;
-    DataSource::randomUniformInt(1, Config::getWarehouseCount(), wId);
+    DataSource::randomUniformInt(1, warehouseCount, wId);
     // 2.7.1.2
     int oCarrierId = 0;
     DataSource::randomUniformInt(1, 10, oCarrierId);
@@ -896,7 +895,7 @@ bool Transactions::executeStockLevel(SQLHDBC& hDBC) {
 
     // 2.8.1.1
     int wId = 0;
-    DataSource::randomUniformInt(1, Config::getWarehouseCount(), wId);
+    DataSource::randomUniformInt(1, warehouseCount, wId);
     int dId = 0;
     DataSource::randomUniformInt(1, 10, dId);
     // 2.8.1.2

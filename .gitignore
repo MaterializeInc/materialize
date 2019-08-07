@@ -1,2 +1,5 @@
 *.o
 chBenchmark
+gen
+log
+out

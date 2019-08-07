@@ -16,7 +16,7 @@ limitations under the License.
 
 #include "DataSource.h"
 
-#include "Config.h"
+#include "Defines.h"
 
 #include <cstdlib>
 #include <ctime>
@@ -129,6 +129,7 @@ vector<const char*> DataSource::tpchAuxiliaries = {"do",
                                                    "try to"};
 
 int DataSource::lastOlCount = 0;
+int DataSource::warehouseCount = 0;
 
 string DataSource::tpchText(int length) {
     string s = " ";
@@ -204,7 +205,10 @@ string DataSource::tpchPrepositionalPhrase() {
            " the " + tpchNounPhrase();
 }
 
-void DataSource::initialize() { srand(1382350201); }
+void DataSource::initialize(int wc) {
+    srand(1382350201);
+    warehouseCount = wc;
+}
 
 bool DataSource::randomTrue(double probability) {
     double value = rand() / double(RAND_MAX);
@@ -267,12 +271,12 @@ void DataSource::randomCLast(string& ret) {
 }
 
 void DataSource::getRemoteWId(int& currentWId, int& ret) {
-    if (Config::getWarehouseCount() == 1) {
+    if (warehouseCount == 1) {
         ret = currentWId;
     } else {
         ret = currentWId;
         while (ret == currentWId)
-            randomUniformInt(1, Config::getWarehouseCount(), ret);
+            randomUniformInt(1, warehouseCount, ret);
     }
 }
 
@@ -294,7 +298,7 @@ void DataSource::addNumeric(int length, ofstream& stream, bool delimiter) {
     }
     stream << s;
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addAlphanumeric62(int length, ofstream& stream,
@@ -310,7 +314,7 @@ void DataSource::addAlphanumeric62(int length, ofstream& stream,
     }
     stream << s;
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addAlphanumeric64(int length, ofstream& stream,
@@ -326,7 +330,7 @@ void DataSource::addAlphanumeric64(int length, ofstream& stream,
     }
     stream << s;
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addAlphanumeric64(int minLength, int maxLength,
@@ -345,14 +349,14 @@ void DataSource::addAlphanumeric64Original(int minLength, int maxLength,
     stream << "ORIGINAL";
     addAlphanumeric64(rLength - 8 - rPosition, stream, 0);
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addTextString(int minLength, int maxLength, ofstream& stream,
                                bool delimiter) {
     stream << tpchText(randomUniformInt(minLength, maxLength));
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addTextStringCustomer(int minLength, int maxLength,
@@ -371,14 +375,14 @@ void DataSource::addTextStringCustomer(int minLength, int maxLength,
     stream << action;
     stream << tpchText(l3);
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addInt(int minValue, int maxValue, ofstream& stream,
                         bool delimiter) {
     stream << randomUniformInt(minValue, maxValue);
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addDouble(double minValue, double maxValue, int decimals,
@@ -387,7 +391,7 @@ void DataSource::addDouble(double minValue, double maxValue, int decimals,
     randomDouble(minValue, maxValue, decimals, d);
     stream << d;
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addNId(ofstream& stream, bool delimiter) {
@@ -397,14 +401,14 @@ void DataSource::addNId(ofstream& stream, bool delimiter) {
         randomUniformInt('0', 'z', rand);
     stream << rand;
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addWDCZip(ofstream& stream, bool delimiter) {
     addNumeric(4, stream, 0);
     stream << "11111";
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 void DataSource::addSuPhone(int& suId, ofstream& stream, bool delimiter) {
@@ -416,7 +420,7 @@ void DataSource::addSuPhone(int& suId, ofstream& stream, bool delimiter) {
     stream << "-";
     addInt(1000, 9999, stream, 0);
     if (delimiter)
-        stream << Config::getCsvDelim();
+        stream << csvDelim;
 }
 
 string DataSource::getCurrentTimeString() {

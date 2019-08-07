@@ -64,9 +64,12 @@ class Transactions {
     SQLHSTMT slDistrictSelect = 0;
     SQLHSTMT slStockSelect = 0;
 
+    int warehouseCount;
+
     bool prepare(SQLHDBC& hDBC);
 
   public:
+    Transactions(int wc) : warehouseCount(wc) {}
     bool prepareStatements(SQLHDBC& hDBC);
 
     bool executeNewOrder(SQLHDBC& hDBC);

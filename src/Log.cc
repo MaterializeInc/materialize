@@ -16,8 +16,6 @@ limitations under the License.
 
 #include "Log.h"
 
-#include "Config.h"
-
 #define WRITE_LOG_FILE
 
 using namespace std;
@@ -33,9 +31,12 @@ Log1& Log::l1() { return log1; }
 
 Log2& Log::l2() { return log2; }
 
+void Log::open(const std::string& path) {
+    logStream.open(path);
+    // TODO(benesch): check for errors.
+}
+
 ofstream* Log::getLogStream() {
-    if (!logStream.is_open())
-        logStream.open((Config::getOutputPath() + "/log").c_str());
     return &logStream;
 }
 
@@ -76,7 +77,7 @@ Log1& operator<<(Log1& l, double d) {
     return l;
 };
 
-Log2& operator<<(Log2& l, LogTime& ) {
+Log2& operator<<(Log2& l, LogTime&) {
     time_t rawtime;
     time(&rawtime);
     struct tm* timeinfo = localtime(&rawtime);

@@ -16,7 +16,6 @@ limitations under the License.
 
 #include "DbcTools.h"
 
-#include "Config.h"
 #include "Log.h"
 
 using namespace std;
@@ -46,13 +45,15 @@ bool DbcTools::setEnv(SQLHENV& hEnv) {
     return 0;
 }
 
-bool DbcTools::connect(SQLHENV& hEnv, SQLHDBC& hDBC) {
+bool DbcTools::connect(SQLHENV& hEnv, SQLHDBC& hDBC, const char * dsn,
+                       const char * username,
+                       const char * password) {
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_DBC, hEnv, &hDBC);
     if (reviewReturn(hDBC, SQL_HANDLE_DBC, ret, 1)) {
         ret =
-            SQLConnect(hDBC, (SQLCHAR*)Config::getDataSourceName().c_str(),
-                       SQL_NTS, (SQLCHAR*)Config::getDbsUser().c_str(), SQL_NTS,
-                       (SQLCHAR*)Config::getDbsPassword().c_str(), SQL_NTS);
+            SQLConnect(hDBC, (SQLCHAR*)dsn,
+                       SQL_NTS, (SQLCHAR*) username, SQL_NTS,
+                       (SQLCHAR*) password, SQL_NTS);
         if (reviewReturn(hDBC, SQL_HANDLE_DBC, ret, 1)) {
             Log::l1() << Log::tm() << "-dbs connected\n";
             return 1;

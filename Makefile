@@ -18,7 +18,6 @@ LDLIBS = -lodbc
 SOURCES = \
 	src/AnalyticalStatistic.cc \
 	src/chBenchmark.cc \
-	src/Config.cc \
 	src/DataSource.cc \
 	src/DbcTools.cc \
 	src/dialect/DialectStrategy.cc \
@@ -35,4 +34,4 @@ chBenchmark: $(SOURCES:.cc=.o)
 
 clean:
 	find . -name '*.o' -delete
-	rm chBenchmark
+	rm -f chBenchmark

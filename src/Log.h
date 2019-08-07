@@ -40,6 +40,7 @@ class Log {
     static Log1& l1();
     static Log2& l2();
     static std::ofstream* getLogStream();
+    static void open(const std::string& path);
 };
 
 Log1& operator<<(Log1& l, LogTime& lt);

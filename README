@@ -1,6 +1,6 @@
-This implementation of the CH-benCHmark was created for the UNIX platform. It uses unixODBC 
+This implementation of the CH-benCHmark was created for the UNIX platform. It uses unixODBC
 and pthreads.
-Additionally, it can handle different SQL dialects. 
+Additionally, it can handle different SQL dialects.
 
 To add a new dialect:
     - put a new dialect file in the "dialect" directory
@@ -10,11 +10,11 @@ To add a new dialect:
 
 
 To build it:
-    requirements are: 
+    requirements are:
     - libodbc (included in unixODBC, version 2.3.2 required!)
     - GNU make (version 3.81 recommended)
     - c++11 compiler (gcc 4.7 recommended)
-    
+
     1. Adjust "Makefile" if needed, for example:
     - CC to appropriate c++11 compiler
     - add -L/path/to/libodbc/directory to LDFLAGS
@@ -30,27 +30,23 @@ To run it:
     - isql yourDataSourceName yourDatabaseUser yourPassword
 
     3. Create initial database as CSV files:
-        chBenchmark
-        -csv
-        -wh <WAREHOUSE_COUNT>
-        -pa <INITIAL_DB_GEN_PATH>
+        chBenchmark gen [--warehouses <COUNT>] [--out-dir <PATH>]
 
-        example: chBenchmark -csv -wh 50 -pa /path/to/any/directory
-        
+        example: ./chBenchmark gen -w50 -ogen
+
     4. Run test:
         chBenchmark
         -run
-        -dsn <DATA_SOURCE_NAME>
-        -usr <DBS_USER>
-        -pwd <DBS_PASSWORD>
-        -a <ANALYTICAL_CLIENTS>
-        -t <TRANSACTIONAL_CLIENTS>
-        -wd <WARMUP_DURATION_IN_S>
-        -td <TEST_DURATION_IN_S>
-        -pa <INITIAL_DB_CREATION_PATH>
-        -op <OUTPUT_PATH>
+        --dsn <DATA_SOURCE_NAME>
+        --username <DBS_USER>
+        --password <DBS_PASSWORD>
+        --analytic-threads <ANALYTICAL_CLIENTS>
+        --transactional-threads <TRANSACTIONAL_CLIENTS>
+        --warmup-seconds <SECONDS>
+        --run-seconds <SECONDS>
+        --gen-dir <PATH>
+        --out-dir <OUTPUT_PATH>
 
-        example: chBenchmark -run -dsn yourDataSourceName -usr yourDatabaseUser -pwd yourPassword 
-                 -a 5 -t 10 -wd 60 -td 300 -pa /path/to/any/directory -op /path/to/any/directory
+        example: ./chBenchmark run -dmysql -uroot -a5 -t10 -w60 -r300
 
-    
+

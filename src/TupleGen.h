@@ -39,7 +39,7 @@ class TupleGen {
     static std::ofstream regionStream;
 
   public:
-    static void openOutputFiles();
+    static void openOutputFiles(std::string outDir);
     static void closeOutputFiles();
     static void genWarehouse(int& wId);
     static void genDistrict(int& dId, int& wId);

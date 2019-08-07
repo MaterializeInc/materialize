@@ -16,12 +16,12 @@ limitations under the License.
 
 #include "Schema.h"
 
-#include "Config.h"
 #include "DbcTools.h"
 #include "Log.h"
 #include "dialect/DialectStrategy.h"
 
 #include <string>
+#include <stdlib.h>
 
 using namespace std;
 
@@ -73,7 +73,7 @@ bool Schema::createSchema(SQLHSTMT& hStmt) {
     return 1;
 }
 
-bool Schema::importCSV(SQLHSTMT& hStmt) {
+bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
 
     if (DialectStrategy::getInstance()->getImportPrefix().size() !=
         DialectStrategy::getInstance()->getImportSuffix().size()) {
@@ -88,7 +88,7 @@ bool Schema::importCSV(SQLHSTMT& hStmt) {
         if (!DbcTools::executeServiceStatement(
                 hStmt,
                 string(DialectStrategy::getInstance()->getImportPrefix()[i] +
-                       Config::getInitialDbCreationPath() +
+                       genDir +
                        DialectStrategy::getInstance()->getImportSuffix()[i])
                     .c_str())) {
             Log::l2() << Log::tm() << "-failed\n";
