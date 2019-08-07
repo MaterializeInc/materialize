@@ -25,8 +25,6 @@ limitations under the License.
 #include <cstring>
 #include <string>
 
-using namespace std;
-
 bool Transactions::prepare(SQLHDBC& hDBC) {
 
     // NewOrder:
@@ -345,7 +343,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
 
     double iPrice;
     int sQuantity;
-    string sDist;
+    std::string sDist;
     double tmp2;
     for (int i = 0; i < olCount; i++) {
 
@@ -390,7 +388,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
 
             if (SQL_SUCCESS == SQLGetData(noStockSelects[dId - 1], 2,
                                           SQL_C_CHAR, buf, 1024, &nIdicator)) {
-                sDist = string((char*)buf);
+                sDist = std::string((char*)buf);
             } else {
                 DbcTools::rollback(hDBC);
                 return 0;
@@ -472,7 +470,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     int y = 0;
     DataSource::randomUniformInt(1, 100, y);
     int cId = 0;
-    string cLast = "";
+    std::string cLast = "";
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {
@@ -497,7 +495,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::rollback(hDBC);
         return 0;
     }
-    string wName = "";
+    std::string wName = "";
     if (!DbcTools::fetch(pmWarehouseSelect, buf, &nIdicator, 1, wName)) {
         DbcTools::rollback(hDBC);
         return 0;
@@ -518,7 +516,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::rollback(hDBC);
         return 0;
     }
-    string dName = "";
+    std::string dName = "";
     if (!DbcTools::fetch(pmDistrictSelect, buf, &nIdicator, 1, dName)) {
         DbcTools::rollback(hDBC);
         return 0;
@@ -532,7 +530,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::rollback(hDBC);
         return 0;
     }
-    string cCredit;
+    std::string cCredit;
     if (y <= 60) { // Case 2
         DbcTools::resetStatement(pmCustomerSelect1);
         char buffer1[16];
@@ -575,7 +573,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
             }
             if (SQL_SUCCESS == SQLGetData(pmCustomerSelect2, 11, SQL_C_CHAR,
                                           buf, 1024, &nIdicator))
-                cCredit = string((char*)buf);
+                cCredit = std::string((char*)buf);
             else {
                 DbcTools::rollback(hDBC);
                 return 0;
@@ -620,14 +618,15 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
             DbcTools::rollback(hDBC);
             return 0;
         }
-        string cData = "";
+        std::string cData = "";
         if (!DbcTools::fetch(pmCustomerSelect4, buf, &nIdicator, 1, cData)) {
             DbcTools::rollback(hDBC);
             return 0;
         }
-        cData = to_string(cId) + "," + to_string(cDId) + "," + to_string(cWId) +
-                "," + to_string(dId) + "," + to_string(wId) + "," +
-                to_string(hAmount) + "," + cData;
+        cData = std::to_string(cId) + "," + std::to_string(cDId) + "," +
+                std::to_string(cWId) + "," + std::to_string(dId) + "," +
+                std::to_string(wId) + "," + std::to_string(hAmount) + "," +
+                cData;
         if (cData.length() > 500)
             cData = cData.substr(0, 500);
 
@@ -644,7 +643,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         }
     }
 
-    string hData = wName + "    " + dName;
+    std::string hData = wName + "    " + dName;
 
     DbcTools::resetStatement(pmHistoryInsert);
     DbcTools::bind(pmHistoryInsert, 1, cId);
@@ -681,7 +680,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     int y = 0;
     DataSource::randomUniformInt(1, 100, y);
     int cId = 0;
-    string cLast = "";
+    std::string cLast = "";
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {

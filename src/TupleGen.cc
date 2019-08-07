@@ -20,22 +20,20 @@ limitations under the License.
 
 #include <err.h>
 
-using namespace std;
+std::ofstream TupleGen::warehouseStream;
+std::ofstream TupleGen::districtStream;
+std::ofstream TupleGen::customerStream;
+std::ofstream TupleGen::historyStream;
+std::ofstream TupleGen::neworderStream;
+std::ofstream TupleGen::orderStream;
+std::ofstream TupleGen::orderlineStream;
+std::ofstream TupleGen::itemStream;
+std::ofstream TupleGen::stockStream;
+std::ofstream TupleGen::nationStream;
+std::ofstream TupleGen::supplierStream;
+std::ofstream TupleGen::regionStream;
 
-ofstream TupleGen::warehouseStream;
-ofstream TupleGen::districtStream;
-ofstream TupleGen::customerStream;
-ofstream TupleGen::historyStream;
-ofstream TupleGen::neworderStream;
-ofstream TupleGen::orderStream;
-ofstream TupleGen::orderlineStream;
-ofstream TupleGen::itemStream;
-ofstream TupleGen::stockStream;
-ofstream TupleGen::nationStream;
-ofstream TupleGen::supplierStream;
-ofstream TupleGen::regionStream;
-
-void ofopen(ofstream& f, std::string path) {
+void ofopen(std::ofstream& f, std::string path) {
     f.open(path);
     if (f.fail()) {
         err(1, "opening %s", path.c_str());
@@ -82,7 +80,7 @@ void TupleGen::genWarehouse(int& wId) {
     DataSource::addWDCZip(warehouseStream, 1);                 // W_ZIP
     DataSource::addDouble(0.0, 0.2, 4, warehouseStream, 1);    // W_TAX
     warehouseStream << "300000.00";                            // W_YTD
-    warehouseStream << endl;
+    warehouseStream << std::endl;
 }
 
 void TupleGen::genDistrict(int& dId, int& wId) {
@@ -97,17 +95,18 @@ void TupleGen::genDistrict(int& dId, int& wId) {
     DataSource::addDouble(0.0, 0.2, 4, districtStream, 1);    // D_TAX
     districtStream << "30000.00" << csvDelim;                 // D_YTD
     districtStream << "3001";                                 // D_NEXT_O_ID
-    districtStream << endl;
+    districtStream << std::endl;
 }
 
-void TupleGen::genCustomer(int& cId, int& dId, int& wId, string& customerTime) {
-    string cLast = "";
+void TupleGen::genCustomer(int& cId, int& dId, int& wId,
+                           std::string& customerTime) {
+    std::string cLast = "";
     if (cId <= 1000)
         DataSource::genCLast(cId - 1, cLast);
     else
         DataSource::randomCLast(cLast);
 
-    string cState = DataSource::randomAlphanumeric62(2);
+    std::string cState = DataSource::randomAlphanumeric62(2);
 
     customerStream << cId << csvDelim;                        // C_ID
     customerStream << dId << csvDelim;                        // C_D_ID
@@ -134,7 +133,7 @@ void TupleGen::genCustomer(int& cId, int& dId, int& wId, string& customerTime) {
     customerStream << "0" << csvDelim;                     // C_DELIVERY_CNT
     DataSource::addAlphanumeric64(300, 500, customerStream, 1); // C_DATA
     customerStream << (int)(cState.c_str())[0];                 // C_N_NATIONKEY
-    customerStream << endl;
+    customerStream << std::endl;
 }
 
 void TupleGen::genHistory(int& cId, int& dId, int& wId) {
@@ -147,18 +146,18 @@ void TupleGen::genHistory(int& cId, int& dId, int& wId) {
                   << csvDelim;            // H_DATE - current date and time
     historyStream << "10.00" << csvDelim; // H_AMOUNT
     DataSource::addAlphanumeric64(12, 24, historyStream, 0); // H_DATA
-    historyStream << endl;
+    historyStream << std::endl;
 }
 
 void TupleGen::genNeworder(int& oId, int& dId, int& wId) {
     neworderStream << oId << csvDelim; // NO_O_ID
     neworderStream << dId << csvDelim; // NO_D_ID
     neworderStream << wId;             // NO_W_ID
-    neworderStream << endl;
+    neworderStream << std::endl;
 }
 
 void TupleGen::genOrder(int& oId, int& dId, int& wId, int& cId, int& olCount,
-                        string& orderTime) {
+                        std::string& orderTime) {
     orderStream << oId << csvDelim;       // O_ID
     orderStream << dId << csvDelim;       // O_D_ID
     orderStream << wId << csvDelim;       // O_W_ID
@@ -172,11 +171,11 @@ void TupleGen::genOrder(int& oId, int& dId, int& wId, int& cId, int& olCount,
         orderStream << "" << csvDelim;
     orderStream << olCount << csvDelim; // O_OL_CNT
     orderStream << "1";                 // O_ALL_LOCAL
-    orderStream << endl;
+    orderStream << std::endl;
 }
 
 void TupleGen::genOrderline(int& oId, int& dId, int& wId, int& olNumber,
-                            string& orderTime) {
+                            std::string& orderTime) {
     orderlineStream << oId << csvDelim;                // OL_O_ID
     orderlineStream << dId << csvDelim;                // OL_D_ID
     orderlineStream << wId << csvDelim;                // OL_W_ID
@@ -193,7 +192,7 @@ void TupleGen::genOrderline(int& oId, int& dId, int& wId, int& olNumber,
     else
         DataSource::addDouble(0.01, 9999.99, 2, orderlineStream, 1);
     DataSource::addAlphanumeric64(24, orderlineStream, 0); // OL_DIST_INFO
-    orderlineStream << endl;
+    orderlineStream << std::endl;
 }
 
 void TupleGen::genItem(int& iId) {
@@ -205,7 +204,7 @@ void TupleGen::genItem(int& iId) {
         DataSource::addAlphanumeric64Original(26, 50, itemStream, 0);
     else
         DataSource::addAlphanumeric64(26, 50, itemStream, 0);
-    itemStream << endl;
+    itemStream << std::endl;
 }
 
 void TupleGen::genStock(int& iId, int& wId) {
@@ -231,7 +230,7 @@ void TupleGen::genStock(int& iId, int& wId) {
         DataSource::addAlphanumeric64(26, 50, stockStream, 1);
     stockStream << ((iId * wId) %
                     10000); // S_SU_SUPPKEY - no TPC-C/CH-benCHmark spec
-    stockStream << endl;
+    stockStream << std::endl;
 }
 
 void TupleGen::genNation(Nation n) {
@@ -239,7 +238,7 @@ void TupleGen::genNation(Nation n) {
     nationStream << n.name << csvDelim;                  // N_NAME
     nationStream << n.rId << csvDelim;                   // N_REGIONKEY
     DataSource::addTextString(31, 114, nationStream, 0); // N_COMMENT
-    nationStream << endl;
+    nationStream << std::endl;
 }
 
 void TupleGen::genSupplier(int& suId) {
@@ -260,12 +259,12 @@ void TupleGen::genSupplier(int& suId) {
                                           0);
     else
         DataSource::addTextString(25, 100, supplierStream, 0);
-    supplierStream << endl;
+    supplierStream << std::endl;
 }
 
 void TupleGen::genRegion(int& rId, const char* rName) {
     regionStream << rId << csvDelim;                     // R_REGIONKEY
     regionStream << rName << csvDelim;                   // R_NAME
     DataSource::addTextString(31, 115, regionStream, 0); // R_COMMENT
-    regionStream << endl;
+    regionStream << std::endl;
 }

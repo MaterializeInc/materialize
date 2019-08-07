@@ -24,8 +24,6 @@ limitations under the License.
 #include <math.h>
 #include <sstream>
 
-using namespace std;
-
 const Nation DataSource::nations[] = {
     {48, "ALGERIA", 0},     {49, "ARGENTINA", 1},      {50, "BRAZIL", 1},
     {51, "CANADA", 1},      {52, "EGYPT", 4},          {53, "ETHIOPIA", 0},
@@ -55,11 +53,11 @@ const Nation DataSource::nations[] = {
 const char* DataSource::regions[] = {"AFRICA", "AMERICA", "ASIA", "EUROPE",
                                      "MIDDLE EAST"};
 
-vector<const char*> DataSource::cLastParts = {"BAR",   "OUGHT", "ABLE", "PRI",
-                                              "PRES",  "ESE",   "ANTI", "CALLY",
-                                              "ATION", "EING"};
+std::vector<const char*> DataSource::cLastParts = {
+    "BAR", "OUGHT", "ABLE",  "PRI",   "PRES",
+    "ESE", "ANTI",  "CALLY", "ATION", "EING"};
 
-vector<const char*> DataSource::tpchNouns = {
+std::vector<const char*> DataSource::tpchNouns = {
     "foxes",        "ideas",        "theodolites",    "pinto beans",
     "instructions", "dependencies", "excuses",        "platelets",
     "asymptotes",   "courts",       "dolphins",       "multipliers",
@@ -72,7 +70,7 @@ vector<const char*> DataSource::tpchNouns = {
     "decoys",       "realms",       "pains",          "grouches",
     "escapades"};
 
-vector<const char*> DataSource::tpchVerbs = {
+std::vector<const char*> DataSource::tpchVerbs = {
     "sleep",  "wake",    "are",    "cajole",    "haggle",   "nag",     "use",
     "boost",  "affix",   "detect", "integrate", "maintain", "nod",     "was",
     "lose",   "sublate", "solve",  "thrash",    "promise",  "engage",  "hinder",
@@ -80,13 +78,13 @@ vector<const char*> DataSource::tpchVerbs = {
     "poach",  "serve",   "run",    "dazzle",    "snooze",   "doze",    "unwind",
     "kindle", "play",    "hang",   "believe",   "doubt"};
 
-vector<const char*> DataSource::tpchAdjectives = {
+std::vector<const char*> DataSource::tpchAdjectives = {
     "furious",  "sly",       "careful",  "blithe", "quick",  "fluffy",  "slow",
     "quiet",    "ruthless",  "thin",     "close",  "dogged", "daring",  "brave",
     "stealthy", "permanent", "enticing", "idle",   "busy",   "regular", "final",
     "ironic",   "even",      "bold",     "silent"};
 
-vector<const char*> DataSource::tpchAdverbs = {
+std::vector<const char*> DataSource::tpchAdverbs = {
     "sometimes", "always",     "never",      "furiously",   "slyly",
     "carefully", "blithely",   "quickly",    "fluffily",    "slowly",
     "quietly",   "ruthlessly", "thinly",     "closely",     "doggedly",
@@ -94,7 +92,7 @@ vector<const char*> DataSource::tpchAdverbs = {
     "idly",      "busily",     "regularly",  "finally",     "ironically",
     "evenly",    "boldly",     "silently"};
 
-vector<const char*> DataSource::tpchPrepositions = {
+std::vector<const char*> DataSource::tpchPrepositions = {
     "about",       "above",   "according to", "across", "after",
     "against",     "along",   "alongside of", "among",  "around",
     "at",          "atop",    "before",       "behind", "beneath",
@@ -106,40 +104,40 @@ vector<const char*> DataSource::tpchPrepositions = {
     "under",       "until",   "up",           "upon",   "without",
     "with",        "within"};
 
-vector<const char*> DataSource::tpchTerminators = {".", ";", ":",
-                                                   "?", "!", "--"};
+std::vector<const char*> DataSource::tpchTerminators = {".", ";", ":",
+                                                        "?", "!", "--"};
 
-vector<const char*> DataSource::tpchAuxiliaries = {"do",
-                                                   "may",
-                                                   "might",
-                                                   "shall",
-                                                   "will",
-                                                   "would",
-                                                   "can",
-                                                   "could",
-                                                   "should",
-                                                   "ought to",
-                                                   "must",
-                                                   "will have to",
-                                                   "shall have to",
-                                                   "could have to",
-                                                   "should have to",
-                                                   "must have to",
-                                                   "need to",
-                                                   "try to"};
+std::vector<const char*> DataSource::tpchAuxiliaries = {"do",
+                                                        "may",
+                                                        "might",
+                                                        "shall",
+                                                        "will",
+                                                        "would",
+                                                        "can",
+                                                        "could",
+                                                        "should",
+                                                        "ought to",
+                                                        "must",
+                                                        "will have to",
+                                                        "shall have to",
+                                                        "could have to",
+                                                        "should have to",
+                                                        "must have to",
+                                                        "need to",
+                                                        "try to"};
 
 int DataSource::lastOlCount = 0;
 int DataSource::warehouseCount = 0;
 
-string DataSource::tpchText(int length) {
-    string s = " ";
+std::string DataSource::tpchText(int length) {
+    std::string s = " ";
     for (int i = 0; i < 25; i++)
         s = s + (i == 0 ? "" : " ") + tpchSentence();
     int pos = randomUniformInt(0, s.length() - length);
     return s.substr(pos, length);
 }
 
-string DataSource::tpchSentence() {
+std::string DataSource::tpchSentence() {
     if (randomTrue(1 / 5))
         return tpchNounPhrase() + " " + tpchVerbPhrase() + " " +
                tpchTerminators[randomUniformInt(0, tpchTerminators.size() - 1)];
@@ -161,47 +159,50 @@ string DataSource::tpchSentence() {
                tpchTerminators[randomUniformInt(0, tpchTerminators.size() - 1)];
 }
 
-string DataSource::tpchNounPhrase() {
+std::string DataSource::tpchNounPhrase() {
     if (randomTrue(1 / 4))
-        return string(tpchNouns[randomUniformInt(0, tpchNouns.size() - 1)]);
+        return std::string(
+            tpchNouns[randomUniformInt(0, tpchNouns.size() - 1)]);
     else if (randomTrue(1 / 4))
-        return string(tpchAdjectives[randomUniformInt(0, tpchAdjectives.size() -
-                                                             1)]) +
+        return std::string(tpchAdjectives[randomUniformInt(
+                   0, tpchAdjectives.size() - 1)]) +
                " " + tpchNouns[randomUniformInt(0, tpchNouns.size() - 1)];
     else if (randomTrue(1 / 4))
-        return string(tpchAdjectives[randomUniformInt(0, tpchAdjectives.size() -
-                                                             1)]) +
+        return std::string(tpchAdjectives[randomUniformInt(
+                   0, tpchAdjectives.size() - 1)]) +
                ", " +
                tpchAdjectives[randomUniformInt(0, tpchAdjectives.size() - 1)] +
                " " + tpchNouns[randomUniformInt(0, tpchNouns.size() - 1)];
     else
-        return string(
+        return std::string(
                    tpchAdverbs[randomUniformInt(0, tpchAdverbs.size() - 1)]) +
                " " +
                tpchAdjectives[randomUniformInt(0, tpchAdjectives.size() - 1)] +
                " " + tpchNouns[randomUniformInt(0, tpchNouns.size() - 1)];
 }
 
-string DataSource::tpchVerbPhrase() {
+std::string DataSource::tpchVerbPhrase() {
     if (randomTrue(1 / 4))
-        return string(tpchVerbs[randomUniformInt(0, tpchVerbs.size() - 1)]);
+        return std::string(
+            tpchVerbs[randomUniformInt(0, tpchVerbs.size() - 1)]);
     else if (randomTrue(1 / 4))
-        return string(tpchAuxiliaries[randomUniformInt(
+        return std::string(tpchAuxiliaries[randomUniformInt(
                    0, tpchAuxiliaries.size() - 1)]) +
                " " + tpchVerbs[randomUniformInt(0, tpchVerbs.size() - 1)];
     else if (randomTrue(1 / 4))
-        return string(tpchVerbs[randomUniformInt(0, tpchVerbs.size() - 1)]) +
+        return std::string(
+                   tpchVerbs[randomUniformInt(0, tpchVerbs.size() - 1)]) +
                " " + tpchAdverbs[randomUniformInt(0, tpchAdverbs.size() - 1)];
     else
-        return string(tpchAuxiliaries[randomUniformInt(
+        return std::string(tpchAuxiliaries[randomUniformInt(
                    0, tpchAuxiliaries.size() - 1)]) +
                " " + tpchVerbs[randomUniformInt(0, tpchVerbs.size() - 1)] +
                " " + tpchAdverbs[randomUniformInt(0, tpchAdverbs.size() - 1)];
 }
 
-string DataSource::tpchPrepositionalPhrase() {
-    return string(tpchPrepositions[randomUniformInt(0, tpchPrepositions.size() -
-                                                           1)]) +
+std::string DataSource::tpchPrepositionalPhrase() {
+    return std::string(tpchPrepositions[randomUniformInt(
+               0, tpchPrepositions.size() - 1)]) +
            " the " + tpchNounPhrase();
 }
 
@@ -255,7 +256,7 @@ void DataSource::getCurrentTimestamp(SQL_TIMESTAMP_STRUCT& ret) {
     ret.fraction = 0;
 }
 
-void DataSource::genCLast(int value, string& ret) {
+void DataSource::genCLast(int value, std::string& ret) {
     ret = "";
     ret += cLastParts[value / 100];
     value %= 100;
@@ -264,7 +265,7 @@ void DataSource::genCLast(int value, string& ret) {
     ret += cLastParts[value];
 }
 
-void DataSource::randomCLast(string& ret) {
+void DataSource::randomCLast(std::string& ret) {
     int value = 0;
     randomNonUniformInt(255, 0, 999, 173, value);
     genCLast(value, ret);
@@ -291,8 +292,8 @@ int DataSource::nextOderlineCount() {
     return temp;
 }
 
-void DataSource::addNumeric(int length, ofstream& stream, bool delimiter) {
-    string s = "";
+void DataSource::addNumeric(int length, std::ofstream& stream, bool delimiter) {
+    std::string s = "";
     for (int i = 0; i < length; i++) {
         s += randomUniformInt('0', '9');
     }
@@ -301,9 +302,9 @@ void DataSource::addNumeric(int length, ofstream& stream, bool delimiter) {
         stream << csvDelim;
 }
 
-void DataSource::addAlphanumeric62(int length, ofstream& stream,
+void DataSource::addAlphanumeric62(int length, std::ofstream& stream,
                                    bool delimiter) {
-    string s = "";
+    std::string s = "";
     int rand;
     for (int i = 0; i < length; i++) {
         rand = 0;
@@ -317,9 +318,9 @@ void DataSource::addAlphanumeric62(int length, ofstream& stream,
         stream << csvDelim;
 }
 
-void DataSource::addAlphanumeric64(int length, ofstream& stream,
+void DataSource::addAlphanumeric64(int length, std::ofstream& stream,
                                    bool delimiter) {
-    string s = "";
+    std::string s = "";
     int rand;
     for (int i = 0; i < length; i++) {
         rand = 0;
@@ -334,13 +335,14 @@ void DataSource::addAlphanumeric64(int length, ofstream& stream,
 }
 
 void DataSource::addAlphanumeric64(int minLength, int maxLength,
-                                   ofstream& stream, bool delimiter) {
+                                   std::ofstream& stream, bool delimiter) {
     addAlphanumeric64(randomUniformInt(minLength, maxLength), stream,
                       delimiter);
 }
 
 void DataSource::addAlphanumeric64Original(int minLength, int maxLength,
-                                           ofstream& stream, bool delimiter) {
+                                           std::ofstream& stream,
+                                           bool delimiter) {
     int rLength = 0;
     randomUniformInt(minLength, maxLength, rLength);
     int rPosition = 0;
@@ -352,16 +354,16 @@ void DataSource::addAlphanumeric64Original(int minLength, int maxLength,
         stream << csvDelim;
 }
 
-void DataSource::addTextString(int minLength, int maxLength, ofstream& stream,
-                               bool delimiter) {
+void DataSource::addTextString(int minLength, int maxLength,
+                               std::ofstream& stream, bool delimiter) {
     stream << tpchText(randomUniformInt(minLength, maxLength));
     if (delimiter)
         stream << csvDelim;
 }
 
 void DataSource::addTextStringCustomer(int minLength, int maxLength,
-                                       const char* action, ofstream& stream,
-                                       bool delimiter) {
+                                       const char* action,
+                                       std::ofstream& stream, bool delimiter) {
     int rLength = 0;
     randomUniformInt(minLength, maxLength, rLength);
     int l1 = 0;
@@ -378,7 +380,7 @@ void DataSource::addTextStringCustomer(int minLength, int maxLength,
         stream << csvDelim;
 }
 
-void DataSource::addInt(int minValue, int maxValue, ofstream& stream,
+void DataSource::addInt(int minValue, int maxValue, std::ofstream& stream,
                         bool delimiter) {
     stream << randomUniformInt(minValue, maxValue);
     if (delimiter)
@@ -386,7 +388,7 @@ void DataSource::addInt(int minValue, int maxValue, ofstream& stream,
 }
 
 void DataSource::addDouble(double minValue, double maxValue, int decimals,
-                           ofstream& stream, bool delimiter) {
+                           std::ofstream& stream, bool delimiter) {
     double d = 0;
     randomDouble(minValue, maxValue, decimals, d);
     stream << d;
@@ -394,7 +396,7 @@ void DataSource::addDouble(double minValue, double maxValue, int decimals,
         stream << csvDelim;
 }
 
-void DataSource::addNId(ofstream& stream, bool delimiter) {
+void DataSource::addNId(std::ofstream& stream, bool delimiter) {
     int rand = 0;
     while (rand == 0 || (rand > '9' && rand < 'A') ||
            (rand > 'Z' && rand < 'a'))
@@ -404,14 +406,14 @@ void DataSource::addNId(ofstream& stream, bool delimiter) {
         stream << csvDelim;
 }
 
-void DataSource::addWDCZip(ofstream& stream, bool delimiter) {
+void DataSource::addWDCZip(std::ofstream& stream, bool delimiter) {
     addNumeric(4, stream, 0);
     stream << "11111";
     if (delimiter)
         stream << csvDelim;
 }
 
-void DataSource::addSuPhone(int& suId, ofstream& stream, bool delimiter) {
+void DataSource::addSuPhone(int& suId, std::ofstream& stream, bool delimiter) {
     int country_code = (suId % 90) + 10; // ensure length 2
     stream << country_code << "-";
     addInt(100, 999, stream, 0);
@@ -423,18 +425,18 @@ void DataSource::addSuPhone(int& suId, ofstream& stream, bool delimiter) {
         stream << csvDelim;
 }
 
-string DataSource::getCurrentTimeString() {
+std::string DataSource::getCurrentTimeString() {
     time_t rawtime;
     struct tm* timeinfo;
     char buffer[24];
     time(&rawtime);
     timeinfo = localtime(&rawtime);
     strftime(buffer, 80, "%F %X", timeinfo);
-    return string(buffer);
+    return std::string(buffer);
 }
 
-string DataSource::randomAlphanumeric62(int length) {
-    string s = "";
+std::string DataSource::randomAlphanumeric62(int length) {
+    std::string s = "";
     int rand;
     for (int i = 0; i < length; i++) {
         rand = 0;
@@ -446,9 +448,9 @@ string DataSource::randomAlphanumeric62(int length) {
     return s;
 }
 
-string DataSource::strLeadingZero(int i, int zeros) {
-    stringstream ss;
-    ss << setw(zeros) << setfill('0') << i;
+std::string DataSource::strLeadingZero(int i, int zeros) {
+    std::stringstream ss;
+    ss << std::setw(zeros) << std::setfill('0') << i;
     return ss.str();
 }
 

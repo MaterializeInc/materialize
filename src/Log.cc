@@ -18,12 +18,10 @@ limitations under the License.
 
 #define WRITE_LOG_FILE
 
-using namespace std;
-
 LogTime Log::lt;
 Log1 Log::log1;
 Log2 Log::log2;
-ofstream Log::logStream;
+std::ofstream Log::logStream;
 
 LogTime& Log::tm() { return lt; }
 
@@ -36,9 +34,7 @@ void Log::open(const std::string& path) {
     // TODO(benesch): check for errors.
 }
 
-ofstream* Log::getLogStream() {
-    return &logStream;
-}
+std::ofstream* Log::getLogStream() { return &logStream; }
 
 Log1& operator<<(Log1& l, LogTime&) {
     time_t rawtime;
@@ -61,7 +57,7 @@ Log1& operator<<(Log1& l, const char* c) {
     return l;
 };
 
-Log1& operator<<(Log1& l, string s) {
+Log1& operator<<(Log1& l, std::string s) {
 #ifdef WRITE_LOG_FILE
     *Log::getLogStream() << s;
     Log::getLogStream()->flush();
@@ -92,8 +88,8 @@ Log2& operator<<(Log2& l, LogTime&) {
 };
 
 Log2& operator<<(Log2& l, const char* c) {
-    cout << c;
-    cout.flush();
+    std::cout << c;
+    std::cout.flush();
 #ifdef WRITE_LOG_FILE
     *Log::getLogStream() << c;
     Log::getLogStream()->flush();
@@ -101,9 +97,9 @@ Log2& operator<<(Log2& l, const char* c) {
     return l;
 };
 
-Log2& operator<<(Log2& l, string s) {
-    cout << s;
-    cout.flush();
+Log2& operator<<(Log2& l, std::string s) {
+    std::cout << s;
+    std::cout.flush();
 #ifdef WRITE_LOG_FILE
     *Log::getLogStream() << s;
     Log::getLogStream()->flush();
@@ -112,8 +108,8 @@ Log2& operator<<(Log2& l, string s) {
 };
 
 Log2& operator<<(Log2& l, double d) {
-    cout << d;
-    cout.flush();
+    std::cout << d;
+    std::cout.flush();
 #ifdef WRITE_LOG_FILE
     *Log::getLogStream() << d;
     Log::getLogStream()->flush();

@@ -32,7 +32,8 @@ class DbcTools {
 
   public:
     static bool setEnv(SQLHENV& hEnv);
-    static bool connect(SQLHENV& hEnv, SQLHDBC& hDBC, const char* dsn, const char* username, const char* password);
+    static bool connect(SQLHENV& hEnv, SQLHDBC& hDBC, const char* dsn,
+                        const char* username, const char* password);
     static bool autoCommitOff(SQLHDBC& hDBC);
     static bool allocAndPrepareStmt(SQLHDBC& hDBC, SQLHSTMT& hStmt,
                                     const char* stmt);

@@ -18,8 +18,6 @@ limitations under the License.
 
 #include "Log.h"
 
-using namespace std;
-
 bool DbcTools::fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator,
                      int pos) {
     SQLRETURN ret = SQLFetch(hStmt);
@@ -45,15 +43,12 @@ bool DbcTools::setEnv(SQLHENV& hEnv) {
     return 0;
 }
 
-bool DbcTools::connect(SQLHENV& hEnv, SQLHDBC& hDBC, const char * dsn,
-                       const char * username,
-                       const char * password) {
+bool DbcTools::connect(SQLHENV& hEnv, SQLHDBC& hDBC, const char* dsn,
+                       const char* username, const char* password) {
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_DBC, hEnv, &hDBC);
     if (reviewReturn(hDBC, SQL_HANDLE_DBC, ret, 1)) {
-        ret =
-            SQLConnect(hDBC, (SQLCHAR*)dsn,
-                       SQL_NTS, (SQLCHAR*) username, SQL_NTS,
-                       (SQLCHAR*) password, SQL_NTS);
+        ret = SQLConnect(hDBC, (SQLCHAR*)dsn, SQL_NTS, (SQLCHAR*)username,
+                         SQL_NTS, (SQLCHAR*)password, SQL_NTS);
         if (reviewReturn(hDBC, SQL_HANDLE_DBC, ret, 1)) {
             Log::l1() << Log::tm() << "-dbs connected\n";
             return 1;
@@ -194,7 +189,7 @@ bool DbcTools::reviewReturn(SQLHANDLE& handle, SQLSMALLINT handleType,
                       << (const char*)message_text_buffer << "\n";
         return 1;
     }
-    string s = "";
+    std::string s = "";
     if (SQL_NEED_DATA == ret) {
         s = "SQL_NEED_DATA";
     } else if (SQL_STILL_EXECUTING == ret) {
@@ -224,9 +219,9 @@ bool DbcTools::reviewReturn(SQLHANDLE& handle, SQLSMALLINT handleType,
 }
 
 bool DbcTools::fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
-                     string& value) {
+                     std::string& value) {
     if (fetch(hStmt, buf, nIdicator, pos)) {
-        value = string((char*)buf);
+        value = std::string((char*)buf);
         return 1;
     }
     return 0;

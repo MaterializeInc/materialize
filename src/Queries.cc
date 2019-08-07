@@ -20,8 +20,6 @@ limitations under the License.
 #include "Log.h"
 #include "dialect/DialectStrategy.h"
 
-using namespace std;
-
 bool Queries::prepareStatements(SQLHDBC& hDBC) {
 
     for (int i = 0; i < 22; i++) {

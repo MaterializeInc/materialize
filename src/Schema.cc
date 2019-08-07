@@ -20,10 +20,8 @@ limitations under the License.
 #include "Log.h"
 #include "dialect/DialectStrategy.h"
 
-#include <string>
 #include <stdlib.h>
-
-using namespace std;
+#include <string>
 
 bool Schema::check(SQLHSTMT& hStmt, const char* query, int& cnt) {
 
@@ -87,9 +85,10 @@ bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
          i < DialectStrategy::getInstance()->getImportPrefix().size(); i++) {
         if (!DbcTools::executeServiceStatement(
                 hStmt,
-                string(DialectStrategy::getInstance()->getImportPrefix()[i] +
-                       genDir +
-                       DialectStrategy::getInstance()->getImportSuffix()[i])
+                std::string(
+                    DialectStrategy::getInstance()->getImportPrefix()[i] +
+                    genDir +
+                    DialectStrategy::getInstance()->getImportSuffix()[i])
                     .c_str())) {
             Log::l2() << Log::tm() << "-failed\n";
             return 0;

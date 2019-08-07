@@ -36,8 +36,6 @@ limitations under the License.
 #include <sqltypes.h>
 #include <unistd.h>
 
-using namespace std;
-
 typedef struct {
     pthread_barrier_t* barStart;
     int* runState;
@@ -203,9 +201,8 @@ static int parseInt(const char* context, const char* v) {
 }
 
 static void usage() {
-    fprintf(stderr,
-            "usage: chBenchmark [--warehouses N] [--out-dir PATH] gen\n"
-            "   or: chBenchmark [options] run\n");
+    fprintf(stderr, "usage: chBenchmark [--warehouses N] [--out-dir PATH] gen\n"
+                    "   or: chBenchmark [options] run\n");
 }
 
 static int detectWarehouses(SQLHSTMT& hStmt, int* countOut) {
@@ -374,7 +371,7 @@ static int run(int argc, char* argv[]) {
     for (int i = 0; i < analyticThreads; i++) {
         aStat[i] = new AnalyticalStatistic();
         aprm[i] = {&barStart, &runState,       i + 1,
-                   0,     (void*)aStat[i], warehouseCount};
+                   0,         (void*)aStat[i], warehouseCount};
         if (!DbcTools::connect(hEnv, aprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
@@ -389,7 +386,7 @@ static int run(int argc, char* argv[]) {
     for (int i = 0; i < transactionalThreads; i++) {
         tStat[i] = new TransactionalStatistic();
         tprm[i] = {&barStart, &runState,       i + 1,
-                   0,     (void*)tStat[i], warehouseCount};
+                   0,         (void*)tStat[i], warehouseCount};
         if (!DbcTools::connect(hEnv, tprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
@@ -488,8 +485,8 @@ static int gen(int argc, char* argv[]) {
 
     int oId;
     int olCount;
-    string customerTime = "";
-    string orderTime;
+    std::string customerTime = "";
+    std::string orderTime;
     for (int wId = 1; wId <= warehouseCount; wId++) {
         // Warehouse
         TupleGen::genWarehouse(wId);
