@@ -42,6 +42,7 @@ where
             .set("auto.offset.reset", "earliest")
             .set("session.timeout.ms", "6000")
             .set("fetch.message.max.bytes", "134217728")
+            .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &connector.addr.to_string());
 
         let mut consumer: Option<BaseConsumer<DefaultConsumerContext>> = if read_kafka {
