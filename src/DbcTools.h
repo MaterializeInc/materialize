@@ -22,29 +22,36 @@ limitations under the License.
 #include <sqltypes.h>
 #include <string>
 
-class DbcTools{
-	
-	private:
-		static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos);
-		static bool reviewReturn(SQLHANDLE& handle, SQLSMALLINT handleType, SQLRETURN& ret, bool showError=0);
+class DbcTools {
 
-	public:
-		static bool setEnv(SQLHENV& hEnv);
-		static bool connect(SQLHENV& hEnv, SQLHDBC& hDBC);
-		static bool autoCommitOff(SQLHDBC& hDBC);
-		static bool allocAndPrepareStmt(SQLHDBC& hDBC, SQLHSTMT& hStmt, const char* stmt);
-		static bool resetStatement(SQLHSTMT& hStmt);
-		static bool bind(SQLHSTMT& hStmt, int pos, int& value);
-		static bool bind(SQLHSTMT& hStmt, int pos, double& value);
-		static bool bind(SQLHSTMT& hStmt, int pos, int bufferLength, char* buffer);
-		static bool bind(SQLHSTMT& hStmt, int pos, SQL_TIMESTAMP_STRUCT& ts);
-		static bool executePreparedStatement(SQLHSTMT& hStmt);
-		static bool executeServiceStatement(SQLHSTMT& hStmt, const char* stmt, bool showError=1);
-		static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos, std::string& value);
-		static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos, int& value);
-		static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos, double& value);
-		static bool commit(SQLHDBC& hDBC);
-		static bool rollback(SQLHDBC& hDBC);
+  private:
+    static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator,
+                      int pos);
+    static bool reviewReturn(SQLHANDLE& handle, SQLSMALLINT handleType,
+                             SQLRETURN& ret, bool showError = 0);
+
+  public:
+    static bool setEnv(SQLHENV& hEnv);
+    static bool connect(SQLHENV& hEnv, SQLHDBC& hDBC);
+    static bool autoCommitOff(SQLHDBC& hDBC);
+    static bool allocAndPrepareStmt(SQLHDBC& hDBC, SQLHSTMT& hStmt,
+                                    const char* stmt);
+    static bool resetStatement(SQLHSTMT& hStmt);
+    static bool bind(SQLHSTMT& hStmt, int pos, int& value);
+    static bool bind(SQLHSTMT& hStmt, int pos, double& value);
+    static bool bind(SQLHSTMT& hStmt, int pos, int bufferLength, char* buffer);
+    static bool bind(SQLHSTMT& hStmt, int pos, SQL_TIMESTAMP_STRUCT& ts);
+    static bool executePreparedStatement(SQLHSTMT& hStmt);
+    static bool executeServiceStatement(SQLHSTMT& hStmt, const char* stmt,
+                                        bool showError = 1);
+    static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
+                      std::string& value);
+    static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
+                      int& value);
+    static bool fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
+                      double& value);
+    static bool commit(SQLHDBC& hDBC);
+    static bool rollback(SQLHDBC& hDBC);
 };
 
 #endif

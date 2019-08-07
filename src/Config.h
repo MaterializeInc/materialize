@@ -22,51 +22,51 @@ limitations under the License.
 #include <sqltypes.h>
 #include <string>
 
-class Config{
+class Config {
 
-	private:
-		static int TYPE;
+  private:
+    static int TYPE;
 
-		static std::string DATA_SOURCE_NAME;
-		static std::string DBS_USER;
-		static std::string DBS_PASSWORD;
+    static std::string DATA_SOURCE_NAME;
+    static std::string DBS_USER;
+    static std::string DBS_PASSWORD;
 
-		static int ANALYTICAL_CLIENTS;
-		static int TRANSACTIONAL_CLIENTS;
+    static int ANALYTICAL_CLIENTS;
+    static int TRANSACTIONAL_CLIENTS;
 
-		static int WARMUP_DURATION_IN_S;
-		static int TEST_DURATION_IN_S;
-		static int WAREHOUSE_COUNT;
-		static std::string INITIAL_DB_CREATION_PATH;
-		static std::string OUTPUT_PATH;
-		
-		static const char CSV_DELIMITER = '|';
+    static int WARMUP_DURATION_IN_S;
+    static int TEST_DURATION_IN_S;
+    static int WAREHOUSE_COUNT;
+    static std::string INITIAL_DB_CREATION_PATH;
+    static std::string OUTPUT_PATH;
 
-		static int is(const char* value, int argc, char* argv[]);
-		static bool is(const char* value, int argc, char* argv[], int* dest);
-		static bool is(const char* value, int argc, char* argv[], std::string* dest);
+    static const char CSV_DELIMITER = '|';
 
-	public:				
-		static bool initialize(int argc, char* argv[]);
-		static bool warehouseDetection(SQLHSTMT& hStmt);
+    static int is(const char* value, int argc, char* argv[]);
+    static bool is(const char* value, int argc, char* argv[], int* dest);
+    static bool is(const char* value, int argc, char* argv[],
+                   std::string* dest);
 
-		static int getType();
+  public:
+    static bool initialize(int argc, char* argv[]);
+    static bool warehouseDetection(SQLHSTMT& hStmt);
 
-		static std::string getDataSourceName();
-		static std::string getDbsUser();
-		static std::string getDbsPassword();
+    static int getType();
 
-		static int getAnalyticalClients();
-		static int getTransactionalClients();
+    static std::string getDataSourceName();
+    static std::string getDbsUser();
+    static std::string getDbsPassword();
 
-		static int getWarmupDurationInS();
-		static int getTestDurationInS();
-		static int getWarehouseCount();
+    static int getAnalyticalClients();
+    static int getTransactionalClients();
 
-		static std::string getOutputPath();
-		static std::string getInitialDbCreationPath();
-		static char getCsvDelim();
+    static int getWarmupDurationInS();
+    static int getTestDurationInS();
+    static int getWarehouseCount();
 
+    static std::string getOutputPath();
+    static std::string getInitialDbCreationPath();
+    static char getCsvDelim();
 };
 
 #endif

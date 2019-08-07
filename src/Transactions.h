@@ -21,60 +21,59 @@ limitations under the License.
 #include <sqlext.h>
 #include <sqltypes.h>
 
-class Transactions{
+class Transactions {
 
-	private:
-		SQLHSTMT noWarehouseSelect = 0;
-		SQLHSTMT noDistrictSelect = 0;
-		SQLHSTMT noDistrictUpdate = 0;
-		SQLHSTMT noCustomerSelect = 0;
-		SQLHSTMT noItemSelect = 0;
-		SQLHSTMT noStockSelects[10] = {0,0,0,0,0,0,0,0,0,0};
-		SQLHSTMT noStockUpdates[2] = {0,0};
-		SQLHSTMT noOrderlineInsert = 0;
-		SQLHSTMT noOrderInsert = 0;
-		SQLHSTMT noNewOrderInsert = 0;
+  private:
+    SQLHSTMT noWarehouseSelect = 0;
+    SQLHSTMT noDistrictSelect = 0;
+    SQLHSTMT noDistrictUpdate = 0;
+    SQLHSTMT noCustomerSelect = 0;
+    SQLHSTMT noItemSelect = 0;
+    SQLHSTMT noStockSelects[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    SQLHSTMT noStockUpdates[2] = {0, 0};
+    SQLHSTMT noOrderlineInsert = 0;
+    SQLHSTMT noOrderInsert = 0;
+    SQLHSTMT noNewOrderInsert = 0;
 
-		SQLHSTMT pmWarehouseSelect = 0;
-		SQLHSTMT pmWarehouseUpdate = 0;
-		SQLHSTMT pmDistrictSelect = 0;
-		SQLHSTMT pmDistrictUpdate = 0;
-		SQLHSTMT pmCustomerSelect1 = 0;
-		SQLHSTMT pmCustomerSelect2 = 0;
-		SQLHSTMT pmCustomerSelect3 = 0;
-		SQLHSTMT pmCustomerUpdate1 = 0;
-		SQLHSTMT pmCustomerSelect4 = 0;
-		SQLHSTMT pmCustomerUpdate2 = 0;
-		SQLHSTMT pmHistoryInsert = 0;
+    SQLHSTMT pmWarehouseSelect = 0;
+    SQLHSTMT pmWarehouseUpdate = 0;
+    SQLHSTMT pmDistrictSelect = 0;
+    SQLHSTMT pmDistrictUpdate = 0;
+    SQLHSTMT pmCustomerSelect1 = 0;
+    SQLHSTMT pmCustomerSelect2 = 0;
+    SQLHSTMT pmCustomerSelect3 = 0;
+    SQLHSTMT pmCustomerUpdate1 = 0;
+    SQLHSTMT pmCustomerSelect4 = 0;
+    SQLHSTMT pmCustomerUpdate2 = 0;
+    SQLHSTMT pmHistoryInsert = 0;
 
-		SQLHSTMT osCustomerSelect1 = 0;
-		SQLHSTMT osCustomerSelect2 = 0;
-		SQLHSTMT osCustomerSelect3 = 0;
-		SQLHSTMT osOrderSelect = 0;
-		SQLHSTMT osOrderlineSelect = 0;
+    SQLHSTMT osCustomerSelect1 = 0;
+    SQLHSTMT osCustomerSelect2 = 0;
+    SQLHSTMT osCustomerSelect3 = 0;
+    SQLHSTMT osOrderSelect = 0;
+    SQLHSTMT osOrderlineSelect = 0;
 
-		SQLHSTMT dlNewOrderSelect = 0;
-		SQLHSTMT dlNewOrderDelete = 0;
-		SQLHSTMT dlOrderSelect = 0;
-		SQLHSTMT dlOrderUpdate = 0;
-		SQLHSTMT dlOrderlineUpdate = 0;
-		SQLHSTMT dlOrderlineSelect = 0;
-		SQLHSTMT dlCustomerUpdate = 0;
+    SQLHSTMT dlNewOrderSelect = 0;
+    SQLHSTMT dlNewOrderDelete = 0;
+    SQLHSTMT dlOrderSelect = 0;
+    SQLHSTMT dlOrderUpdate = 0;
+    SQLHSTMT dlOrderlineUpdate = 0;
+    SQLHSTMT dlOrderlineSelect = 0;
+    SQLHSTMT dlCustomerUpdate = 0;
 
-		SQLHSTMT slDistrictSelect = 0;
-		SQLHSTMT slStockSelect = 0;
+    SQLHSTMT slDistrictSelect = 0;
+    SQLHSTMT slStockSelect = 0;
 
-		bool prepare(SQLHDBC& hDBC);
+    bool prepare(SQLHDBC& hDBC);
 
-	public:
-		bool prepareStatements(SQLHDBC& hDBC);
+  public:
+    bool prepareStatements(SQLHDBC& hDBC);
 
-		bool executeNewOrder(SQLHDBC& hDBC);
-		bool executePayment(SQLHDBC& hDBC);
-		bool executeOrderStatus(SQLHDBC& hDBC);
-		bool executeDelivery(SQLHDBC& hDBC);
-		bool executeStockLevel(SQLHDBC& hDBC);
-
+    bool executeNewOrder(SQLHDBC& hDBC);
+    bool executePayment(SQLHDBC& hDBC);
+    bool executeOrderStatus(SQLHDBC& hDBC);
+    bool executeDelivery(SQLHDBC& hDBC);
+    bool executeStockLevel(SQLHDBC& hDBC);
 };
 
 #endif

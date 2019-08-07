@@ -21,17 +21,16 @@ limitations under the License.
 #include <sqlext.h>
 #include <sqltypes.h>
 
-class Schema{
+class Schema {
 
-	private:
-		static bool check(SQLHSTMT& hStmt, const char* query, int& cnt);
+  private:
+    static bool check(SQLHSTMT& hStmt, const char* query, int& cnt);
 
-	public:
-		static bool createSchema(SQLHSTMT& hStmt);
-		static bool importCSV(SQLHSTMT& hStmt);
-		static bool check(SQLHSTMT& hStmt);
-		static bool additionalPreparation(SQLHSTMT& hStmt);
-
+  public:
+    static bool createSchema(SQLHSTMT& hStmt);
+    static bool importCSV(SQLHSTMT& hStmt);
+    static bool check(SQLHSTMT& hStmt);
+    static bool additionalPreparation(SQLHSTMT& hStmt);
 };
 
 #endif

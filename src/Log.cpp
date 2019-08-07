@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 #include "Log.h"
+
 #include "Config.h"
 
 #define WRITE_LOG_FILE
@@ -26,103 +27,95 @@ Log1 Log::log1;
 Log2 Log::log2;
 ofstream Log::logStream;
 
-LogTime& Log::tm(){
-	return lt;
+LogTime& Log::tm() { return lt; }
+
+Log1& Log::l1() { return log1; }
+
+Log2& Log::l2() { return log2; }
+
+ofstream* Log::getLogStream() {
+    if (!logStream.is_open())
+        logStream.open((Config::getOutputPath() + "/log").c_str());
+    return &logStream;
 }
 
-Log1& Log::l1(){
-	return log1;
-}
-
-Log2& Log::l2(){
-	return log2;
-}
-
-ofstream* Log::getLogStream(){
-	if(!logStream.is_open())
-		logStream.open( (Config::getOutputPath()+"/log").c_str() );
-	return &logStream;
-}
-
-
-Log1& operator<<(Log1& l, LogTime& lt){
-	time_t rawtime;
-	time (&rawtime);
-	struct tm * timeinfo = localtime (&rawtime);
-	char buffer [24];
-	strftime (buffer,24,"%r: ",timeinfo);
+Log1& operator<<(Log1& l, LogTime& lt) {
+    time_t rawtime;
+    time(&rawtime);
+    struct tm* timeinfo = localtime(&rawtime);
+    char buffer[24];
+    strftime(buffer, 24, "%r: ", timeinfo);
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << buffer;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << buffer;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };
 
-Log1& operator<<(Log1& l, const char* c){
+Log1& operator<<(Log1& l, const char* c) {
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << c;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << c;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };
 
-Log1& operator<<(Log1& l, string s){
+Log1& operator<<(Log1& l, string s) {
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << s;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << s;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };
 
-Log1& operator<<(Log1& l, double d){
+Log1& operator<<(Log1& l, double d) {
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << d;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << d;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };
 
-
-Log2& operator<<(Log2& l, LogTime& lt){
-	time_t rawtime;
-	time (&rawtime);
-	struct tm * timeinfo = localtime (&rawtime);
-	char buffer [24];
-	strftime (buffer,24,"%r: ",timeinfo);
+Log2& operator<<(Log2& l, LogTime& lt) {
+    time_t rawtime;
+    time(&rawtime);
+    struct tm* timeinfo = localtime(&rawtime);
+    char buffer[24];
+    strftime(buffer, 24, "%r: ", timeinfo);
 
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << buffer;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << buffer;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };
 
-Log2& operator<<(Log2& l,const char* c){
-	cout << c;
-	cout.flush();
+Log2& operator<<(Log2& l, const char* c) {
+    cout << c;
+    cout.flush();
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << c;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << c;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };
 
-Log2& operator<<(Log2& l,string s){
-	cout << s;
-	cout.flush();
+Log2& operator<<(Log2& l, string s) {
+    cout << s;
+    cout.flush();
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << s;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << s;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };
 
-Log2& operator<<(Log2& l,double d){
-	cout << d;
-	cout.flush();
+Log2& operator<<(Log2& l, double d) {
+    cout << d;
+    cout.flush();
 #ifdef WRITE_LOG_FILE
-	*Log::getLogStream() << d;
-	Log::getLogStream()->flush();
+    *Log::getLogStream() << d;
+    Log::getLogStream()->flush();
 #endif
-	return l;
+    return l;
 };

@@ -19,88 +19,86 @@ limitations under the License.
 
 #include <vector>
 
-class Dialect{
+class Dialect {
 
-	public:
+  public:
+    virtual ~Dialect(){};
 
-		virtual ~Dialect(){};
+    // Strings to create initial database
+    virtual std::vector<const char*>& getDropExistingSchemaStatements() = 0;
+    virtual std::vector<const char*>& getCreateSchemaStatements() = 0;
+    virtual std::vector<const char*>& getImportPrefix() = 0;
+    virtual std::vector<const char*>& getImportSuffix() = 0;
+    virtual std::vector<const char*>& getAdditionalPreparationStatements() = 0;
 
-		//Strings to create initial database
-		virtual std::vector<const char*>& getDropExistingSchemaStatements() = 0;
-		virtual std::vector<const char*>& getCreateSchemaStatements() = 0;
-		virtual std::vector<const char*>& getImportPrefix() = 0;
-		virtual std::vector<const char*>& getImportSuffix() = 0;
-		virtual std::vector<const char*>& getAdditionalPreparationStatements() = 0;
+    // 22 adjusted TPC-H OLAP query strings
+    virtual std::vector<const char*>& getTpchQueryStrings() = 0;
 
-		//22 adjusted TPC-H OLAP query strings
-		virtual std::vector<const char*>& getTpchQueryStrings() = 0;
+    // Strings for database check
+    virtual const char* getSelectCountWarehouse() = 0;
+    virtual const char* getSelectCountDistrict() = 0;
+    virtual const char* getSelectCountCustomer() = 0;
+    virtual const char* getSelectCountOrder() = 0;
+    virtual const char* getSelectCountOrderline() = 0;
+    virtual const char* getSelectCountNeworder() = 0;
+    virtual const char* getSelectCountHistory() = 0;
+    virtual const char* getSelectCountStock() = 0;
+    virtual const char* getSelectCountItem() = 0;
+    virtual const char* getSelectCountSupplier() = 0;
+    virtual const char* getSelectCountNation() = 0;
+    virtual const char* getSelectCountRegion() = 0;
 
-		//Strings for database check
-		virtual const char* getSelectCountWarehouse() = 0;
-		virtual const char* getSelectCountDistrict() = 0;
-		virtual const char* getSelectCountCustomer() = 0;
-		virtual const char* getSelectCountOrder() = 0;
-		virtual const char* getSelectCountOrderline() = 0;
-		virtual const char* getSelectCountNeworder() = 0;
-		virtual const char* getSelectCountHistory() = 0;
-		virtual const char* getSelectCountStock() = 0;
-		virtual const char* getSelectCountItem() = 0;
-		virtual const char* getSelectCountSupplier() = 0;
-		virtual const char* getSelectCountNation() = 0;
-		virtual const char* getSelectCountRegion() = 0;
-
-		//TPC-C transaction strings
-		//NewOrder:
-		virtual const char* getNoWarehouseSelect() = 0;
-		virtual const char* getNoDistrictSelect() = 0;
-		virtual const char* getNoDistrictUpdate() = 0;
-		virtual const char* getNoCustomerSelect() = 0;
-		virtual const char* getNoOrderInsert() = 0;
-		virtual const char* getNoNewOrderInsert() = 0;
-		virtual const char* getNoItemSelect() = 0;
-		virtual const char* getNoStockSelect01() = 0;
-		virtual const char* getNoStockSelect02() = 0;
-		virtual const char* getNoStockSelect03() = 0;
-		virtual const char* getNoStockSelect04() = 0;
-		virtual const char* getNoStockSelect05() = 0;
-		virtual const char* getNoStockSelect06() = 0;
-		virtual const char* getNoStockSelect07() = 0;
-		virtual const char* getNoStockSelect08() = 0;
-		virtual const char* getNoStockSelect09() = 0;
-		virtual const char* getNoStockSelect10() = 0;
-		virtual const char* getNoStockUpdate01() = 0;
-		virtual const char* getNoStockUpdate02() = 0;
-		virtual const char* getNoOrderlineInsert() = 0;
-		//Payment:
-		virtual const char* getPmWarehouseSelect() = 0;
-		virtual const char* getPmWarehouseUpdate() = 0;
-		virtual const char* getPmDistrictSelect() = 0;
-		virtual const char* getPmDistrictUpdate() = 0;
-		virtual const char* getPmCustomerSelect1() = 0;
-		virtual const char* getPmCustomerSelect2() = 0;
-		virtual const char* getPmCustomerSelect3() = 0;
-		virtual const char* getPmCustomerUpdate1() = 0;
-		virtual const char* getPmCustomerSelect4() = 0;
-		virtual const char* getPmCustomerUpdate2() = 0;
-		virtual const char* getPmHistoryInsert() = 0;
-		//OrderStatus:
-		virtual const char* getOsCustomerSelect1() = 0;
-		virtual const char* getOsCustomerSelect2() = 0;
-		virtual const char* getOsCustomerSelect3() = 0;
-		virtual const char* getOsOrderSelect() = 0;
-		virtual const char* getOsOrderlineSelect() = 0;
-		//Delivery:
-		virtual const char* getDlNewOrderSelect() = 0;
-		virtual const char* getDlNewOrderDelete() = 0;
-		virtual const char* getDlOrderSelect() = 0;
-		virtual const char* getDlOrderUpdate() = 0;
-		virtual const char* getDlOrderlineUpdate() = 0;
-		virtual const char* getDlOrderlineSelect() = 0;
-		virtual const char* getDlCustomerUpdate() = 0;
-		//StockLevel:
-		virtual const char* getSlDistrictSelect() = 0;
-		virtual const char* getSlStockSelect() = 0;
-
+    // TPC-C transaction strings
+    // NewOrder:
+    virtual const char* getNoWarehouseSelect() = 0;
+    virtual const char* getNoDistrictSelect() = 0;
+    virtual const char* getNoDistrictUpdate() = 0;
+    virtual const char* getNoCustomerSelect() = 0;
+    virtual const char* getNoOrderInsert() = 0;
+    virtual const char* getNoNewOrderInsert() = 0;
+    virtual const char* getNoItemSelect() = 0;
+    virtual const char* getNoStockSelect01() = 0;
+    virtual const char* getNoStockSelect02() = 0;
+    virtual const char* getNoStockSelect03() = 0;
+    virtual const char* getNoStockSelect04() = 0;
+    virtual const char* getNoStockSelect05() = 0;
+    virtual const char* getNoStockSelect06() = 0;
+    virtual const char* getNoStockSelect07() = 0;
+    virtual const char* getNoStockSelect08() = 0;
+    virtual const char* getNoStockSelect09() = 0;
+    virtual const char* getNoStockSelect10() = 0;
+    virtual const char* getNoStockUpdate01() = 0;
+    virtual const char* getNoStockUpdate02() = 0;
+    virtual const char* getNoOrderlineInsert() = 0;
+    // Payment:
+    virtual const char* getPmWarehouseSelect() = 0;
+    virtual const char* getPmWarehouseUpdate() = 0;
+    virtual const char* getPmDistrictSelect() = 0;
+    virtual const char* getPmDistrictUpdate() = 0;
+    virtual const char* getPmCustomerSelect1() = 0;
+    virtual const char* getPmCustomerSelect2() = 0;
+    virtual const char* getPmCustomerSelect3() = 0;
+    virtual const char* getPmCustomerUpdate1() = 0;
+    virtual const char* getPmCustomerSelect4() = 0;
+    virtual const char* getPmCustomerUpdate2() = 0;
+    virtual const char* getPmHistoryInsert() = 0;
+    // OrderStatus:
+    virtual const char* getOsCustomerSelect1() = 0;
+    virtual const char* getOsCustomerSelect2() = 0;
+    virtual const char* getOsCustomerSelect3() = 0;
+    virtual const char* getOsOrderSelect() = 0;
+    virtual const char* getOsOrderlineSelect() = 0;
+    // Delivery:
+    virtual const char* getDlNewOrderSelect() = 0;
+    virtual const char* getDlNewOrderDelete() = 0;
+    virtual const char* getDlOrderSelect() = 0;
+    virtual const char* getDlOrderUpdate() = 0;
+    virtual const char* getDlOrderlineUpdate() = 0;
+    virtual const char* getDlOrderlineSelect() = 0;
+    virtual const char* getDlCustomerUpdate() = 0;
+    // StockLevel:
+    virtual const char* getSlDistrictSelect() = 0;
+    virtual const char* getSlStockSelect() = 0;
 };
 
 #endif

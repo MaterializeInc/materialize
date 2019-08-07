@@ -14,30 +14,33 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+#include "Queries.h"
+
 #include "Config.h"
 #include "DbcTools.h"
 #include "Log.h"
-#include "Queries.h"
 #include "dialect/DialectStrategy.h"
 
 using namespace std;
 
-bool Queries::prepareStatements(SQLHDBC& hDBC){
+bool Queries::prepareStatements(SQLHDBC& hDBC) {
 
-	for(int i = 0; i < 22; i++){
-		if(!DbcTools::allocAndPrepareStmt(hDBC, odbc_queries[i], DialectStrategy::getInstance()->getTpchQueryStrings()[i])){
-			Log::l2() << Log::tm() << "-prepare statements failed\n";
-			return 0;
-		}
-	}
-	Log::l1() << Log::tm() << "-prepare statements succeeded\n";
-	return 1;
+    for (int i = 0; i < 22; i++) {
+        if (!DbcTools::allocAndPrepareStmt(
+                hDBC, odbc_queries[i],
+                DialectStrategy::getInstance()->getTpchQueryStrings()[i])) {
+            Log::l2() << Log::tm() << "-prepare statements failed\n";
+            return 0;
+        }
+    }
+    Log::l1() << Log::tm() << "-prepare statements succeeded\n";
+    return 1;
 }
 
-bool Queries::executeTPCH(int& i){
+bool Queries::executeTPCH(int& i) {
 
-	if(DbcTools::resetStatement(odbc_queries[i-1])){
-		return DbcTools::executePreparedStatement(odbc_queries[i-1]);
-	}
-	return 0;
+    if (DbcTools::resetStatement(odbc_queries[i - 1])) {
+        return DbcTools::executePreparedStatement(odbc_queries[i - 1]);
+    }
+    return 0;
 }

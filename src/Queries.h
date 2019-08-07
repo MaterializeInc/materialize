@@ -21,15 +21,14 @@ limitations under the License.
 #include <sqlext.h>
 #include <sqltypes.h>
 
-class Queries{
+class Queries {
 
-	private:
-		SQLHSTMT odbc_queries[22] = {0};
+  private:
+    SQLHSTMT odbc_queries[22] = {0};
 
-	public:
-		bool prepareStatements(SQLHDBC& hDBC);
-		bool executeTPCH(int& i);
-
+  public:
+    bool prepareStatements(SQLHDBC& hDBC);
+    bool executeTPCH(int& i);
 };
 
 #endif
