@@ -78,7 +78,7 @@ where
                                 }
                             };
 
-                            let ms = match message.timestamp() {
+                            let mut ms = match message.timestamp() {
                                 KafkaTimestamp::NotAvailable => {
                                     // TODO(benesch): do we need to do something
                                     // else?
@@ -88,6 +88,13 @@ where
                                 KafkaTimestamp::CreateTime(ms)
                                 | KafkaTimestamp::LogAppendTime(ms) => ms as u64,
                             };
+
+                            // The encoding of a null before/after record.
+                            let null_null = vec![0, 0, 0, 0, 143, 0, 0u8];
+                            if null_null[..] == payload[..] && ms == *cap.time() {
+                                ms += 1;
+                            }
+
                             if ms >= *cap.time() {
                                 cap.downgrade(&ms)
                             } else {
