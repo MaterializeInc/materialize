@@ -297,10 +297,12 @@ where
 
     fn sequence_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
         let sequenced_cmd = match cmd {
-            DataflowCommand::CreateDataflow(dataflow) => {
-                self.dataflows
-                    .insert(dataflow.name().to_owned(), dataflow.clone());
-                SequencedCommand::CreateDataflow(dataflow)
+            DataflowCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    self.dataflows
+                        .insert(dataflow.name().to_owned(), dataflow.clone());
+                }
+                SequencedCommand::CreateDataflows(dataflows)
             }
             DataflowCommand::DropDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
@@ -438,14 +440,16 @@ where
 
     fn handle_command(&mut self, cmd: SequencedCommand, cmd_meta: CommandMeta) {
         match cmd {
-            SequencedCommand::CreateDataflow(dataflow) => {
-                render::build_dataflow(
-                    &dataflow,
-                    &mut self.traces,
-                    self.inner,
-                    &mut self.inputs,
-                    &mut self.local_input_mux,
-                );
+            SequencedCommand::CreateDataflows(dataflows) => {
+                for dataflow in dataflows.iter() {
+                    render::build_dataflow(
+                        &dataflow,
+                        &mut self.traces,
+                        self.inner,
+                        &mut self.inputs,
+                        &mut self.local_input_mux,
+                    );
+                }
             }
 
             SequencedCommand::DropDataflows(dataflows) => {
