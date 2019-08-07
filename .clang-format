@@ -7,4 +7,5 @@ DerivePointerAlignment: false
 PointerAlignment: Left
 IncludeBlocks: Regroup
 BreakStringLiterals: false
+SpaceAfterCStyleCast: true
 ...

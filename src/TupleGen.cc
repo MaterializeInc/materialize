@@ -132,7 +132,7 @@ void TupleGen::genCustomer(int& cId, int& dId, int& wId,
     customerStream << "1" << csvDelim;                     // C_PAYMENT_CNT
     customerStream << "0" << csvDelim;                     // C_DELIVERY_CNT
     DataSource::addAlphanumeric64(300, 500, customerStream, 1); // C_DATA
-    customerStream << (int)(cState.c_str())[0];                 // C_N_NATIONKEY
+    customerStream << (int) (cState.c_str())[0];                // C_N_NATIONKEY
     customerStream << std::endl;
 }
 

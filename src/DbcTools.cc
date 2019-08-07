@@ -35,7 +35,7 @@ bool DbcTools::setEnv(SQLHENV& hEnv) {
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &hEnv);
     if (reviewReturn(hEnv, SQL_HANDLE_ENV, ret, 1)) {
         ret = SQLSetEnvAttr(hEnv, SQL_ATTR_ODBC_VERSION,
-                            (SQLPOINTER)SQL_OV_ODBC3, 0);
+                            (SQLPOINTER) SQL_OV_ODBC3, 0);
         if (reviewReturn(hEnv, SQL_HANDLE_ENV, ret, 1))
             return 1;
     }
@@ -47,8 +47,8 @@ bool DbcTools::connect(SQLHENV& hEnv, SQLHDBC& hDBC, const char* dsn,
                        const char* username, const char* password) {
     SQLRETURN ret = SQLAllocHandle(SQL_HANDLE_DBC, hEnv, &hDBC);
     if (reviewReturn(hDBC, SQL_HANDLE_DBC, ret, 1)) {
-        ret = SQLConnect(hDBC, (SQLCHAR*)dsn, SQL_NTS, (SQLCHAR*)username,
-                         SQL_NTS, (SQLCHAR*)password, SQL_NTS);
+        ret = SQLConnect(hDBC, (SQLCHAR*) dsn, SQL_NTS, (SQLCHAR*) username,
+                         SQL_NTS, (SQLCHAR*) password, SQL_NTS);
         if (reviewReturn(hDBC, SQL_HANDLE_DBC, ret, 1)) {
             Log::l1() << Log::tm() << "-dbs connected\n";
             return 1;
@@ -74,7 +74,7 @@ bool DbcTools::allocAndPrepareStmt(SQLHDBC& hDBC, SQLHSTMT& hStmt,
         hStmt = 0;
     }
     if (SQL_SUCCESS == SQLAllocHandle(SQL_HANDLE_STMT, hDBC, &hStmt)) {
-        if (SQL_SUCCESS == SQLPrepare(hStmt, (unsigned char*)stmt, SQL_NTS))
+        if (SQL_SUCCESS == SQLPrepare(hStmt, (unsigned char*) stmt, SQL_NTS))
             return 1;
     }
     Log::l1() << Log::tm() << "-prepare statement failed:\n" << stmt << "\n";
@@ -144,7 +144,7 @@ bool DbcTools::executePreparedStatement(SQLHSTMT& hStmt) {
 bool DbcTools::executeServiceStatement(SQLHSTMT& hStmt, const char* stmt,
                                        bool showError) {
     if (resetStatement(hStmt)) {
-        SQLRETURN ret = SQLExecDirect(hStmt, (SQLCHAR*)stmt, SQL_NTS);
+        SQLRETURN ret = SQLExecDirect(hStmt, (SQLCHAR*) stmt, SQL_NTS);
         if (reviewReturn(hStmt, SQL_HANDLE_STMT, ret, 1))
             return 1;
     }
@@ -176,17 +176,17 @@ bool DbcTools::reviewReturn(SQLHANDLE& handle, SQLSMALLINT handleType,
         if (showError)
             Log::l2() << Log::tm()
                       << "-info:\n    SQL_SUCCESS_WITH_INFO\n    SQLSTATE: "
-                      << (const char*)sql_state_buffer
+                      << (const char*) sql_state_buffer
                       << "\n    NATIVE ERROR: " << native_error
                       << "\n    MESSAGE TEXT: "
-                      << (const char*)message_text_buffer << "\n";
+                      << (const char*) message_text_buffer << "\n";
         else
             Log::l1() << Log::tm()
                       << "-info:\n    SQL_SUCCESS_WITH_INFO\n    SQLSTATE: "
-                      << (const char*)sql_state_buffer
+                      << (const char*) sql_state_buffer
                       << "\n    NATIVE ERROR: " << native_error
                       << "\n    MESSAGE TEXT: "
-                      << (const char*)message_text_buffer << "\n";
+                      << (const char*) message_text_buffer << "\n";
         return 1;
     }
     std::string s = "";
@@ -205,15 +205,15 @@ bool DbcTools::reviewReturn(SQLHANDLE& handle, SQLSMALLINT handleType,
     }
     if (showError)
         Log::l2() << Log::tm() << "-bad return:\n    " << s
-                  << "\n    SQLSTATE: " << (const char*)sql_state_buffer
+                  << "\n    SQLSTATE: " << (const char*) sql_state_buffer
                   << "\n    NATIVE ERROR: " << native_error
-                  << "\n    MESSAGE TEXT: " << (const char*)message_text_buffer
+                  << "\n    MESSAGE TEXT: " << (const char*) message_text_buffer
                   << "\n";
     else
         Log::l1() << Log::tm() << "-bad return:\n    " << s
-                  << "\n    SQLSTATE: " << (const char*)sql_state_buffer
+                  << "\n    SQLSTATE: " << (const char*) sql_state_buffer
                   << "\n    NATIVE ERROR: " << native_error
-                  << "\n    MESSAGE TEXT: " << (const char*)message_text_buffer
+                  << "\n    MESSAGE TEXT: " << (const char*) message_text_buffer
                   << "\n";
     return 0;
 }
@@ -221,7 +221,7 @@ bool DbcTools::reviewReturn(SQLHANDLE& handle, SQLSMALLINT handleType,
 bool DbcTools::fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
                      std::string& value) {
     if (fetch(hStmt, buf, nIdicator, pos)) {
-        value = std::string((char*)buf);
+        value = std::string((char*) buf);
         return 1;
     }
     return 0;
@@ -230,7 +230,7 @@ bool DbcTools::fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
 bool DbcTools::fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
                      int& value) {
     if (fetch(hStmt, buf, nIdicator, pos)) {
-        value = strtol((char*)buf, NULL, 0);
+        value = strtol((char*) buf, NULL, 0);
         return 1;
     }
     return 0;
@@ -239,7 +239,7 @@ bool DbcTools::fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
 bool DbcTools::fetch(SQLHSTMT& hStmt, SQLCHAR* buf, SQLLEN* nIdicator, int pos,
                      double& value) {
     if (fetch(hStmt, buf, nIdicator, pos)) {
-        value = atof((char*)buf);
+        value = atof((char*) buf);
         return 1;
     }
     return 0;

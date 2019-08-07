@@ -47,8 +47,8 @@ typedef struct {
 
 static void* analyticalThread(void* args) {
 
-    threadParameters* prm = (threadParameters*)args;
-    AnalyticalStatistic* aStat = (AnalyticalStatistic*)prm->stat;
+    threadParameters* prm = (threadParameters*) args;
+    AnalyticalStatistic* aStat = (AnalyticalStatistic*) prm->stat;
 
     bool b;
     long query = 0;
@@ -93,8 +93,8 @@ static void* analyticalThread(void* args) {
 
 static void* transactionalThread(void* args) {
 
-    threadParameters* prm = (threadParameters*)args;
-    TransactionalStatistic* tStat = (TransactionalStatistic*)prm->stat;
+    threadParameters* prm = (threadParameters*) args;
+    TransactionalStatistic* tStat = (TransactionalStatistic*) prm->stat;
 
     Transactions* transactions = new Transactions(prm->warehouseCount);
     if (!transactions->prepareStatements(prm->hDBC)) {
@@ -370,8 +370,8 @@ static int run(int argc, char* argv[]) {
     threadParameters aprm[analyticThreads];
     for (int i = 0; i < analyticThreads; i++) {
         aStat[i] = new AnalyticalStatistic();
-        aprm[i] = {&barStart, &runState,       i + 1,
-                   0,         (void*)aStat[i], warehouseCount};
+        aprm[i] = {&barStart, &runState,        i + 1,
+                   0,         (void*) aStat[i], warehouseCount};
         if (!DbcTools::connect(hEnv, aprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
@@ -385,8 +385,8 @@ static int run(int argc, char* argv[]) {
     threadParameters tprm[transactionalThreads];
     for (int i = 0; i < transactionalThreads; i++) {
         tStat[i] = new TransactionalStatistic();
-        tprm[i] = {&barStart, &runState,       i + 1,
-                   0,         (void*)tStat[i], warehouseCount};
+        tprm[i] = {&barStart, &runState,        i + 1,
+                   0,         (void*) tStat[i], warehouseCount};
         if (!DbcTools::connect(hEnv, tprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }

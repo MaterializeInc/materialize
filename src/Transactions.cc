@@ -357,7 +357,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         if (SQL_SUCCESS == SQLFetch(noItemSelect)) {
             if (SQL_SUCCESS ==
                 SQLGetData(noItemSelect, 1, SQL_C_CHAR, buf, 1024, &nIdicator))
-                iPrice = atof((char*)buf);
+                iPrice = atof((char*) buf);
             else {
                 DbcTools::rollback(hDBC);
                 return 0;
@@ -380,7 +380,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         if (SQL_SUCCESS == SQLFetch(noStockSelects[dId - 1])) {
             if (SQL_SUCCESS == SQLGetData(noStockSelects[dId - 1], 1,
                                           SQL_C_CHAR, buf, 1024, &nIdicator)) {
-                sQuantity = strtol((char*)buf, NULL, 0);
+                sQuantity = strtol((char*) buf, NULL, 0);
             } else {
                 DbcTools::rollback(hDBC);
                 return 0;
@@ -388,7 +388,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
 
             if (SQL_SUCCESS == SQLGetData(noStockSelects[dId - 1], 2,
                                           SQL_C_CHAR, buf, 1024, &nIdicator)) {
-                sDist = std::string((char*)buf);
+                sDist = std::string((char*) buf);
             } else {
                 DbcTools::rollback(hDBC);
                 return 0;
@@ -566,14 +566,14 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         if (SQL_SUCCESS == SQLFetch(pmCustomerSelect2)) {
             if (SQL_SUCCESS == SQLGetData(pmCustomerSelect2, 1, SQL_C_CHAR, buf,
                                           1024, &nIdicator))
-                cId = strtol((char*)buf, NULL, 0);
+                cId = strtol((char*) buf, NULL, 0);
             else {
                 DbcTools::rollback(hDBC);
                 return 0;
             }
             if (SQL_SUCCESS == SQLGetData(pmCustomerSelect2, 11, SQL_C_CHAR,
                                           buf, 1024, &nIdicator))
-                cCredit = std::string((char*)buf);
+                cCredit = std::string((char*) buf);
             else {
                 DbcTools::rollback(hDBC);
                 return 0;
@@ -805,7 +805,7 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         if (SQL_SUCCESS == SQLFetch(dlNewOrderSelect)) {
             if (SQL_SUCCESS == SQLGetData(dlNewOrderSelect, 1, SQL_C_CHAR, buf,
                                           1024, &nIdicator))
-                noOId = strtol((char*)buf, NULL, 0);
+                noOId = strtol((char*) buf, NULL, 0);
             else {
                 DbcTools::rollback(hDBC);
                 return 0;
