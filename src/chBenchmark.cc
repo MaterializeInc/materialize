@@ -14,17 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#include "pthread_shim.h"
-#include "src/AnalyticalStatistic.h"
-#include "src/Config.h"
-#include "src/DataSource.h"
-#include "src/DbcTools.h"
-#include "src/Log.h"
-#include "src/Queries.h"
-#include "src/Schema.h"
-#include "src/TransactionalStatistic.h"
-#include "src/Transactions.h"
-#include "src/TupleGen.h"
+#include "PthreadShim.h"
+#include "AnalyticalStatistic.h"
+#include "Config.h"
+#include "DataSource.h"
+#include "DbcTools.h"
+#include "Log.h"
+#include "Queries.h"
+#include "Schema.h"
+#include "TransactionalStatistic.h"
+#include "Transactions.h"
+#include "TupleGen.h"
 
 #include <fstream>
 #include <iostream>

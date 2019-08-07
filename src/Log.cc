@@ -39,7 +39,7 @@ ofstream* Log::getLogStream() {
     return &logStream;
 }
 
-Log1& operator<<(Log1& l, LogTime& lt) {
+Log1& operator<<(Log1& l, LogTime&) {
     time_t rawtime;
     time(&rawtime);
     struct tm* timeinfo = localtime(&rawtime);
@@ -76,7 +76,7 @@ Log1& operator<<(Log1& l, double d) {
     return l;
 };
 
-Log2& operator<<(Log2& l, LogTime& lt) {
+Log2& operator<<(Log2& l, LogTime& ) {
     time_t rawtime;
     time(&rawtime);
     struct tm* timeinfo = localtime(&rawtime);

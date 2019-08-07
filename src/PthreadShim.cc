@@ -30,7 +30,7 @@
  * SUCH DAMAGE.
  */
 
-#include "pthread_shim.h"
+#include "PthreadShim.h"
 
 #include <assert.h>
 #include <errno.h>

@@ -14,26 +14,24 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#include "AnalyticalStatistic.h"
+#include "TransactionalStatistic.h"
 
-using namespace std;
-
-AnalyticalStatistic::AnalyticalStatistic() {
-    for (int i = 0; i < 22; i++) {
-        executeTPCHSuccessCount[i] = 0;
-        executeTPCHFailCount[i] = 0;
+TransactionalStatistic::TransactionalStatistic() {
+    for (int i = 0; i < 5; i++) {
+        executeTPCCSuccessCount[i] = 0;
+        executeTPCCFailCount[i] = 0;
     }
 }
 
-void AnalyticalStatistic::addResult(unsigned long long& analyticalResults) {
-    for (int i = 0; i < 22; i++) {
-        analyticalResults += executeTPCHSuccessCount[i];
-    }
+void TransactionalStatistic::addResult(
+    unsigned long long& transcationalResults) {
+    transcationalResults += executeTPCCSuccessCount[0];
 }
 
-void AnalyticalStatistic::executeTPCHSuccess(int queryNumber, bool success) {
+void TransactionalStatistic::executeTPCCSuccess(int transactionNumber,
+                                                bool success) {
     if (success)
-        executeTPCHSuccessCount[queryNumber - 1]++;
+        executeTPCCSuccessCount[transactionNumber - 1]++;
     else
-        executeTPCHFailCount[queryNumber - 1]++;
+        executeTPCCFailCount[transactionNumber - 1]++;
 }

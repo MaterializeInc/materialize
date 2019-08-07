@@ -12,37 +12,27 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 
-CC=g++
-CXXFLAGS=-c -std=c++11 -O2 -Wall
-LDFLAGS=-lodbc
+CXXFLAGS = -c -std=c++17 -O2 -Wall -Wextra -Werror
+LDLIBS = -lodbc
 
 SOURCES = \
-	src/AnalyticalStatistic.cpp \
-	src/TransactionalStatistic.cpp \
-	src/dialect/DialectStrategy.cpp \
-	src/Config.cpp \
-	src/Log.cpp \
-	src/DbcTools.cpp \
-	src/DataSource.cpp \
-	src/TupleGen.cpp \
-	src/Schema.cpp \
-	src/Queries.cpp \
-	src/Transactions.cpp \
-	chBenchmark.cpp \
-	pthread_shim.cpp
-OBJECTS=$(SOURCES:.cpp=.o)
-EXECUTABLE=chBenchmark
+	src/AnalyticalStatistic.cc \
+	src/chBenchmark.cc \
+	src/Config.cc \
+	src/DataSource.cc \
+	src/DbcTools.cc \
+	src/dialect/DialectStrategy.cc \
+	src/Log.cc \
+	src/PthreadShim.cc \
+	src/Queries.cc \
+	src/Schema.cc \
+	src/TransactionalStatistic.cc \
+	src/Transactions.cc \
+	src/TupleGen.cc
 
-all: $(SOURCES) $(EXECUTABLE)
-
-$(EXECUTABLE): $(OBJECTS)
-	$(CC) $(LDFLAGS) $(OBJECTS) -o $@
-
-.cpp.o:
-	$(CC) $(CXXFLAGS) $< -o $@
+chBenchmark: $(SOURCES:.cc=.o)
+	$(CXX) $(LDFLAGS) $(LDLIBS) $^ -o $@
 
 clean:
-	rm *.o
-	rm src/*.o
-	rm src/dialect/*.o
+	find . -name '*.o' -delete
 	rm chBenchmark
