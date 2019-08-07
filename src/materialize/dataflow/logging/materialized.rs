@@ -16,7 +16,7 @@ pub struct Peek {
     uuid: uuid::Uuid,
 }
 
-use super::BatchLogger;
+use super::{BatchLogger, LogVariant, MaterializedLog};
 use crate::dataflow::arrangement::KeysOnlyHandle;
 use crate::dataflow::types::Timestamp;
 use crate::repr::Datum;
@@ -31,19 +31,21 @@ use timely::logging::WorkerIdentifier;
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     probe: &mut ProbeHandle<Timestamp>,
-    granularity_ns: u128,
+    config: &super::LoggingConfiguration,
 ) -> (
     BatchLogger<
         Peek,
         WorkerIdentifier,
         std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, Peek)>>,
     >,
-    [KeysOnlyHandle; 2],
+    std::collections::HashMap<LogVariant, KeysOnlyHandle>,
 ) {
     // Create timely dataflow logger based on shared linked lists.
     let writer = EventLink::<Timestamp, (Duration, WorkerIdentifier, Peek)>::new();
     let writer = std::rc::Rc::new(writer);
     let reader = writer.clone();
+
+    let granularity_ns = config.granularity_ns;
 
     // The two return values.
     let logger = BatchLogger::new(writer);
@@ -120,7 +122,19 @@ pub fn construct<A: Allocate>(
 
         active.stream.probe_with(probe);
 
-        [duration.trace, active.trace]
+        vec![
+            (
+                LogVariant::Materialized(MaterializedLog::PeekDuration),
+                duration.trace,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::PeekActive),
+                active.trace,
+            ),
+        ]
+        .into_iter()
+        .filter(|(name, _trace)| config.active_logs.contains(name))
+        .collect()
     });
 
     (logger, traces)

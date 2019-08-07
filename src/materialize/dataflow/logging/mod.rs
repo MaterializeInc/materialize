@@ -11,6 +11,154 @@ use crate::dataflow::types::Timestamp;
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
 use std::time::Duration;
 
+use crate::repr::{ColumnType, RelationType, ScalarType};
+
+/// Logging configuration.
+#[derive(Debug, Clone)]
+pub struct LoggingConfiguration {
+    granularity_ns: u128,
+    pub active_logs: std::collections::HashSet<LogVariant>,
+}
+
+impl Default for LoggingConfiguration {
+    fn default() -> Self {
+        Self {
+            granularity_ns: 10_000_000,
+            active_logs: LogVariant::default_logs().into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+pub enum LogVariant {
+    Timely(TimelyLog),
+    Differential(DifferentialLog),
+    Materialized(MaterializedLog),
+}
+
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+pub enum TimelyLog {
+    Operates,
+    Channels,
+    Shutdown,
+    Text,
+    Elapsed,
+    Histogram,
+}
+
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+pub enum DifferentialLog {
+    Arrangement,
+}
+
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+pub enum MaterializedLog {
+    PeekDuration,
+    PeekActive,
+}
+
+impl LogVariant {
+    pub fn default_logs() -> Vec<LogVariant> {
+        vec![
+            LogVariant::Timely(TimelyLog::Operates),
+            LogVariant::Timely(TimelyLog::Channels),
+            LogVariant::Timely(TimelyLog::Shutdown),
+            LogVariant::Timely(TimelyLog::Text),
+            LogVariant::Timely(TimelyLog::Elapsed),
+            LogVariant::Timely(TimelyLog::Histogram),
+            LogVariant::Differential(DifferentialLog::Arrangement),
+            LogVariant::Materialized(MaterializedLog::PeekDuration),
+            LogVariant::Materialized(MaterializedLog::PeekActive),
+        ]
+    }
+
+    pub fn name(&self) -> &'static str {
+        // Bind all names in one place to avoid accidental clashes.
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => "logs_operates",
+            LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
+            LogVariant::Timely(TimelyLog::Shutdown) => "logs_shutdown",
+            LogVariant::Timely(TimelyLog::Text) => "logs_text",
+            LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
+            LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
+            LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_duration",
+            LogVariant::Materialized(MaterializedLog::PeekActive) => "logs_peek_active",
+        }
+    }
+    pub fn schema(&self) -> RelationType {
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("id"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                    ColumnType::new(ScalarType::String).name("address"),
+                    ColumnType::new(ScalarType::String).name("name"),
+                ],
+            },
+            LogVariant::Timely(TimelyLog::Channels) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("id"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                    ColumnType::new(ScalarType::String).name("scope"),
+                    ColumnType::new(ScalarType::Int64).name("source node"),
+                    ColumnType::new(ScalarType::Int64).name("source port"),
+                    ColumnType::new(ScalarType::Int64).name("target node"),
+                    ColumnType::new(ScalarType::Int64).name("target port"),
+                ],
+            },
+            LogVariant::Timely(TimelyLog::Shutdown) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("id"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                ],
+            },
+            LogVariant::Timely(TimelyLog::Text) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("text"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                ],
+            },
+            LogVariant::Timely(TimelyLog::Elapsed) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("id"),
+                    ColumnType::new(ScalarType::Int64).name("elapsed_ns"),
+                ],
+            },
+            LogVariant::Timely(TimelyLog::Histogram) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("id"),
+                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
+                    ColumnType::new(ScalarType::Int64).name("count"),
+                ],
+            },
+            LogVariant::Differential(DifferentialLog::Arrangement) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("operator"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                    ColumnType::new(ScalarType::Int64).name("records"),
+                    ColumnType::new(ScalarType::Int64).name("batches"),
+                ],
+            },
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::String).name("UUID"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
+                ],
+            },
+            LogVariant::Materialized(MaterializedLog::PeekActive) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::String).name("UUID"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                    ColumnType::new(ScalarType::String).name("view"),
+                    ColumnType::new(ScalarType::Int64).name("timestamp"),
+                ],
+            },
+        }
+    }
+}
+
 /// Logs events as a timely stream, with progress statements.
 pub struct BatchLogger<T, E, P>
 where
