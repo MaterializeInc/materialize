@@ -29,7 +29,7 @@ pub type DeleteCallback = Box<dyn FnOnce()>;
 /// of a collection. These arrangements can either be unkeyed, or keyed by some expression.
 pub struct TraceManager {
     /// A map from named collections to maintained traces.
-    traces: HashMap<String, CollectionTraces>,
+    pub traces: HashMap<String, CollectionTraces>,
 }
 
 impl Default for TraceManager {
@@ -159,7 +159,7 @@ impl TraceManager {
 }
 
 /// Maintained traces for a collection.
-struct CollectionTraces {
+pub struct CollectionTraces {
     /// The collection arranged "by self", where the key is the record.
     by_self: Option<(KeysOnlyHandle, Option<DeleteCallback>)>,
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.

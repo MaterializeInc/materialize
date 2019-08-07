@@ -22,10 +22,11 @@ use std::time::Instant;
 
 use super::render;
 use super::render::InputCapability;
-use super::RelationExpr;
 use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
-use crate::dataflow::{Dataflow, Timestamp, View};
+use crate::dataflow::Timestamp;
 use crate::glue::*;
+
+use crate::dataflow::coordinator;
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
@@ -63,20 +64,6 @@ pub enum DataflowResultsHandler {
     Remote(String),
 }
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-enum SequencedCommand {
-    CreateDataflows(Vec<Dataflow>),
-    DropDataflows(Vec<String>),
-    Peek {
-        name: String,
-        timestamp: Timestamp,
-        drop_after_peek: bool,
-    },
-    Tail(String),
-    Shutdown,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PendingPeek {
     /// The name of the dataflow to peek.
@@ -94,17 +81,17 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
     local_input_mux: LocalInputMux,
     dataflow_results_handler: DataflowResultsHandler,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputCapability>,
-    dataflows: HashMap<String, Dataflow>,
-    sequencer: Sequencer<(SequencedCommand, CommandMeta)>,
+    sequencer: Sequencer<(coordinator::SequencedCommand, CommandMeta)>,
     system_probe: timely::dataflow::ProbeHandle<Timestamp>,
     logging_granularity_ns: Option<u128>,
+
+    command_coordinator: Option<coordinator::CommandCoordinator>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -118,19 +105,21 @@ where
         dataflow_results_handler: DataflowResultsHandler,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
+        let command_coordinator =
+            dataflow_command_receiver.map(|dcr| coordinator::CommandCoordinator::new(dcr));
+
         Worker {
             inner: w,
-            dataflow_command_receiver,
             local_input_mux,
             dataflow_results_handler,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
-            dataflows: HashMap::new(),
             sequencer,
             system_probe: timely::dataflow::ProbeHandle::new(),
             logging_granularity_ns: None,
+            command_coordinator,
         }
     }
 
@@ -273,17 +262,23 @@ where
             self.inner.step();
             self.maintain_logging();
 
-            if self.dataflow_command_receiver.is_some() {
-                while let Ok(Some((cmd, cmd_meta))) =
-                    self.dataflow_command_receiver.as_mut().unwrap().try_next()
-                {
-                    self.sequence_command(cmd, cmd_meta)
+            if let Some(coordinator) = &mut self.command_coordinator {
+                // Sequence any pending commands.
+                coordinator.sequence_commands(&mut self.sequencer);
+
+                // Update upper bounds for each maintained trace.
+                let mut upper = Antichain::new();
+                for name in self.traces.traces.keys() {
+                    if let Some(by_self) = self.traces.get_by_self(name) {
+                        by_self.clone().read_upper(&mut upper);
+                        coordinator.update_upper(name, upper.elements());
+                    }
                 }
             }
 
             // Handle any received commands
             while let Some((cmd, cmd_meta)) = self.sequencer.next() {
-                if let SequencedCommand::Shutdown = cmd {
+                if let coordinator::SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
                 self.handle_command(cmd, cmd_meta);
@@ -295,152 +290,9 @@ where
         }
     }
 
-    fn sequence_command(&mut self, cmd: DataflowCommand, cmd_meta: CommandMeta) {
-        let sequenced_cmd = match cmd {
-            DataflowCommand::CreateDataflows(dataflows) => {
-                for dataflow in dataflows.iter() {
-                    self.dataflows
-                        .insert(dataflow.name().to_owned(), dataflow.clone());
-                }
-                SequencedCommand::CreateDataflows(dataflows)
-            }
-            DataflowCommand::DropDataflows(dataflows) => {
-                for dataflow in dataflows.iter() {
-                    self.dataflows.remove(dataflow);
-                }
-                SequencedCommand::DropDataflows(dataflows)
-            }
-            DataflowCommand::Tail(name) => SequencedCommand::Tail(name),
-            DataflowCommand::Peek { source, when } => {
-                // Peeks describe a source of data and a timestamp at which to view its contents.
-                //
-                // We need to determine both an appropriate timestamp from the description, and
-                // also to ensure that there is a view in place to query, if the source of data
-                // for the peek is not a base relation.
-
-                // Choose a timestamp for all workers to use in the peek.
-                // We minimize over all participating views, to ensure that the query will not
-                // need to block on the arrival of further input data.
-                let timestamp = match when {
-                    // Explicitly requested timestamps should be respected.
-                    PeekWhen::AtTimestamp(timestamp) => timestamp,
-
-                    // We should produce the minimum accepted time among inputs sources that
-                    // `source` depends on transitively, ignoring the accepted times of
-                    // intermediate views.
-                    PeekWhen::EarliestSource | PeekWhen::Immediately => {
-                        let mut bound = Antichain::new(); // lower bound on available data.
-                        let mut upper = Antichain::new(); // temporary storage for batches.
-
-                        // TODO : RelationExpr has a `uses_inner` method, but it wasn't
-                        // clear what it does (it suppresses let bound names, for example).
-                        // Dataflow not yet installed, so we should visit the RelationExpr
-                        // manually and then call `self.sources_frontier`
-                        source.visit(&mut |e| {
-                            if let RelationExpr::Get { name, typ: _ } = e {
-                                match when {
-                                    PeekWhen::EarliestSource => {
-                                        self.sources_frontier(name, &mut bound, &mut upper);
-                                    }
-                                    PeekWhen::Immediately => {
-                                        if let Some(mut trace) =
-                                            self.traces.get_by_self(&name).cloned()
-                                        {
-                                            trace.read_upper(&mut upper);
-                                            bound.extend(upper.elements().iter().cloned());
-                                        } else {
-                                            // A missing relation *should* mean one that has been
-                                            // sequenced for insertion but not yet handled. That
-                                            // relation can be treated as having frontier zero,
-                                            // in the absence of any other information about it.
-                                            bound.insert(0);
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                };
-                            }
-                        });
-
-                        // Pick the first time strictly less than `bound` to ensure that the
-                        // peek can respond without further input advances.
-                        // TODO : the subtraction saturates to not wrap zero around, but if
-                        // we get this far with a zero we are at risk of a peek that may not
-                        // immediately return.
-                        if let Some(bound) = bound.elements().get(0) {
-                            bound.saturating_sub(1)
-                        } else {
-                            Timestamp::max_value()
-                        }
-                    }
-                };
-
-                // Create a transient view if the peek is not of a base relation.
-                let (name, drop) = if let RelationExpr::Get { name, typ: _ } = source {
-                    // Fast path. We can just look at the existing dataflow directly.
-                    (name, false)
-                } else {
-                    // Slow path. We need to perform some computation, so build
-                    // a new transient dataflow that will be dropped after the
-                    // peek completes.
-                    let name = format!("<temp_{}>", Uuid::new_v4());
-                    let typ = source.typ();
-                    self.sequencer.push((
-                        SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
-                            name: name.clone(),
-                            relation_expr: source,
-                            typ,
-                        })]),
-                        CommandMeta::nil(),
-                    ));
-                    (name, true)
-                };
-
-                SequencedCommand::Peek {
-                    name,
-                    timestamp,
-                    drop_after_peek: drop,
-                }
-            }
-            DataflowCommand::Shutdown => SequencedCommand::Shutdown,
-        };
-        self.sequencer.push((sequenced_cmd, cmd_meta));
-    }
-
-    /// Introduces all frontier elements from sources (not views) into `bound`.
-    ///
-    /// This method transitively traverses view definitions until it finds sources, and incorporates
-    /// the accepted frontiers of each source into `bound`.
-    fn sources_frontier(
-        &self,
-        name: &str,
-        bound: &mut Antichain<Timestamp>,
-        upper: &mut Antichain<Timestamp>,
-    ) {
-        match &self.dataflows[name] {
-            Dataflow::Source(_) => {
-                if let Some(mut trace) = self.traces.get_by_self(&name).cloned() {
-                    trace.read_upper(upper);
-                    bound.extend(upper.elements().iter().cloned());
-                } else {
-                    // A missing relation *should* mean one that has been
-                    // sequenced for insertion but not yet handled. That
-                    // relation can be treated as having frontier zero,
-                    // in the absence of any other information about it.
-                    bound.insert(0);
-                }
-            }
-            Dataflow::Sink(_) => unreachable!(),
-            v @ Dataflow::View(_) => {
-                for name in v.uses() {
-                    self.sources_frontier(name, bound, upper);
-                }
-            }
-        }
-    }
-
-    fn handle_command(&mut self, cmd: SequencedCommand, cmd_meta: CommandMeta) {
+    fn handle_command(&mut self, cmd: coordinator::SequencedCommand, cmd_meta: CommandMeta) {
         match cmd {
-            SequencedCommand::CreateDataflows(dataflows) => {
+            coordinator::SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
                     render::build_dataflow(
                         &dataflow,
@@ -452,14 +304,14 @@ where
                 }
             }
 
-            SequencedCommand::DropDataflows(dataflows) => {
+            coordinator::SequencedCommand::DropDataflows(dataflows) => {
                 for name in &dataflows {
                     self.inputs.remove(name);
                     self.traces.del_trace(name);
                 }
             }
 
-            SequencedCommand::Peek {
+            coordinator::SequencedCommand::Peek {
                 name,
                 timestamp,
                 drop_after_peek,
@@ -476,9 +328,9 @@ where
                 self.pending_peeks.push((pending_peek, trace));
             }
 
-            SequencedCommand::Tail(_) => unimplemented!(),
+            coordinator::SequencedCommand::Tail(_) => unimplemented!(),
 
-            SequencedCommand::Shutdown => {
+            coordinator::SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.inputs.clear();
                 self.traces.del_all_traces();
@@ -564,7 +416,7 @@ where
         mem::replace(&mut self.pending_peeks, pending_peeks);
         if !dataflows_to_be_dropped.is_empty() {
             self.handle_command(
-                SequencedCommand::DropDataflows(dataflows_to_be_dropped),
+                coordinator::SequencedCommand::DropDataflows(dataflows_to_be_dropped),
                 CommandMeta {
                     connection_uuid: Uuid::nil(),
                 },
