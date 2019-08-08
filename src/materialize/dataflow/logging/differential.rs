@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::BatchLogger;
+use super::{BatchLogger, DifferentialLog, LogVariant};
 use crate::dataflow::arrangement::KeysOnlyHandle;
 use crate::dataflow::types::Timestamp;
 use crate::repr::Datum;
@@ -18,19 +18,21 @@ use timely::logging::WorkerIdentifier;
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     probe: &mut ProbeHandle<Timestamp>,
-    granularity_ns: u128,
+    config: &super::LoggingConfiguration,
 ) -> (
     BatchLogger<
         DifferentialEvent,
         WorkerIdentifier,
         std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
     >,
-    [KeysOnlyHandle; 1],
+    std::collections::HashMap<LogVariant, KeysOnlyHandle>,
 ) {
     // Create timely dataflow logger based on shared linked lists.
     let writer = EventLink::<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>::new();
     let writer = std::rc::Rc::new(writer);
     let reader = writer.clone();
+
+    let granularity_ns = config.granularity_ns;
 
     // The two return values.
     let logger = BatchLogger::new(writer);
@@ -88,7 +90,13 @@ pub fn construct<A: Allocate>(
 
         arrangements.stream.probe_with(probe);
 
-        [arrangements.trace]
+        vec![(
+            LogVariant::Differential(DifferentialLog::Arrangement),
+            arrangements.trace,
+        )]
+        .into_iter()
+        .filter(|(name, _trace)| config.active_logs.contains(name))
+        .collect()
     });
 
     (logger, traces)

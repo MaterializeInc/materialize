@@ -27,6 +27,7 @@ use crate::dataflow::Timestamp;
 use crate::glue::*;
 
 use crate::dataflow::coordinator;
+use crate::dataflow::logging;
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
@@ -34,7 +35,7 @@ pub fn serve(
     local_input_mux: LocalInputMux,
     dataflow_results_handler: DataflowResultsHandler,
     timely_configuration: timely::Configuration,
-    log_granularity_ns: Option<u128>, // None disables logging, Some(ns) refreshes logging each ns nanoseconds.
+    logging_config: Option<logging::LoggingConfiguration>,
 ) -> Result<WorkerGuards<()>, String> {
     let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
 
@@ -49,8 +50,8 @@ pub fn serve(
             dataflow_command_receiver,
             local_input_mux.clone(),
             dataflow_results_handler.clone(),
+            logging_config.clone(),
         )
-        .logging(log_granularity_ns)
         .run()
     })
 }
@@ -89,8 +90,7 @@ where
     inputs: HashMap<String, InputCapability>,
     sequencer: Sequencer<(coordinator::SequencedCommand, CommandMeta)>,
     system_probe: timely::dataflow::ProbeHandle<Timestamp>,
-    logging_granularity_ns: Option<u128>,
-
+    logging_config: Option<logging::LoggingConfiguration>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
 }
 
@@ -103,10 +103,11 @@ where
         dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
         local_input_mux: LocalInputMux,
         dataflow_results_handler: DataflowResultsHandler,
+        logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
-        let command_coordinator =
-            dataflow_command_receiver.map(|dcr| coordinator::CommandCoordinator::new(dcr));
+        let command_coordinator = dataflow_command_receiver
+            .map(|dcr| coordinator::CommandCoordinator::new(dcr, &logging_config));
 
         Worker {
             inner: w,
@@ -118,85 +119,58 @@ where
             inputs: HashMap::new(),
             sequencer,
             system_probe: timely::dataflow::ProbeHandle::new(),
-            logging_granularity_ns: None,
+            logging_config,
             command_coordinator,
         }
     }
 
-    /// Enables or disables logging.
-    ///
-    /// The argument disables logging by setting it to `None`, and otherwise contains
-    /// the granularity of log messages in nanoseconds. All log events will be rounded
-    /// up to the nearest multiple of this amount once produced, and should result in
-    /// view updates only at these times.
-    ///
-    /// Coarsening the granularity, with a larger number, may reduce logging overhead.
-    pub fn logging(mut self, granularity_ns: Option<u128>) -> Self {
-        self.logging_granularity_ns = granularity_ns;
-        self
-    }
-
     /// Initializes timely dataflow logging and publishes as a view.
-    fn initialize_logging(&mut self, granularity_ns: u128) {
-        use crate::dataflow::logging;
+    ///
+    /// The initialization respects the setting of `self.logging_config`, and in particular
+    /// if it is set to `None` then nothing happens. This has the potential to crash and burn
+    /// if logging is not initialized and anyone tries to use it.
+    fn initialize_logging(&mut self) {
+        if let Some(logging) = &self.logging_config {
+            // Construct logging dataflows and endpoints before registering any.
+            let (mut t_logger, t_traces) =
+                logging::timely::construct(&mut self.inner, &mut self.system_probe, logging);
+            let (mut d_logger, d_traces) =
+                logging::differential::construct(&mut self.inner, &mut self.system_probe, logging);
+            let (mut m_logger, m_traces) =
+                logging::materialized::construct(&mut self.inner, &mut self.system_probe, logging);
 
-        // Construct logging dataflows and endpoints before registering any.
-        let (mut t_logger, t_traces) =
-            logging::timely::construct(&mut self.inner, &mut self.system_probe, granularity_ns);
-        let (mut d_logger, d_traces) = logging::differential::construct(
-            &mut self.inner,
-            &mut self.system_probe,
-            granularity_ns,
-        );
-        let (mut m_logger, m_traces) = logging::materialized::construct(
-            &mut self.inner,
-            &mut self.system_probe,
-            granularity_ns,
-        );
+            // Register each logger endpoint.
+            self.inner
+                .log_register()
+                .insert::<timely::logging::TimelyEvent, _>("timely", move |time, data| {
+                    t_logger.publish_batch(time, data)
+                });
 
-        // Register each logger endpoint.
-        self.inner
-            .log_register()
-            .insert::<timely::logging::TimelyEvent, _>("timely", move |time, data| {
-                t_logger.publish_batch(time, data)
-            });
+            self.inner
+                .log_register()
+                .insert::<differential_dataflow::logging::DifferentialEvent, _>(
+                    "differential/arrange",
+                    move |time, data| d_logger.publish_batch(time, data),
+                );
 
-        self.inner
-            .log_register()
-            .insert::<differential_dataflow::logging::DifferentialEvent, _>(
-                "differential/arrange",
-                move |time, data| d_logger.publish_batch(time, data),
-            );
+            self.inner
+                .log_register()
+                .insert::<logging::materialized::Peek, _>(
+                    "materialized/peeks",
+                    move |time, data| m_logger.publish_batch(time, data),
+                );
 
-        self.inner
-            .log_register()
-            .insert::<logging::materialized::Peek, _>("materialized/peeks", move |time, data| {
-                m_logger.publish_batch(time, data)
-            });
-
-        // Install traces as maintained views.
-        let [operates, channels, shutdown, text, elapsed, histogram] = t_traces;
-        self.traces
-            .set_by_self("logs_operates".to_owned(), operates, None);
-        self.traces
-            .set_by_self("logs_channels".to_owned(), channels, None);
-        self.traces
-            .set_by_self("logs_shutdown".to_owned(), shutdown, None);
-        self.traces.set_by_self("logs_text".to_owned(), text, None);
-        self.traces
-            .set_by_self("logs_elapsed".to_owned(), elapsed, None);
-        self.traces
-            .set_by_self("logs_histogram".to_owned(), histogram, None);
-
-        let [arrangement] = d_traces;
-        self.traces
-            .set_by_self("logs_arrangement".to_owned(), arrangement, None);
-
-        let [duration, active] = m_traces;
-        self.traces
-            .set_by_self("logs_peek_duration".to_owned(), duration, None);
-        self.traces
-            .set_by_self("logs_peek_active".to_owned(), active, None);
+            // Install traces as maintained views.
+            for (log, trace) in t_traces {
+                self.traces.set_by_self(log.name().to_string(), trace, None);
+            }
+            for (log, trace) in d_traces {
+                self.traces.set_by_self(log.name().to_string(), trace, None);
+            }
+            for (log, trace) in m_traces {
+                self.traces.set_by_self(log.name().to_string(), trace, None);
+            }
+        }
     }
 
     /// Maintenance operations on logging traces.
@@ -205,28 +179,18 @@ where
     /// The traces are compacted using the least time accepted by any of the traces, which should
     /// ensure that each can be joined with the others.
     fn maintain_logging(&mut self) {
-        let logs = [
-            "logs_operates",
-            "logs_channels",
-            "logs_shutdown",
-            "logs_text",
-            "logs_elapsed",
-            "logs_histogram",
-            "logs_arrangement",
-            "logs_peek_duration",
-            "logs_peek_active",
-        ];
+        if let Some(configuration) = &self.logging_config {
+            let mut lower = Antichain::new();
+            self.system_probe.with_frontier(|frontier| {
+                for element in frontier.iter() {
+                    lower.insert(element.saturating_sub(1_000_000_000));
+                }
+            });
 
-        let mut lower = Antichain::new();
-        self.system_probe.with_frontier(|frontier| {
-            for element in frontier.iter() {
-                lower.insert(element.saturating_sub(1_000_000_000));
-            }
-        });
-
-        for log in logs.iter() {
-            if let Some(trace) = self.traces.get_by_self_mut(log) {
-                trace.advance_by(lower.elements());
+            for log in configuration.active_logs.iter() {
+                if let Some(trace) = self.traces.get_by_self_mut(log.name()) {
+                    trace.advance_by(lower.elements());
+                }
             }
         }
     }
@@ -247,9 +211,7 @@ where
         // produced at logical times that are multiples of this many nanoseconds, which can reduce
         // the churn of the underlying computation.
 
-        if let Some(granularity_ns) = self.logging_granularity_ns {
-            self.initialize_logging(granularity_ns);
-        }
+        self.initialize_logging();
 
         let mut shutdown = false;
         while !shutdown {
@@ -316,7 +278,11 @@ where
                 timestamp,
                 drop_after_peek,
             } => {
-                let mut trace = self.traces.get_by_self(&name).unwrap().clone();
+                let mut trace = self
+                    .traces
+                    .get_by_self(&name)
+                    .expect("Failed to find trace for peek")
+                    .clone();
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {

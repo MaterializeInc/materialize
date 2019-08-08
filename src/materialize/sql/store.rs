@@ -11,7 +11,7 @@ use std::iter::FromIterator;
 use crate::dataflow::SourceConnector;
 
 use crate::dataflow::{Dataflow, LocalSourceConnector, Source};
-use crate::repr::{ColumnType, RelationType, ScalarType};
+use crate::repr::RelationType;
 
 #[derive(Debug)]
 pub struct DataflowStore {
@@ -124,156 +124,27 @@ impl DataflowStore {
 
 impl Default for DataflowStore {
     fn default() -> DataflowStore {
-        let mut store = DataflowStore {
-            inner: HashMap::new(),
-        };
-
-        let operates_dataflow = Dataflow::Source(Source {
-            name: "logs_operates".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::String).name("address"),
-                    ColumnType::new(ScalarType::String).name("name"),
-                ],
-            },
-        });
-        store.insert(operates_dataflow).unwrap();
-
-        let channels_dataflow = Dataflow::Source(Source {
-            name: "logs_channels".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::String).name("scope"),
-                    ColumnType::new(ScalarType::Int64).name("source node"),
-                    ColumnType::new(ScalarType::Int64).name("source port"),
-                    ColumnType::new(ScalarType::Int64).name("target node"),
-                    ColumnType::new(ScalarType::Int64).name("target port"),
-                ],
-            },
-        });
-        store.insert(channels_dataflow).unwrap();
-
-        let shutdown_dataflow = Dataflow::Source(Source {
-            name: "logs_shutdown".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                ],
-            },
-        });
-        store.insert(shutdown_dataflow).unwrap();
-
-        let text_dataflow = Dataflow::Source(Source {
-            name: "logs_text".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("text"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                ],
-            },
-        });
-        store.insert(text_dataflow).unwrap();
-
-        let elapsed_dataflow = Dataflow::Source(Source {
-            name: "logs_elapsed".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("elapsed_ns"),
-                ],
-            },
-        });
-        store.insert(elapsed_dataflow).unwrap();
-
-        let duration_dataflow = Dataflow::Source(Source {
-            name: "logs_histogram".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
-                    ColumnType::new(ScalarType::Int64).name("count"),
-                ],
-            },
-        });
-        store.insert(duration_dataflow).unwrap();
-
-        let duration_dataflow = Dataflow::Source(Source {
-            name: "logs_arrangement".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("operator"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::Int64).name("records"),
-                    ColumnType::new(ScalarType::Int64).name("batches"),
-                ],
-            },
-        });
-        store.insert(duration_dataflow).unwrap();
-
-        let duration_dataflow = Dataflow::Source(Source {
-            name: "logs_peek_duration".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("UUID"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
-                ],
-            },
-        });
-        store.insert(duration_dataflow).unwrap();
-
-        let duration_dataflow = Dataflow::Source(Source {
-            name: "logs_peek_active".into(),
-            connector: SourceConnector::Local(LocalSourceConnector {
-                uuid: uuid::Uuid::new_v4(),
-            }),
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("UUID"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::String).name("view"),
-                    ColumnType::new(ScalarType::Int64).name("timestamp"),
-                ],
-            },
-        });
-        store.insert(duration_dataflow).unwrap();
-
-        store
+        // TODO: This should be more closely coupled to the actual logging configuration.
+        crate::dataflow::logging::LogVariant::default_logs()
+            .into_iter()
+            .map(|log| {
+                Dataflow::Source(Source {
+                    name: log.name().to_string(),
+                    connector: SourceConnector::Local(LocalSourceConnector {
+                        uuid: uuid::Uuid::new_v4(),
+                    }),
+                    typ: log.schema(),
+                })
+            })
+            .collect()
     }
 }
 
 impl FromIterator<Dataflow> for DataflowStore {
     fn from_iter<I: IntoIterator<Item = Dataflow>>(iter: I) -> Self {
-        let mut store = DataflowStore::default();
+        let mut store = DataflowStore {
+            inner: std::collections::HashMap::new(),
+        };
         for dataflow in iter {
             store.insert(dataflow).unwrap();
         }

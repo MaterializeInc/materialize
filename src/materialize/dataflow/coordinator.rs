@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::RelationExpr;
+use crate::dataflow::logging;
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 
@@ -36,9 +37,19 @@ pub struct CommandCoordinator {
 
 impl CommandCoordinator {
     /// Creates a new command coordinator from input and output command queues.
-    pub fn new(command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>) -> Self {
+    pub fn new(
+        command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+        logging_config: &Option<logging::LoggingConfiguration>,
+    ) -> Self {
+        let mut views = HashMap::new();
+        if let Some(config) = &logging_config {
+            for log in config.active_logs.iter() {
+                views.insert(log.name().to_string(), ViewState::new_source());
+            }
+        }
+
         Self {
-            views: HashMap::new(),
+            views,
             command_receiver,
         }
     }
@@ -64,7 +75,7 @@ impl CommandCoordinator {
             DataflowCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
                     self.views
-                        .insert(dataflow.name().to_owned(), ViewState::new(dataflow.clone()));
+                        .insert(dataflow.name().to_owned(), ViewState::new(dataflow));
                 }
                 sequencer.push((SequencedCommand::CreateDataflows(dataflows), command_meta));
             }
@@ -171,17 +182,13 @@ impl CommandCoordinator {
     /// This method transitively traverses view definitions until it finds sources, and incorporates
     /// the accepted frontiers of each source into `bound`.
     fn sources_frontier(&self, name: &str, bound: &mut Antichain<Timestamp>) {
-        match &self.views[name].dataflow {
-            Dataflow::Source(_) => {
-                let upper = self.upper_of(name).expect("Name missing at coordinator");
-                bound.extend(upper.elements().iter().cloned());
+        if let Some(uses) = &self.views[name].uses {
+            for name in uses {
+                self.sources_frontier(name, bound);
             }
-            Dataflow::Sink(_) => unreachable!(),
-            v @ Dataflow::View(_) => {
-                for name in v.uses() {
-                    self.sources_frontier(name, bound);
-                }
-            }
+        } else {
+            let upper = self.upper_of(name).expect("Name missing at coordinator");
+            bound.extend(upper.elements().iter().cloned());
         }
     }
 
@@ -219,8 +226,8 @@ impl CommandCoordinator {
 
 /// Per-view state.
 pub struct ViewState {
-    /// Dataflow structure defining the view.
-    dataflow: Dataflow,
+    /// Names of views on which this view depends, or `None` if a source.
+    uses: Option<Vec<String>>,
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     upper: Antichain<Timestamp>,
@@ -234,9 +241,25 @@ impl ViewState {
     /// Initialize a new `ViewState` from a name and a dataflow.
     ///
     /// The upper bound and since compaction are initialized to the zero frontier.
-    pub fn new(dataflow: Dataflow) -> Self {
+    pub fn new(dataflow: &Dataflow) -> Self {
+        // determine immediate dependencies.
+        let uses = match dataflow {
+            Dataflow::Source(_) => None,
+            Dataflow::Sink(_) => None,
+            v @ Dataflow::View(_) => Some(v.uses().iter().map(|x| x.to_string()).collect()),
+        };
+
         ViewState {
-            dataflow,
+            uses,
+            upper: Antichain::from_elem(0),
+            since: Antichain::from_elem(0),
+        }
+    }
+
+    /// Creates the state for a source, with no depedencies.
+    pub fn new_source() -> Self {
+        ViewState {
+            uses: None,
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
         }

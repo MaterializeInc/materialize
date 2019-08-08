@@ -168,7 +168,7 @@ pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
         local_input_mux.clone(),
         dataflow_results_handler,
         config.timely_configuration,
-        Some(10_000_000), // 10ms logging granularity
+        Some(Default::default()), // 10ms logging granularity
     )?;
 
     // Initialize command queue and sql planner

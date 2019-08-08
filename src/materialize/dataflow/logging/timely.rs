@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::BatchLogger;
+use super::{BatchLogger, LogVariant, TimelyLog};
 use crate::dataflow::arrangement::KeysOnlyHandle;
 use crate::dataflow::types::Timestamp;
 use crate::repr::Datum;
@@ -17,20 +17,22 @@ use timely::logging::{TimelyEvent, WorkerIdentifier};
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     probe: &mut ProbeHandle<Timestamp>,
-    granularity_ns: u128,
+    config: &super::LoggingConfiguration,
 ) -> (
     BatchLogger<
         TimelyEvent,
         WorkerIdentifier,
         std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
     >,
-    [KeysOnlyHandle; 6],
+    std::collections::HashMap<LogVariant, KeysOnlyHandle>,
 ) {
     // Create timely dataflow logger based on shared linked lists.
     let writer =
         timely::dataflow::operators::capture::event::link::EventLink::<Timestamp, _>::new();
     let writer = std::rc::Rc::new(writer);
     let reader = writer.clone();
+
+    let granularity_ns = config.granularity_ns;
 
     // The two return values.
     let logger = BatchLogger::new(writer);
@@ -211,14 +213,18 @@ pub fn construct<A: Allocate>(
         elapsed.stream.probe_with(probe);
         histogram.stream.probe_with(probe);
 
-        [
-            operates.trace,
-            channels.trace,
-            shutdown.trace,
-            text.trace,
-            elapsed.trace,
-            histogram.trace,
+        // Restrict results by those logs that are meant to be active.
+        vec![
+            (LogVariant::Timely(TimelyLog::Operates), operates.trace),
+            (LogVariant::Timely(TimelyLog::Channels), channels.trace),
+            (LogVariant::Timely(TimelyLog::Shutdown), shutdown.trace),
+            (LogVariant::Timely(TimelyLog::Text), text.trace),
+            (LogVariant::Timely(TimelyLog::Elapsed), elapsed.trace),
+            (LogVariant::Timely(TimelyLog::Histogram), histogram.trace),
         ]
+        .into_iter()
+        .filter(|(name, _trace)| config.active_logs.contains(name))
+        .collect()
     });
 
     (logger, traces)
