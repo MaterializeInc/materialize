@@ -35,7 +35,7 @@
 #include <pthread.h>
 #include <unistd.h>
 
-#ifndef _POSIX_BARRIERS
+#if !defined(_POSIX_BARRIERS) || _POSIX_BARRIERS < 0
 
 #define PTHREAD_BARRIER_SERIAL_THREAD 1
 

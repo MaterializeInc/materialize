@@ -35,7 +35,7 @@
 #include <assert.h>
 #include <errno.h>
 
-#ifndef _POSIX_BARRIERS
+#if !defined(_POSIX_BARRIERS) || _POSIX_BARRIERS < 0
 
 int pthread_barrier_init(pthread_barrier_t* barrier,
                          const pthread_barrierattr_t* attr, unsigned count) {
