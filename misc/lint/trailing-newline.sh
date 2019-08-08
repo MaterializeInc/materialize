@@ -22,7 +22,7 @@ for file in "$@"; do
 
     last_byte=$(tail -c1 "$file")
     if [[ "$last_byte" != $'\n' && "$last_byte" != "" ]] &> /dev/null; then
-        echo "lint: trailing-newline: $1 is missing a trailing newline" >&2
+        echo "lint: trailing-newline: $file is missing a trailing newline" >&2
         exit 1
     fi
 done
