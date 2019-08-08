@@ -216,22 +216,22 @@ class MySqlDialect : public Dialect {
         "LOAD DATA INFILE '", "LOAD DATA INFILE '", "LOAD DATA INFILE '"};
 
     std::vector<const char*> importSuffixStrings = {
-        "/WAREHOUSE.tbl' INTO TABLE tpcch.warehouse FIELDS TERMINATED BY '|'",
-        "/DISTRICT.tbl' INTO TABLE tpcch.district FIELDS TERMINATED BY '|'",
-        "/CUSTOMER.tbl' INTO TABLE tpcch.customer FIELDS TERMINATED BY '|'",
-        "/HISTORY.tbl' INTO TABLE tpcch.history FIELDS TERMINATED BY '|'",
-        "/NEWORDER.tbl' INTO TABLE tpcch.neworder FIELDS TERMINATED BY '|'",
-        "/ORDER.tbl' INTO TABLE tpcch.order FIELDS TERMINATED BY '|' "
+        "/warehouse.tbl' INTO TABLE tpcch.warehouse FIELDS TERMINATED BY '|'",
+        "/district.tbl' INTO TABLE tpcch.district FIELDS TERMINATED BY '|'",
+        "/customer.tbl' INTO TABLE tpcch.customer FIELDS TERMINATED BY '|'",
+        "/history.tbl' INTO TABLE tpcch.history FIELDS TERMINATED BY '|'",
+        "/neworder.tbl' INTO TABLE tpcch.neworder FIELDS TERMINATED BY '|'",
+        "/order.tbl' INTO TABLE tpcch.order FIELDS TERMINATED BY '|' "
         "  (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, @x, o_ol_cnt, o_all_local) "
         "  SET o_carrier_id = IF(@x = '', NULL, @x)",
-        "/ORDERLINE.tbl' INTO TABLE tpcch.orderline FIELDS TERMINATED BY '|'"
+        "/orderline.tbl' INTO TABLE tpcch.orderline FIELDS TERMINATED BY '|'"
         "  (ol_o_id, ol_d_id, ol_w_id, ol_number, ol_i_id, ol_supply_w_id, @x, ol_quantity, ol_amount, ol_dist_info) "
         "  SET ol_delivery_d = IF(@x = '', NULL, @x)",
-        "/ITEM.tbl' INTO TABLE tpcch.item FIELDS TERMINATED BY '|'",
-        "/STOCK.tbl' INTO TABLE tpcch.stock FIELDS TERMINATED BY '|'",
-        "/NATION.tbl' INTO TABLE tpcch.nation FIELDS TERMINATED BY '|'",
-        "/SUPPLIER.tbl' INTO TABLE tpcch.supplier FIELDS TERMINATED BY '|'",
-        "/REGION.tbl' INTO TABLE tpcch.region FIELDS TERMINATED BY '|'"};
+        "/item.tbl' INTO TABLE tpcch.item FIELDS TERMINATED BY '|'",
+        "/stock.tbl' INTO TABLE tpcch.stock FIELDS TERMINATED BY '|'",
+        "/nation.tbl' INTO TABLE tpcch.nation FIELDS TERMINATED BY '|'",
+        "/supplier.tbl' INTO TABLE tpcch.supplier FIELDS TERMINATED BY '|'",
+        "/region.tbl' INTO TABLE tpcch.region FIELDS TERMINATED BY '|'"};
 
     std::vector<const char*> tpchQueryStrings = {
         // TPC-H-Query 1
