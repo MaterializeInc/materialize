@@ -326,11 +326,6 @@ static int run(int argc, char* argv[]) {
 
     // import initial database from csv files
     Log::l2() << Log::tm() << "CSV import:\n";
-    {
-        char* genDirAbs = realpath(genDir.c_str(), NULL);
-        genDir = genDirAbs;
-        free(genDirAbs);
-    }
     if (!Schema::importCSV(hStmt, genDir)) {
         return 1;
     }
