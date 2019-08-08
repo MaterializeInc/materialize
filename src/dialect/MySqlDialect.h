@@ -255,7 +255,7 @@ class MySqlDialect : public Dialect {
         "select\n"
         "	su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment\n"
         "from\n"
-        "	TPCCH.item, tpcch.supplier, tpcch.stock, tpcch.nation, tpcch.region,\n"
+        "	tpcch.item, tpcch.supplier, tpcch.stock, tpcch.nation, tpcch.region,\n"
         "	(	select\n"
         "			s_i_id as m_i_id,\n"
         " 			min(s_quantity) as m_s_quantity\n"
@@ -396,7 +396,7 @@ class MySqlDialect : public Dialect {
         "	extract(year from o_entry_d) as l_year,\n"
         "	sum(case when n2.n_name = 'GERMANY' then ol_amount else 0 end) / sum(ol_amount) as mkt_share\n"
         "from\n"
-        "	TPCCH.item, tpcch.supplier, tpcch.stock, tpcch.orderline, tpcch.order, tpcch.customer, tpcch.nation n1, tpcch.nation n2, tpcch.region\n"
+        "	tpcch.item, tpcch.supplier, tpcch.stock, tpcch.orderline, tpcch.order, tpcch.customer, tpcch.nation n1, tpcch.nation n2, tpcch.region\n"
         "where\n"
         "		i_id = s_i_id\n"
         "	and ol_i_id = s_i_id\n"
@@ -425,7 +425,7 @@ class MySqlDialect : public Dialect {
         "select\n"
         "	n_name, extract(year from o_entry_d) as l_year, sum(ol_amount) as sum_profit\n"
         "from\n"
-        "	TPCCH.item, tpcch.stock, tpcch.supplier, tpcch.orderline, tpcch.order, tpcch.nation\n"
+        "	tpcch.item, tpcch.stock, tpcch.supplier, tpcch.orderline, tpcch.order, tpcch.nation\n"
         "where\n"
         "		ol_i_id = s_i_id\n"
         "	and ol_supply_w_id = s_w_id\n"
@@ -527,7 +527,7 @@ class MySqlDialect : public Dialect {
         "select\n"
         "	100.00 * sum(case when i_data like 'PR%' then ol_amount else 0 end) / (1+sum(ol_amount)) as promo_revenue\n"
         "from\n"
-        "	tpcch.orderline, TPCCH.item\n"
+        "	tpcch.orderline, tpcch.item\n"
         "where\n"
         "		ol_i_id = i_id\n"
         "	and ol_delivery_d >= '2007-01-02 00:00:00.000000'\n"
@@ -578,7 +578,7 @@ class MySqlDialect : public Dialect {
         "	i_price,\n"
         "	count(distinct s_su_suppkey) as supplier_cnt\n"
         "from\n"
-        "	tpcch.stock, TPCCH.item\n"
+        "	tpcch.stock, tpcch.item\n"
         "where\n"
         "		i_id = s_i_id\n"
         "	and i_data not like 'zz%'\n"
@@ -603,7 +603,7 @@ class MySqlDialect : public Dialect {
         "	(	select\n"
         "			i_id, avg(ol_quantity) as a\n"
         "		from\n"
-        "			TPCCH.item, tpcch.orderline\n"
+        "			tpcch.item, tpcch.orderline\n"
         "		    where\n"
         "		    		i_data like '%b'\n"
         "				and ol_i_id = i_id\n"
@@ -637,7 +637,7 @@ class MySqlDialect : public Dialect {
         "select\n"
         "	sum(ol_amount) as revenue\n"
         "from\n"
-        "	tpcch.orderline, TPCCH.item\n"
+        "	tpcch.orderline, tpcch.item\n"
         "where\n"
         "	(\n"
         "		ol_i_id = i_id\n"
@@ -670,7 +670,7 @@ class MySqlDialect : public Dialect {
         "		from     tpcch.stock, tpcch.orderline\n"
         "		where    s_i_id in\n"
         "				(select i_id\n"
-        "				 from TPCCH.item\n"
+        "				 from tpcch.item\n"
         "				 where i_data like 'co%')\n"
         "			 and ol_i_id=s_i_id\n"
         "			 and ol_delivery_d > '2010-05-23 12:00:00'\n"
@@ -821,15 +821,15 @@ class MySqlDialect : public Dialect {
     // TPC-C transaction strings
     // NewOrder:
     virtual const char* getNoWarehouseSelect() {
-        return "select W_TAX from TPCCH.WAREHOUSE where W_ID=?";
+        return "select W_TAX from tpcch.warehouse where W_ID=?";
     }
 
     virtual const char* getNoDistrictSelect() {
-        return "select D_TAX, D_NEXT_O_ID from TPCCH.DISTRICT where D_W_ID=? and D_ID=?";
+        return "select D_TAX, D_NEXT_O_ID from tpcch.district where D_W_ID=? and D_ID=?";
     }
 
     virtual const char* getNoDistrictUpdate() {
-        return "update TPCCH.DISTRICT set D_NEXT_O_ID=D_NEXT_O_ID+1 where D_W_ID=? and D_ID=?";
+        return "update tpcch.district set D_NEXT_O_ID=D_NEXT_O_ID+1 where D_W_ID=? and D_ID=?";
     }
 
     virtual const char* getNoCustomerSelect() {
@@ -845,7 +845,7 @@ class MySqlDialect : public Dialect {
     }
 
     virtual const char* getNoItemSelect() {
-        return "select I_PRICE,I_NAME,I_DATA from TPCCH.ITEM where I_ID=?";
+        return "select I_PRICE,I_NAME,I_DATA from tpcch.item where I_ID=?";
     }
 
     virtual const char* getNoStockSelect01() {
@@ -902,19 +902,19 @@ class MySqlDialect : public Dialect {
 
     // Payment:
     virtual const char* getPmWarehouseSelect() {
-        return "select W_NAME, W_STREET_1, W_STREET_2, W_CITY, W_STATE, W_ZIP from TPCCH.WAREHOUSE where W_ID=?";
+        return "select W_NAME, W_STREET_1, W_STREET_2, W_CITY, W_STATE, W_ZIP from tpcch.warehouse where W_ID=?";
     }
 
     virtual const char* getPmWarehouseUpdate() {
-        return "update TPCCH.WAREHOUSE set W_YTD=W_YTD+? where W_ID=?";
+        return "update tpcch.warehouse set W_YTD=W_YTD+? where W_ID=?";
     }
 
     virtual const char* getPmDistrictSelect() {
-        return "select D_NAME, D_STREET_1, D_STREET_2, D_CITY, D_STATE, D_ZIP from TPCCH.DISTRICT where D_W_ID=? and D_ID=?";
+        return "select D_NAME, D_STREET_1, D_STREET_2, D_CITY, D_STATE, D_ZIP from tpcch.district where D_W_ID=? and D_ID=?";
     }
 
     virtual const char* getPmDistrictUpdate() {
-        return "update TPCCH.DISTRICT set D_YTD=D_YTD+? where D_W_ID=? and D_ID=?";
+        return "update tpcch.district set D_YTD=D_YTD+? where D_W_ID=? and D_ID=?";
     }
 
     virtual const char* getPmCustomerSelect1() {
@@ -997,7 +997,7 @@ class MySqlDialect : public Dialect {
 
     // StockLevel:
     virtual const char* getSlDistrictSelect() {
-        return "select D_NEXT_O_ID from TPCCH.DISTRICT where D_W_ID=? and D_ID=?";
+        return "select D_NEXT_O_ID from tpcch.district where D_W_ID=? and D_ID=?";
     }
 
     virtual const char* getSlStockSelect() {
