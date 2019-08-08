@@ -45,7 +45,7 @@ us to interactively put JSON blobs into materialize, according to a schema.
 
 ```console
 $ source doc/demo-utils.sh
-$ mtrz-produce quotes '{
+$ mtrlz-produce quotes '{
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -98,7 +98,7 @@ For your avro producer session do:
 
 ```console
 $ source doc/demo-utils.sh
-$ mtrz-produce aggdata '{
+$ mtrlz-produce aggdata '{
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -147,7 +147,7 @@ $ mtrlz-shell
 
 ```console
 $ source doc/demo-utils.sh
-$ mtrz-produce src1 '{
+$ mtrlz-produce src1 '{
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -185,7 +185,7 @@ Open another terminal and start another producer:
 
 ```console
 $ source doc/demo-utils.sh
-$ mtrz-produce src2 '{
+$ mtrlz-produce src2 '{
     "type": "record",
     "name": "envelope",
     "fields": [
