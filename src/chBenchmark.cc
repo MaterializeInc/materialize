@@ -363,6 +363,7 @@ static int run(int argc, char* argv[]) {
     AnalyticalStatistic* aStat[analyticThreads];
     pthread_t apt[analyticThreads];
     std::vector<threadParameters> aprm;
+    aprm.reserve(analyticThreads);
     for (int i = 0; i < analyticThreads; i++) {
         aStat[i] = new AnalyticalStatistic();
         aprm.push_back(
@@ -378,6 +379,7 @@ static int run(int argc, char* argv[]) {
     TransactionalStatistic* tStat[transactionalThreads];
     pthread_t tpt[transactionalThreads];
     std::vector<threadParameters> tprm;
+    tprm.reserve(transactionalThreads);
     for (int i = 0; i < transactionalThreads; i++) {
         tStat[i] = new TransactionalStatistic();
         tprm.push_back(
