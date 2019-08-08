@@ -193,7 +193,13 @@ impl Action for IngestAction {
         println!("Ingesting data into Kafka topic {:?}", topic_name);
         {
             let num_partitions = 1;
-            let new_topic = NewTopic::new(&topic_name, num_partitions, TopicReplication::Fixed(1));
+            let new_topic = NewTopic::new(&topic_name, num_partitions, TopicReplication::Fixed(1))
+                // Disabling retention is very important! Our testdrive tests
+                // use hardcoded timestamps that are immediately eligible for
+                // deletion by Kafka's garbage collector. E.g., the timestamp
+                // "1" is interpreted as January 1, 1970 00:00:01, which is
+                // breaches the default 7-day retention policy.
+                .set("retention.ms", "-1");
             let res = state
                 .kafka_admin
                 .create_topics(&[new_topic], &state.kafka_admin_opts)
