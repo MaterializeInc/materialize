@@ -40,6 +40,7 @@ pub enum LogVariant {
 pub enum TimelyLog {
     Operates,
     Channels,
+    Messages,
     Shutdown,
     Text,
     Elapsed,
@@ -64,6 +65,7 @@ impl LogVariant {
         vec![
             LogVariant::Timely(TimelyLog::Operates),
             LogVariant::Timely(TimelyLog::Channels),
+            LogVariant::Timely(TimelyLog::Messages),
             LogVariant::Timely(TimelyLog::Shutdown),
             LogVariant::Timely(TimelyLog::Text),
             LogVariant::Timely(TimelyLog::Elapsed),
@@ -81,6 +83,7 @@ impl LogVariant {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => "logs_operates",
             LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
+            LogVariant::Timely(TimelyLog::Messages) => "logs_messages",
             LogVariant::Timely(TimelyLog::Shutdown) => "logs_shutdown",
             LogVariant::Timely(TimelyLog::Text) => "logs_text",
             LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
@@ -111,6 +114,12 @@ impl LogVariant {
                     ColumnType::new(ScalarType::Int64).name("source port"),
                     ColumnType::new(ScalarType::Int64).name("target node"),
                     ColumnType::new(ScalarType::Int64).name("target port"),
+                ],
+            },
+            LogVariant::Timely(TimelyLog::Messages) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("channel"),
+                    ColumnType::new(ScalarType::Int64).name("count"),
                 ],
             },
             LogVariant::Timely(TimelyLog::Shutdown) => RelationType {
