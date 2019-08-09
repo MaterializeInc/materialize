@@ -424,7 +424,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         DbcTools::bind(noOrderlineInsert, 7, (oLines[i].olQuantity));
         tmp2 = iPrice * oLines[i].olQuantity;
         DbcTools::bind(noOrderlineInsert, 8, tmp2);
-        char buffer[24];
+        char buffer[24 + 1];
         strcpy(buffer, sDist.c_str());
         DbcTools::bind(noOrderlineInsert, 9, 24, buffer);
         if (!DbcTools::executePreparedStatement(noOrderlineInsert)) {
@@ -523,7 +523,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     std::string cCredit;
     if (y <= 60) { // Case 2
         DbcTools::resetStatement(pmCustomerSelect1);
-        char buffer1[16];
+        char buffer1[16 + 1];
         strcpy(buffer1, cLast.c_str());
         DbcTools::bind(pmCustomerSelect1, 1, 16, buffer1);
         DbcTools::bind(pmCustomerSelect1, 2, cDId);
@@ -539,7 +539,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         }
 
         DbcTools::resetStatement(pmCustomerSelect2);
-        char buffer2[16];
+        char buffer2[16 + 1];
         strcpy(buffer2, cLast.c_str());
         DbcTools::bind(pmCustomerSelect2, 1, 16, buffer2);
         DbcTools::bind(pmCustomerSelect2, 2, cDId);
@@ -621,7 +621,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
             cData = cData.substr(0, 500);
 
         DbcTools::resetStatement(pmCustomerUpdate2);
-        char buffer3[500];
+        char buffer3[500 + 1];
         strcpy(buffer3, cData.c_str());
         DbcTools::bind(pmCustomerUpdate2, 1, 500, buffer3);
         DbcTools::bind(pmCustomerUpdate2, 2, cId);
@@ -643,7 +643,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     DbcTools::bind(pmHistoryInsert, 5, wId);
     DbcTools::bind(pmHistoryInsert, 6, hDate);
     DbcTools::bind(pmHistoryInsert, 7, hAmount);
-    char buffer4[24];
+    char buffer4[24 + 1];
     strcpy(buffer4, hData.c_str());
     DbcTools::bind(pmHistoryInsert, 8, 24, buffer4);
     if (!DbcTools::executePreparedStatement(pmHistoryInsert)) {
@@ -680,7 +680,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     // BEGIN TRANSACTION
     if (y <= 60) { // Case 2
         DbcTools::resetStatement(osCustomerSelect1);
-        char buffer1[16];
+        char buffer1[16 + 1];
         strcpy(buffer1, cLast.c_str());
         DbcTools::bind(osCustomerSelect1, 1, 16, buffer1);
         DbcTools::bind(osCustomerSelect1, 2, dId);
@@ -696,7 +696,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
         }
 
         DbcTools::resetStatement(osCustomerSelect2);
-        char buffer2[16];
+        char buffer2[16 + 1];
         strcpy(buffer2, cLast.c_str());
         DbcTools::bind(osCustomerSelect2, 1, 16, buffer2);
         DbcTools::bind(osCustomerSelect2, 2, dId);

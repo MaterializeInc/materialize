@@ -286,7 +286,7 @@ class MySqlDialect : public Dialect {
         "	ol_o_id, ol_w_id, ol_d_id,\n"
         "	sum(ol_amount) as revenue, o_entry_d\n"
         "from\n"
-        "	tpcch.customer, TPCCH.neworder, tpcch.order, tpcch.orderline\n"
+        "	tpcch.customer, tpcch.neworder, tpcch.order, tpcch.orderline\n"
         "where\n"
         "		c_state like 'A%'\n"
         "	and c_id = o_c_id\n"
@@ -841,7 +841,7 @@ class MySqlDialect : public Dialect {
     }
 
     virtual const char* getNoNewOrderInsert() {
-        return "insert into TPCCH.NEWORDER values(?,?,?)";
+        return "insert into tpcch.neworder values(?,?,?)";
     }
 
     virtual const char* getNoItemSelect() {
@@ -942,7 +942,7 @@ class MySqlDialect : public Dialect {
     }
 
     virtual const char* getPmHistoryInsert() {
-        return "insert into TPCCH.History values (?,?,?,?,?,?,?,?)";
+        return "insert into tpcch.history values (?,?,?,?,?,?,?,?)";
     }
 
     // OrderStatus:
@@ -968,11 +968,11 @@ class MySqlDialect : public Dialect {
 
     // Delivery:
     virtual const char* getDlNewOrderSelect() {
-        return "select NO_O_ID from TPCCH.NEWORDER where NO_W_ID=? and NO_D_ID=? and NO_O_ID=(select min(NO_O_ID) from TPCCH.NEWORDER where NO_W_ID=? and NO_D_ID=?)";
+        return "select NO_O_ID from tpcch.neworder where NO_W_ID=? and NO_D_ID=? and NO_O_ID=(select min(NO_O_ID) from tpcch.neworder where NO_W_ID=? and NO_D_ID=?)";
     }
 
     virtual const char* getDlNewOrderDelete() {
-        return "delete from TPCCH.NEWORDER where NO_W_ID=? and NO_D_ID=? and NO_O_ID=?";
+        return "delete from tpcch.neworder where NO_W_ID=? and NO_D_ID=? and NO_O_ID=?";
     }
 
     virtual const char* getDlOrderSelect() {
