@@ -12,7 +12,7 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 
-CXXFLAGS = -c -std=c++17 -O2 -Wall -Wextra -Werror
+CXXFLAGS = -c -std=c++17 -O2 -Wall -Wextra -Werror -g
 LDLIBS = -lodbc -lpthread
 
 SOURCES = \
