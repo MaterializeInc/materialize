@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use super::RelationExpr;
 use crate::dataflow::logging;
+use crate::dataflow::logging::materialized::MaterializedEvent;
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 
@@ -33,24 +34,16 @@ pub struct CommandCoordinator {
     /// Per-view maintained state.
     views: HashMap<String, ViewState>,
     command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    pub logger: Option<logging::materialized::Logger>,
 }
 
 impl CommandCoordinator {
     /// Creates a new command coordinator from input and output command queues.
-    pub fn new(
-        command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
-        logging_config: &Option<logging::LoggingConfiguration>,
-    ) -> Self {
-        let mut views = HashMap::new();
-        if let Some(config) = &logging_config {
-            for log in config.active_logs.iter() {
-                views.insert(log.name().to_string(), ViewState::new_source());
-            }
-        }
-
+    pub fn new(command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>) -> Self {
         Self {
-            views,
+            views: HashMap::new(),
             command_receiver,
+            logger: None,
         }
     }
 
@@ -74,14 +67,13 @@ impl CommandCoordinator {
         match command {
             DataflowCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
-                    self.views
-                        .insert(dataflow.name().to_owned(), ViewState::new(dataflow));
+                    self.insert_view(dataflow);
                 }
                 sequencer.push((SequencedCommand::CreateDataflows(dataflows), command_meta));
             }
             DataflowCommand::DropDataflows(dataflows) => {
-                for dataflow in dataflows.iter() {
-                    self.views.remove(dataflow);
+                for name in dataflows.iter() {
+                    self.remove_view(name);
                 }
                 sequencer.push((SequencedCommand::DropDataflows(dataflows), command_meta));
             }
@@ -195,6 +187,24 @@ impl CommandCoordinator {
     /// Updates the upper frontier of a named view.
     pub fn update_upper(&mut self, name: &str, upper: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
+            // Log the change to frontiers.
+            if let Some(logger) = self.logger.as_mut() {
+                for time in entry.upper.elements().iter() {
+                    logger.log(MaterializedEvent::Frontier(
+                        name.to_string(),
+                        time.clone(),
+                        -1,
+                    ));
+                }
+                for time in upper.iter() {
+                    logger.log(MaterializedEvent::Frontier(
+                        name.to_string(),
+                        time.clone(),
+                        1,
+                    ));
+                }
+            }
+
             entry.upper.clear();
             entry.upper.extend(upper.iter().cloned());
         }
@@ -221,6 +231,60 @@ impl CommandCoordinator {
     /// The since frontier of a maintained view, if it exists.
     pub fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.since)
+    }
+
+    /// Inserts a view into the coordinator.
+    ///
+    /// Initializes managed state and logs the insertion (and removal of any existing view).
+    pub fn insert_view(&mut self, dataflow: &Dataflow) {
+        self.remove_view(dataflow.name());
+        let viewstate = ViewState::new(dataflow);
+        if let Some(logger) = self.logger.as_mut() {
+            for time in viewstate.upper.elements() {
+                logger.log(MaterializedEvent::Frontier(
+                    dataflow.name().to_string(),
+                    time.clone(),
+                    1,
+                ));
+            }
+        }
+        self.views.insert(dataflow.name().to_string(), viewstate);
+    }
+
+    /// Inserts a source into the coordinator.
+    ///
+    /// Unlike `insert_view`, this method can be called without a dataflow argument.
+    /// This is most commonly used for internal sources such as logging.
+    pub fn insert_source(&mut self, name: &str) {
+        self.remove_view(name);
+        let viewstate = ViewState::new_source();
+        if let Some(logger) = self.logger.as_mut() {
+            for time in viewstate.upper.elements() {
+                logger.log(MaterializedEvent::Frontier(
+                    name.to_string(),
+                    time.clone(),
+                    1,
+                ));
+            }
+        }
+        self.views.insert(name.to_string(), viewstate);
+    }
+
+    /// Removes a view from the coordinator.
+    ///
+    /// Removes the managed state and logs the removal.
+    pub fn remove_view(&mut self, name: &str) {
+        if let Some(state) = self.views.remove(name) {
+            if let Some(logger) = &mut self.logger {
+                for time in state.upper.elements() {
+                    logger.log(MaterializedEvent::Frontier(
+                        name.to_string(),
+                        time.clone(),
+                        -1,
+                    ));
+                }
+            }
+        }
     }
 }
 

@@ -28,6 +28,7 @@ use crate::glue::*;
 
 use crate::dataflow::coordinator;
 use crate::dataflow::logging;
+use crate::dataflow::logging::materialized::MaterializedEvent;
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
@@ -92,6 +93,7 @@ where
     system_probe: timely::dataflow::ProbeHandle<Timestamp>,
     logging_config: Option<logging::LoggingConfiguration>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
+    materialized_logger: Option<logging::materialized::Logger>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -106,8 +108,8 @@ where
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
-        let command_coordinator = dataflow_command_receiver
-            .map(|dcr| coordinator::CommandCoordinator::new(dcr, &logging_config));
+        let command_coordinator =
+            dataflow_command_receiver.map(|dcr| coordinator::CommandCoordinator::new(dcr));
 
         Worker {
             inner: w,
@@ -121,6 +123,7 @@ where
             system_probe: timely::dataflow::ProbeHandle::new(),
             logging_config,
             command_coordinator,
+            materialized_logger: None,
         }
     }
 
@@ -155,8 +158,8 @@ where
 
             self.inner
                 .log_register()
-                .insert::<logging::materialized::Peek, _>(
-                    "materialized/peeks",
+                .insert::<logging::materialized::MaterializedEvent, _>(
+                    "materialized",
                     move |time, data| m_logger.publish_batch(time, data),
                 );
 
@@ -169,6 +172,15 @@ where
             }
             for (log, trace) in m_traces {
                 self.traces.set_by_self(log.name().to_string(), trace, None);
+            }
+
+            self.materialized_logger = self.inner.log_register().get("materialized");
+
+            if let Some(coordinator) = &mut self.command_coordinator {
+                coordinator.logger = self.inner.log_register().get("materialized");
+                for log in logging.active_logs.iter() {
+                    coordinator.insert_source(log.name());
+                }
             }
         }
     }
@@ -202,7 +214,7 @@ where
     fn shutdown_logging(&mut self) {
         self.inner.log_register().remove("timely");
         self.inner.log_register().remove("differential/arrange");
-        self.inner.log_register().remove("materialized/peeks");
+        self.inner.log_register().remove("materialized");
     }
 
     /// Draws from `dataflow_command_receiver` until shutdown.
@@ -256,6 +268,12 @@ where
         match cmd {
             coordinator::SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        logger.log(MaterializedEvent::Dataflow(
+                            dataflow.name().to_string(),
+                            true,
+                        ));
+                    }
                     render::build_dataflow(
                         &dataflow,
                         &mut self.traces,
@@ -268,6 +286,9 @@ where
 
             coordinator::SequencedCommand::DropDataflows(dataflows) => {
                 for name in &dataflows {
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
+                    }
                     self.inputs.remove(name);
                     self.traces.del_trace(name);
                 }
@@ -291,6 +312,16 @@ where
                     timestamp,
                     drop_after_peek,
                 };
+                if let Some(logger) = self.materialized_logger.as_mut() {
+                    logger.log(MaterializedEvent::Peek(
+                        crate::dataflow::logging::materialized::Peek::new(
+                            &pending_peek.name,
+                            pending_peek.timestamp,
+                            &pending_peek.connection_uuid,
+                        ),
+                        true,
+                    ));
+                }
                 self.pending_peeks.push((pending_peek, trace));
             }
 
@@ -344,6 +375,12 @@ where
                         copies += diff;
                     }
                 });
+                if copies < 0 {
+                    println!(
+                        "Negative multiplicity: {} for {:?} in view {}",
+                        copies, key, peek.name
+                    );
+                }
                 assert!(copies >= 0);
                 for _ in 0..copies {
                     results.push(key.clone());
@@ -373,6 +410,16 @@ where
                         .send()
                         .unwrap();
                 }
+            }
+            if let Some(logger) = self.materialized_logger.as_mut() {
+                logger.log(MaterializedEvent::Peek(
+                    crate::dataflow::logging::materialized::Peek::new(
+                        &peek.name,
+                        peek.timestamp,
+                        &peek.connection_uuid,
+                    ),
+                    false,
+                ));
             }
             if peek.drop_after_peek {
                 dataflows_to_be_dropped.push(peek.name.clone());

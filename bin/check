@@ -121,6 +121,10 @@ disabled_lints=(
     # `..`, while sometimes convenient, can cause match sites that need to be
     # updated for the new field to be overlooked.
     clippy::unneeded_field_pattern
+
+    # This is annoying because there are many types that *happen* to be copy,
+    # but we want to write code as if these types may not be.
+    clippy::clone_on_copy
 )
 
 extra_lints=(
