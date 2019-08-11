@@ -12,9 +12,8 @@ members = [
 [profile.release]
 debug = true
 
-# TODO(benesch): remove when https://github.com/fede1024/rust-rdkafka/pull/117
-# lands.
 [patch.crates-io]
-rdkafka = { git = "ssh://git@github.com/MaterializeInc/rust-rdkafka.git" }
+# TODO(benesch): remove rdkafka patch when 0.22 is released.
+rdkafka = { git = "ssh://git@github.com/fede1024/rust-rdkafka.git" }
 avro-rs = { git = "ssh://git@github.com/MaterializeInc/avro-rs.git" }
 futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch = "0.1" }

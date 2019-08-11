@@ -41,7 +41,7 @@ rand = "0.7"
 regex = "1.2.1"
 regex-syntax = "0.6.8"
 reqwest = { version = "0.9.19", features = ["trust-dns"] }
-rdkafka = "0.20"
+rdkafka = "0.21"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0"
 serde_json = "1.0.40"
