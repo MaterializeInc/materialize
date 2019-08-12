@@ -56,6 +56,7 @@ pub fn construct<A: Allocate>(
 
         let (mut operates_out, operates) = demux.new_output();
         let (mut channels_out, channels) = demux.new_output();
+        let (mut messages_out, messages) = demux.new_output();
         let (mut shutdown_out, shutdown) = demux.new_output();
         let (mut text_out, text) = demux.new_output();
 
@@ -65,6 +66,7 @@ pub fn construct<A: Allocate>(
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
+                let mut messages = messages_out.activate();
                 let mut shutdown = shutdown_out.activate();
                 let mut text = text_out.activate();
 
@@ -73,6 +75,7 @@ pub fn construct<A: Allocate>(
 
                     let mut operates_session = operates.session(&time);
                     let mut channels_session = channels.session(&time);
+                    let mut messages_session = messages.session(&time);
                     let mut shutdown_session = shutdown.session(&time);
                     let mut text_session = text.session(&time);
 
@@ -108,6 +111,11 @@ pub fn construct<A: Allocate>(
                                     1,
                                 ));
                             }
+                            TimelyEvent::Messages(messages) => messages_session.give((
+                                messages.channel,
+                                time_ns,
+                                messages.length as isize,
+                            )),
                             TimelyEvent::Shutdown(event) => {
                                 shutdown_session.give((
                                     vec![
@@ -203,11 +211,17 @@ pub fn construct<A: Allocate>(
 
         let operates = operates.as_collection().arrange_by_self();
         let channels = channels.as_collection().arrange_by_self();
+        let messages = messages
+            .as_collection()
+            .count()
+            .map(|(channel, count)| vec![Datum::Int64(channel as i64), Datum::Int64(count as i64)])
+            .arrange_by_self();
         let shutdown = shutdown.as_collection().arrange_by_self();
         let text = text.as_collection().arrange_by_self();
 
         operates.stream.probe_with(probe);
         channels.stream.probe_with(probe);
+        messages.stream.probe_with(probe);
         shutdown.stream.probe_with(probe);
         text.stream.probe_with(probe);
         elapsed.stream.probe_with(probe);
@@ -217,6 +231,7 @@ pub fn construct<A: Allocate>(
         vec![
             (LogVariant::Timely(TimelyLog::Operates), operates.trace),
             (LogVariant::Timely(TimelyLog::Channels), channels.trace),
+            (LogVariant::Timely(TimelyLog::Messages), messages.trace),
             (LogVariant::Timely(TimelyLog::Shutdown), shutdown.trace),
             (LogVariant::Timely(TimelyLog::Text), text.trace),
             (LogVariant::Timely(TimelyLog::Elapsed), elapsed.trace),

@@ -40,6 +40,7 @@ pub enum LogVariant {
 pub enum TimelyLog {
     Operates,
     Channels,
+    Messages,
     Shutdown,
     Text,
     Elapsed,
@@ -53,8 +54,10 @@ pub enum DifferentialLog {
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub enum MaterializedLog {
+    DataflowCurrent,
+    FrontierCurrent,
+    PeekCurrent,
     PeekDuration,
-    PeekActive,
 }
 
 impl LogVariant {
@@ -62,13 +65,16 @@ impl LogVariant {
         vec![
             LogVariant::Timely(TimelyLog::Operates),
             LogVariant::Timely(TimelyLog::Channels),
+            LogVariant::Timely(TimelyLog::Messages),
             LogVariant::Timely(TimelyLog::Shutdown),
             LogVariant::Timely(TimelyLog::Text),
             LogVariant::Timely(TimelyLog::Elapsed),
             LogVariant::Timely(TimelyLog::Histogram),
             LogVariant::Differential(DifferentialLog::Arrangement),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent),
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent),
+            LogVariant::Materialized(MaterializedLog::PeekCurrent),
             LogVariant::Materialized(MaterializedLog::PeekDuration),
-            LogVariant::Materialized(MaterializedLog::PeekActive),
         ]
     }
 
@@ -77,13 +83,16 @@ impl LogVariant {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => "logs_operates",
             LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
+            LogVariant::Timely(TimelyLog::Messages) => "logs_messages",
             LogVariant::Timely(TimelyLog::Shutdown) => "logs_shutdown",
             LogVariant::Timely(TimelyLog::Text) => "logs_text",
             LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
             LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_duration",
-            LogVariant::Materialized(MaterializedLog::PeekActive) => "logs_peek_active",
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers",
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks",
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations",
         }
     }
     pub fn schema(&self) -> RelationType {
@@ -105,6 +114,12 @@ impl LogVariant {
                     ColumnType::new(ScalarType::Int64).name("source port"),
                     ColumnType::new(ScalarType::Int64).name("target node"),
                     ColumnType::new(ScalarType::Int64).name("target port"),
+                ],
+            },
+            LogVariant::Timely(TimelyLog::Messages) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("channel"),
+                    ColumnType::new(ScalarType::Int64).name("count"),
                 ],
             },
             LogVariant::Timely(TimelyLog::Shutdown) => RelationType {
@@ -140,19 +155,31 @@ impl LogVariant {
                     ColumnType::new(ScalarType::Int64).name("batches"),
                 ],
             },
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationType {
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationType {
                 column_types: vec![
-                    ColumnType::new(ScalarType::String).name("UUID"),
+                    ColumnType::new(ScalarType::String).name("name"),
                     ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
                 ],
             },
-            LogVariant::Materialized(MaterializedLog::PeekActive) => RelationType {
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationType {
                 column_types: vec![
-                    ColumnType::new(ScalarType::String).name("UUID"),
+                    ColumnType::new(ScalarType::String).name("name"),
+                    ColumnType::new(ScalarType::Int64).name("time"),
+                ],
+            },
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::String).name("uuid"),
                     ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::String).name("view"),
-                    ColumnType::new(ScalarType::Int64).name("timestamp"),
+                    ColumnType::new(ScalarType::String).name("name"),
+                    ColumnType::new(ScalarType::Int64).name("time"),
+                ],
+            },
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
+                    ColumnType::new(ScalarType::Int64).name("count"),
                 ],
             },
         }

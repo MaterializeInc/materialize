@@ -33,10 +33,18 @@
 > select count (*) from count_arrangement;
 1
 
-> create view count_peek_duration as select count(*) from logs_peek_duration;
-> select count (*) from count_peek_duration;
+> create view count_dataflows as select count(*) from logs_dataflows;
+> select count (*) from count_dataflows;
 1
 
-> create view count_peek_active as select count(*) from logs_peek_active;
-> select count (*) from count_peek_active;
+> create view count_frontiers as select count(*) from logs_frontiers;
+> select count (*) from count_frontiers;
+1
+
+> create view count_peeks as select count(*) from logs_peeks;
+> select count (*) from count_peeks;
+1
+
+> create view count_peek_durations as select count(*) from logs_peek_durations;
+> select count (*) from count_peek_durations;
 1
