@@ -14,7 +14,7 @@ materialize = { path = "../src/materialize" }
 testdrive = { path = "../src/testdrive" }
 sqllogictest = { path = "../src/sqllogictest" }
 walkdir = "2"
-rand = "0.6.5"
+rand = { version = "0.7.0", features = ["small_rng"] }
 
 [[bin]]
 name = "fuzz_testdrive"
