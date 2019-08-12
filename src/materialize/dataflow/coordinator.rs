@@ -42,6 +42,12 @@ pub enum SequencedCommand {
         timestamp: Timestamp,
         drop_after_peek: bool,
     },
+    /// Enable compaction in views.
+    ///
+    /// Each entry in the vector names a view and provides a frontier after which
+    /// accumulations must be correct. The workers gain the liberty of compacting
+    /// the corresponding maintained traces up through that frontier.
+    EnableCompaction(Vec<(String, Vec<Timestamp>)>),
     /// Currently unimplemented.
     Tail(String),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.

@@ -75,6 +75,18 @@ impl TraceManager {
         }
     }
 
+    /// Enables compaction of traces associated with the name.
+    ///
+    /// Compaction may not occur immediately, but once this method is called the
+    /// associated traces may not accumulate to the correct quantities for times
+    /// not in advance of `frontier`. Users should take care to only rely on
+    /// accumulations at times in advance of `frontier`.
+    pub fn enable_compaction(&mut self, name: &str, frontier: &[Timestamp]) {
+        if let Some(val) = self.traces.get_mut(name) {
+            val.merge_logical(frontier);
+        }
+    }
+
     /// Returns a copy of the by_self arrangement, should it exist.
     #[allow(dead_code)]
     pub fn get_by_self(&self, name: &str) -> Option<&KeysOnlyHandle> {
@@ -180,6 +192,21 @@ impl CollectionTraces {
         for (handle, _d) in self.by_keys.values_mut() {
             handle.read_upper(antichain);
             handle.distinguish_since(antichain.elements());
+        }
+    }
+
+    /// Advances the frontiers for logical merging to the supplied frontier limit.
+    ///
+    /// Logical compaction does not immediately occur, rather it happens only when
+    /// the next physical merge happens, and users should take care to ensure that
+    /// the times observed in traces may need to be advanced to this frontier.
+    pub fn merge_logical(&mut self, frontier: &[Timestamp]) {
+        use differential_dataflow::trace::TraceReader;
+        if let Some((handle, _d)) = &mut self.by_self {
+            handle.advance_by(frontier);
+        }
+        for (handle, _d) in self.by_keys.values_mut() {
+            handle.advance_by(frontier);
         }
     }
 }
