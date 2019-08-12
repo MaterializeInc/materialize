@@ -3,6 +3,19 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+//! Coordination of installed views, available timestamps, and compacted timestamps.
+//!
+//! The command coordinator maintains a view of the installed views, and for each tracks
+//! the frontier of available times (`upper`) and the frontier of compacted times (`since`).
+//! The upper frontier describes times that may not return immediately, as any timestamps in
+//! advance of the frontier are still open. The since frontier constrains those times for
+//! which the maintained view will be correct, as any timestamps in advance of the frontier
+//! must accumulate to the same value as would an un-compacted trace.
+
+// Clone on copy permitted for timestamps, which happen to be Copy at the moment, but which
+// may become non-copy in the future.
+#![allow(clippy::clone_on_copy)]
+
 use timely::progress::frontier::Antichain;
 use timely::synchronization::sequence::Sequencer;
 
@@ -15,17 +28,23 @@ use crate::dataflow::logging::materialized::MaterializedEvent;
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 
+/// Explicit instructions for timely dataflow workers.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
+    /// Create a sequence of dataflows.
     CreateDataflows(Vec<Dataflow>),
+    /// Drop the dataflows bound to these names.
     DropDataflows(Vec<String>),
+    /// Peek at a materialized view.
     Peek {
         name: String,
         timestamp: Timestamp,
         drop_after_peek: bool,
     },
+    /// Currently unimplemented.
     Tail(String),
+    /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
 
@@ -90,51 +109,7 @@ impl CommandCoordinator {
                 // Choose a timestamp for all workers to use in the peek.
                 // We minimize over all participating views, to ensure that the query will not
                 // need to block on the arrival of further input data.
-                let timestamp = match when {
-                    // Explicitly requested timestamps should be respected.
-                    PeekWhen::AtTimestamp(timestamp) => timestamp,
-
-                    // We should produce the minimum accepted time among inputs sources that
-                    // `source` depends on transitively, ignoring the accepted times of
-                    // intermediate views.
-                    PeekWhen::EarliestSource | PeekWhen::Immediately => {
-                        let mut bound = Antichain::new(); // lower bound on available data.
-
-                        // TODO : RelationExpr has a `uses_inner` method, but it wasn't
-                        // clear what it does (it suppresses let bound names, for example).
-                        // Dataflow not yet installed, so we should visit the RelationExpr
-                        // manually and then call `self.sources_frontier`
-                        source.visit(&mut |e| {
-                            if let RelationExpr::Get { name, typ: _ } = e {
-                                match when {
-                                    PeekWhen::EarliestSource => {
-                                        self.sources_frontier(name, &mut bound);
-                                    }
-                                    PeekWhen::Immediately => {
-                                        if let Some(upper) = self.upper_of(name) {
-                                            bound.extend(upper.elements().iter().cloned());
-                                        } else {
-                                            eprintln!("Alarming! Absent relation in view");
-                                            bound.insert(0);
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                };
-                            }
-                        });
-
-                        // Pick the first time strictly less than `bound` to ensure that the
-                        // peek can respond without further input advances.
-                        // TODO : the subtraction saturates to not wrap zero around, but if
-                        // we get this far with a zero we are at risk of a peek that may not
-                        // immediately return.
-                        if let Some(bound) = bound.elements().get(0) {
-                            bound.saturating_sub(1)
-                        } else {
-                            Timestamp::max_value()
-                        }
-                    }
-                };
+                let timestamp = self.determine_timestamp(&source, when);
 
                 // Create a transient view if the peek is not of a base relation.
                 let (name, drop) = if let RelationExpr::Get { name, typ: _ } = source {
@@ -167,6 +142,55 @@ impl CommandCoordinator {
                 sequencer.push((SequencedCommand::Shutdown, command_meta));
             }
         };
+    }
+
+    /// A policy for determining the timestamp for a peek.
+    fn determine_timestamp(&mut self, source: &RelationExpr, when: PeekWhen) -> Timestamp {
+        match when {
+            // Explicitly requested timestamps should be respected.
+            PeekWhen::AtTimestamp(timestamp) => timestamp,
+
+            // We should produce the minimum accepted time among inputs sources that
+            // `source` depends on transitively, ignoring the accepted times of
+            // intermediate views.
+            PeekWhen::EarliestSource | PeekWhen::Immediately => {
+                let mut bound = Antichain::new(); // lower bound on available data.
+
+                // TODO : RelationExpr has a `uses_inner` method, but it wasn't
+                // clear what it does (it suppresses let bound names, for example).
+                // Dataflow not yet installed, so we should visit the RelationExpr
+                // manually and then call `self.sources_frontier`
+                source.visit(&mut |e| {
+                    if let RelationExpr::Get { name, typ: _ } = e {
+                        match when {
+                            PeekWhen::EarliestSource => {
+                                self.sources_frontier(name, &mut bound);
+                            }
+                            PeekWhen::Immediately => {
+                                if let Some(upper) = self.upper_of(name) {
+                                    bound.extend(upper.elements().iter().cloned());
+                                } else {
+                                    eprintln!("Alarming! Absent relation in view");
+                                    bound.insert(0);
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                    }
+                });
+
+                // Pick the first time strictly less than `bound` to ensure that the
+                // peek can respond without further input advances.
+                // TODO : the subtraction saturates to not wrap zero around, but if
+                // we get this far with a zero we are at risk of a peek that may not
+                // immediately return.
+                if let Some(bound) = bound.elements().get(0) {
+                    bound.saturating_sub(1)
+                } else {
+                    Timestamp::max_value()
+                }
+            }
+        }
     }
 
     /// Introduces all frontier elements from sources (not views) into `bound`.

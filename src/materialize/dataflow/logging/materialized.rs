@@ -45,7 +45,7 @@ impl Peek {
         Self {
             name: name.to_string(),
             time,
-            uuid: uuid.clone(),
+            uuid: *uuid,
         }
     }
 }

@@ -375,13 +375,13 @@ where
                         copies += diff;
                     }
                 });
-                if copies < 0 {
-                    println!(
-                        "Negative multiplicity: {} for {:?} in view {}",
-                        copies, key, peek.name
-                    );
-                }
-                assert!(copies >= 0);
+                assert!(
+                    copies >= 0,
+                    "Negative multiplicity: {} for {:?} in view {}",
+                    copies,
+                    key,
+                    peek.name
+                );
                 for _ in 0..copies {
                     results.push(key.clone());
                 }
