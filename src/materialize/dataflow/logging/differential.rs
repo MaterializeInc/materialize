@@ -32,7 +32,8 @@ pub fn construct<A: Allocate>(
     let writer = std::rc::Rc::new(writer);
     let reader = writer.clone();
 
-    let granularity_ns = config.granularity_ns;
+    // let granularity_ns = config.granularity_ns;
+    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     // The two return values.
     let logger = BatchLogger::new(writer);
@@ -50,20 +51,20 @@ pub fn construct<A: Allocate>(
         // Duration statistics derive from the non-rounded event times.
         let arrangements = logs
             .flat_map(move |(ts, worker, event)| {
-                let time = (((ts.as_nanos() / granularity_ns) + 1) * granularity_ns) as Timestamp;
+                let time_ms = ((ts.as_millis() as Timestamp / granularity_ms) + 1) * granularity_ms;
                 match event {
                     DifferentialEvent::Batch(event) => {
                         let difference = differential_dataflow::difference::DiffVector::new(vec![
                             event.length as isize,
                             1,
                         ]);
-                        Some(((event.operator, worker), time, difference))
+                        Some(((event.operator, worker), time_ms, difference))
                     }
                     DifferentialEvent::Merge(event) => {
                         if let Some(done) = event.complete {
                             Some((
                                 (event.operator, worker),
-                                time,
+                                time_ms,
                                 differential_dataflow::difference::DiffVector::new(vec![
                                     (done as isize) - ((event.length1 + event.length2) as isize),
                                     -1,

@@ -59,6 +59,7 @@ pub struct CommandCoordinator {
     /// Per-view maintained state.
     views: HashMap<String, ViewState>,
     command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    since_updates: Vec<(String, Vec<Timestamp>)>,
     pub logger: Option<logging::materialized::Logger>,
 }
 
@@ -69,6 +70,7 @@ impl CommandCoordinator {
             views: HashMap::new(),
             command_receiver,
             logger: None,
+            since_updates: Vec::new(),
         }
     }
 
@@ -150,6 +152,21 @@ impl CommandCoordinator {
         };
     }
 
+    /// Perform maintenance work associated with the coordinator.
+    ///
+    /// Primarily, this involves sequencing compaction commands, which should be issued whenever
+    /// available, but the sequencer is otherwise only provided in response to received commands.
+    pub fn maintenance(&mut self, sequencer: &mut Sequencer<(SequencedCommand, CommandMeta)>) {
+        // Take this opportunity to drain `since_update` commands.
+        sequencer.push((
+            SequencedCommand::EnableCompaction(std::mem::replace(
+                &mut self.since_updates,
+                Vec::new(),
+            )),
+            CommandMeta::nil(),
+        ));
+    }
+
     /// A policy for determining the timestamp for a peek.
     fn determine_timestamp(&mut self, source: &RelationExpr, when: PeekWhen) -> Timestamp {
         match when {
@@ -217,26 +234,36 @@ impl CommandCoordinator {
     /// Updates the upper frontier of a named view.
     pub fn update_upper(&mut self, name: &str, upper: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
-            // Log the change to frontiers.
-            if let Some(logger) = self.logger.as_mut() {
-                for time in entry.upper.elements().iter() {
-                    logger.log(MaterializedEvent::Frontier(
-                        name.to_string(),
-                        time.clone(),
-                        -1,
-                    ));
+            // We may be informed of non-changes; suppress them.
+            if entry.upper.elements() != upper {
+                // Log the change to frontiers.
+                if let Some(logger) = self.logger.as_mut() {
+                    for time in entry.upper.elements().iter() {
+                        logger.log(MaterializedEvent::Frontier(
+                            name.to_string(),
+                            time.clone(),
+                            -1,
+                        ));
+                    }
+                    for time in upper.iter() {
+                        logger.log(MaterializedEvent::Frontier(
+                            name.to_string(),
+                            time.clone(),
+                            1,
+                        ));
+                    }
                 }
-                for time in upper.iter() {
-                    logger.log(MaterializedEvent::Frontier(
-                        name.to_string(),
-                        time.clone(),
-                        1,
-                    ));
-                }
-            }
 
-            entry.upper.clear();
-            entry.upper.extend(upper.iter().cloned());
+                entry.upper.clear();
+                entry.upper.extend(upper.iter().cloned());
+
+                let mut since = Antichain::new();
+                for time in entry.upper.elements() {
+                    since.insert(time.saturating_sub(1_000)); // 1000 ms compaction lag. Change!
+                }
+                self.since_updates
+                    .push((name.to_string(), since.elements().to_vec()));
+            }
         }
     }
 

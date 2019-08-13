@@ -195,7 +195,9 @@ where
             let mut lower = Antichain::new();
             self.system_probe.with_frontier(|frontier| {
                 for element in frontier.iter() {
-                    lower.insert(element.saturating_sub(1_000_000_000));
+                    // TODO : Constant chosen arbitrarily; choose better!
+                    // Number of milliseconds logs are retained for.
+                    lower.insert(element.saturating_sub(1_000));
                 }
             });
 
@@ -239,6 +241,7 @@ where
             if let Some(coordinator) = &mut self.command_coordinator {
                 // Sequence any pending commands.
                 coordinator.sequence_commands(&mut self.sequencer);
+                coordinator.maintenance(&mut self.sequencer);
 
                 // Update upper bounds for each maintained trace.
                 let mut upper = Antichain::new();

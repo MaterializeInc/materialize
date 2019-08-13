@@ -32,7 +32,8 @@ pub fn construct<A: Allocate>(
     let writer = std::rc::Rc::new(writer);
     let reader = writer.clone();
 
-    let granularity_ns = config.granularity_ns;
+    // let granularity_ns = config.granularity_ns;
+    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     // The two return values.
     let logger = BatchLogger::new(writer);
@@ -80,8 +81,8 @@ pub fn construct<A: Allocate>(
                     let mut text_session = text.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time_ns = (((time.as_nanos() / granularity_ns) + 1) * granularity_ns)
-                            as Timestamp;
+                        let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
+                            * granularity_ms) as Timestamp;
 
                         match datum {
                             TimelyEvent::Operates(event) => {
@@ -92,7 +93,7 @@ pub fn construct<A: Allocate>(
                                         Datum::String(format!("{:?}", event.addr)),
                                         Datum::String(event.name),
                                     ],
-                                    time_ns,
+                                    time_ms,
                                     1,
                                 ));
                             }
@@ -107,13 +108,13 @@ pub fn construct<A: Allocate>(
                                         Datum::Int64(event.target.0 as i64),
                                         Datum::Int64(event.target.1 as i64),
                                     ],
-                                    time_ns,
+                                    time_ms,
                                     1,
                                 ));
                             }
                             TimelyEvent::Messages(messages) => messages_session.give((
                                 messages.channel,
-                                time_ns,
+                                time_ms,
                                 messages.length as isize,
                             )),
                             TimelyEvent::Shutdown(event) => {
@@ -122,14 +123,14 @@ pub fn construct<A: Allocate>(
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
                                     ],
-                                    time_ns,
+                                    time_ms,
                                     1,
                                 ));
                             }
                             TimelyEvent::Text(text) => {
                                 text_session.give((
                                     vec![Datum::String(text), Datum::Int64(worker as i64)],
-                                    time_ns,
+                                    time_ms,
                                     1,
                                 ));
                             }
@@ -176,11 +177,11 @@ pub fn construct<A: Allocate>(
                                     timely::logging::StartStop::Stop => {
                                         assert!(map.contains_key(&key));
                                         let start = map.remove(&key).expect("start event absent");
-                                        let elapsed = time_ns - start;
-                                        let time_ns = (((time_ns / granularity_ns) + 1)
-                                            * granularity_ns)
-                                            as Timestamp;
-                                        session.give((key.1, time_ns, elapsed));
+                                        let elapsed_ns = time_ns - start;
+                                        let time_ms = (time_ns / 1_000_000) as Timestamp;
+                                        let time_ms =
+                                            ((time_ms / granularity_ms) + 1) * granularity_ms;
+                                        session.give((key.1, time_ms, elapsed_ns));
                                     }
                                 }
                             }

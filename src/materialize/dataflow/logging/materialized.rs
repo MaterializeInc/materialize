@@ -67,7 +67,8 @@ pub fn construct<A: Allocate>(
     let writer = std::rc::Rc::new(writer);
     let reader = writer.clone();
 
-    let granularity_ns = config.granularity_ns as u64;
+    // let granularity_ns = config.granularity_ns as u64;
+    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     // The two return values.
     let logger = BatchLogger::new(writer);
@@ -105,17 +106,17 @@ pub fn construct<A: Allocate>(
                     let mut frontier_session = frontier.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time = time.as_nanos() as Timestamp;
+                        let time_ns = time.as_nanos() as Timestamp;
 
                         match datum {
                             MaterializedEvent::Dataflow(name, is_create) => {
-                                dataflow_session.give((name, worker, is_create, time))
+                                dataflow_session.give((name, worker, is_create, time_ns))
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
-                                peek_session.give((peek, worker, is_install, time))
+                                peek_session.give((peek, worker, is_install, time_ns))
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
-                                frontier_session.give((name, logical, delta as isize, time))
+                                frontier_session.give((name, logical, delta as isize, time_ns))
                             }
                         }
                     }
@@ -124,9 +125,10 @@ pub fn construct<A: Allocate>(
         });
 
         let dataflow_current = dataflow
-            .map(move |(name, worker, is_create, time)| {
-                let time = ((time / granularity_ns) + 1) * granularity_ns;
-                ((name, worker), time, if is_create { 1 } else { -1 })
+            .map(move |(name, worker, is_create, time_ns)| {
+                let time_ms = (time_ns / 1_000_000) as Timestamp;
+                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
+                ((name, worker), time_ms, if is_create { 1 } else { -1 })
             })
             .as_collection()
             .map(|(name, worker)| vec![Datum::String(name), Datum::Int64(worker as i64)])
@@ -134,9 +136,11 @@ pub fn construct<A: Allocate>(
         dataflow_current.stream.probe_with(probe);
 
         let peek_current = peek
-            .map(move |(name, worker, is_install, time)| {
-                let time = ((time / granularity_ns) + 1) * granularity_ns;
-                ((name, worker), time, if is_install { 1 } else { -1 })
+            .map(move |(name, worker, is_install, time_ns)| {
+                let time_ms = (time_ns / 1_000_000) as Timestamp;
+                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
+                let time_ms = time_ms as Timestamp;
+                ((name, worker), time_ms, if is_install { 1 } else { -1 })
             })
             .as_collection()
             .map(|(peek, worker)| {
@@ -151,9 +155,11 @@ pub fn construct<A: Allocate>(
         peek_current.stream.probe_with(probe);
 
         let frontier_current = frontier
-            .map(move |(name, logical, delta, time)| {
-                let time = ((time / granularity_ns) + 1) * granularity_ns;
-                ((name, logical), time, delta)
+            .map(move |(name, logical, delta, time_ns)| {
+                let time_ms = (time_ns / 1_000_000) as Timestamp;
+                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
+                let time_ms = time_ms as Timestamp;
+                ((name, logical), time_ms, delta)
             })
             .as_collection()
             .map(|(name, logical)| vec![Datum::String(name), Datum::Int64(logical as i64)])
@@ -182,11 +188,12 @@ pub fn construct<A: Allocate>(
                                 } else {
                                     assert!(map.contains_key(&key));
                                     let start = map.remove(&key).expect("start event absent");
-                                    let elapsed = time_ns - start;
-                                    let time_ns = ((time_ns / granularity_ns) + 1) * granularity_ns;
+                                    let elapsed_ns = time_ns - start;
+                                    let time_ms = (time_ns / 1_000_000) as Timestamp;
+                                    let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
                                     session.give((
-                                        (key.0, elapsed.next_power_of_two()),
-                                        time_ns,
+                                        (key.0, elapsed_ns.next_power_of_two()),
+                                        time_ms,
                                         1isize,
                                     ));
                                 }
