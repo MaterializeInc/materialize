@@ -496,6 +496,7 @@ impl Planner {
                 };
                 Ok(relation_expr)
             }
+            SetExpr::SetOperation { op, .. } => bail!("set operation {:?} is not supported", op),
             SetExpr::Values(Values(values)) => {
                 ensure!(
                     !values.is_empty(),
@@ -551,7 +552,7 @@ impl Planner {
                 }
                 Ok(expr.unwrap())
             }
-            _ => bail!("set operations are not yet supported"),
+            SetExpr::Query { .. } => bail!("subqueries are not yet supported"),
         }
     }
 
