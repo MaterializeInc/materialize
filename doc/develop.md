@@ -56,8 +56,15 @@ supported.
 
 On Linux, you might want to consider using [nix]. It is a purely functional
 package manager, which is appealing because bits and pieces of state usually
-are to blame when package management goes wrong. Reach out to @jamii for more
-information.
+are to blame when package management goes wrong. Plus, getting started is easy:
+
+```shell
+cd materialize
+nix-shell
+```
+
+This will start a new shell with all the necessary dependencies available and pinned to the correct version.
+Reach out to @jamii for more information.
 
 [Homebrew]: https://brew.sh
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
