@@ -102,6 +102,7 @@ pub struct LocalSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
+    Tail(TailSinkConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -109,6 +110,12 @@ pub struct KafkaSinkConnector {
     pub addr: std::net::SocketAddr,
     pub topic: String,
     pub schema_id: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TailSinkConnector {
+    pub connection_uuid: uuid::Uuid,
+    pub handler: String,
 }
 
 /// A view transforms one dataflow into another.

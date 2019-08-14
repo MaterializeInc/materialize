@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::{AsCollection, Collection};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
@@ -30,11 +30,12 @@ pub enum InputCapability {
 }
 
 pub fn build_dataflow<A: Allocate>(
-    dataflow: &Dataflow,
+    dataflow: Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
     local_input_mux: &mut LocalInputMux,
+    rpc_client: Rc<RefCell<reqwest::Client>>,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
@@ -42,14 +43,14 @@ pub fn build_dataflow<A: Allocate>(
 
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
-            let relation_expr = match &src.connector {
+            let relation_expr = match src.connector {
                 SourceConnector::Kafka(c) => {
                     // Distribute read responsibility among workers.
                     use differential_dataflow::hashable::Hashable;
                     let hash = src.name.hashed() as usize;
                     let read_from_kafka = hash % worker_peers == worker_index;
 
-                    let (stream, capability) = source::kafka(scope, &src.name, &c, read_from_kafka);
+                    let (stream, capability) = source::kafka(scope, &src.name, c, read_from_kafka);
                     if let Some(capability) = capability {
                         inputs.insert(src.name.clone(), InputCapability::External(capability));
                     }
@@ -57,7 +58,7 @@ pub fn build_dataflow<A: Allocate>(
                 }
                 SourceConnector::Local(c) => {
                     let (stream, capability) =
-                        source::local(scope, &src.name, &c, worker_index == 0, local_input_mux);
+                        source::local(scope, &src.name, c, worker_index == 0, local_input_mux);
                     if let Some(capability) = capability {
                         inputs.insert(src.name.clone(), InputCapability::External(capability));
                     }
@@ -83,9 +84,12 @@ pub fn build_dataflow<A: Allocate>(
                 .cloned()
                 .unwrap_or_else(|| panic!(format!("unable to find dataflow {:?}", sink.from)))
                 .import_core(scope, &format!("Import({:?})", sink.from));
-            match &sink.connector {
+            match sink.connector {
                 SinkConnector::Kafka(c) => {
                     sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
+                }
+                SinkConnector::Tail(c) => {
+                    sink::tail(&arrangement.stream, &sink.name, c, rpc_client)
                 }
             }
         }

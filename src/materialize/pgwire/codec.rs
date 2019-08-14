@@ -67,6 +67,8 @@ impl Encoder for Codec {
             BackendMessage::ReadyForQuery => b'Z',
             BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::ErrorResponse { .. } => b'E',
+            BackendMessage::CopyOutResponse => b'H',
+            BackendMessage::CopyData(_) => b'd',
         });
 
         // Write message length placeholder. The true length is filled in later.
@@ -75,6 +77,21 @@ impl Encoder for Codec {
 
         // Write message contents.
         match msg {
+            // psql doesn't actually care about the number of columns.
+            // It should be saved in the message if we ever need to care about it; until then,
+            // 0 is fine.
+            BackendMessage::CopyOutResponse/*(n_cols)*/ => {
+                buf.put_u8(0); // textual format
+                buf.put_i16_be(0/*n_cols*/);
+                /*
+                for _ in 0..n_cols {
+                    buf.put_i16_be(0); // textual format for this column
+                }
+                */
+            }
+            BackendMessage::CopyData(mut data) => {
+                buf.append(&mut data);
+            }
             BackendMessage::AuthenticationOk => {
                 buf.put_u32_be(0);
             }

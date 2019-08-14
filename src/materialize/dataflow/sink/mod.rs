@@ -4,5 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 mod kafka;
+mod tail;
 
 pub use kafka::kafka;
+pub use tail::tail;

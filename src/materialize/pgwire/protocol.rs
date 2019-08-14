@@ -22,6 +22,7 @@ use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::sql::Session;
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
+use std::io::Write;
 
 pub struct Context {
     pub uuid: Uuid,
@@ -91,6 +92,8 @@ pub trait Conn:
 
 impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Send {}
 
+type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
+
 /// A state machine that drives the pgwire backend.
 ///
 /// Much of the state machine boilerplate is generated automatically with the
@@ -122,6 +125,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(
         SendCommandComplete,
         SendRowDescription,
+        StartCopyOut,
         SendError,
         Error
     ))]
@@ -145,6 +149,17 @@ pub enum StateMachine<A: Conn + 'static> {
         remaining_results: usize,
     },
 
+    #[state_machine_future(transitions(WaitForUpdates, SendUpdates, Error))]
+    WaitForUpdates { conn: A },
+
+    #[state_machine_future(transitions(WaitForUpdates, Error))]
+    StartCopyOut { send: SinkSend<A> },
+
+    #[state_machine_future(transitions(SendError, Error, WaitForUpdates))]
+    SendUpdates {
+        send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
+    },
+
     #[state_machine_future(transitions(SendReadyForQuery, Error))]
     SendCommandComplete {
         send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
@@ -163,6 +178,24 @@ pub enum StateMachine<A: Conn + 'static> {
 
     #[state_machine_future(error)]
     Error(failure::Error),
+}
+
+fn format_update(update: Update) -> BackendMessage {
+    let mut buf: Vec<u8> = Vec::new();
+    let format_result: csv::Result<()> = {
+        let mut wtr = csv::WriterBuilder::new()
+            .terminator(csv::Terminator::Any(b' '))
+            .from_writer(&mut buf);
+        wtr.serialize(&update.row)
+            .and_then(|_| wtr.flush().map_err(|err| From::from(err)))
+    };
+    BackendMessage::CopyData(match format_result {
+        Ok(()) => match writeln!(&mut buf, " (Diff: {} at {})", update.diff, update.timestamp) {
+            Ok(_) => buf,
+            Err(e) => e.to_string().into_bytes(),
+        },
+        Err(e) => e.to_string().into_bytes(),
+    })
 }
 
 impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
@@ -254,6 +287,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         })
     }
 
+    fn poll_start_copy_out<'s, 'c>(
+        state: &'s mut RentToOwn<'s, StartCopyOut<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterStartCopyOut<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        transition!(WaitForUpdates { conn })
+    }
+
     fn poll_recv_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvQuery<A>>,
         context: &'c mut RentToOwn<'c, Context>,
@@ -338,6 +379,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         rows: Some(rows),
                     }),
                     SqlResponse::SetVariable => command_complete!("SET"),
+                    SqlResponse::Tailing => transition!(StartCopyOut {
+                        send: state.conn.send(BackendMessage::CopyOutResponse),
+                    }),
                 }
             }
             Ok(Async::Ready(Some(SqlResult {
@@ -382,6 +426,31 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         }
     }
 
+    fn poll_wait_for_updates<'s, 'c>(
+        state: &'s mut RentToOwn<'s, WaitForUpdates<A>>,
+        context: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterWaitForUpdates<A>, failure::Error> {
+        match context.dataflow_results_receiver.poll() {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Ok(Async::Ready(Some(results))) => {
+                let state = state.take();
+                let results = match results {
+                    DataflowResults::Tailed(results) => results,
+                    _ => panic!("Unexpected dataflow result type"),
+                };
+                let stream: MessageStream = Box::new(futures::stream::iter_ok(
+                    results.into_iter().map(format_update),
+                ));
+                transition!(SendUpdates {
+                    send: Box::new(stream.forward(state.conn)),
+                })
+            }
+            Ok(Async::Ready(None)) | Err(()) => {
+                panic!("Connection to dataflow server closed unexpectedly")
+            }
+        }
+    }
+
     fn poll_wait_for_rows<'s, 'c>(
         state: &'s mut RentToOwn<'s, WaitForRows<A>>,
         context: &'c mut RentToOwn<'c, Context>,
@@ -405,6 +474,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 panic!("Connection to dataflow server closed unexpectedly")
             }
         }
+    }
+
+    fn poll_send_updates<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendUpdates<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendUpdates<A>, failure::Error> {
+        let (_, conn) = try_ready!(state.send.poll());
+        transition!(WaitForUpdates { conn: conn })
     }
 
     fn poll_send_command_complete<'s, 'c>(

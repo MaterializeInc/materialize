@@ -66,6 +66,7 @@ pub enum SqlResponse {
         rows: Vec<Vec<Datum>>,
     },
     SetVariable,
+    Tailing,
 }
 
 pub type SqlResultMux = Arc<RwLock<Mux<Uuid, SqlResult>>>;
@@ -79,7 +80,10 @@ pub enum DataflowCommand {
         source: RelationExpr,
         when: PeekWhen,
     },
-    Tail(String),
+    Tail {
+        typ: RelationType,
+        name: String,
+    },
     Shutdown,
 }
 
@@ -96,7 +100,7 @@ pub enum PeekWhen {
     AtTimestamp(Timestamp),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {
     pub row: Vec<Datum>,
@@ -114,19 +118,20 @@ pub enum LocalInput {
 
 pub type LocalInputMux = Arc<RwLock<Mux<Uuid, LocalInput>>>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataflowResults {
     Peeked(Vec<Vec<Datum>>),
+    Tailed(Vec<Update>),
 }
 
 impl DataflowResults {
     pub fn unwrap_peeked(self) -> Vec<Vec<Datum>> {
         match self {
             DataflowResults::Peeked(v) => v,
-            // _ => panic!(
-            //     "DataflowResults::unwrap_peeked called on a {:?} variant",
-            //     self
-            // ),
+            _ => panic!(
+                "DataflowResults::unwrap_peeked called on a {:?} variant",
+                self
+            ),
         }
     }
 }

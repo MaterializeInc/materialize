@@ -23,12 +23,14 @@ use std::time::Instant;
 use super::render;
 use super::render::InputCapability;
 use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
-use crate::dataflow::Timestamp;
+use crate::dataflow::{Dataflow, Sink, SinkConnector, TailSinkConnector, Timestamp};
 use crate::glue::*;
 
 use crate::dataflow::coordinator;
 use crate::dataflow::logging;
 use crate::dataflow::logging::materialized::MaterializedEvent;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
@@ -58,7 +60,7 @@ pub fn serve(
 }
 
 /// Options for how dataflow results return to those that posed the queries.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum DataflowResultsHandler {
     /// A local exchange fabric.
     Local(DataflowResultsMux),
@@ -87,7 +89,7 @@ where
     dataflow_results_handler: DataflowResultsHandler,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
-    rpc_client: reqwest::Client,
+    rpc_client: Rc<RefCell<reqwest::Client>>,
     inputs: HashMap<String, InputCapability>,
     sequencer: Sequencer<(coordinator::SequencedCommand, CommandMeta)>,
     logging_config: Option<logging::LoggingConfiguration>,
@@ -116,10 +118,12 @@ where
             dataflow_results_handler,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
-            rpc_client: reqwest::Client::builder()
-                .tcp_nodelay()
-                .build()
-                .expect("building reqwest client failed"),
+            rpc_client: Rc::new(RefCell::new(
+                reqwest::Client::builder()
+                    .tcp_nodelay()
+                    .build()
+                    .expect("building reqwest client failed"),
+            )),
             inputs: HashMap::new(),
             sequencer,
             logging_config,
@@ -255,7 +259,7 @@ where
     fn handle_command(&mut self, cmd: coordinator::SequencedCommand, cmd_meta: CommandMeta) {
         match cmd {
             coordinator::SequencedCommand::CreateDataflows(dataflows) => {
-                for dataflow in dataflows.iter() {
+                for dataflow in dataflows.into_iter() {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(
                             dataflow.name().to_string(),
@@ -263,11 +267,12 @@ where
                         ));
                     }
                     render::build_dataflow(
-                        &dataflow,
+                        dataflow,
                         &mut self.traces,
                         self.inner,
                         &mut self.inputs,
                         &mut self.local_input_mux,
+                        self.rpc_client.clone(),
                     );
                 }
             }
@@ -319,8 +324,29 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Tail(_) => unimplemented!(),
-
+            coordinator::SequencedCommand::Tail { typ, name } => {
+                let sink_name = format!("<temp_{}>", Uuid::new_v4());
+                if let DataflowResultsHandler::Remote(path) = &self.dataflow_results_handler {
+                    let dataflow = Dataflow::Sink(Sink {
+                        name: sink_name,
+                        from: (name, typ),
+                        connector: SinkConnector::Tail(TailSinkConnector {
+                            connection_uuid: cmd_meta.connection_uuid,
+                            handler: path.clone(),
+                        }),
+                    });
+                    render::build_dataflow(
+                        dataflow,
+                        &mut self.traces,
+                        self.inner,
+                        &mut self.inputs,
+                        &mut self.local_input_mux,
+                        self.rpc_client.clone(),
+                    );
+                } else {
+                    unimplemented!()
+                }
+            }
             coordinator::SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.inputs.clear();
@@ -398,6 +424,7 @@ where
                 DataflowResultsHandler::Remote(response_address) => {
                     let encoded = bincode::serialize(&result).unwrap();
                     self.rpc_client
+                        .borrow_mut()
                         .post(response_address)
                         .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
                         .body(encoded)

@@ -14,7 +14,7 @@ use repr::Datum;
 pub fn local<G>(
     scope: &G,
     name: &str,
-    connector: &LocalSourceConnector,
+    connector: LocalSourceConnector,
     read_input: bool,
     local_input_mux: &mut LocalInputMux,
 ) -> (
