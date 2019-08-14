@@ -5,9 +5,11 @@
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::sink::Send as SinkSend;
+use futures::stream;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
+use std::iter;
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -88,8 +90,6 @@ pub trait Conn:
 
 impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Send {}
 
-type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
-
 /// A state machine that drives the pgwire backend.
 ///
 /// Much of the state machine boilerplate is generated automatically with the
@@ -123,7 +123,7 @@ pub enum StateMachine<A: Conn + 'static> {
     ))]
     HandleQuery { conn: A },
 
-    #[state_machine_future(transitions(WaitForRows, SendRows, Error))]
+    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
     SendRowDescription {
         send: SinkSend<A>,
         row_type: RelationType,
@@ -131,7 +131,7 @@ pub enum StateMachine<A: Conn + 'static> {
         rows: Option<Vec<Vec<Datum>>>,
     },
 
-    #[state_machine_future(transitions(WaitForRows, SendRows, Error))]
+    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
     WaitForRows {
         conn: A,
         row_type: RelationType,
@@ -139,13 +139,10 @@ pub enum StateMachine<A: Conn + 'static> {
         remaining_results: usize,
     },
 
-    #[state_machine_future(transitions(SendCommandComplete, SendError, Error))]
-    SendRows {
-        send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
-    },
-
     #[state_machine_future(transitions(SendReadyForQuery, Error))]
-    SendCommandComplete { send: SinkSend<A> },
+    SendCommandComplete {
+        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
+    },
 
     #[state_machine_future(transitions(SendReadyForQuery, Done, Error))]
     SendError { send: SinkSend<A>, fatal: bool },
@@ -262,9 +259,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 macro_rules! command_complete {
                     ($($arg:tt)*) => {
                         transition!(SendCommandComplete {
-                            send: state.conn.send(BackendMessage::CommandComplete {
+                            send: Box::new(state.conn.send(BackendMessage::CommandComplete {
                                 tag: std::fmt::format(format_args!($($arg)*))
-                            }),
+                            })),
                         })
                     };
                 }
@@ -276,7 +273,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     SqlResponse::DroppedSource => command_complete!("DROP SOURCE"),
                     SqlResponse::DroppedView => command_complete!("DROP VIEW"),
                     SqlResponse::EmptyQuery => transition!(SendCommandComplete {
-                        send: state.conn.send(BackendMessage::EmptyQueryResponse),
+                        send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
                     }),
                     SqlResponse::Peeking { typ } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
@@ -320,13 +317,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let state = state.take();
         let row_type = state.row_type;
         if let Some(rows) = state.rows {
-            let stream: MessageStream =
-                Box::new(futures::stream::iter_ok(rows.into_iter().map(move |row| {
-                    BackendMessage::DataRow(message::field_values_from_row(row, &row_type))
-                })));
-            transition!(SendRows {
-                send: Box::new(stream.forward(conn))
-            })
+            transition!(send_rows(conn, rows, row_type))
         } else {
             transition!(WaitForRows {
                 conn,
@@ -351,14 +342,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     let mut peek_results = state.peek_results;
                     peek_results.sort();
                     let row_type = state.row_type;
-                    let stream: MessageStream = Box::new(futures::stream::iter_ok(
-                        peek_results.into_iter().map(move |row| {
-                            BackendMessage::DataRow(message::field_values_from_row(row, &row_type))
-                        }),
-                    ));
-                    transition!(SendRows {
-                        send: Box::new(stream.forward(state.conn)),
-                    })
+                    transition!(send_rows(state.conn, peek_results, row_type))
                 } else {
                     transition!(state)
                 }
@@ -367,18 +351,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 panic!("Connection to dataflow server closed unexpectedly")
             }
         }
-    }
-
-    fn poll_send_rows<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendRows<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendRows<A>, failure::Error> {
-        let (_, conn) = try_ready!(state.send.poll());
-        transition!(SendCommandComplete {
-            send: conn.send(BackendMessage::CommandComplete {
-                tag: "SELECT".to_owned()
-            }),
-        })
     }
 
     fn poll_send_command_complete<'s, 'c>(
@@ -403,5 +375,22 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 send: conn.send(BackendMessage::ReadyForQuery),
             })
         }
+    }
+}
+
+fn send_rows<A, R>(conn: A, rows: R, row_type: RelationType) -> SendCommandComplete<A>
+where
+    A: Conn + 'static,
+    R: IntoIterator<Item = Vec<Datum>>,
+    <R as IntoIterator>::IntoIter: 'static + Send,
+{
+    let rows = rows
+        .into_iter()
+        .map(move |row| BackendMessage::DataRow(message::field_values_from_row(row, &row_type)))
+        .chain(iter::once(BackendMessage::CommandComplete {
+            tag: "SELECT".into(),
+        }));
+    SendCommandComplete {
+        send: Box::new(stream::iter_ok(rows).forward(conn).map(|(_, conn)| conn)),
     }
 }

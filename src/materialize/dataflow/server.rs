@@ -117,7 +117,10 @@ where
             dataflow_results_handler,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
-            rpc_client: reqwest::Client::new(),
+            rpc_client: reqwest::Client::builder()
+                .tcp_nodelay()
+                .build()
+                .expect("building reqwest client failed"),
             inputs: HashMap::new(),
             sequencer,
             system_probe: timely::dataflow::ProbeHandle::new(),
