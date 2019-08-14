@@ -4,32 +4,20 @@ This guide details what you'll need to contribute to Materialize.
 
 Materialize is written in [Rust] and should compile on any recent stable version.
 
-As far as external components go, Materialize has a hard dependency on [Apache
-ZooKeeper] and [Apache Kafka], and an optional dependency on the [Confluent
-Schema Registry].
+As far as external components go, Materialize has hard dependencies on [Apache
+ZooKeeper] and [Apache Kafka]. It also has an optional dependency on the [Confluent
+Schema Registry]. Conveniently, [Confluent Platform] bundles these three components
+into a single download. Not so conveniently, it bundles many other components as
+well. Strangely, their webpages do not mention ZooKeeper at all, even though version
+5.3.0 most definitely does include the corresponding binaries.
 
 [Rust]: https://www.rust-lang.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [Apache Kafka]: https://kafka.apache.org
 [Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
+[Confluent Platform]: https://www.confluent.io/product/confluent-platform/
 
-## Installing dependencies with Nix
-
-One way to install all the necessary dependencies is to use [Nix]. Note that this does not work for OS X users, as Nix on OS X 
-is bad.
-
-```shell
-cd materialize
-nix-shell
-```
-
-This will start a new shell with all the necessary dependencies available and pinned to the correct version.
-
-(If you encounter any problems with Nix, @jamii is responsible for fixing them)
-
-[Nix]: https://nixos.org/nix/
-
-## Installing dependencies manually
+## Installing
 
 ### Rust
 
@@ -43,18 +31,16 @@ Rustup will automatically select the correct toolchain version specified in [mat
 
 [rustup]: https://www.rust-lang.org/tools/install
 
-### Confluent platform
 
-The "Confluent Platform" bundles ZooKeeper, Kafka, and the Confluent Schema Registry
-(along with a few other components that we don't currently care about).
+### Confluent Platform
 
-On macOS, the easiest installation method is to use Homebrew:
+On macOS, [Homebrew] makes package installation easy breezy:
 
 ```shell
-brew install confluent-oss
+brew install confluent-platform
 ```
 
-On Debian-based Linux variants:
+On Debian-based Linux variants, it's a tad more involved:
 
 ```shell
 curl http://packages.confluent.io/deb/5.2/archive.key | sudo apt-key add -
@@ -68,7 +54,21 @@ installation instructions][confluent-install]. Note that, at the time of
 writing, Java 8 is a strict requirement. Later versions of Java are not
 supported.
 
+On Linux, you might want to consider using [nix]. It is a purely functional
+package manager, which is appealing because bits and pieces of state usually
+are to blame when package management goes wrong. Plus, getting started is easy:
+
+```shell
+cd materialize
+nix-shell
+```
+
+This will start a new shell with all the necessary dependencies available and pinned to the correct version.
+Reach out to @jamii for more information.
+
+[Homebrew]: https://brew.sh
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
+[nix]: https://nixos.org/nix/
 
 ## Building
 
