@@ -626,7 +626,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "differential-dataflow"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#8ded097a17ec9d904b0ff7ba4d10c7a75ffb7fd5"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#6e67400512565b00fa0202f75a2ac6d4f8a3ab8d"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2479,7 +2479,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2493,12 +2493,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
 
 [[package]]
 name = "timely_communication"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2513,7 +2513,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#4369ce33f12f4fe6a2a33e9b9037770a6ca607a6"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
 
 [[package]]
 name = "timely_sort"

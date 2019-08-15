@@ -90,7 +90,6 @@ where
     rpc_client: reqwest::Client,
     inputs: HashMap<String, InputCapability>,
     sequencer: Sequencer<(coordinator::SequencedCommand, CommandMeta)>,
-    system_probe: timely::dataflow::ProbeHandle<Timestamp>,
     logging_config: Option<logging::LoggingConfiguration>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
     materialized_logger: Option<logging::materialized::Logger>,
@@ -120,7 +119,6 @@ where
             rpc_client: reqwest::Client::new(),
             inputs: HashMap::new(),
             sequencer,
-            system_probe: timely::dataflow::ProbeHandle::new(),
             logging_config,
             command_coordinator,
             materialized_logger: None,
@@ -134,13 +132,21 @@ where
     /// if logging is not initialized and anyone tries to use it.
     fn initialize_logging(&mut self) {
         if let Some(logging) = &self.logging_config {
+            use crate::dataflow::logging::BatchLogger;
+            use timely::dataflow::operators::capture::event::link::EventLink;
+
+            // Establish loggers first, so we can either log the logging or not, as we like.
+            let t_linked = std::rc::Rc::new(EventLink::new());
+            let mut t_logger = BatchLogger::new(t_linked.clone());
+            let d_linked = std::rc::Rc::new(EventLink::new());
+            let mut d_logger = BatchLogger::new(d_linked.clone());
+            let m_linked = std::rc::Rc::new(EventLink::new());
+            let mut m_logger = BatchLogger::new(m_linked.clone());
+
             // Construct logging dataflows and endpoints before registering any.
-            let (mut t_logger, t_traces) =
-                logging::timely::construct(&mut self.inner, &mut self.system_probe, logging);
-            let (mut d_logger, d_traces) =
-                logging::differential::construct(&mut self.inner, &mut self.system_probe, logging);
-            let (mut m_logger, m_traces) =
-                logging::materialized::construct(&mut self.inner, &mut self.system_probe, logging);
+            let t_traces = logging::timely::construct(&mut self.inner, logging, t_linked);
+            let d_traces = logging::differential::construct(&mut self.inner, logging, d_linked);
+            let m_traces = logging::materialized::construct(&mut self.inner, logging, m_linked);
 
             // Register each logger endpoint.
             self.inner
@@ -179,31 +185,8 @@ where
             if let Some(coordinator) = &mut self.command_coordinator {
                 coordinator.logger = self.inner.log_register().get("materialized");
                 for log in logging.active_logs.iter() {
-                    coordinator.insert_source(log.name());
-                }
-            }
-        }
-    }
-
-    /// Maintenance operations on logging traces.
-    ///
-    /// This method advances logging traces, ensuring that they can be compacted as new data arrive.
-    /// The traces are compacted using the least time accepted by any of the traces, which should
-    /// ensure that each can be joined with the others.
-    fn maintain_logging(&mut self) {
-        if let Some(configuration) = &self.logging_config {
-            let mut lower = Antichain::new();
-            self.system_probe.with_frontier(|frontier| {
-                for element in frontier.iter() {
-                    // TODO : Constant chosen arbitrarily; choose better!
-                    // Number of milliseconds logs are retained for.
-                    lower.insert(element.saturating_sub(1_000));
-                }
-            });
-
-            for log in configuration.active_logs.iter() {
-                if let Some(trace) = self.traces.get_by_self_mut(log.name()) {
-                    trace.advance_by(lower.elements());
+                    // Insert with 1 second compaction latency.
+                    coordinator.insert_source(log.name(), 1_000);
                 }
             }
         }
@@ -236,7 +219,6 @@ where
             // Can either yield tastefully, or busy-wait.
             // self.inner.step_or_park(None);
             self.inner.step();
-            self.maintain_logging();
 
             if let Some(coordinator) = &mut self.command_coordinator {
                 // Sequence any pending commands.

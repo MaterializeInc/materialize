@@ -3,40 +3,23 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::{BatchLogger, LogVariant, TimelyLog};
+use super::{LogVariant, TimelyLog};
 use crate::dataflow::arrangement::KeysOnlyHandle;
 use crate::dataflow::types::Timestamp;
 use crate::repr::Datum;
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
-use timely::dataflow::ProbeHandle;
 use timely::logging::{TimelyEvent, WorkerIdentifier};
 
 // Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    probe: &mut ProbeHandle<Timestamp>,
     config: &super::LoggingConfiguration,
-) -> (
-    BatchLogger<
-        TimelyEvent,
-        WorkerIdentifier,
-        std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
-    >,
-    std::collections::HashMap<LogVariant, KeysOnlyHandle>,
-) {
-    // Create timely dataflow logger based on shared linked lists.
-    let writer =
-        timely::dataflow::operators::capture::event::link::EventLink::<Timestamp, _>::new();
-    let writer = std::rc::Rc::new(writer);
-    let reader = writer.clone();
-
+    linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
+) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
     // let granularity_ns = config.granularity_ns;
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
-
-    // The two return values.
-    let logger = BatchLogger::new(writer);
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow(move |scope| {
@@ -46,7 +29,7 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::operators::Map;
 
         // TODO: Rewrite as one operator with multiple outputs.
-        let logs = Some(reader).replay_into(scope);
+        let logs = Some(linked).replay_into(scope);
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
@@ -143,7 +126,6 @@ pub fn construct<A: Allocate>(
 
         use differential_dataflow::operators::reduce::Count;
         use timely::dataflow::operators::generic::operator::Operator;
-        use timely::dataflow::operators::probe::Probe;
 
         // Duration statistics derive from the non-rounded event times.
         let duration = logs
@@ -220,14 +202,6 @@ pub fn construct<A: Allocate>(
         let shutdown = shutdown.as_collection().arrange_by_self();
         let text = text.as_collection().arrange_by_self();
 
-        operates.stream.probe_with(probe);
-        channels.stream.probe_with(probe);
-        messages.stream.probe_with(probe);
-        shutdown.stream.probe_with(probe);
-        text.stream.probe_with(probe);
-        elapsed.stream.probe_with(probe);
-        histogram.stream.probe_with(probe);
-
         // Restrict results by those logs that are meant to be active.
         vec![
             (LogVariant::Timely(TimelyLog::Operates), operates.trace),
@@ -243,5 +217,5 @@ pub fn construct<A: Allocate>(
         .collect()
     });
 
-    (logger, traces)
+    traces
 }

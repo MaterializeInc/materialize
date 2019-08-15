@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::{BatchLogger, LogVariant, MaterializedLog};
+use super::{LogVariant, MaterializedLog};
 use crate::dataflow::arrangement::KeysOnlyHandle;
 use crate::dataflow::types::Timestamp;
 use crate::repr::Datum;
@@ -11,8 +11,6 @@ use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::operator::Operator;
-use timely::dataflow::operators::probe::Probe;
-use timely::dataflow::ProbeHandle;
 use timely::logging::WorkerIdentifier;
 
 /// Type alias for logging of materialized events.
@@ -52,26 +50,11 @@ impl Peek {
 
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    probe: &mut ProbeHandle<Timestamp>,
     config: &super::LoggingConfiguration,
-) -> (
-    BatchLogger<
-        MaterializedEvent,
-        WorkerIdentifier,
-        std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
-    >,
-    std::collections::HashMap<LogVariant, KeysOnlyHandle>,
-) {
-    // Create timely dataflow logger based on shared linked lists.
-    let writer = EventLink::<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>::new();
-    let writer = std::rc::Rc::new(writer);
-    let reader = writer.clone();
-
+    linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
+) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
     // let granularity_ns = config.granularity_ns as u64;
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
-
-    // The two return values.
-    let logger = BatchLogger::new(writer);
 
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
@@ -80,7 +63,7 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::operators::Map;
 
         // TODO: Rewrite as one operator with multiple outputs.
-        let logs = Some(reader).replay_into(scope);
+        let logs = Some(linked).replay_into(scope);
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
@@ -133,7 +116,6 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .map(|(name, worker)| vec![Datum::String(name), Datum::Int64(worker as i64)])
             .arrange_by_self();
-        dataflow_current.stream.probe_with(probe);
 
         let peek_current = peek
             .map(move |(name, worker, is_install, time_ns)| {
@@ -152,7 +134,6 @@ pub fn construct<A: Allocate>(
                 ]
             })
             .arrange_by_self();
-        peek_current.stream.probe_with(probe);
 
         let frontier_current = frontier
             .map(move |(name, logical, delta, time_ns)| {
@@ -164,7 +145,6 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .map(|(name, logical)| vec![Datum::String(name), Datum::Int64(logical as i64)])
             .arrange_by_self();
-        frontier_current.stream.probe_with(probe);
 
         // Duration statistics derive from the non-rounded event times.
         use differential_dataflow::operators::reduce::Count;
@@ -213,8 +193,6 @@ pub fn construct<A: Allocate>(
             })
             .arrange_by_self();
 
-        peek_duration.stream.probe_with(probe);
-
         vec![
             (
                 LogVariant::Materialized(MaterializedLog::DataflowCurrent),
@@ -238,5 +216,5 @@ pub fn construct<A: Allocate>(
         .collect()
     });
 
-    (logger, traces)
+    traces
 }

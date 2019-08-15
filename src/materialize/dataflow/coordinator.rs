@@ -259,7 +259,7 @@ impl CommandCoordinator {
 
                 let mut since = Antichain::new();
                 for time in entry.upper.elements() {
-                    since.insert(time.saturating_sub(1_000)); // 1000 ms compaction lag. Change!
+                    since.insert(time.saturating_sub(1_000)); // 60s compaction lag. Change!
                 }
                 self.since_updates
                     .push((name.to_string(), since.elements().to_vec()));
@@ -312,9 +312,9 @@ impl CommandCoordinator {
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    pub fn insert_source(&mut self, name: &str) {
+    pub fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
         self.remove_view(name);
-        let viewstate = ViewState::new_source();
+        let mut viewstate = ViewState::new_source();
         if let Some(logger) = self.logger.as_mut() {
             for time in viewstate.upper.elements() {
                 logger.log(MaterializedEvent::Frontier(
@@ -324,6 +324,7 @@ impl CommandCoordinator {
                 ));
             }
         }
+        viewstate.set_compaction_latency(compaction_ms);
         self.views.insert(name.to_string(), viewstate);
     }
 
@@ -356,6 +357,11 @@ pub struct ViewState {
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
     since: Antichain<Timestamp>,
+    /// Compaction delay.
+    ///
+    /// This timestamp drives the advancement of the since frontier as a
+    /// function of the upper frontier, trailing it by exactly this much.
+    compaction_latency_ms: Timestamp,
 }
 
 impl ViewState {
@@ -374,6 +380,7 @@ impl ViewState {
             uses,
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
+            compaction_latency_ms: 60_000,
         }
     }
 
@@ -383,6 +390,12 @@ impl ViewState {
             uses: None,
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
+            compaction_latency_ms: 60_000,
         }
+    }
+
+    /// Sets the latency behind the collection frontier at which compaction occurs.
+    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
+        self.compaction_latency_ms = latency_ms;
     }
 }
