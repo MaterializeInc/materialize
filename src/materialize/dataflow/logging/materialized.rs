@@ -53,7 +53,6 @@ pub fn construct<A: Allocate>(
     config: &super::LoggingConfiguration,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
 ) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
-    // let granularity_ns = config.granularity_ns as u64;
     let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow(move |scope| {

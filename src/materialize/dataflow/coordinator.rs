@@ -47,7 +47,7 @@ pub enum SequencedCommand {
     /// Each entry in the vector names a view and provides a frontier after which
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
-    EnableCompaction(Vec<(String, Vec<Timestamp>)>),
+    AllowCompaction(Vec<(String, Vec<Timestamp>)>),
     /// Currently unimplemented.
     Tail(String),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
@@ -156,10 +156,13 @@ impl CommandCoordinator {
     ///
     /// Primarily, this involves sequencing compaction commands, which should be issued whenever
     /// available, but the sequencer is otherwise only provided in response to received commands.
+    ///
+    /// This API is a bit wonky, but at the moment the sequencer plays the role of both send and
+    /// receive, and so cannot be owned only by the coordinator.
     pub fn maintenance(&mut self, sequencer: &mut Sequencer<(SequencedCommand, CommandMeta)>) {
         // Take this opportunity to drain `since_update` commands.
         sequencer.push((
-            SequencedCommand::EnableCompaction(std::mem::replace(
+            SequencedCommand::AllowCompaction(std::mem::replace(
                 &mut self.since_updates,
                 Vec::new(),
             )),
@@ -259,7 +262,7 @@ impl CommandCoordinator {
 
                 let mut since = Antichain::new();
                 for time in entry.upper.elements() {
-                    since.insert(time.saturating_sub(1_000)); // 60s compaction lag. Change!
+                    since.insert(time.saturating_sub(entry.compaction_latency_ms));
                 }
                 self.since_updates
                     .push((name.to_string(), since.elements().to_vec()));

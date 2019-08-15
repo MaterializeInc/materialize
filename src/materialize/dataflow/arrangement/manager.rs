@@ -81,7 +81,7 @@ impl TraceManager {
     /// associated traces may not accumulate to the correct quantities for times
     /// not in advance of `frontier`. Users should take care to only rely on
     /// accumulations at times in advance of `frontier`.
-    pub fn enable_compaction(&mut self, name: &str, frontier: &[Timestamp]) {
+    pub fn allow_compaction(&mut self, name: &str, frontier: &[Timestamp]) {
         if let Some(val) = self.traces.get_mut(name) {
             val.merge_logical(frontier);
         }

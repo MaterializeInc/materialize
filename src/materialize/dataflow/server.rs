@@ -310,9 +310,9 @@ where
                 self.pending_peeks.push((pending_peek, trace));
             }
 
-            coordinator::SequencedCommand::EnableCompaction(list) => {
+            coordinator::SequencedCommand::AllowCompaction(list) => {
                 for (name, frontier) in list {
-                    self.traces.enable_compaction(&name, &frontier[..]);
+                    self.traces.allow_compaction(&name, &frontier[..]);
                 }
             }
 
