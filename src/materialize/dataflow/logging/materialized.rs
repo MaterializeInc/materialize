@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::{BatchLogger, LogVariant, MaterializedLog};
+use super::{LogVariant, MaterializedLog};
 use crate::dataflow::arrangement::KeysOnlyHandle;
 use crate::dataflow::types::Timestamp;
 use crate::repr::Datum;
@@ -11,8 +11,6 @@ use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::operator::Operator;
-use timely::dataflow::operators::probe::Probe;
-use timely::dataflow::ProbeHandle;
 use timely::logging::WorkerIdentifier;
 
 /// Type alias for logging of materialized events.
@@ -52,25 +50,10 @@ impl Peek {
 
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    probe: &mut ProbeHandle<Timestamp>,
     config: &super::LoggingConfiguration,
-) -> (
-    BatchLogger<
-        MaterializedEvent,
-        WorkerIdentifier,
-        std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
-    >,
-    std::collections::HashMap<LogVariant, KeysOnlyHandle>,
-) {
-    // Create timely dataflow logger based on shared linked lists.
-    let writer = EventLink::<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>::new();
-    let writer = std::rc::Rc::new(writer);
-    let reader = writer.clone();
-
-    let granularity_ns = config.granularity_ns as u64;
-
-    // The two return values.
-    let logger = BatchLogger::new(writer);
+    linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
+) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
+    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
@@ -79,7 +62,7 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::operators::Map;
 
         // TODO: Rewrite as one operator with multiple outputs.
-        let logs = Some(reader).replay_into(scope);
+        let logs = Some(linked).replay_into(scope);
 
         use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
@@ -105,17 +88,17 @@ pub fn construct<A: Allocate>(
                     let mut frontier_session = frontier.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
-                        let time = time.as_nanos() as Timestamp;
+                        let time_ns = time.as_nanos() as Timestamp;
 
                         match datum {
                             MaterializedEvent::Dataflow(name, is_create) => {
-                                dataflow_session.give((name, worker, is_create, time))
+                                dataflow_session.give((name, worker, is_create, time_ns))
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
-                                peek_session.give((peek, worker, is_install, time))
+                                peek_session.give((peek, worker, is_install, time_ns))
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
-                                frontier_session.give((name, logical, delta as isize, time))
+                                frontier_session.give((name, logical, delta as isize, time_ns))
                             }
                         }
                     }
@@ -124,19 +107,21 @@ pub fn construct<A: Allocate>(
         });
 
         let dataflow_current = dataflow
-            .map(move |(name, worker, is_create, time)| {
-                let time = ((time / granularity_ns) + 1) * granularity_ns;
-                ((name, worker), time, if is_create { 1 } else { -1 })
+            .map(move |(name, worker, is_create, time_ns)| {
+                let time_ms = (time_ns / 1_000_000) as Timestamp;
+                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
+                ((name, worker), time_ms, if is_create { 1 } else { -1 })
             })
             .as_collection()
             .map(|(name, worker)| vec![Datum::String(name), Datum::Int64(worker as i64)])
             .arrange_by_self();
-        dataflow_current.stream.probe_with(probe);
 
         let peek_current = peek
-            .map(move |(name, worker, is_install, time)| {
-                let time = ((time / granularity_ns) + 1) * granularity_ns;
-                ((name, worker), time, if is_install { 1 } else { -1 })
+            .map(move |(name, worker, is_install, time_ns)| {
+                let time_ms = (time_ns / 1_000_000) as Timestamp;
+                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
+                let time_ms = time_ms as Timestamp;
+                ((name, worker), time_ms, if is_install { 1 } else { -1 })
             })
             .as_collection()
             .map(|(peek, worker)| {
@@ -148,17 +133,17 @@ pub fn construct<A: Allocate>(
                 ]
             })
             .arrange_by_self();
-        peek_current.stream.probe_with(probe);
 
         let frontier_current = frontier
-            .map(move |(name, logical, delta, time)| {
-                let time = ((time / granularity_ns) + 1) * granularity_ns;
-                ((name, logical), time, delta)
+            .map(move |(name, logical, delta, time_ns)| {
+                let time_ms = (time_ns / 1_000_000) as Timestamp;
+                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
+                let time_ms = time_ms as Timestamp;
+                ((name, logical), time_ms, delta)
             })
             .as_collection()
             .map(|(name, logical)| vec![Datum::String(name), Datum::Int64(logical as i64)])
             .arrange_by_self();
-        frontier_current.stream.probe_with(probe);
 
         // Duration statistics derive from the non-rounded event times.
         use differential_dataflow::operators::reduce::Count;
@@ -182,11 +167,12 @@ pub fn construct<A: Allocate>(
                                 } else {
                                     assert!(map.contains_key(&key));
                                     let start = map.remove(&key).expect("start event absent");
-                                    let elapsed = time_ns - start;
-                                    let time_ns = ((time_ns / granularity_ns) + 1) * granularity_ns;
+                                    let elapsed_ns = time_ns - start;
+                                    let time_ms = (time_ns / 1_000_000) as Timestamp;
+                                    let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
                                     session.give((
-                                        (key.0, elapsed.next_power_of_two()),
-                                        time_ns,
+                                        (key.0, elapsed_ns.next_power_of_two()),
+                                        time_ms,
                                         1isize,
                                     ));
                                 }
@@ -205,8 +191,6 @@ pub fn construct<A: Allocate>(
                 ]
             })
             .arrange_by_self();
-
-        peek_duration.stream.probe_with(probe);
 
         vec![
             (
@@ -231,5 +215,5 @@ pub fn construct<A: Allocate>(
         .collect()
     });
 
-    (logger, traces)
+    traces
 }

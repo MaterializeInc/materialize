@@ -42,6 +42,12 @@ pub enum SequencedCommand {
         timestamp: Timestamp,
         drop_after_peek: bool,
     },
+    /// Enable compaction in views.
+    ///
+    /// Each entry in the vector names a view and provides a frontier after which
+    /// accumulations must be correct. The workers gain the liberty of compacting
+    /// the corresponding maintained traces up through that frontier.
+    AllowCompaction(Vec<(String, Vec<Timestamp>)>),
     /// Currently unimplemented.
     Tail(String),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
@@ -53,6 +59,7 @@ pub struct CommandCoordinator {
     /// Per-view maintained state.
     views: HashMap<String, ViewState>,
     command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    since_updates: Vec<(String, Vec<Timestamp>)>,
     pub logger: Option<logging::materialized::Logger>,
 }
 
@@ -63,6 +70,7 @@ impl CommandCoordinator {
             views: HashMap::new(),
             command_receiver,
             logger: None,
+            since_updates: Vec::new(),
         }
     }
 
@@ -144,6 +152,24 @@ impl CommandCoordinator {
         };
     }
 
+    /// Perform maintenance work associated with the coordinator.
+    ///
+    /// Primarily, this involves sequencing compaction commands, which should be issued whenever
+    /// available, but the sequencer is otherwise only provided in response to received commands.
+    ///
+    /// This API is a bit wonky, but at the moment the sequencer plays the role of both send and
+    /// receive, and so cannot be owned only by the coordinator.
+    pub fn maintenance(&mut self, sequencer: &mut Sequencer<(SequencedCommand, CommandMeta)>) {
+        // Take this opportunity to drain `since_update` commands.
+        sequencer.push((
+            SequencedCommand::AllowCompaction(std::mem::replace(
+                &mut self.since_updates,
+                Vec::new(),
+            )),
+            CommandMeta::nil(),
+        ));
+    }
+
     /// A policy for determining the timestamp for a peek.
     fn determine_timestamp(&mut self, source: &RelationExpr, when: PeekWhen) -> Timestamp {
         match when {
@@ -211,26 +237,36 @@ impl CommandCoordinator {
     /// Updates the upper frontier of a named view.
     pub fn update_upper(&mut self, name: &str, upper: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
-            // Log the change to frontiers.
-            if let Some(logger) = self.logger.as_mut() {
-                for time in entry.upper.elements().iter() {
-                    logger.log(MaterializedEvent::Frontier(
-                        name.to_string(),
-                        time.clone(),
-                        -1,
-                    ));
+            // We may be informed of non-changes; suppress them.
+            if entry.upper.elements() != upper {
+                // Log the change to frontiers.
+                if let Some(logger) = self.logger.as_mut() {
+                    for time in entry.upper.elements().iter() {
+                        logger.log(MaterializedEvent::Frontier(
+                            name.to_string(),
+                            time.clone(),
+                            -1,
+                        ));
+                    }
+                    for time in upper.iter() {
+                        logger.log(MaterializedEvent::Frontier(
+                            name.to_string(),
+                            time.clone(),
+                            1,
+                        ));
+                    }
                 }
-                for time in upper.iter() {
-                    logger.log(MaterializedEvent::Frontier(
-                        name.to_string(),
-                        time.clone(),
-                        1,
-                    ));
-                }
-            }
 
-            entry.upper.clear();
-            entry.upper.extend(upper.iter().cloned());
+                entry.upper.clear();
+                entry.upper.extend(upper.iter().cloned());
+
+                let mut since = Antichain::new();
+                for time in entry.upper.elements() {
+                    since.insert(time.saturating_sub(entry.compaction_latency_ms));
+                }
+                self.since_updates
+                    .push((name.to_string(), since.elements().to_vec()));
+            }
         }
     }
 
@@ -279,9 +315,9 @@ impl CommandCoordinator {
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    pub fn insert_source(&mut self, name: &str) {
+    pub fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
         self.remove_view(name);
-        let viewstate = ViewState::new_source();
+        let mut viewstate = ViewState::new_source();
         if let Some(logger) = self.logger.as_mut() {
             for time in viewstate.upper.elements() {
                 logger.log(MaterializedEvent::Frontier(
@@ -291,6 +327,7 @@ impl CommandCoordinator {
                 ));
             }
         }
+        viewstate.set_compaction_latency(compaction_ms);
         self.views.insert(name.to_string(), viewstate);
     }
 
@@ -323,6 +360,11 @@ pub struct ViewState {
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
     since: Antichain<Timestamp>,
+    /// Compaction delay.
+    ///
+    /// This timestamp drives the advancement of the since frontier as a
+    /// function of the upper frontier, trailing it by exactly this much.
+    compaction_latency_ms: Timestamp,
 }
 
 impl ViewState {
@@ -341,6 +383,7 @@ impl ViewState {
             uses,
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
+            compaction_latency_ms: 60_000,
         }
     }
 
@@ -350,6 +393,12 @@ impl ViewState {
             uses: None,
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
+            compaction_latency_ms: 60_000,
         }
+    }
+
+    /// Sets the latency behind the collection frontier at which compaction occurs.
+    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
+        self.compaction_latency_ms = latency_ms;
     }
 }

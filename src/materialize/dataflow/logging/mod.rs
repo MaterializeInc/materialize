@@ -212,14 +212,16 @@ where
     /// Publishes a batch of logged events and advances the capability.
     #[allow(clippy::clone_on_copy)]
     pub fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
-        let new_frontier = time.clone().as_nanos() as Timestamp;
-        let old_frontier = self.time.clone().as_nanos() as Timestamp;
+        let new_frontier = time.clone().as_millis() as Timestamp;
+        let old_frontier = self.time.clone().as_millis() as Timestamp;
         self.event_pusher.push(Event::Messages(
-            self.time.as_nanos() as Timestamp,
+            self.time.as_millis() as Timestamp,
             ::std::mem::replace(data, Vec::new()),
         ));
-        self.event_pusher
-            .push(Event::Progress(vec![(new_frontier, 1), (old_frontier, -1)]));
+        if old_frontier < new_frontier {
+            self.event_pusher
+                .push(Event::Progress(vec![(new_frontier, 1), (old_frontier, -1)]));
+        }
         self.time = time.clone();
     }
 }
@@ -229,7 +231,7 @@ where
 {
     fn drop(&mut self) {
         self.event_pusher.push(Event::Progress(vec![(
-            self.time.as_nanos() as Timestamp,
+            self.time.as_millis() as Timestamp,
             -1,
         )]));
     }
