@@ -108,18 +108,20 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     let mut column_names = Vec::new();
     let mut expected_rows = Vec::new();
     match (line2, line3) {
-        (Some((_, line2)), Some((_, line3))) => {
+        (Some((pos2, line2)), Some((pos3, line3))) => {
             if line3.len() >= 3 && line3.chars().all(|c| c == '-') {
-                column_names = split_line(&line2);
+                column_names = split_line(pos2, &line2)?;
             } else {
-                expected_rows.push(split_line(&line2));
-                expected_rows.push(split_line(&line3));
+                expected_rows.push(split_line(pos2, &line2)?);
+                expected_rows.push(split_line(pos3, &line3)?);
             }
         }
-        (Some((_, line2)), None) => expected_rows.push(split_line(&line2)),
+        (Some((pos2, line2)), None) => expected_rows.push(split_line(pos2, &line2)?),
         _ => (),
     }
-    expected_rows.extend(slurp_all(line_reader).iter().map(|s| split_line(s)));
+    while let Some((pos, line)) = slurp_one(line_reader) {
+        expected_rows.push(split_line(pos, &line)?)
+    }
     Ok(SqlCommand {
         query: line1[1..].trim().to_owned(),
         column_names,
@@ -145,8 +147,40 @@ fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, InputE
     })
 }
 
-fn split_line(line: &str) -> Vec<String> {
-    line.split_whitespace().map(ToOwned::to_owned).collect()
+fn split_line(pos: usize, line: &str) -> Result<Vec<String>, InputError> {
+    let mut out = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = None;
+    let mut escaping = true;
+    for (i, c) in line.char_indices() {
+        if in_quotes.is_none() && c.is_whitespace() {
+            if !field.is_empty() {
+                out.push(field);
+                field = String::new();
+            }
+        } else if c == '"' && !escaping {
+            if in_quotes.is_none() {
+                in_quotes = Some(i)
+            } else {
+                in_quotes = None;
+            }
+        } else if c == '\\' && !escaping && in_quotes.is_some() {
+            escaping = true;
+        } else {
+            field.push(c);
+            escaping = false;
+        }
+    }
+    if let Some(i) = in_quotes {
+        return Err(InputError {
+            msg: "unterminated quote".into(),
+            pos: pos + i,
+        });
+    }
+    if !field.is_empty() {
+        out.push(field);
+    }
+    Ok(out)
 }
 
 fn slurp_all(line_reader: &mut LineReader) -> Vec<String> {
