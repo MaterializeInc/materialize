@@ -58,6 +58,7 @@ url = "1.7.2"
 url_serde = "0.2.0"
 uuid = { version = "0.7.4", features = ["serde", "v4"] }
 jemallocator = "0.3.0"
+unicase = "2.4.0"
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

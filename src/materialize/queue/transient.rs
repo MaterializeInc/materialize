@@ -12,20 +12,21 @@ use crate::sql;
 
 pub fn serve(
     sql_command_receiver: UnboundedReceiver<(SqlCommand, CommandMeta)>,
-    sql_response_mux: SqlResponseMux,
+    sql_result_mux: SqlResultMux,
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
 ) {
     std::thread::spawn(move || {
         let mut planner = sql::Planner::default();
         for msg in sql_command_receiver.wait() {
-            let (sql_command, command_meta) = msg.unwrap();
+            let (mut cmd, command_meta) = msg.unwrap();
             let connection_uuid = command_meta.connection_uuid;
 
-            let (sql_response, dataflow_command) = match planner.handle_command(sql_command) {
-                Ok((sql_response, dataflow_command)) => (Ok(sql_response), dataflow_command),
-                Err(err) => (Err(err), None),
-            };
+            let (sql_result, dataflow_command) =
+                match planner.handle_command(&mut cmd.session, cmd.sql) {
+                    Ok((resp, cmd)) => (Ok(resp), cmd),
+                    Err(err) => (Err(err), None),
+                };
 
             if let Some(dataflow_command) = dataflow_command {
                 dataflow_command_sender
@@ -37,8 +38,11 @@ pub fn serve(
             }
 
             // the response sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-            if let Ok(sender) = sql_response_mux.read().unwrap().sender(&connection_uuid) {
-                drop(sender.unbounded_send(sql_response));
+            if let Ok(sender) = sql_result_mux.read().unwrap().sender(&connection_uuid) {
+                drop(sender.unbounded_send(SqlResult {
+                    result: sql_result,
+                    session: cmd.session,
+                }));
             }
         }
     });

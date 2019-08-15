@@ -3,6 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+// Ignore disparity between the sizes of the variants in the generated state
+// machine.
+#![allow(clippy::large_enum_variant)]
+
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::sink::Send as SinkSend;
 use futures::stream;
@@ -20,12 +24,13 @@ use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::repr::{Datum, RelationType};
+use crate::sql::Session;
 use ore::future::{Recv, StreamExt};
 
 pub struct Context {
     pub uuid: Uuid,
     pub sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
-    pub sql_response_receiver: UnboundedReceiver<Result<SqlResponse, failure::Error>>,
+    pub sql_result_receiver: UnboundedReceiver<SqlResult>,
     pub dataflow_results_receiver: UnboundedReceiver<DataflowResults>,
     pub num_timely_workers: usize,
 }
@@ -101,19 +106,22 @@ impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Se
 #[state_machine_future(context = "Context")]
 pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
-    Start { stream: A },
+    Start { stream: A, session: Session },
 
     #[state_machine_future(transitions(SendAuthenticationOk, SendError, Error))]
-    RecvStartup { recv: Recv<A> },
+    RecvStartup { recv: Recv<A>, session: Session },
 
     #[state_machine_future(transitions(SendReadyForQuery, SendError, Error))]
-    SendAuthenticationOk { send: SinkSend<A> },
+    SendAuthenticationOk {
+        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
+        session: Session,
+    },
 
     #[state_machine_future(transitions(RecvQuery, SendError, Error))]
-    SendReadyForQuery { send: SinkSend<A> },
+    SendReadyForQuery { send: SinkSend<A>, session: Session },
 
     #[state_machine_future(transitions(HandleQuery, SendError, Error, Done))]
-    RecvQuery { recv: Recv<A> },
+    RecvQuery { recv: Recv<A>, session: Session },
 
     #[state_machine_future(transitions(
         SendCommandComplete,
@@ -126,6 +134,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
     SendRowDescription {
         send: SinkSend<A>,
+        session: Session,
         row_type: RelationType,
         /// To be sent immediately
         rows: Option<Vec<Vec<Datum>>>,
@@ -134,6 +143,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
     WaitForRows {
         conn: A,
+        session: Session,
         row_type: RelationType,
         peek_results: Vec<Vec<Datum>>,
         remaining_results: usize,
@@ -142,10 +152,15 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(SendReadyForQuery, Error))]
     SendCommandComplete {
         send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
+        session: Session,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, Done, Error))]
-    SendError { send: SinkSend<A>, fatal: bool },
+    SendError {
+        send: SinkSend<A>,
+        session: Session,
+        fatal: bool,
+    },
 
     #[state_machine_future(ready)]
     Done(()),
@@ -162,6 +177,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let state = state.take();
         transition!(RecvStartup {
             recv: state.stream.recv(),
+            session: state.session,
         })
     }
 
@@ -170,6 +186,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvStartup<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
+        let state = state.take();
         let version = match msg {
             FrontendMessage::Startup { version } => version,
             _ => transition!(SendError {
@@ -179,6 +196,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     message: "invalid frontend message flow".into(),
                     detail: None,
                 }),
+                session: state.session,
                 fatal: true,
             }),
         };
@@ -191,12 +209,28 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     message: "server does not support SSL".into(),
                     detail: None,
                 }),
+                session: state.session,
                 fatal: true,
             })
         }
 
+        let messages: Vec<_> = iter::once(BackendMessage::AuthenticationOk)
+            .chain(
+                state
+                    .session
+                    .startup_vars()
+                    .iter()
+                    .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
+            )
+            .collect();
+
         transition!(SendAuthenticationOk {
-            send: conn.send(BackendMessage::AuthenticationOk)
+            send: Box::new(
+                stream::iter_ok(messages)
+                    .forward(conn)
+                    .map(|(_, conn)| conn)
+            ),
+            session: state.session,
         })
     }
 
@@ -205,8 +239,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendAuthenticationOk<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
+        let state = state.take();
         transition!(SendReadyForQuery {
             send: conn.send(BackendMessage::ReadyForQuery),
+            session: state.session,
         })
     }
 
@@ -215,7 +251,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendReadyForQuery<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
-        transition!(RecvQuery { recv: conn.recv() })
+        let state = state.take();
+        transition!(RecvQuery {
+            recv: conn.recv(),
+            session: state.session
+        })
     }
 
     fn poll_recv_query<'s, 'c>(
@@ -223,16 +263,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
+        let state = state.take();
         match msg {
             FrontendMessage::Query { query } => {
                 let sql = String::from(String::from_utf8_lossy(&query));
                 context.sql_command_sender.unbounded_send((
-                    sql,
+                    SqlCommand {
+                        sql,
+                        session: state.session,
+                    },
                     CommandMeta {
                         connection_uuid: context.uuid,
                     },
                 ))?;
-                transition!(HandleQuery { conn: conn })
+                transition!(HandleQuery { conn })
             }
             FrontendMessage::Terminate => transition!(Done(())),
             _ => transition!(SendError {
@@ -242,6 +286,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     message: "invalid frontend message flow".into(),
                     detail: None,
                 }),
+                session: state.session,
                 fatal: true,
             }),
         };
@@ -251,9 +296,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, HandleQuery<A>>,
         context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleQuery<A>, failure::Error> {
-        match context.sql_response_receiver.poll() {
+        match context.sql_result_receiver.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(Some(Ok(response)))) => {
+            Ok(Async::Ready(Some(SqlResult {
+                result: Ok(response),
+                session,
+            }))) => {
                 let state = state.take();
 
                 macro_rules! command_complete {
@@ -262,6 +310,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             send: Box::new(state.conn.send(BackendMessage::CommandComplete {
                                 tag: std::fmt::format(format_args!($($arg)*))
                             })),
+                            session,
                         })
                     };
                 }
@@ -274,11 +323,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     SqlResponse::DroppedView => command_complete!("DROP VIEW"),
                     SqlResponse::EmptyQuery => transition!(SendCommandComplete {
                         send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
+                        session,
                     }),
                     SqlResponse::Peeking { typ } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
                         )),
+                        session,
                         row_type: typ,
                         rows: None,
                     }),
@@ -286,12 +337,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
                         )),
+                        session,
                         row_type: typ,
                         rows: Some(rows),
                     }),
+                    SqlResponse::SetVariable => command_complete!("SET"),
                 }
             }
-            Ok(Async::Ready(Some(Err(err)))) => {
+            Ok(Async::Ready(Some(SqlResult {
+                result: Err(err),
+                session,
+            }))) => {
                 let state = state.take();
                 transition!(SendError {
                     send: state.conn.send(BackendMessage::ErrorResponse {
@@ -300,6 +356,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         message: err.to_string(),
                         detail: None,
                     }),
+                    session,
                     fatal: false,
                 });
             }
@@ -317,10 +374,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let state = state.take();
         let row_type = state.row_type;
         if let Some(rows) = state.rows {
-            transition!(send_rows(conn, rows, row_type))
+            transition!(send_rows(conn, state.session, rows, row_type))
         } else {
             transition!(WaitForRows {
                 conn,
+                session: state.session,
                 row_type,
                 peek_results: vec![],
                 remaining_results: context.num_timely_workers,
@@ -342,7 +400,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     let mut peek_results = state.peek_results;
                     peek_results.sort();
                     let row_type = state.row_type;
-                    transition!(send_rows(state.conn, peek_results, row_type))
+                    transition!(send_rows(state.conn, state.session, peek_results, row_type))
                 } else {
                     transition!(state)
                 }
@@ -358,8 +416,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
+        let state = state.take();
         transition!(SendReadyForQuery {
             send: conn.send(BackendMessage::ReadyForQuery),
+            session: state.session,
         })
     }
 
@@ -368,17 +428,24 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendError<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
+        let state = state.take();
         if state.fatal {
             transition!(Done(()))
         } else {
             transition!(SendReadyForQuery {
                 send: conn.send(BackendMessage::ReadyForQuery),
+                session: state.session,
             })
         }
     }
 }
 
-fn send_rows<A, R>(conn: A, rows: R, row_type: RelationType) -> SendCommandComplete<A>
+fn send_rows<A, R>(
+    conn: A,
+    session: Session,
+    rows: R,
+    row_type: RelationType,
+) -> SendCommandComplete<A>
 where
     A: Conn + 'static,
     R: IntoIterator<Item = Vec<Datum>>,
@@ -392,5 +459,6 @@ where
         }));
     SendCommandComplete {
         send: Box::new(stream::iter_ok(rows).forward(conn).map(|(_, conn)| conn)),
+        session,
     }
 }

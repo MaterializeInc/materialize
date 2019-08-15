@@ -33,14 +33,14 @@ pub use protocol::match_handshake;
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
     sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
-    sql_response_mux: SqlResponseMux,
+    sql_result_mux: SqlResultMux,
     dataflow_results_mux: DataflowResultsMux,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let uuid = Uuid::new_v4();
     let stream = Framed::new(a, codec::Codec::new());
-    let sql_response_receiver = {
-        let mut mux = sql_response_mux.write().unwrap();
+    let sql_result_receiver = {
+        let mut mux = sql_result_mux.write().unwrap();
         mux.channel(uuid).unwrap();
         mux.receiver(&uuid).unwrap()
     };
@@ -51,10 +51,11 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     };
     protocol::StateMachine::start(
         stream,
+        crate::sql::Session::default(),
         protocol::Context {
             uuid,
             sql_command_sender,
-            sql_response_receiver,
+            sql_result_receiver,
             dataflow_results_receiver,
             num_timely_workers,
         },
