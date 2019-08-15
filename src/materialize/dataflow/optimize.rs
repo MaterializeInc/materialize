@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::repr::*;
+use repr::*;
 
 use super::types::*;
 
@@ -112,7 +112,7 @@ impl ScalarExpr {
     /// ```rust
     /// use materialize::dataflow::ScalarExpr;
     /// use materialize::dataflow::func::BinaryFunc;
-    /// use materialize::repr::Datum;
+    /// use repr::Datum;
     ///
     /// let expr_0 = ScalarExpr::Column(0);
     /// let expr_t = ScalarExpr::Literal(Datum::True);

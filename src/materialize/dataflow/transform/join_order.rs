@@ -4,14 +4,14 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::dataflow::RelationExpr;
-use crate::repr::RelationType;
+use repr::RelationType;
 
 /// Re-order relations in a join to process them in an order that makes sense.
 ///
 /// ```rust
 /// use materialize::dataflow::RelationExpr;
-/// use materialize::repr::{ColumnType, RelationType, ScalarType};
 /// use materialize::dataflow::transform::join_order::JoinOrder;
+/// use repr::{ColumnType, RelationType, ScalarType};
 ///
 /// let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
 ///     ColumnType::new(ScalarType::Bool),

@@ -29,11 +29,11 @@ use crate::dataflow::{
 };
 use crate::glue::*;
 use crate::interchange::avro;
-use crate::repr::decimal::MAX_DECIMAL_PRECISION;
-use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use ore::option::OptionExt;
+use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 use store::{DataflowStore, RemoveMode};
 
 pub use session::Session;
@@ -341,41 +341,37 @@ impl Planner {
     }
 }
 
-impl ScalarType {
-    pub fn from_sql(data_type: &DataType) -> Result<Self, failure::Error> {
-        // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
-        Ok(match data_type {
-            DataType::Boolean => ScalarType::Bool,
-            DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
-            DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-            DataType::Custom(name) if name.to_string().to_lowercase() == "string" => {
-                ScalarType::String
+pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
+    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
+    Ok(match data_type {
+        DataType::Boolean => ScalarType::Bool,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
+        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
+        DataType::SmallInt => ScalarType::Int32,
+        DataType::Int | DataType::BigInt => ScalarType::Int64,
+        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+        DataType::Decimal(precision, scale) => {
+            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
+            let scale = scale.unwrap_or(0);
+            if precision > MAX_DECIMAL_PRECISION.into() {
+                bail!(
+                    "decimal precision {} exceeds maximum precision {}",
+                    precision,
+                    MAX_DECIMAL_PRECISION
+                );
             }
-            DataType::SmallInt => ScalarType::Int32,
-            DataType::Int | DataType::BigInt => ScalarType::Int64,
-            DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
-            DataType::Decimal(precision, scale) => {
-                let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
-                let scale = scale.unwrap_or(0);
-                if precision > MAX_DECIMAL_PRECISION.into() {
-                    bail!(
-                        "decimal precision {} exceeds maximum precision {}",
-                        precision,
-                        MAX_DECIMAL_PRECISION
-                    );
-                }
-                if scale > precision {
-                    bail!("decimal scale {} exceeds precision {}", scale, precision);
-                }
-                ScalarType::Decimal(precision as u8, scale as u8)
+            if scale > precision {
+                bail!("decimal scale {} exceeds precision {}", scale, precision);
             }
-            DataType::Date => ScalarType::Date,
-            DataType::Timestamp => ScalarType::Timestamp,
-            DataType::Time => ScalarType::Time,
-            DataType::Bytea => ScalarType::Bytes,
-            other => bail!("Unexpected SQL type: {:?}", other),
-        })
-    }
+            ScalarType::Decimal(precision as u8, scale as u8)
+        }
+        DataType::Date => ScalarType::Date,
+        DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Time => ScalarType::Time,
+        DataType::Bytea => ScalarType::Bytes,
+        other => bail!("Unexpected SQL type: {:?}", other),
+    })
 }
 
 fn build_source(
@@ -1185,7 +1181,7 @@ impl Planner {
         expr: &'a Expr,
         data_type: &'a DataType,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let to_scalar_type = ScalarType::from_sql(data_type)?;
+        let to_scalar_type = scalar_type_from_sql(data_type)?;
         let (expr, from_type) = self.plan_expr(ctx, expr)?;
         plan_cast_internal("CAST", expr, &from_type, to_scalar_type)
     }

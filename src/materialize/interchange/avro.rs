@@ -12,9 +12,9 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use url::Url;
 
-use crate::repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
-use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
 use ore::collections::CollectionExt;
+use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 /// Converts an Apache Avro schema into a [`repr::RelationType`].
 pub fn validate_schema(schema: &str) -> Result<RelationType, Error> {
@@ -439,7 +439,7 @@ mod tests {
     use serde::Deserialize;
     use std::fs::File;
 
-    use crate::repr::RelationType;
+    use repr::RelationType;
 
     #[derive(Deserialize)]
     struct TestCase {

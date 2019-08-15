@@ -4,8 +4,8 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::dataflow::types::{RelationExpr, ScalarExpr};
-use crate::repr::Datum;
-use crate::repr::RelationType;
+use repr::Datum;
+use repr::RelationType;
 
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
@@ -60,7 +60,7 @@ pub mod demorgans {
 
     use crate::dataflow::func::{BinaryFunc, UnaryFunc};
     use crate::dataflow::types::{RelationExpr, ScalarExpr};
-    use crate::repr::{Datum, RelationType};
+    use repr::{Datum, RelationType};
 
     pub struct DeMorgans;
     impl crate::dataflow::transform::Transform for DeMorgans {
@@ -151,7 +151,7 @@ pub mod undistribute_and {
 
     use crate::dataflow::func::BinaryFunc;
     use crate::dataflow::types::{RelationExpr, ScalarExpr};
-    use crate::repr::{Datum, RelationType};
+    use repr::{Datum, RelationType};
 
     pub struct UndistributeAnd;
 

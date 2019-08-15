@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use super::RelationExpr;
-use crate::repr::RelationType;
+use repr::RelationType;
 
 pub mod aggregation;
 pub mod empty_map;

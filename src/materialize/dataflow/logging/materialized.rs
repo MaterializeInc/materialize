@@ -6,7 +6,7 @@
 use super::{LogVariant, MaterializedLog};
 use crate::dataflow::arrangement::KeysOnlyHandle;
 use crate::dataflow::types::Timestamp;
-use crate::repr::Datum;
+use repr::Datum;
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;

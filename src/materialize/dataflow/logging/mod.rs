@@ -11,7 +11,7 @@ use crate::dataflow::types::Timestamp;
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
 use std::time::Duration;
 
-use crate::repr::{ColumnType, RelationType, ScalarType};
+use repr::{ColumnType, RelationType, ScalarType};
 
 /// Logging configuration.
 #[derive(Debug, Clone)]

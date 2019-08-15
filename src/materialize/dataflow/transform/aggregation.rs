@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::dataflow::types::RelationExpr;
-use crate::repr::RelationType;
+use repr::RelationType;
 
 pub struct FractureReduce;
 
@@ -109,7 +109,7 @@ impl AbelianReduce {
 mod tests {
     use crate::dataflow::func::AggregateFunc;
     use crate::dataflow::types::{RelationExpr, ScalarExpr};
-    use crate::repr::{ColumnType, RelationType, ScalarType};
+    use repr::{ColumnType, RelationType, ScalarType};
 
     #[test]
     fn transform() {

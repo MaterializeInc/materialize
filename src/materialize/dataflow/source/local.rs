@@ -9,7 +9,7 @@ use super::util::source;
 use super::SharedCapability;
 use crate::dataflow::types::{Diff, LocalSourceConnector, Timestamp};
 use crate::glue::{LocalInput, LocalInputMux};
-use crate::repr::Datum;
+use repr::Datum;
 
 pub fn local<G>(
     scope: &G,

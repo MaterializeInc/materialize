@@ -8,7 +8,7 @@
 //! ```rust
 //! use materialize::dataflow::{RelationExpr, ScalarExpr};
 //! use materialize::dataflow::transform::fusion::filter::Filter;
-//! use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
 //! let input = RelationExpr::constant(vec![], RelationType::new(vec![
 //!     ColumnType::new(ScalarType::Bool),
@@ -37,7 +37,7 @@
 //! ```
 
 use crate::dataflow::RelationExpr;
-use crate::repr::RelationType;
+use repr::RelationType;
 
 pub struct Filter;
 

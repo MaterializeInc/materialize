@@ -5,7 +5,7 @@
 
 use crate::dataflow::func::BinaryFunc;
 use crate::dataflow::{RelationExpr, ScalarExpr};
-use crate::repr::RelationType;
+use repr::RelationType;
 
 pub struct SplitPredicates;
 

@@ -7,8 +7,8 @@
 //! Materialize together.
 
 use crate::dataflow::{Dataflow, RelationExpr, Timestamp};
-use crate::repr::{Datum, RelationType};
 use failure::{ensure, format_err};
+use repr::{Datum, RelationType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;

@@ -11,7 +11,7 @@ use std::iter::FromIterator;
 use crate::dataflow::SourceConnector;
 
 use crate::dataflow::{Dataflow, LocalSourceConnector, Source};
-use crate::repr::RelationType;
+use repr::RelationType;
 
 #[derive(Debug)]
 pub struct DataflowStore {

@@ -23,9 +23,9 @@ use crate::glue::*;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
-use crate::repr::{Datum, RelationType};
 use crate::sql::Session;
 use ore::future::{Recv, StreamExt};
+use repr::{Datum, RelationType};
 
 pub struct Context {
     pub uuid: Uuid,
