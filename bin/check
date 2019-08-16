@@ -25,7 +25,7 @@ run() {
 disabled_lints=(
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#block_in_if_condition_stmt
     #
-    # clippy::block-in-if-condition-stmt prohibits complicated blocks in `if`
+    # clippy::block_in_if_condition_stmt prohibits complicated blocks in `if`
     # statements, like:
     #
     #     if { let difficult_answer = big_computation(); difficult_answer == 42 } { .. }
@@ -36,7 +36,7 @@ disabled_lints=(
     #    assert!(vec.iter().all(|item| {
     #        // ...
     #    }))
-    clippy::block-in-if-condition-stmt
+    clippy::block_in_if_condition_stmt
 
     # This lint is broken in Rust 1.35.
     # See: https://github.com/rust-lang/rust-clippy/issues/4133
