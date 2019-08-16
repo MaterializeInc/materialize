@@ -38,6 +38,14 @@ disabled_lints=(
     #    }))
     clippy::block_in_if_condition_stmt
 
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#large_enum_variant
+    #
+    # clippy::large_enum_variant complains when enum variants have divergent
+    # sizes, as the size of an enum is determined by the size of its largest
+    # element. Obeying this lint is nearly always a premature optimization,
+    # and the suggested solution—boxing the large variant—might actually result
+    # in slower code due to the allocation.
+    clippy::large_enum_variant
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#let_and_return
     #

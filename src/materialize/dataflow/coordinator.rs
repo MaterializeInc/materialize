@@ -29,7 +29,6 @@ use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
 
 /// Explicit instructions for timely dataflow workers.
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.

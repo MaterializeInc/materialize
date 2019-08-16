@@ -60,7 +60,6 @@ pub enum SqlResponse {
 pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Error>>>>;
 
 /// The commands that a running dataflow server can accept.
-#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {
     CreateDataflows(Vec<Dataflow>),
