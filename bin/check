@@ -25,7 +25,7 @@ run() {
 disabled_lints=(
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#block_in_if_condition_stmt
     #
-    # clippy::block-in-if-condition-stmt prohibits complicated blocks in `if`
+    # clippy::block_in_if_condition_stmt prohibits complicated blocks in `if`
     # statements, like:
     #
     #     if { let difficult_answer = big_computation(); difficult_answer == 42 } { .. }
@@ -36,13 +36,16 @@ disabled_lints=(
     #    assert!(vec.iter().all(|item| {
     #        // ...
     #    }))
-    clippy::block-in-if-condition-stmt
+    clippy::block_in_if_condition_stmt
 
-    # This lint is broken in Rust 1.35.
-    # See: https://github.com/rust-lang/rust-clippy/issues/4133
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#large_enum_variant
     #
-    # TODO(benesch): remove when we upgrade to Rust 1.36.
-    clippy::identity_conversion
+    # clippy::large_enum_variant complains when enum variants have divergent
+    # sizes, as the size of an enum is determined by the size of its largest
+    # element. Obeying this lint is nearly always a premature optimization,
+    # and the suggested solution—boxing the large variant—might actually result
+    # in slower code due to the allocation.
+    clippy::large_enum_variant
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#let_and_return
     #
