@@ -8,9 +8,10 @@
 use failure::{bail, ensure, format_err};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
-    BinaryOperator, DataType, Expr, Function, JoinConstraint, JoinOperator, ObjectName, ObjectType,
-    Query, Select, SelectItem, SetExpr, SetOperator, SourceSchema, Statement, TableAlias,
-    TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+    BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
+    ObjectType, Query, Select, SelectItem, SetExpr, SetOperator, SetVariableValue,
+    ShowStatementFilter, SourceSchema, Statement, TableAlias, TableFactor, TableWithJoins,
+    UnaryOperator, Value, Values,
 };
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
@@ -35,6 +36,9 @@ use ore::iter::{FallibleIteratorExt, IteratorExt};
 use ore::option::OptionExt;
 use store::{DataflowStore, RemoveMode};
 
+pub use session::Session;
+
+mod session;
 pub mod store;
 
 /// Converts raw SQL queries into dataflow commands.
@@ -81,16 +85,16 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 impl Planner {
     /// Parses and plans a raw SQL query. See the documentation for
     /// [`PlannerResult`] for details about the meaning of the return type.
-    pub fn handle_command(&mut self, sql: String) -> PlannerResult {
+    pub fn handle_command(&mut self, session: &mut Session, sql: String) -> PlannerResult {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
         match stmts.len() {
             0 => Ok((SqlResponse::EmptyQuery, None)),
-            1 => self.handle_statement(stmts.into_element()),
+            1 => self.handle_statement(session, stmts.into_element()),
             _ => bail!("expected one statement, but got {}", stmts.len()),
         }
     }
 
-    fn handle_statement(&mut self, stmt: Statement) -> PlannerResult {
+    fn handle_statement(&mut self, session: &mut Session, stmt: Statement) -> PlannerResult {
         match stmt {
             Statement::Peek { name, immediate } => self.handle_peek(name, immediate),
             Statement::Tail { .. } => bail!("TAIL is not implemented yet"),
@@ -100,10 +104,77 @@ impl Planner {
             | Statement::CreateSources { .. } => self.handle_create_dataflow(stmt),
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
             Statement::Query(query) => self.handle_select(*query),
-            Statement::Show { object_type: ot } => self.handle_show_objects(ot),
-            Statement::ShowColumns { table_name } => self.handle_show_columns(&table_name),
+            Statement::SetVariable {
+                local,
+                variable,
+                value,
+            } => self.handle_set_variable(session, local, variable, value),
+            Statement::ShowVariable { variable } => self.handle_show_variable(session, variable),
+            Statement::ShowObjects { object_type: ot } => self.handle_show_objects(ot),
+            Statement::ShowColumns {
+                extended,
+                full,
+                table_name,
+                filter,
+            } => self.handle_show_columns(extended, full, &table_name, filter.as_ref()),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
+        }
+    }
+
+    fn handle_set_variable(
+        &mut self,
+        session: &mut Session,
+        local: bool,
+        variable: Ident,
+        value: SetVariableValue,
+    ) -> PlannerResult {
+        if local {
+            bail!("SET LOCAL ... is not supported");
+        }
+        session.set(
+            &variable,
+            &match value {
+                SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
+                SetVariableValue::Literal(lit) => lit.to_string(),
+                SetVariableValue::Ident(ident) => ident,
+            },
+        )?;
+        Ok((SqlResponse::SetVariable, None))
+    }
+
+    fn handle_show_variable(&mut self, session: &Session, variable: Ident) -> PlannerResult {
+        if variable == unicase::Ascii::new("ALL") {
+            Ok((
+                SqlResponse::SendRows {
+                    typ: RelationType {
+                        column_types: vec![
+                            ColumnType::new(ScalarType::String).name("name"),
+                            ColumnType::new(ScalarType::String).name("setting"),
+                            ColumnType::new(ScalarType::String).name("description"),
+                        ],
+                    },
+                    rows: session
+                        .vars()
+                        .iter()
+                        .map(|v| vec![v.name().into(), v.value().into(), v.description().into()])
+                        .collect(),
+                },
+                None,
+            ))
+        } else {
+            let variable = session.get(&variable)?;
+            Ok((
+                SqlResponse::SendRows {
+                    typ: RelationType {
+                        column_types: vec![
+                            ColumnType::new(ScalarType::String).name(variable.name())
+                        ],
+                    },
+                    rows: vec![vec![variable.value().into()]],
+                },
+                None,
+            ))
         }
     }
 
@@ -127,8 +198,22 @@ impl Planner {
     }
 
     /// Create an immediate result that describes all the columns for the given table
-    pub fn handle_show_columns(&mut self, table_name: &ObjectName) -> PlannerResult {
-        use Datum::String as DString;
+    pub fn handle_show_columns(
+        &mut self,
+        extended: bool,
+        full: bool,
+        table_name: &ObjectName,
+        filter: Option<&ShowStatementFilter>,
+    ) -> PlannerResult {
+        if extended {
+            bail!("SHOW EXTENDED COLUMNS is not supported");
+        }
+        if full {
+            bail!("SHOW FULL COLUMNS is not supported");
+        }
+        if filter.is_some() {
+            bail!("SHOW COLUMNS ... { LIKE | WHERE } is not supported");
+        }
 
         let column_descriptions: Vec<_> = self
             .dataflows
@@ -137,9 +222,9 @@ impl Planner {
             .iter()
             .map(|colty| {
                 vec![
-                    DString(colty.name.as_ref().map(|n| &**n).unwrap_or("?").to_string()),
-                    DString(if colty.nullable { "YES" } else { "NO" }.to_string()),
-                    DString(colty.scalar_type.to_string()),
+                    colty.name.as_deref().unwrap_or("?").into(),
+                    if colty.nullable { "YES" } else { "NO" }.into(),
+                    colty.scalar_type.to_string().into(),
                 ]
             })
             .collect();

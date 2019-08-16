@@ -26,7 +26,7 @@ use materialize::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnec
 use materialize::glue::*;
 use materialize::repr::{ColumnType, Datum};
 use materialize::sql::store::RemoveMode;
-use materialize::sql::Planner;
+use materialize::sql::{Planner, Session};
 use ore::collections::CollectionExt;
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
@@ -611,6 +611,7 @@ const NUM_TIMELY_WORKERS: usize = 3;
 struct FullState {
     postgres: Postgres,
     planner: Planner,
+    session: Session,
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
     // this is only here to avoid dropping it too early
@@ -681,6 +682,7 @@ impl FullState {
     fn start() -> Result<Self, failure::Error> {
         let postgres = Postgres::open_and_erase()?;
         let planner = Planner::default();
+        let session = Session::default();
         let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
         let local_input_mux = LocalInputMux::default();
         let dataflow_results_mux = DataflowResultsMux::default();
@@ -697,6 +699,7 @@ impl FullState {
         Ok(FullState {
             postgres,
             planner,
+            session,
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
             current_timestamp: 1,
@@ -904,11 +907,13 @@ impl RecordRunner for FullState {
                     | Statement::CreateSource { .. }
                     | Statement::CreateSink { .. }
                     | Statement::Drop { .. } => {
-                        let (_response, dataflow_command) =
-                            match self.planner.handle_command(sql.to_owned()) {
-                                Ok((response, dataflow_command)) => (response, dataflow_command),
-                                Err(error) => return Ok(Outcome::PlanFailure { error }),
-                            };
+                        let (_response, dataflow_command) = match self
+                            .planner
+                            .handle_command(&mut self.session, sql.to_owned())
+                        {
+                            Ok((response, dataflow_command)) => (response, dataflow_command),
+                            Err(error) => return Ok(Outcome::PlanFailure { error }),
+                        };
                         // make sure we peek at the correct time
                         let dataflow_command = match dataflow_command {
                             Some(DataflowCommand::Peek { source, .. }) => {
@@ -952,38 +957,40 @@ impl RecordRunner for FullState {
                     }
                 }
 
-                let (typ, dataflow_command, immediate_rows) =
-                    match self.planner.handle_command(sql.to_string()) {
-                        Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
-                            (typ, dataflow_command, None)
-                        }
-                        // impossible for there to be a dataflow command
-                        Ok((SqlResponse::SendRows { typ, rows }, None)) => (typ, None, Some(rows)),
-                        Ok(other) => {
-                            return Ok(Outcome::PlanFailure {
-                                error: failure::format_err!(
-                                    "Query did not result in Peeking, instead got {:?}",
-                                    other
-                                ),
-                            });
-                        }
-                        Err(error) => {
-                            // TODO(jamii) check error messages, once ours stabilize
-                            if output.is_err() {
-                                return Ok(Outcome::Success);
+                let (typ, dataflow_command, immediate_rows) = match self
+                    .planner
+                    .handle_command(&mut self.session, sql.to_string())
+                {
+                    Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
+                        (typ, dataflow_command, None)
+                    }
+                    // impossible for there to be a dataflow command
+                    Ok((SqlResponse::SendRows { typ, rows }, None)) => (typ, None, Some(rows)),
+                    Ok(other) => {
+                        return Ok(Outcome::PlanFailure {
+                            error: failure::format_err!(
+                                "Query did not result in Peeking, instead got {:?}",
+                                other
+                            ),
+                        });
+                    }
+                    Err(error) => {
+                        // TODO(jamii) check error messages, once ours stabilize
+                        if output.is_err() {
+                            return Ok(Outcome::Success);
+                        } else {
+                            let error_string = format!("{}", error);
+                            if error_string.contains("supported")
+                                || error_string.contains("overload")
+                            {
+                                // this is a failure, but it's caused by lack of support rather than by bugs
+                                return Ok(Outcome::Unsupported { error });
                             } else {
-                                let error_string = format!("{}", error);
-                                if error_string.contains("supported")
-                                    || error_string.contains("overload")
-                                {
-                                    // this is a failure, but it's caused by lack of support rather than by bugs
-                                    return Ok(Outcome::Unsupported { error });
-                                } else {
-                                    return Ok(Outcome::PlanFailure { error });
-                                }
+                                return Ok(Outcome::PlanFailure { error });
                             }
                         }
-                    };
+                    }
+                };
 
                 match output {
                     Err(expected_error) => Ok(Outcome::UnexpectedPlanSuccess { expected_error }),
@@ -1274,7 +1281,10 @@ pub fn run_stdin(verbosity: usize, only_parse: bool) -> Outcomes {
 pub fn fuzz(sqls: &str) {
     let mut state = FullState::start().unwrap();
     for sql in sqls.split(';') {
-        if let Ok((sql_response, dataflow_command)) = state.planner.handle_command(sql.to_owned()) {
+        if let Ok((sql_response, dataflow_command)) = state
+            .planner
+            .handle_command(&mut state.session, sql.to_owned())
+        {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);
                 if let SqlResponse::Peeking { typ } = sql_response {

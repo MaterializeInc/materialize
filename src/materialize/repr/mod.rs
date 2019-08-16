@@ -233,6 +233,12 @@ impl From<String> for Datum {
     }
 }
 
+impl From<&str> for Datum {
+    fn from(s: &str) -> Datum {
+        Datum::String(s.to_owned())
+    }
+}
+
 impl From<::regex::Regex> for Datum {
     fn from(r: ::regex::Regex) -> Datum {
         Datum::Regex(Regex(r))

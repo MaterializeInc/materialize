@@ -55,6 +55,7 @@ pub enum BackendMessage {
     ReadyForQuery,
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<FieldValue>>),
+    ParameterStatus(&'static str, String),
     ErrorResponse {
         severity: Severity,
         code: &'static str,

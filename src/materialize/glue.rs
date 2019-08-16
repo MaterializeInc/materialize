@@ -37,10 +37,19 @@ impl CommandMeta {
 }
 
 /// Incoming raw SQL from users.
-pub type SqlCommand = String;
+pub struct SqlCommand {
+    pub sql: String,
+    pub session: crate::sql::Session,
+}
 
-/// Responses from the planner to SQL commands.
+/// Responses from the queue to SQL commands.
+pub struct SqlResult {
+    pub result: Result<SqlResponse, failure::Error>,
+    pub session: crate::sql::Session,
+}
+
 #[derive(Debug)]
+/// Responses from the planner to SQL commands.
 pub enum SqlResponse {
     CreatedSink,
     CreatedSource,
@@ -55,9 +64,10 @@ pub enum SqlResponse {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
     },
+    SetVariable,
 }
 
-pub type SqlResponseMux = Arc<RwLock<Mux<Uuid, Result<SqlResponse, failure::Error>>>>;
+pub type SqlResultMux = Arc<RwLock<Mux<Uuid, SqlResult>>>;
 
 /// The commands that a running dataflow server can accept.
 #[allow(clippy::large_enum_variant)]

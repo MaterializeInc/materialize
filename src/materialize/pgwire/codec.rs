@@ -65,6 +65,7 @@ impl Encoder for Codec {
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
+            BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::ErrorResponse { .. } => b'E',
         });
 
@@ -117,6 +118,10 @@ impl Encoder for Codec {
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
                 buf.put(b'I'); // transaction indicator
+            }
+            BackendMessage::ParameterStatus(name, value) => {
+                buf.put_string(name);
+                buf.put_string(value);
             }
             BackendMessage::ErrorResponse {
                 severity,

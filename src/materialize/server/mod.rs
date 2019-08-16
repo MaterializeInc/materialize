@@ -90,7 +90,7 @@ impl Default for Config {
 fn handle_connection(
     tcp_stream: TcpStream,
     sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
-    sql_response_mux: SqlResponseMux,
+    sql_result_mux: SqlResultMux,
     dataflow_results_mux: DataflowResultsMux,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
@@ -109,7 +109,7 @@ fn handle_connection(
                 pgwire::serve(
                     ss.into_sniffed(),
                     sql_command_sender,
-                    sql_response_mux,
+                    sql_result_mux,
                     dataflow_results_mux,
                     num_timely_workers,
                 )
@@ -132,7 +132,7 @@ pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
     let (sql_command_sender, sql_command_receiver) =
         crate::glue::unbounded::<(SqlCommand, CommandMeta)>();
-    let sql_response_mux = SqlResponseMux::default();
+    let sql_result_mux = SqlResultMux::default();
     let (dataflow_command_sender, dataflow_command_receiver) =
         crate::glue::unbounded::<(DataflowCommand, CommandMeta)>();
     let dataflow_results_mux = DataflowResultsMux::default();
@@ -177,7 +177,7 @@ pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
             let worker0_thread = dd_workers.guards().into_first().thread();
             queue::transient::serve(
                 sql_command_receiver,
-                sql_response_mux.clone(),
+                sql_result_mux.clone(),
                 dataflow_command_sender,
                 worker0_thread.clone(),
             );
@@ -205,7 +205,7 @@ pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
                     tokio::spawn(handle_connection(
                         stream,
                         sql_command_sender.clone(),
-                        sql_response_mux.clone(),
+                        sql_result_mux.clone(),
                         dataflow_results_mux.clone(),
                         num_timely_workers,
                     ));
