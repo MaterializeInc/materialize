@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::dataflow::types::RelationExpr;
-use crate::repr::RelationType;
+use repr::RelationType;
 
 pub struct EmptyMap;
 

@@ -15,7 +15,7 @@
 //! [pg_type.dat file]:
 //! https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
 
-use crate::repr::ScalarType;
+use repr::ScalarType;
 
 /// PostgreSQL type metadata.
 pub struct PgType {

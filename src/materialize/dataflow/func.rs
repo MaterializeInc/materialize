@@ -9,9 +9,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
-use crate::repr::decimal::Significand;
-use crate::repr::Datum;
-use crate::repr::ScalarType;
+use repr::decimal::Significand;
+use repr::Datum;
+use repr::ScalarType;
 
 pub fn and(a: Datum, b: Datum) -> Datum {
     match (&a, &b) {

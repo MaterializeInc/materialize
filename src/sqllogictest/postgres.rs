@@ -15,8 +15,9 @@ use byteorder::{NetworkEndian, ReadBytesExt};
 use failure::{bail, ensure, format_err};
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
-use materialize::repr::decimal::Significand;
-use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
+use materialize::sql::scalar_type_from_sql;
+use repr::decimal::Significand;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 pub struct Postgres {
     client: Client,
@@ -88,7 +89,7 @@ END $$;
                         .map(|column| {
                             Ok(ColumnType {
                                 name: Some(column.name.clone()),
-                                scalar_type: ScalarType::from_sql(&column.data_type)?,
+                                scalar_type: scalar_type_from_sql(&column.data_type)?,
                                 nullable: true,
                             })
                         })
@@ -172,7 +173,7 @@ fn get_column(
     sql_type: &DataType,
     nullable: bool,
 ) -> Result<Datum, failure::Error> {
-    // NOTE this needs to stay in sync with ScalarType::from_sql
+    // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
     Ok(match sql_type {
         DataType::Boolean => get_column_inner::<bool>(postgres_row, i, nullable)?.into(),
@@ -206,7 +207,7 @@ fn get_column(
             .into(),
         DataType::Double => get_column_inner::<f64>(postgres_row, i, nullable)?.into(),
         DataType::Decimal(_, _) => {
-            let desired_scale = match ScalarType::from_sql(sql_type).unwrap() {
+            let desired_scale = match scalar_type_from_sql(sql_type).unwrap() {
                 ScalarType::Decimal(_precision, desired_scale) => desired_scale,
 
                 _ => unreachable!(),

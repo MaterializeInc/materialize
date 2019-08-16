@@ -1,0 +1,16 @@
+[package]
+name = "repr"
+description = "The core data types for Materialize."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+failure = "0.1.5"
+ordered-float = { version = "1.0.2", features = ["serde"] }
+regex = "1.2.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_regex = "0.4.0"

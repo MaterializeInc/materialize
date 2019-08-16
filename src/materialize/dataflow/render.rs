@@ -23,7 +23,7 @@ use crate::dataflow::arrangement::TraceManager;
 use crate::dataflow::arrangement::{context::ArrangementFlavor, Context};
 use crate::dataflow::types::RelationExpr;
 use crate::glue::LocalInputMux;
-use crate::repr::Datum;
+use repr::Datum;
 
 pub enum InputCapability {
     External(SharedCapability),

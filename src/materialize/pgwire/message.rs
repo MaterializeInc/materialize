@@ -6,8 +6,8 @@
 use bytes::Bytes;
 
 use super::types::PgType;
-use crate::repr::decimal::Decimal;
-use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::decimal::Decimal;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 #[allow(dead_code)]
 #[derive(Debug)]

@@ -14,7 +14,7 @@ use super::util::source;
 use super::SharedCapability;
 use crate::dataflow::types::{Diff, KafkaSourceConnector, Timestamp};
 use crate::interchange::avro;
-use crate::repr::Datum;
+use repr::Datum;
 
 pub fn kafka<G>(
     scope: &G,

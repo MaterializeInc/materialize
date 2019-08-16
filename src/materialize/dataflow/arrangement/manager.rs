@@ -11,7 +11,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use std::collections::HashMap;
 
 use crate::dataflow::types::{Diff, Timestamp};
-use crate::repr::Datum;
+use repr::Datum;
 
 pub type KeysOnlySpine = OrdKeySpine<Vec<Datum>, Timestamp, Diff>;
 #[allow(dead_code)]

@@ -5,6 +5,7 @@ members = [
     "src/metastore",
     "src/materialize",
     "src/ore",
+    "src/repr",
     "src/testdrive",
     "src/sqllogictest",
 ]

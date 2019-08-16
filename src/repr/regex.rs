@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
-/// A regular expression object suitable for use in `crate::repr::Datum`. The
+/// A regular expression object suitable for use in `repr::Datum`. The
 /// object has perhaps surprising comparison semantics as a result: two regexes
 /// are considered equal iff their string representation is identical. The
 /// [`PartialOrd`], [`Ord`], and [`Hash`] implementations are similarly based

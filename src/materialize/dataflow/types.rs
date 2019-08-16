@@ -8,7 +8,7 @@ use url::Url;
 use uuid::Uuid;
 
 use super::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -502,7 +502,7 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use crate::repr::{ColumnType, ScalarType};
+    use repr::{ColumnType, ScalarType};
 
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]

@@ -11,7 +11,7 @@
 //! use materialize::dataflow::{RelationExpr, ScalarExpr};
 //! use materialize::dataflow::func::BinaryFunc;
 //! use materialize::dataflow::transform::predicate_pushdown::PredicatePushdown;
-//! use materialize::repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
 //! let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
 //!     ColumnType::new(ScalarType::Bool),
@@ -61,7 +61,7 @@
 //! ```
 
 use crate::dataflow::types::{RelationExpr, ScalarExpr};
-use crate::repr::RelationType;
+use repr::RelationType;
 
 pub struct PredicatePushdown;
 
