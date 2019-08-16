@@ -787,6 +787,7 @@ impl Planner {
 
         // Step 5. Handle projections.
         {
+            let relation_type = relation_expr.typ();
             let mut project_exprs = vec![];
             let mut project_key = vec![];
             for p in &s.projection {
@@ -799,7 +800,18 @@ impl Planner {
                     self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
                 {
                     match &expr {
-                        ScalarExpr::Column(i) => {
+                        ScalarExpr::Column(i)
+                            if typ.name == relation_type.column_types[*i].name =>
+                        {
+                            // Note that if the column name changed (i.e.,
+                            // because the select item was aliased), then we
+                            // can't take this fast path, or we'll lose the
+                            // alias. Hence the guard on this match arm.
+                            //
+                            // TODO(benesch): this is a dumb restriction. If
+                            // this optimization is actually important, perhaps
+                            // it should be come a proper query transformation
+                            // and we shouldn't bother trying to do it here.
                             project_key.push(*i);
                         }
                         _ => {
