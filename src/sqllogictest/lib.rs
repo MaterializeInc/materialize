@@ -1245,7 +1245,9 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
                     println!("{}", HEAVY_HORIZONTAL_RULE);
                     println!("{}", outcome);
                     match &record {
-                        Record::Statement { sql, .. } => println!("{}\n{}", LIGHT_HORIZONTAL_RULE, sql),
+                        Record::Statement { sql, .. } => {
+                            println!("{}\n{}", LIGHT_HORIZONTAL_RULE, sql)
+                        }
                         Record::Query { sql, .. } => println!("{}\n{}", LIGHT_HORIZONTAL_RULE, sql),
                         _ => (),
                     }
