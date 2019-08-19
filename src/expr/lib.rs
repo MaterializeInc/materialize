@@ -8,6 +8,8 @@
 mod relation;
 mod scalar;
 
+pub mod transform;
+
 pub use relation::func::AggregateFunc;
 pub use relation::{AggregateExpr, RelationExpr};
 pub use scalar::func::{BinaryFunc, UnaryFunc, VariadicFunc};

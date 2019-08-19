@@ -3,14 +3,14 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use expr::RelationExpr;
+use crate::RelationExpr;
 use repr::RelationType;
 
 /// Re-order relations in a join to process them in an order that makes sense.
 ///
 /// ```rust
-/// use materialize::dataflow::RelationExpr;
-/// use materialize::dataflow::transform::join_order::JoinOrder;
+/// use expr::RelationExpr;
+/// use expr::transform::join_order::JoinOrder;
 /// use repr::{ColumnType, RelationType, ScalarType};
 ///
 /// let input1 = RelationExpr::constant(vec![], RelationType::new(vec![

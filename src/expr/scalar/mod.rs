@@ -177,8 +177,7 @@ impl ScalarExpr {
     /// Reduces a complex expression where possible.
     ///
     /// ```rust
-    /// use materialize::dataflow::ScalarExpr;
-    /// use materialize::dataflow::func::BinaryFunc;
+    /// use expr::{BinaryFunc, ScalarExpr};
     /// use repr::Datum;
     ///
     /// let expr_0 = ScalarExpr::Column(0);

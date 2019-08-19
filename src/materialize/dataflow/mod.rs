@@ -14,7 +14,6 @@ mod types;
 
 pub mod coordinator;
 pub mod server;
-pub mod transform;
 
 pub use server::{serve, DataflowResultsHandler};
 pub use types::*;

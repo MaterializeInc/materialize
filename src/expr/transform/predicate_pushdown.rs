@@ -6,11 +6,8 @@
 //! Re-order relations in a join to process them in an order that makes sense.
 //!
 //! ```rust
-//! # use pretty_assertions::assert_eq;
-//!
-//! use materialize::dataflow::{RelationExpr, ScalarExpr};
-//! use materialize::dataflow::func::BinaryFunc;
-//! use materialize::dataflow::transform::predicate_pushdown::PredicatePushdown;
+//! use expr::{BinaryFunc, RelationExpr, ScalarExpr};
+//! use expr::transform::predicate_pushdown::PredicatePushdown;
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
 //! let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
@@ -60,7 +57,7 @@
 //! assert_eq!(expr, expected);
 //! ```
 
-use expr::{RelationExpr, ScalarExpr};
+use crate::{RelationExpr, ScalarExpr};
 use repr::RelationType;
 
 pub struct PredicatePushdown;
@@ -131,8 +128,8 @@ impl PredicatePushdown {
                             push_downs[relation].push(predicate);
                         }
                         _ => {
-                            use expr::BinaryFunc;
-                            use expr::UnaryFunc;
+                            use crate::BinaryFunc;
+                            use crate::UnaryFunc;
                             if let ScalarExpr::CallBinary {
                                 func: BinaryFunc::Eq,
                                 expr1,
@@ -199,7 +196,7 @@ impl PredicatePushdown {
                     let mut pos = 0;
                     while pos + 1 < variable.len() {
                         if variable[pos].0 == variable[pos + 1].0 {
-                            use expr::BinaryFunc;
+                            use crate::BinaryFunc;
                             push_downs[variable[pos].0].push(ScalarExpr::CallBinary {
                                 func: BinaryFunc::Eq,
                                 expr1: Box::new(ScalarExpr::Column(variable[pos].1)),

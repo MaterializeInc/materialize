@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use expr::RelationExpr;
+use crate::RelationExpr;
 use repr::RelationType;
 
 pub struct FractureReduce;
@@ -53,7 +53,7 @@ impl FractureReduce {
                         // (0..keys).collect(),
                         group_key.clone(),
                         vec![(
-                            expr::AggregateExpr {
+                            crate::AggregateExpr {
                                 func: agg.func,
                                 // expr: ScalarExpr::Column(keys),
                                 expr: agg.expr,
@@ -107,7 +107,7 @@ impl AbelianReduce {
 
 #[cfg(test)]
 mod tests {
-    use expr::{AggregateFunc, RelationExpr, ScalarExpr};
+    use crate::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr};
     use repr::{ColumnType, RelationType, ScalarType};
 
     #[test]
@@ -121,22 +121,22 @@ mod tests {
 
         let data = RelationExpr::constant(vec![], typ1);
 
-        let agg0 = crate::dataflow::types::AggregateExpr {
+        let agg0 = AggregateExpr {
             func: AggregateFunc::AvgInt64,
             expr: ScalarExpr::Column(0),
             distinct: false,
         };
-        let agg1 = crate::dataflow::types::AggregateExpr {
+        let agg1 = AggregateExpr {
             func: AggregateFunc::SumInt64,
             expr: ScalarExpr::Column(2),
             distinct: false,
         };
-        let agg2 = crate::dataflow::types::AggregateExpr {
+        let agg2 = AggregateExpr {
             func: AggregateFunc::Count,
             expr: ScalarExpr::Column(1),
             distinct: true,
         };
-        let agg3 = crate::dataflow::types::AggregateExpr {
+        let agg3 = AggregateExpr {
             func: AggregateFunc::MinInt64,
             expr: ScalarExpr::Column(0),
             distinct: false,
