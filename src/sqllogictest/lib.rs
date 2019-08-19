@@ -26,11 +26,11 @@ use dataflow::{
     self, Dataflow, DataflowCommand, DataflowResults, LocalInput, LocalSourceConnector, PeekWhen,
     Source, SourceConnector, Update,
 };
-use materialize::sql::store::RemoveMode;
-use materialize::sql::{Planner, Session, SqlResponse};
 use ore::collections::CollectionExt;
 use ore::mpmc::Mux;
 use repr::{ColumnType, Datum};
+use sql::store::RemoveMode;
+use sql::{Planner, Session, SqlResponse};
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};

@@ -47,13 +47,13 @@ pub mod store;
 pub struct SqlCommand {
     pub connection_uuid: Uuid,
     pub sql: String,
-    pub session: crate::sql::Session,
+    pub session: crate::Session,
 }
 
 /// Responses from the queue to SQL commands.
 pub struct SqlResult {
     pub result: Result<SqlResponse, failure::Error>,
-    pub session: crate::sql::Session,
+    pub session: crate::Session,
 }
 
 #[derive(Debug)]

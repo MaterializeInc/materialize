@@ -9,6 +9,7 @@ members = [
     "src/materialize",
     "src/ore",
     "src/repr",
+    "src/sql",
     "src/testdrive",
     "src/sqllogictest",
 ]

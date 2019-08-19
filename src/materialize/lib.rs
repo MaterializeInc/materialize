@@ -13,7 +13,6 @@
 pub mod pgwire;
 pub mod queue;
 pub mod server;
-pub mod sql;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;

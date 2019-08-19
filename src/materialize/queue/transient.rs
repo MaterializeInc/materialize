@@ -7,10 +7,10 @@
 
 use futures::Stream;
 
-use crate::sql::{self, SqlCommand, SqlResult};
 use dataflow::DataflowCommand;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use ore::mpmc::Mux;
+use sql::{self, SqlCommand, SqlResult};
 
 pub fn serve(
     sql_command_receiver: UnboundedReceiver<SqlCommand>,

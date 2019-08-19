@@ -10,6 +10,7 @@ use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
+use std::io::Write;
 use std::iter;
 use tokio::codec::Framed;
 use tokio::io;
@@ -19,11 +20,10 @@ use uuid::Uuid;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
-use crate::sql::{Session, SqlCommand, SqlResponse, SqlResult};
 use dataflow::{DataflowResults, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
-use std::io::Write;
+use sql::{Session, SqlCommand, SqlResponse, SqlResult};
 
 pub struct Context {
     pub uuid: Uuid,

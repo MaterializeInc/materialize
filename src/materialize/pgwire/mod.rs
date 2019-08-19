@@ -22,9 +22,9 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
-use crate::sql::{SqlCommand, SqlResult};
 use dataflow::DataflowResults;
 use ore::mpmc::Mux;
+use sql::{SqlCommand, SqlResult};
 
 mod codec;
 mod message;
@@ -55,7 +55,7 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     };
     protocol::StateMachine::start(
         stream,
-        crate::sql::Session::default(),
+        sql::Session::default(),
         protocol::Context {
             uuid,
             sql_command_sender,
