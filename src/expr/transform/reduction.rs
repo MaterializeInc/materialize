@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::types::{RelationExpr, ScalarExpr};
+use crate::{RelationExpr, ScalarExpr};
 use repr::Datum;
 use repr::RelationType;
 
@@ -58,12 +58,12 @@ impl FoldConstants {
 
 pub mod demorgans {
 
-    use crate::dataflow::func::{BinaryFunc, UnaryFunc};
-    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use crate::{BinaryFunc, UnaryFunc};
+    use crate::{RelationExpr, ScalarExpr};
     use repr::{Datum, RelationType};
 
     pub struct DeMorgans;
-    impl crate::dataflow::transform::Transform for DeMorgans {
+    impl crate::transform::Transform for DeMorgans {
         fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
             self.transform(relation, metadata)
         }
@@ -149,13 +149,13 @@ pub mod demorgans {
 
 pub mod undistribute_and {
 
-    use crate::dataflow::func::BinaryFunc;
-    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use crate::BinaryFunc;
+    use crate::{RelationExpr, ScalarExpr};
     use repr::{Datum, RelationType};
 
     pub struct UndistributeAnd;
 
-    impl crate::dataflow::transform::Transform for UndistributeAnd {
+    impl crate::transform::Transform for UndistributeAnd {
         fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
             self.transform(relation, metadata)
         }

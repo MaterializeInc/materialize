@@ -22,13 +22,15 @@ use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
 
-use crate::dataflow::func::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::dataflow::{
-    AggregateExpr, Dataflow, KafkaSinkConnector, KafkaSourceConnector, RelationExpr, ScalarExpr,
-    Sink, SinkConnector, Source, SourceConnector, View,
+    Dataflow, KafkaSinkConnector, KafkaSourceConnector, Sink, SinkConnector, Source,
+    SourceConnector, View,
 };
 use crate::glue::*;
 use crate::interchange::avro;
+use expr::{
+    AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
+};
 use ore::collections::CollectionExt;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use ore::option::OptionExt;
@@ -2090,7 +2092,14 @@ impl Scope {
     }
 }
 
-impl RelationExpr {
+trait RelationExprExt {
+    fn let_<F>(self, f: F) -> Result<(Self, Scope), failure::Error>
+    where
+        F: FnOnce(Self) -> Result<(Self, Scope), failure::Error>,
+        Self: Sized;
+}
+
+impl RelationExprExt for RelationExpr {
     fn let_<F>(self: RelationExpr, f: F) -> Result<(Self, Scope), failure::Error>
     where
         F: FnOnce(Self) -> Result<(Self, Scope), failure::Error>,

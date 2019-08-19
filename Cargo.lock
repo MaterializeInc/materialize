@@ -716,6 +716,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "expr"
+version = "0.1.0"
+dependencies = [
+ "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ordered-float 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "regex 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "regex-syntax 0.6.11 (registry+https://github.com/rust-lang/crates.io-index)",
+ "repr 0.1.0",
+ "serde 1.0.98 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "failure"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1202,6 +1214,7 @@ dependencies = [
  "ccsr 0.1.0",
  "criterion 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "differential-dataflow 0.10.0 (git+https://github.com/TimelyDataflow/differential-dataflow.git)",
+ "expr 0.1.0",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.27 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "getopts 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",

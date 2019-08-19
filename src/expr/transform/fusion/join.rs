@@ -3,12 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::RelationExpr;
+use crate::RelationExpr;
 use repr::RelationType;
 
 pub struct Join;
 
-impl crate::dataflow::transform::Transform for Join {
+impl crate::transform::Transform for Join {
     fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
         self.transform(relation, metadata)
     }

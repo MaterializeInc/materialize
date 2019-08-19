@@ -3,8 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::func::BinaryFunc;
-use crate::dataflow::{RelationExpr, ScalarExpr};
+use crate::BinaryFunc;
+use crate::{RelationExpr, ScalarExpr};
 use repr::RelationType;
 
 pub struct SplitPredicates;

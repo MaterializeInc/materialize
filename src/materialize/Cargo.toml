@@ -26,6 +26,7 @@ bytes = "0.4"
 cast = "0.2"
 ccsr = { path = "../ccsr" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.1"
 getopts = "0.2"

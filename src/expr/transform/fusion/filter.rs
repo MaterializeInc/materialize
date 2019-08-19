@@ -6,8 +6,8 @@
 //! Re-order relations in a join to process them in an order that makes sense.
 //!
 //! ```rust
-//! use materialize::dataflow::{RelationExpr, ScalarExpr};
-//! use materialize::dataflow::transform::fusion::filter::Filter;
+//! use expr::{RelationExpr, ScalarExpr};
+//! use expr::transform::fusion::filter::Filter;
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
 //! let input = RelationExpr::constant(vec![], RelationType::new(vec![
@@ -36,12 +36,12 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::dataflow::RelationExpr;
+use crate::RelationExpr;
 use repr::RelationType;
 
 pub struct Filter;
 
-impl crate::dataflow::transform::Transform for Filter {
+impl crate::transform::Transform for Filter {
     fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
         self.transform(relation, metadata)
     }

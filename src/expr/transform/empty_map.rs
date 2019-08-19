@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::types::RelationExpr;
+use crate::RelationExpr;
 use repr::RelationType;
 
 pub struct EmptyMap;

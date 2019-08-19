@@ -21,8 +21,8 @@ use super::source::SharedCapability;
 use super::types::*;
 use crate::dataflow::arrangement::TraceManager;
 use crate::dataflow::arrangement::{context::ArrangementFlavor, Context};
-use crate::dataflow::types::RelationExpr;
 use crate::glue::LocalInputMux;
+use expr::RelationExpr;
 use repr::Datum;
 
 pub enum InputCapability {
@@ -123,18 +123,17 @@ pub fn build_dataflow<A: Allocate>(
                 // Push predicates down a few times.
                 let mut view = view.clone();
 
-                use crate::dataflow::transform;
-                let transforms: Vec<Box<dyn transform::Transform>> = vec![
-                    Box::new(transform::reduction::FoldConstants),
-                    Box::new(transform::reduction::DeMorgans),
-                    Box::new(transform::reduction::UndistributeAnd),
-                    Box::new(transform::split_predicates::SplitPredicates),
-                    Box::new(transform::fusion::join::Join),
-                    Box::new(transform::predicate_pushdown::PredicatePushdown),
-                    Box::new(transform::fusion::filter::Filter),
-                    Box::new(transform::join_order::JoinOrder),
-                    Box::new(transform::empty_map::EmptyMap),
-                    // Box::new(transform::aggregation::FractureReduce),
+                let transforms: Vec<Box<dyn expr::transform::Transform>> = vec![
+                    Box::new(expr::transform::reduction::FoldConstants),
+                    Box::new(expr::transform::reduction::DeMorgans),
+                    Box::new(expr::transform::reduction::UndistributeAnd),
+                    Box::new(expr::transform::split_predicates::SplitPredicates),
+                    Box::new(expr::transform::fusion::join::Join),
+                    Box::new(expr::transform::predicate_pushdown::PredicatePushdown),
+                    Box::new(expr::transform::fusion::filter::Filter),
+                    Box::new(expr::transform::join_order::JoinOrder),
+                    Box::new(expr::transform::empty_map::EmptyMap),
+                    // Box::new(expr::transform::aggregation::FractureReduce),
                 ];
                 for transform in transforms.iter() {
                     transform.transform(&mut view.relation_expr, &view.typ);
@@ -347,7 +346,7 @@ where
                 let keys_clone = group_key.clone();
                 let input = build_relation_expr(*input, scope, context, worker_index);
 
-                use crate::dataflow::func::AggregateFunc;
+                use expr::AggregateFunc;
 
                 // Reduce has the ability to lift any Abelian, non-distinct aggregations
                 // into the diff field. We also need to maintain the count as well, as we
@@ -779,31 +778,4 @@ where
         .collection(&relation_expr)
         .expect("Collection surprisingly absent")
         .clone()
-}
-
-impl ScalarExpr {
-    pub fn eval(&self, data: &[Datum]) -> Datum {
-        match self {
-            ScalarExpr::Column(index) => data[*index].clone(),
-            ScalarExpr::Literal(datum) => datum.clone(),
-            ScalarExpr::CallUnary { func, expr } => {
-                let eval = expr.eval(data);
-                (func.func())(eval)
-            }
-            ScalarExpr::CallBinary { func, expr1, expr2 } => {
-                let eval1 = expr1.eval(data);
-                let eval2 = expr2.eval(data);
-                (func.func())(eval1, eval2)
-            }
-            ScalarExpr::CallVariadic { func, exprs } => {
-                let evals = exprs.iter().map(|e| e.eval(data)).collect();
-                (func.func())(evals)
-            }
-            ScalarExpr::If { cond, then, els } => match cond.eval(data) {
-                Datum::True => then.eval(data),
-                Datum::False | Datum::Null => els.eval(data),
-                d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
-            },
-        }
-    }
 }
