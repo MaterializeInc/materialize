@@ -19,8 +19,10 @@
 use timely::progress::frontier::Antichain;
 use timely::synchronization::sequence::Sequencer;
 
+use futures::sync::mpsc::UnboundedReceiver;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use uuid::Uuid;
 
 use crate::dataflow::logging;
 use crate::dataflow::logging::materialized::MaterializedEvent;

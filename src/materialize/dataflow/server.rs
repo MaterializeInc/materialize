@@ -14,12 +14,14 @@ use timely::progress::frontier::Antichain;
 use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
+use futures::sync::mpsc::UnboundedReceiver;
+use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem;
 use std::sync::Mutex;
 use std::time::Instant;
-use ore::mpmc::Mux;
+use uuid::Uuid;
 
 use super::render;
 use super::render::InputCapability;

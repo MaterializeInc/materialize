@@ -21,6 +21,7 @@ use std::fmt;
 use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
+use uuid::Uuid;
 
 use crate::dataflow::{
     Dataflow, KafkaSinkConnector, KafkaSourceConnector, Sink, SinkConnector, Source,

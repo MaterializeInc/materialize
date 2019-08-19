@@ -16,9 +16,11 @@
 //!   * [CockroachDB pgwire implementation](https://github.com/cockroachdb/cockroach/tree/master/pkg/sql/pgwire)
 //!   * ["Postgres on the wire" PGCon talk](https://www.pgcon.org/2014/schedule/attachments/330_postgres-for-the-wire.pdf)
 
+use futures::sync::mpsc::UnboundedSender;
 use futures::Future;
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
+use uuid::Uuid;
 
 use crate::glue::*;
 use ore::mpmc::Mux;

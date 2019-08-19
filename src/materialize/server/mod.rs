@@ -5,6 +5,7 @@
 
 //! Main materialized server.
 
+use futures::sync::mpsc::{self, UnboundedSender};
 use futures::Future;
 use log::error;
 use std::boxed::Box;
@@ -20,9 +21,9 @@ use crate::pgwire;
 use crate::queue;
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
+use ore::mpmc::Mux;
 use ore::netio;
 use ore::netio::SniffingStream;
-use ore::mpmc::Mux;
 
 mod http;
 
@@ -131,11 +132,10 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
-    let (sql_command_sender, sql_command_receiver) =
-        crate::glue::unbounded::<(SqlCommand, CommandMeta)>();
+    let (sql_command_sender, sql_command_receiver) = mpsc::unbounded::<(SqlCommand, CommandMeta)>();
     let sql_result_mux = Mux::default();
     let (dataflow_command_sender, dataflow_command_receiver) =
-        crate::glue::unbounded::<(DataflowCommand, CommandMeta)>();
+        mpsc::unbounded::<(DataflowCommand, CommandMeta)>();
     let dataflow_results_mux = Mux::default();
 
     // Extract timely dataflow parameters.

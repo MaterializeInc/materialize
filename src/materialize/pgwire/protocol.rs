@@ -6,6 +6,7 @@
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::sink::Send as SinkSend;
 use futures::stream;
+use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};

@@ -9,6 +9,7 @@ use futures::Stream;
 
 use crate::glue::*;
 use crate::sql;
+use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use ore::mpmc::Mux;
 
 pub fn serve(

@@ -16,6 +16,7 @@ use std::str::FromStr;
 
 use failure::{bail, format_err, ResultExt};
 use futures::stream::Stream;
+use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -684,7 +685,7 @@ impl FullState {
         let postgres = Postgres::open_and_erase()?;
         let planner = Planner::default();
         let session = Session::default();
-        let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
+        let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
         let local_input_mux = Mux::default();
         let dataflow_results_mux = Mux::default();
         let dataflow_workers = dataflow::serve(

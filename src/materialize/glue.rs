@@ -10,12 +10,7 @@ use crate::dataflow::{Dataflow, Timestamp};
 use expr::RelationExpr;
 use repr::{Datum, RelationType};
 use serde::{Deserialize, Serialize};
-
-pub use uuid::Uuid;
-
-// These work in both async and sync settings, so prefer them over std::sync::mpsc
-// (For sync settings, use `sender.unbounded_send`, `receiver.try_next` and `receiver.wait`)
-pub use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use uuid::Uuid;
 
 /// Various metadata that gets attached to commands at all stages.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,7 +104,6 @@ pub enum LocalInput {
     Watermark(u64),
 }
 
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataflowResults {
     Peeked(Vec<Vec<Datum>>),
@@ -127,4 +121,3 @@ impl DataflowResults {
         }
     }
 }
-
