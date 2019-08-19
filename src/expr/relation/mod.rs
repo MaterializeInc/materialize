@@ -73,6 +73,8 @@ pub enum RelationExpr {
     Negate { input: Box<RelationExpr> },
     /// Return a dataflow where the row counts are all set to 1
     Distinct { input: Box<RelationExpr> },
+    /// Keep rows from a dataflow where the row counts are positive
+    Threshold { input: Box<RelationExpr> },
     /// Return the union of two dataflows
     Union {
         left: Box<RelationExpr>,
@@ -148,6 +150,7 @@ impl RelationExpr {
             }
             RelationExpr::Negate { input } => input.typ(),
             RelationExpr::Distinct { input } => input.typ(),
+            RelationExpr::Threshold { input } => input.typ(),
             RelationExpr::Union { left, right } => {
                 let left_typ = left.typ();
                 let right_typ = right.typ();
@@ -232,6 +235,12 @@ impl RelationExpr {
 
     pub fn distinct(self) -> Self {
         RelationExpr::Distinct {
+            input: Box::new(self),
+        }
+    }
+
+    pub fn threshold(self) -> Self {
+        RelationExpr::Threshold {
             input: Box::new(self),
         }
     }
@@ -342,6 +351,7 @@ impl RelationExpr {
             }
             RelationExpr::Negate { input } => f(input),
             RelationExpr::Distinct { input } => f(input),
+            RelationExpr::Threshold { input } => f(input),
             RelationExpr::Union { left, right } => {
                 f(left);
                 f(right);
@@ -392,6 +402,7 @@ impl RelationExpr {
             }
             RelationExpr::Negate { input } => f(input),
             RelationExpr::Distinct { input } => f(input),
+            RelationExpr::Threshold { input } => f(input),
             RelationExpr::Union { left, right } => {
                 f(left);
                 f(right);
