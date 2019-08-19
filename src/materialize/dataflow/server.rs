@@ -26,7 +26,10 @@ use uuid::Uuid;
 use super::render;
 use super::render::InputCapability;
 use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
-use crate::dataflow::{Dataflow, Sink, SinkConnector, TailSinkConnector, Timestamp};
+use crate::dataflow::{
+    Dataflow, DataflowCommand, DataflowResults, LocalInput, Sink, SinkConnector, TailSinkConnector,
+    Timestamp,
+};
 use crate::glue::*;
 
 use crate::dataflow::coordinator;

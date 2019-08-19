@@ -24,10 +24,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::dataflow::{
-    Dataflow, KafkaSinkConnector, KafkaSourceConnector, Sink, SinkConnector, Source,
-    SourceConnector, View,
+    Dataflow, DataflowCommand, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
-use crate::glue::*;
 use expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };

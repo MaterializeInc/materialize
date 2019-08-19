@@ -22,8 +22,10 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
-use materialize::dataflow;
-use materialize::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
+use materialize::dataflow::{
+    self, Dataflow, DataflowCommand, DataflowResults, LocalInput, LocalSourceConnector, PeekWhen,
+    Source, SourceConnector, Update,
+};
 use materialize::glue::*;
 use materialize::sql::store::RemoveMode;
 use materialize::sql::{Planner, Session, SqlResponse};

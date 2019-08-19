@@ -16,6 +16,7 @@ use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
+use crate::dataflow::{DataflowResults, Update};
 use crate::glue::*;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;

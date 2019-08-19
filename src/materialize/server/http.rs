@@ -9,7 +9,7 @@ use hyper::service;
 use hyper::{Body, Method, Request, Response};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::glue::*;
+use crate::dataflow::DataflowResults;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 

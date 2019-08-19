@@ -15,7 +15,7 @@ use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
-use crate::dataflow;
+use crate::dataflow::{self, DataflowCommand, DataflowResults, LocalInput};
 use crate::glue::*;
 use crate::pgwire;
 use crate::queue;

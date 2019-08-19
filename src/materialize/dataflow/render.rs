@@ -21,7 +21,6 @@ use super::source::SharedCapability;
 use super::types::*;
 use crate::dataflow::arrangement::TraceManager;
 use crate::dataflow::arrangement::{context::ArrangementFlavor, Context};
-use crate::glue::LocalInput;
 use expr::RelationExpr;
 use ore::mpmc::Mux;
 use repr::Datum;

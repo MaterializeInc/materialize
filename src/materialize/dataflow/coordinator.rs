@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::dataflow::logging;
 use crate::dataflow::logging::materialized::MaterializedEvent;
-use crate::dataflow::{Dataflow, Timestamp, View};
+use crate::dataflow::{Dataflow, DataflowCommand, PeekWhen, Timestamp, View};
 use crate::glue::*;
 use expr::RelationExpr;
 use repr::RelationType;

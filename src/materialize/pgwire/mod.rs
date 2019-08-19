@@ -22,6 +22,7 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
+use crate::dataflow::DataflowResults;
 use crate::glue::*;
 use crate::sql::{SqlCommand, SqlResult};
 use ore::mpmc::Mux;
