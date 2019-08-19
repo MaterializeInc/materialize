@@ -27,10 +27,10 @@ use crate::dataflow::{
     SourceConnector, View,
 };
 use crate::glue::*;
-use crate::interchange::avro;
 use expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
+use interchange::avro;
 use ore::collections::CollectionExt;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use ore::option::OptionExt;

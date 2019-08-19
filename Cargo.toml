@@ -3,6 +3,7 @@ members = [
     "fuzz",
     "src/ccsr",
     "src/expr",
+    "src/interchange",
     "src/metastore",
     "src/materialize",
     "src/ore",

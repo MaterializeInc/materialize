@@ -1,0 +1,30 @@
+[package]
+name = "interchange"
+description = "Translations for various data serialization formats."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[[bench]]
+name = "interchange-avro"
+path = "benches/avro.rs"
+harness = false
+
+[dependencies]
+avro-rs = "0.6.5"
+byteorder = "1.3"
+ccsr = { path = "../ccsr" }
+failure = "0.1.5"
+sha2 = "0.8"
+ore = { path = "../ore" }
+repr = { path = "../repr" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.40"
+url = "1.7.2"
+
+[dev-dependencies]
+pretty_assertions = "0.6.1"
+criterion = "0.2"

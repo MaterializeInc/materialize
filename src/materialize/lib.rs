@@ -12,7 +12,6 @@
 
 pub mod dataflow;
 pub mod glue;
-pub mod interchange;
 pub mod pgwire;
 pub mod queue;
 pub mod server;
