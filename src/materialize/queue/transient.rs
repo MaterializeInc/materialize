@@ -9,10 +9,11 @@ use futures::Stream;
 
 use crate::glue::*;
 use crate::sql;
+use ore::mpmc::Mux;
 
 pub fn serve(
     sql_command_receiver: UnboundedReceiver<(SqlCommand, CommandMeta)>,
-    sql_result_mux: SqlResultMux,
+    sql_result_mux: Mux<SqlResult>,
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
 ) {

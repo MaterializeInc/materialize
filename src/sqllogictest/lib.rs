@@ -27,6 +27,7 @@ use materialize::glue::*;
 use materialize::sql::store::RemoveMode;
 use materialize::sql::{Planner, Session};
 use ore::collections::CollectionExt;
+use ore::mpmc::Mux;
 use repr::{ColumnType, Datum};
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
@@ -618,8 +619,8 @@ struct FullState {
     _dataflow_workers: Box<dyn Drop>,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
-    local_input_mux: LocalInputMux,
-    dataflow_results_mux: DataflowResultsMux,
+    local_input_mux: Mux<LocalInput>,
+    dataflow_results_mux: Mux<DataflowResults>,
 }
 
 fn format_row(
@@ -684,8 +685,8 @@ impl FullState {
         let planner = Planner::default();
         let session = Session::default();
         let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
-        let local_input_mux = LocalInputMux::default();
-        let dataflow_results_mux = DataflowResultsMux::default();
+        let local_input_mux = Mux::default();
+        let dataflow_results_mux = Mux::default();
         let dataflow_workers = dataflow::serve(
             dataflow_command_receiver,
             local_input_mux.clone(),
@@ -865,7 +866,7 @@ impl RecordRunner for FullState {
                                     .expect("Unknown table in update");
                                 {
                                     let mux = self.local_input_mux.read().unwrap();
-                                    for (uuid, sender) in &mux.senders {
+                                    for (uuid, sender) in mux.senders() {
                                         if uuid == updated_uuid {
                                             sender
                                                 .unbounded_send(LocalInput::Updates(

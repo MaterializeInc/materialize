@@ -22,6 +22,7 @@ use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::SniffingStream;
+use ore::mpmc::Mux;
 
 mod http;
 
@@ -90,8 +91,8 @@ impl Default for Config {
 fn handle_connection(
     tcp_stream: TcpStream,
     sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
-    sql_result_mux: SqlResultMux,
-    dataflow_results_mux: DataflowResultsMux,
+    sql_result_mux: Mux<SqlResult>,
+    dataflow_results_mux: Mux<DataflowResults>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
@@ -128,14 +129,14 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 }
 
 /// Start the materialized server.
-pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
+pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
     let (sql_command_sender, sql_command_receiver) =
         crate::glue::unbounded::<(SqlCommand, CommandMeta)>();
-    let sql_result_mux = SqlResultMux::default();
+    let sql_result_mux = Mux::default();
     let (dataflow_command_sender, dataflow_command_receiver) =
         crate::glue::unbounded::<(DataflowCommand, CommandMeta)>();
-    let dataflow_results_mux = DataflowResultsMux::default();
+    let dataflow_results_mux = Mux::default();
 
     // Extract timely dataflow parameters.
     let num_timely_workers = config.num_timely_workers();
@@ -156,7 +157,7 @@ pub fn serve(config: Config) -> Result<LocalInputMux, Box<dyn StdError>> {
     };
 
     // Construct timely dataflow instance.
-    let local_input_mux = LocalInputMux::default();
+    let local_input_mux = Mux::default();
     let dataflow_results_handler = match config.dataflow_results {
         DataflowResultsConfig::Local => {
             dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone())

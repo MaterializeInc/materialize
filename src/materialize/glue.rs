@@ -8,13 +8,8 @@
 
 use crate::dataflow::{Dataflow, Timestamp};
 use expr::RelationExpr;
-use failure::{ensure, format_err};
 use repr::{Datum, RelationType};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::sync::{Arc, RwLock};
 
 pub use uuid::Uuid;
 
@@ -69,8 +64,6 @@ pub enum SqlResponse {
     Tailing,
 }
 
-pub type SqlResultMux = Arc<RwLock<Mux<Uuid, SqlResult>>>;
-
 /// The commands that a running dataflow server can accept.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {
@@ -116,7 +109,6 @@ pub enum LocalInput {
     Watermark(u64),
 }
 
-pub type LocalInputMux = Arc<RwLock<Mux<Uuid, LocalInput>>>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataflowResults {
@@ -136,78 +128,3 @@ impl DataflowResults {
     }
 }
 
-pub type DataflowResultsMux = Arc<RwLock<Mux<Uuid, DataflowResults>>>;
-
-/// A multiple-producer, multiple-consumer (mpmc) channel where receivers are
-/// keyed by K.
-#[derive(Debug)]
-pub struct Mux<K, T>
-where
-    K: Hash + Eq,
-{
-    pub receivers: HashMap<K, UnboundedReceiver<T>>,
-    pub senders: HashMap<K, UnboundedSender<T>>,
-}
-
-impl<K, T> Default for Mux<K, T>
-where
-    K: Hash + Eq,
-{
-    fn default() -> Self {
-        Mux {
-            receivers: Default::default(),
-            senders: Default::default(),
-        }
-    }
-}
-
-impl<K, T> Mux<K, T>
-where
-    K: Clone + Hash + Eq + Debug,
-{
-    /// Registers a new channel for the specified key.
-    pub fn channel(&mut self, key: K) -> Result<(), failure::Error> {
-        // We might hold onto closed senders for arbitrary amounts of time, but
-        // by GCing on channel creation we limit the *growth* of wasted memory.
-        self.gc();
-        ensure!(
-            self.senders.get(&key).is_none(),
-            "Key {:?} is already registered",
-            key
-        );
-        let (sender, receiver) = unbounded();
-        self.senders.insert(key.clone(), sender);
-        self.receivers.insert(key, receiver);
-        Ok(())
-    }
-
-    /// Takes (and consumes) the receiver for the specified key
-    pub fn receiver(&mut self, key: &K) -> Result<UnboundedReceiver<T>, failure::Error> {
-        self.receivers
-            .remove(key)
-            .ok_or_else(|| format_err!("Key {:?} is not registered", key))
-    }
-
-    /// Gets a sender for the specified key.
-    pub fn sender(&self, key: &K) -> Result<&UnboundedSender<T>, failure::Error> {
-        self.senders
-            .get(key)
-            .ok_or_else(|| format_err!("Key {:?} is not registered", key))
-    }
-
-    /// Closes the sender for the specified key. It is not an error if no
-    /// such key exists.
-    ///
-    /// This is not necessary in general, as the sender will be automatically
-    /// garbage collected when the receiver is dropped. It can be useful,
-    /// however, to eagerly reclaim the key so that the key can be reused.
-    pub fn close(&mut self, key: &K) {
-        self.senders.remove(key);
-    }
-
-    /// Removes references to channels where the receiver has been closed or
-    /// dropped.
-    fn gc(&mut self) {
-        self.senders.retain(|_, sender| !sender.is_closed())
-    }
-}

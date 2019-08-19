@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::Mutex;
 use std::time::Instant;
+use ore::mpmc::Mux;
 
 use super::render;
 use super::render::InputCapability;
@@ -35,7 +36,7 @@ use std::rc::Rc;
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
-    local_input_mux: LocalInputMux,
+    local_input_mux: Mux<LocalInput>,
     dataflow_results_handler: DataflowResultsHandler,
     timely_configuration: timely::Configuration,
     logging_config: Option<logging::LoggingConfiguration>,
@@ -63,7 +64,7 @@ pub fn serve(
 #[derive(Clone, Debug)]
 pub enum DataflowResultsHandler {
     /// A local exchange fabric.
-    Local(DataflowResultsMux),
+    Local(Mux<DataflowResults>),
     /// An address to post results at.
     Remote(String),
 }
@@ -85,7 +86,7 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    local_input_mux: LocalInputMux,
+    local_input_mux: Mux<LocalInput>,
     dataflow_results_handler: DataflowResultsHandler,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
@@ -104,7 +105,7 @@ where
     fn new(
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
-        local_input_mux: LocalInputMux,
+        local_input_mux: Mux<LocalInput>,
         dataflow_results_handler: DataflowResultsHandler,
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {

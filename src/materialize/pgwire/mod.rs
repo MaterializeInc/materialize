@@ -21,6 +21,7 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::glue::*;
+use ore::mpmc::Mux;
 
 mod codec;
 mod message;
@@ -33,8 +34,8 @@ pub use protocol::match_handshake;
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
     sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
-    sql_result_mux: SqlResultMux,
-    dataflow_results_mux: DataflowResultsMux,
+    sql_result_mux: Mux<SqlResult>,
+    dataflow_results_mux: Mux<DataflowResults>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let uuid = Uuid::new_v4();
