@@ -2526,7 +2526,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#b63bea65438a482477463f816cccf72dacaba8da"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2540,12 +2540,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#b63bea65438a482477463f816cccf72dacaba8da"
 
 [[package]]
 name = "timely_communication"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#b63bea65438a482477463f816cccf72dacaba8da"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2560,7 +2560,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#0b6ba222eb262aa8a22048ebd0b14bb9383c4967"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#b63bea65438a482477463f816cccf72dacaba8da"
 
 [[package]]
 name = "timely_sort"
