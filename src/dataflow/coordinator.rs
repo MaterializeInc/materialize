@@ -24,9 +24,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::dataflow::logging;
-use crate::dataflow::logging::materialized::MaterializedEvent;
-use crate::dataflow::{Dataflow, DataflowCommand, PeekWhen, Timestamp, View};
+use crate::logging;
+use crate::logging::materialized::MaterializedEvent;
+use crate::{Dataflow, DataflowCommand, PeekWhen, Timestamp, View};
 use expr::RelationExpr;
 use repr::RelationType;
 
@@ -51,7 +51,11 @@ pub enum SequencedCommand {
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(String, Vec<Timestamp>)>),
     /// Currently unimplemented.
-    Tail { connection_uuid: Uuid, typ: RelationType, name: String },
+    Tail {
+        connection_uuid: Uuid,
+        typ: RelationType,
+        name: String,
+    },
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -146,8 +150,16 @@ impl CommandCoordinator {
                 };
                 sequencer.push(peek_command);
             }
-            DataflowCommand::Tail { connection_uuid, typ, name } => {
-                sequencer.push(SequencedCommand::Tail { connection_uuid, typ, name });
+            DataflowCommand::Tail {
+                connection_uuid,
+                typ,
+                name,
+            } => {
+                sequencer.push(SequencedCommand::Tail {
+                    connection_uuid,
+                    typ,
+                    name,
+                });
             }
             DataflowCommand::Shutdown => {
                 sequencer.push(SequencedCommand::Shutdown);

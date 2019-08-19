@@ -7,8 +7,8 @@
 
 use futures::Stream;
 
-use crate::dataflow::DataflowCommand;
 use crate::sql::{self, SqlCommand, SqlResult};
+use dataflow::DataflowCommand;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use ore::mpmc::Mux;
 

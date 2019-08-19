@@ -16,11 +16,11 @@ use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
-use crate::dataflow::{DataflowResults, Update};
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::sql::{Session, SqlCommand, SqlResponse, SqlResult};
+use dataflow::{DataflowResults, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
 use std::io::Write;

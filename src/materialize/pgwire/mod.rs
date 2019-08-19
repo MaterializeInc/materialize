@@ -22,8 +22,8 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
-use crate::dataflow::DataflowResults;
 use crate::sql::{SqlCommand, SqlResult};
+use dataflow::DataflowResults;
 use ore::mpmc::Mux;
 
 mod codec;

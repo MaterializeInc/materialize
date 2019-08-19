@@ -7,7 +7,7 @@ pub mod differential;
 pub mod materialized;
 pub mod timely;
 
-use crate::dataflow::types::Timestamp;
+use crate::types::Timestamp;
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
 use std::time::Duration;
 

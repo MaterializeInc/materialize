@@ -12,7 +12,7 @@ use timely::dataflow::{Scope, Stream};
 
 use super::util::source;
 use super::SharedCapability;
-use crate::dataflow::types::{Diff, KafkaSourceConnector, Timestamp};
+use crate::types::{Diff, KafkaSourceConnector, Timestamp};
 use interchange::avro;
 use repr::Datum;
 

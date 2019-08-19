@@ -15,10 +15,10 @@ use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
-use crate::dataflow::{self, DataflowCommand, DataflowResults, LocalInput};
 use crate::pgwire;
 use crate::queue;
 use crate::sql::{SqlCommand, SqlResult};
+use dataflow::{self, DataflowCommand, DataflowResults, LocalInput};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;

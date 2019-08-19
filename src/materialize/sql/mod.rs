@@ -23,7 +23,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
 use uuid::Uuid;
 
-use crate::dataflow::{
+use dataflow::{
     Dataflow, DataflowCommand, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink,
     SinkConnector, Source, SourceConnector, View,
 };

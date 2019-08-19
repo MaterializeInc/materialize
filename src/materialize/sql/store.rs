@@ -8,9 +8,9 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 
-use crate::dataflow::SourceConnector;
+use dataflow::SourceConnector;
 
-use crate::dataflow::{Dataflow, LocalSourceConnector, Source};
+use dataflow::{Dataflow, LocalSourceConnector, Source};
 use repr::RelationType;
 
 #[derive(Debug)]
@@ -125,7 +125,7 @@ impl DataflowStore {
 impl Default for DataflowStore {
     fn default() -> DataflowStore {
         // TODO: This should be more closely coupled to the actual logging configuration.
-        crate::dataflow::logging::LogVariant::default_logs()
+        dataflow::logging::LogVariant::default_logs()
             .into_iter()
             .map(|log| {
                 Dataflow::Source(Source {

@@ -22,7 +22,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
-use materialize::dataflow::{
+use dataflow::{
     self, Dataflow, DataflowCommand, DataflowResults, LocalInput, LocalSourceConnector, PeekWhen,
     Source, SourceConnector, Update,
 };

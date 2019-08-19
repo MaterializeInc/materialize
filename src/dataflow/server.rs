@@ -27,11 +27,11 @@ use uuid::Uuid;
 
 use super::render;
 use super::render::InputCapability;
-use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
-use crate::dataflow::coordinator;
-use crate::dataflow::logging;
-use crate::dataflow::logging::materialized::MaterializedEvent;
-use crate::dataflow::{
+use crate::arrangement::{manager::KeysOnlyHandle, TraceManager};
+use crate::coordinator;
+use crate::logging;
+use crate::logging::materialized::MaterializedEvent;
+use crate::{
     Dataflow, DataflowCommand, DataflowResults, LocalInput, Sink, SinkConnector, TailSinkConnector,
     Timestamp,
 };
@@ -143,7 +143,7 @@ where
     /// if logging is not initialized and anyone tries to use it.
     fn initialize_logging(&mut self) {
         if let Some(logging) = &self.logging_config {
-            use crate::dataflow::logging::BatchLogger;
+            use crate::logging::BatchLogger;
             use timely::dataflow::operators::capture::event::link::EventLink;
 
             // Establish loggers first, so we can either log the logging or not, as we like.
@@ -312,7 +312,7 @@ where
                 };
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(
-                        crate::dataflow::logging::materialized::Peek::new(
+                        crate::logging::materialized::Peek::new(
                             &pending_peek.name,
                             pending_peek.timestamp,
                             &pending_peek.connection_uuid,
@@ -329,7 +329,11 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Tail { connection_uuid, typ, name } => {
+            coordinator::SequencedCommand::Tail {
+                connection_uuid,
+                typ,
+                name,
+            } => {
                 let sink_name = format!("<temp_{}>", Uuid::new_v4());
                 if let DataflowResultsHandler::Remote(path) = &self.dataflow_results_handler {
                     let dataflow = Dataflow::Sink(Sink {
@@ -439,7 +443,7 @@ where
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
                 logger.log(MaterializedEvent::Peek(
-                    crate::dataflow::logging::materialized::Peek::new(
+                    crate::logging::materialized::Peek::new(
                         &peek.name,
                         peek.timestamp,
                         &peek.connection_uuid,
