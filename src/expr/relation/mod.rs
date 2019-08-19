@@ -303,7 +303,6 @@ impl RelationExpr {
     }
 
     /// Collects the names of the dataflows that this relation_expr depends upon.
-    #[allow(clippy::unneeded_field_pattern)]
     pub fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
         self.visit(&mut |e| match e {
             RelationExpr::Get { name, .. } => {

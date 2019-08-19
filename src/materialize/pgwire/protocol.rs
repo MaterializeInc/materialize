@@ -3,10 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// Ignore disparity between the sizes of the variants in the generated state
-// machine.
-#![allow(clippy::large_enum_variant)]
-
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::sink::Send as SinkSend;
 use futures::stream;
