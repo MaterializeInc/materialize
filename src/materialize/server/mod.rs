@@ -19,6 +19,7 @@ use crate::dataflow;
 use crate::glue::*;
 use crate::pgwire;
 use crate::queue;
+use crate::sql::{SqlCommand, SqlResult};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;

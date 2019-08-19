@@ -44,6 +44,38 @@ pub use session::Session;
 mod session;
 pub mod store;
 
+/// Incoming raw SQL from users.
+pub struct SqlCommand {
+    pub sql: String,
+    pub session: crate::sql::Session,
+}
+
+/// Responses from the queue to SQL commands.
+pub struct SqlResult {
+    pub result: Result<SqlResponse, failure::Error>,
+    pub session: crate::sql::Session,
+}
+
+#[derive(Debug)]
+/// Responses from the planner to SQL commands.
+pub enum SqlResponse {
+    CreatedSink,
+    CreatedSource,
+    CreatedView,
+    DroppedSource,
+    DroppedView,
+    EmptyQuery,
+    Peeking {
+        typ: RelationType,
+    },
+    SendRows {
+        typ: RelationType,
+        rows: Vec<Vec<Datum>>,
+    },
+    SetVariable,
+    Tailing,
+}
+
 /// Converts raw SQL queries into dataflow commands.
 #[derive(Debug, Default)]
 pub struct Planner {

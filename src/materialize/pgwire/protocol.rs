@@ -20,7 +20,7 @@ use crate::glue::*;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
-use crate::sql::Session;
+use crate::sql::{Session, SqlCommand, SqlResponse, SqlResult};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
 use std::io::Write;

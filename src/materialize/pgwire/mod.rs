@@ -23,6 +23,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
 use crate::glue::*;
+use crate::sql::{SqlCommand, SqlResult};
 use ore::mpmc::Mux;
 
 mod codec;

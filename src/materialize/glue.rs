@@ -27,38 +27,6 @@ impl CommandMeta {
     }
 }
 
-/// Incoming raw SQL from users.
-pub struct SqlCommand {
-    pub sql: String,
-    pub session: crate::sql::Session,
-}
-
-/// Responses from the queue to SQL commands.
-pub struct SqlResult {
-    pub result: Result<SqlResponse, failure::Error>,
-    pub session: crate::sql::Session,
-}
-
-#[derive(Debug)]
-/// Responses from the planner to SQL commands.
-pub enum SqlResponse {
-    CreatedSink,
-    CreatedSource,
-    CreatedView,
-    DroppedSource,
-    DroppedView,
-    EmptyQuery,
-    Peeking {
-        typ: RelationType,
-    },
-    SendRows {
-        typ: RelationType,
-        rows: Vec<Vec<Datum>>,
-    },
-    SetVariable,
-    Tailing,
-}
-
 /// The commands that a running dataflow server can accept.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {

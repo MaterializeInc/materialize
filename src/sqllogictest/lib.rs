@@ -26,7 +26,7 @@ use materialize::dataflow;
 use materialize::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
 use materialize::glue::*;
 use materialize::sql::store::RemoveMode;
-use materialize::sql::{Planner, Session};
+use materialize::sql::{Planner, Session, SqlResponse};
 use ore::collections::CollectionExt;
 use ore::mpmc::Mux;
 use repr::{ColumnType, Datum};
