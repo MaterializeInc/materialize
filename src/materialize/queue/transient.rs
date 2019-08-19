@@ -8,7 +8,6 @@
 use futures::Stream;
 
 use crate::dataflow::DataflowCommand;
-use crate::glue::*;
 use crate::sql::{self, SqlCommand, SqlResult};
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use ore::mpmc::Mux;
@@ -16,29 +15,23 @@ use ore::mpmc::Mux;
 pub fn serve(
     sql_command_receiver: UnboundedReceiver<SqlCommand>,
     sql_result_mux: Mux<SqlResult>,
-    dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
+    dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,
 ) {
     std::thread::spawn(move || {
         let mut planner = sql::Planner::default();
         for msg in sql_command_receiver.wait() {
             let mut cmd = msg.unwrap();
-            let connection_uuid = cmd.connection_uuid;
 
             let (sql_result, dataflow_command) =
-                match planner.handle_command(&mut cmd.session, cmd.sql) {
+                match planner.handle_command(&mut cmd.session, cmd.connection_uuid, cmd.sql) {
                     Ok((resp, cmd)) => (Ok(resp), cmd),
                     Err(err) => (Err(err), None),
                 };
 
             if let Some(dataflow_command) = dataflow_command {
                 dataflow_command_sender
-                    .unbounded_send((
-                        dataflow_command.clone(),
-                        CommandMeta {
-                            connection_uuid: connection_uuid,
-                        },
-                    ))
+                    .unbounded_send(dataflow_command.clone())
                     // if the dataflow server has gone down, just explode
                     .unwrap();
 
@@ -46,7 +39,7 @@ pub fn serve(
             }
 
             // the response sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-            if let Ok(sender) = sql_result_mux.read().unwrap().sender(&connection_uuid) {
+            if let Ok(sender) = sql_result_mux.read().unwrap().sender(&cmd.connection_uuid) {
                 drop(sender.unbounded_send(SqlResult {
                     result: sql_result,
                     session: cmd.session,

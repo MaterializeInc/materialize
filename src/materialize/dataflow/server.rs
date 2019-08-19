@@ -17,8 +17,10 @@ use timely::worker::Worker as TimelyWorker;
 use futures::sync::mpsc::UnboundedReceiver;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 use uuid::Uuid;
@@ -26,21 +28,17 @@ use uuid::Uuid;
 use super::render;
 use super::render::InputCapability;
 use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
+use crate::dataflow::coordinator;
+use crate::dataflow::logging;
+use crate::dataflow::logging::materialized::MaterializedEvent;
 use crate::dataflow::{
     Dataflow, DataflowCommand, DataflowResults, LocalInput, Sink, SinkConnector, TailSinkConnector,
     Timestamp,
 };
-use crate::glue::*;
-
-use crate::dataflow::coordinator;
-use crate::dataflow::logging;
-use crate::dataflow::logging::materialized::MaterializedEvent;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
-    dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
     local_input_mux: Mux<LocalInput>,
     dataflow_results_handler: DataflowResultsHandler,
     timely_configuration: timely::Configuration,
@@ -97,7 +95,7 @@ where
     traces: TraceManager,
     rpc_client: Rc<RefCell<reqwest::Client>>,
     inputs: HashMap<String, InputCapability>,
-    sequencer: Sequencer<(coordinator::SequencedCommand, CommandMeta)>,
+    sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<logging::LoggingConfiguration>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
     materialized_logger: Option<logging::materialized::Logger>,
@@ -109,7 +107,7 @@ where
 {
     fn new(
         w: &'w mut TimelyWorker<A>,
-        dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
+        dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
         local_input_mux: Mux<LocalInput>,
         dataflow_results_handler: DataflowResultsHandler,
         logging_config: Option<logging::LoggingConfiguration>,
@@ -249,11 +247,11 @@ where
             }
 
             // Handle any received commands
-            while let Some((cmd, cmd_meta)) = self.sequencer.next() {
+            while let Some(cmd) = self.sequencer.next() {
                 if let coordinator::SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
-                self.handle_command(cmd, cmd_meta);
+                self.handle_command(cmd);
             }
 
             if !shutdown {
@@ -262,7 +260,7 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: coordinator::SequencedCommand, cmd_meta: CommandMeta) {
+    fn handle_command(&mut self, cmd: coordinator::SequencedCommand) {
         match cmd {
             coordinator::SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
@@ -296,6 +294,7 @@ where
             coordinator::SequencedCommand::Peek {
                 name,
                 timestamp,
+                connection_uuid,
                 drop_after_peek,
             } => {
                 let mut trace = self
@@ -307,7 +306,7 @@ where
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
                     name,
-                    connection_uuid: cmd_meta.connection_uuid,
+                    connection_uuid,
                     timestamp,
                     drop_after_peek,
                 };
@@ -330,14 +329,14 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Tail { typ, name } => {
+            coordinator::SequencedCommand::Tail { connection_uuid, typ, name } => {
                 let sink_name = format!("<temp_{}>", Uuid::new_v4());
                 if let DataflowResultsHandler::Remote(path) = &self.dataflow_results_handler {
                     let dataflow = Dataflow::Sink(Sink {
                         name: sink_name,
                         from: (name, typ),
                         connector: SinkConnector::Tail(TailSinkConnector {
-                            connection_uuid: cmd_meta.connection_uuid,
+                            connection_uuid,
                             handler: path.clone(),
                         }),
                     });
@@ -455,12 +454,9 @@ where
         });
         mem::replace(&mut self.pending_peeks, pending_peeks);
         if !dataflows_to_be_dropped.is_empty() {
-            self.handle_command(
-                coordinator::SequencedCommand::DropDataflows(dataflows_to_be_dropped),
-                CommandMeta {
-                    connection_uuid: Uuid::nil(),
-                },
-            );
+            self.handle_command(coordinator::SequencedCommand::DropDataflows(
+                dataflows_to_be_dropped,
+            ));
         }
     }
 }

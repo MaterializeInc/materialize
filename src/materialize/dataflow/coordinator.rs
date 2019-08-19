@@ -27,7 +27,6 @@ use uuid::Uuid;
 use crate::dataflow::logging;
 use crate::dataflow::logging::materialized::MaterializedEvent;
 use crate::dataflow::{Dataflow, DataflowCommand, PeekWhen, Timestamp, View};
-use crate::glue::*;
 use expr::RelationExpr;
 use repr::RelationType;
 
@@ -42,6 +41,7 @@ pub enum SequencedCommand {
     Peek {
         name: String,
         timestamp: Timestamp,
+        connection_uuid: Uuid,
         drop_after_peek: bool,
     },
     /// Enable compaction in views.
@@ -51,7 +51,7 @@ pub enum SequencedCommand {
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(String, Vec<Timestamp>)>),
     /// Currently unimplemented.
-    Tail { typ: RelationType, name: String },
+    Tail { connection_uuid: Uuid, typ: RelationType, name: String },
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -60,14 +60,14 @@ pub enum SequencedCommand {
 pub struct CommandCoordinator {
     /// Per-view maintained state.
     views: HashMap<String, ViewState>,
-    command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
+    command_receiver: UnboundedReceiver<DataflowCommand>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     pub logger: Option<logging::materialized::Logger>,
 }
 
 impl CommandCoordinator {
     /// Creates a new command coordinator from input and output command queues.
-    pub fn new(command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>) -> Self {
+    pub fn new(command_receiver: UnboundedReceiver<DataflowCommand>) -> Self {
         Self {
             views: HashMap::new(),
             command_receiver,
@@ -77,12 +77,9 @@ impl CommandCoordinator {
     }
 
     /// Drains commands from the receiver and sequences them to the sequencer.
-    pub fn sequence_commands(
-        &mut self,
-        sequencer: &mut Sequencer<(SequencedCommand, CommandMeta)>,
-    ) {
-        while let Ok(Some((cmd, cmd_meta))) = self.command_receiver.try_next() {
-            self.sequence_command(cmd, cmd_meta, sequencer);
+    pub fn sequence_commands(&mut self, sequencer: &mut Sequencer<SequencedCommand>) {
+        while let Ok(Some(cmd)) = self.command_receiver.try_next() {
+            self.sequence_command(cmd, sequencer);
         }
     }
 
@@ -90,23 +87,26 @@ impl CommandCoordinator {
     pub fn sequence_command(
         &mut self,
         command: DataflowCommand,
-        command_meta: CommandMeta,
-        sequencer: &mut Sequencer<(SequencedCommand, CommandMeta)>,
+        sequencer: &mut Sequencer<SequencedCommand>,
     ) {
         match command {
             DataflowCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.iter() {
                     self.insert_view(dataflow);
                 }
-                sequencer.push((SequencedCommand::CreateDataflows(dataflows), command_meta));
+                sequencer.push(SequencedCommand::CreateDataflows(dataflows));
             }
             DataflowCommand::DropDataflows(dataflows) => {
                 for name in dataflows.iter() {
                     self.remove_view(name);
                 }
-                sequencer.push((SequencedCommand::DropDataflows(dataflows), command_meta));
+                sequencer.push(SequencedCommand::DropDataflows(dataflows));
             }
-            DataflowCommand::Peek { source, when } => {
+            DataflowCommand::Peek {
+                source,
+                connection_uuid,
+                when,
+            } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
                 //
                 // We need to determine both an appropriate timestamp from the description, and
@@ -134,22 +134,23 @@ impl CommandCoordinator {
                             relation_expr: source,
                             typ,
                         })]);
-                    sequencer.push((create_command, CommandMeta::nil()));
+                    sequencer.push(create_command);
                     (name, true)
                 };
 
                 let peek_command = SequencedCommand::Peek {
                     name,
                     timestamp,
+                    connection_uuid,
                     drop_after_peek: drop,
                 };
-                sequencer.push((peek_command, command_meta));
+                sequencer.push(peek_command);
             }
-            DataflowCommand::Tail { typ, name } => {
-                sequencer.push((SequencedCommand::Tail { typ, name }, command_meta));
+            DataflowCommand::Tail { connection_uuid, typ, name } => {
+                sequencer.push(SequencedCommand::Tail { connection_uuid, typ, name });
             }
             DataflowCommand::Shutdown => {
-                sequencer.push((SequencedCommand::Shutdown, command_meta));
+                sequencer.push(SequencedCommand::Shutdown);
             }
         };
     }
@@ -161,15 +162,12 @@ impl CommandCoordinator {
     ///
     /// This API is a bit wonky, but at the moment the sequencer plays the role of both send and
     /// receive, and so cannot be owned only by the coordinator.
-    pub fn maintenance(&mut self, sequencer: &mut Sequencer<(SequencedCommand, CommandMeta)>) {
+    pub fn maintenance(&mut self, sequencer: &mut Sequencer<SequencedCommand>) {
         // Take this opportunity to drain `since_update` commands.
-        sequencer.push((
-            SequencedCommand::AllowCompaction(std::mem::replace(
-                &mut self.since_updates,
-                Vec::new(),
-            )),
-            CommandMeta::nil(),
-        ));
+        sequencer.push(SequencedCommand::AllowCompaction(std::mem::replace(
+            &mut self.since_updates,
+            Vec::new(),
+        )));
     }
 
     /// A policy for determining the timestamp for a peek.

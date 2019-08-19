@@ -16,7 +16,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
 use crate::dataflow::{self, DataflowCommand, DataflowResults, LocalInput};
-use crate::glue::*;
 use crate::pgwire;
 use crate::queue;
 use crate::sql::{SqlCommand, SqlResult};
@@ -135,8 +134,7 @@ pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
     let (sql_command_sender, sql_command_receiver) = mpsc::unbounded::<SqlCommand>();
     let sql_result_mux = Mux::default();
-    let (dataflow_command_sender, dataflow_command_receiver) =
-        mpsc::unbounded::<(DataflowCommand, CommandMeta)>();
+    let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded::<DataflowCommand>();
     let dataflow_results_mux = Mux::default();
 
     // Extract timely dataflow parameters.

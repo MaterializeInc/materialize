@@ -22,10 +22,12 @@ pub enum DataflowCommand {
     CreateDataflows(Vec<Dataflow>),
     DropDataflows(Vec<String>),
     Peek {
+        connection_uuid: Uuid,
         source: RelationExpr,
         when: PeekWhen,
     },
     Tail {
+        connection_uuid: Uuid,
         typ: RelationType,
         name: String,
     },

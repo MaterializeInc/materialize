@@ -120,25 +120,37 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 impl Planner {
     /// Parses and plans a raw SQL query. See the documentation for
     /// [`PlannerResult`] for details about the meaning of the return type.
-    pub fn handle_command(&mut self, session: &mut Session, sql: String) -> PlannerResult {
+    pub fn handle_command(
+        &mut self,
+        session: &mut Session,
+        connection_uuid: Uuid,
+        sql: String,
+    ) -> PlannerResult {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
         match stmts.len() {
             0 => Ok((SqlResponse::EmptyQuery, None)),
-            1 => self.handle_statement(session, stmts.into_element()),
+            1 => self.handle_statement(session, connection_uuid, stmts.into_element()),
             _ => bail!("expected one statement, but got {}", stmts.len()),
         }
     }
 
-    fn handle_statement(&mut self, session: &mut Session, stmt: Statement) -> PlannerResult {
+    fn handle_statement(
+        &mut self,
+        session: &mut Session,
+        connection_uuid: Uuid,
+        stmt: Statement,
+    ) -> PlannerResult {
         match stmt {
-            Statement::Peek { name, immediate } => self.handle_peek(name, immediate),
-            Statement::Tail { name } => self.handle_tail(name),
+            Statement::Peek { name, immediate } => {
+                self.handle_peek(connection_uuid, name, immediate)
+            }
+            Statement::Tail { name } => self.handle_tail(connection_uuid, name),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
             | Statement::CreateView { .. }
             | Statement::CreateSources { .. } => self.handle_create_dataflow(stmt),
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
-            Statement::Query(query) => self.handle_select(*query),
+            Statement::Query(query) => self.handle_select(connection_uuid, *query),
             Statement::SetVariable {
                 local,
                 variable,
@@ -213,11 +225,12 @@ impl Planner {
         }
     }
 
-    fn handle_tail(&mut self, name: ObjectName) -> PlannerResult {
+    fn handle_tail(&mut self, connection_uuid: Uuid, name: ObjectName) -> PlannerResult {
         let name = name.to_string();
         Ok((
             SqlResponse::Tailing,
             Some(DataflowCommand::Tail {
+                connection_uuid,
                 typ: self.dataflows.get_type(&name)?.clone(),
                 name: name.to_owned(),
             }),
@@ -352,7 +365,12 @@ impl Planner {
         Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
     }
 
-    fn handle_peek(&mut self, name: ObjectName, immediate: bool) -> PlannerResult {
+    fn handle_peek(
+        &mut self,
+        connection_uuid: Uuid,
+        name: ObjectName,
+        immediate: bool,
+    ) -> PlannerResult {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
         Ok((
@@ -360,6 +378,7 @@ impl Planner {
                 typ: dataflow.typ().clone(),
             },
             Some(DataflowCommand::Peek {
+                connection_uuid,
                 source: RelationExpr::Get {
                     name: dataflow.name().to_owned(),
                     typ: dataflow.typ().clone(),
@@ -373,13 +392,14 @@ impl Planner {
         ))
     }
 
-    pub fn handle_select(&mut self, query: Query) -> PlannerResult {
+    pub fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
         let relation_expr = self.plan_query(&query)?;
         Ok((
             SqlResponse::Peeking {
                 typ: relation_expr.typ(),
             },
             Some(DataflowCommand::Peek {
+                connection_uuid,
                 source: relation_expr,
                 when: PeekWhen::Immediately,
             }),

@@ -11,7 +11,6 @@
 //! [timely dataflow]: ../timely/index.html
 
 pub mod dataflow;
-pub mod glue;
 pub mod pgwire;
 pub mod queue;
 pub mod server;
