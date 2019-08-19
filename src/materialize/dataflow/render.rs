@@ -762,6 +762,54 @@ where
                 context.set_local(*input, &keys[..], arranged.clone());
                 arranged.as_collection(|_k, v| v.clone())
             }
+            RelationExpr::Threshold { input } => {
+                // TODO: re-use and publish arrangement here.
+                let arity = input.arity();
+                let keys = (0..arity).collect::<Vec<_>>();
+
+                // TODO: easier idioms for detecting, re-using, and stashing.
+                if context.arrangement(&input, &keys[..]).is_none() {
+                    let built = build_relation_expr((*input).clone(), scope, context, worker_index);
+                    let keys2 = keys.clone();
+                    let keyed = built
+                        .map(move |tuple| {
+                            (
+                                keys2.iter().map(|i| tuple[*i].clone()).collect::<Vec<_>>(),
+                                tuple,
+                            )
+                        })
+                        .arrange_by_key();
+                    context.set_local((*input).clone(), &keys[..], keyed);
+                }
+
+                use differential_dataflow::operators::reduce::ReduceCore;
+                use differential_dataflow::trace::implementations::ord::OrdValSpine;
+
+                let arranged = match context.arrangement(&input, &keys[..]) {
+                    Some(ArrangementFlavor::Local(local)) => local
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_k, s, t| {
+                            for (record, count) in s.iter() {
+                                if *count > 0 {
+                                    t.push(((*record).clone(), *count));
+                                }
+                            }
+                        }),
+                    Some(ArrangementFlavor::Trace(trace)) => trace
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_k, s, t| {
+                            for (record, count) in s.iter() {
+                                if *count > 0 {
+                                    t.push(((*record).clone(), *count));
+                                }
+                            }
+                        }),
+                    None => {
+                        panic!("Arrangement alarmingly absent!");
+                    }
+                };
+
+                context.set_local(*input, &keys[..], arranged.clone());
+                arranged.as_collection(|_k, v| v.clone())
+            }
             RelationExpr::Union { left, right } => {
                 let input1 = build_relation_expr(*left, scope, context, worker_index);
                 let input2 = build_relation_expr(*right, scope, context, worker_index);
