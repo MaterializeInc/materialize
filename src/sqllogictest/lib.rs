@@ -1194,6 +1194,9 @@ impl RecordRunner for OnlyParseState {
     }
 }
 
+const LIGHT_HORIZONTAL_RULE: &str = "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────";
+const HEAVY_HORIZONTAL_RULE: &str = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+
 pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool) -> Outcomes {
     let mut outcomes = Outcomes::default();
     let mut state: Box<dyn RecordRunner> = if only_parse {
@@ -1239,12 +1242,15 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
             }
             _ => {
                 if verbosity >= 2 {
+                    println!("{}", HEAVY_HORIZONTAL_RULE);
+                    println!("{}", outcome);
                     match &record {
-                        Record::Statement { sql, .. } => println!("    error for: {}", sql),
-                        Record::Query { sql, .. } => println!("    error for: {}", sql),
+                        Record::Statement { sql, .. } => {
+                            println!("{}\n{}", LIGHT_HORIZONTAL_RULE, sql)
+                        }
+                        Record::Query { sql, .. } => println!("{}\n{}", LIGHT_HORIZONTAL_RULE, sql),
                         _ => (),
                     }
-                    println!("    {}", outcome);
                 }
             }
         }
