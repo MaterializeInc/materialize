@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::types::RelationExpr;
+use expr::RelationExpr;
 use repr::RelationType;
 
 pub struct FractureReduce;
@@ -53,7 +53,7 @@ impl FractureReduce {
                         // (0..keys).collect(),
                         group_key.clone(),
                         vec![(
-                            crate::dataflow::types::AggregateExpr {
+                            expr::AggregateExpr {
                                 func: agg.func,
                                 // expr: ScalarExpr::Column(keys),
                                 expr: agg.expr,
@@ -107,8 +107,7 @@ impl AbelianReduce {
 
 #[cfg(test)]
 mod tests {
-    use crate::dataflow::func::AggregateFunc;
-    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use expr::{AggregateFunc, RelationExpr, ScalarExpr};
     use repr::{ColumnType, RelationType, ScalarType};
 
     #[test]

@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::RelationExpr;
+use expr::RelationExpr;
 use repr::RelationType;
 
 /// Re-order relations in a join to process them in an order that makes sense.

@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::types::{RelationExpr, ScalarExpr};
+use expr::{RelationExpr, ScalarExpr};
 use repr::Datum;
 use repr::RelationType;
 
@@ -58,8 +58,8 @@ impl FoldConstants {
 
 pub mod demorgans {
 
-    use crate::dataflow::func::{BinaryFunc, UnaryFunc};
-    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use expr::{BinaryFunc, UnaryFunc};
+    use expr::{RelationExpr, ScalarExpr};
     use repr::{Datum, RelationType};
 
     pub struct DeMorgans;
@@ -149,8 +149,8 @@ pub mod demorgans {
 
 pub mod undistribute_and {
 
-    use crate::dataflow::func::BinaryFunc;
-    use crate::dataflow::types::{RelationExpr, ScalarExpr};
+    use expr::BinaryFunc;
+    use expr::{RelationExpr, ScalarExpr};
     use repr::{Datum, RelationType};
 
     pub struct UndistributeAnd;

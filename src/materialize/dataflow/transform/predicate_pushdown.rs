@@ -60,7 +60,7 @@
 //! assert_eq!(expr, expected);
 //! ```
 
-use crate::dataflow::types::{RelationExpr, ScalarExpr};
+use expr::{RelationExpr, ScalarExpr};
 use repr::RelationType;
 
 pub struct PredicatePushdown;
@@ -131,8 +131,8 @@ impl PredicatePushdown {
                             push_downs[relation].push(predicate);
                         }
                         _ => {
-                            use crate::dataflow::func::BinaryFunc;
-                            use crate::dataflow::func::UnaryFunc;
+                            use expr::BinaryFunc;
+                            use expr::UnaryFunc;
                             if let ScalarExpr::CallBinary {
                                 func: BinaryFunc::Eq,
                                 expr1,
@@ -199,7 +199,7 @@ impl PredicatePushdown {
                     let mut pos = 0;
                     while pos + 1 < variable.len() {
                         if variable[pos].0 == variable[pos + 1].0 {
-                            use crate::dataflow::func::BinaryFunc;
+                            use expr::BinaryFunc;
                             push_downs[variable[pos].0].push(ScalarExpr::CallBinary {
                                 func: BinaryFunc::Eq,
                                 expr1: Box::new(ScalarExpr::Column(variable[pos].1)),

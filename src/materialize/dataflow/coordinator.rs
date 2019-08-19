@@ -22,11 +22,11 @@ use timely::synchronization::sequence::Sequencer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::RelationExpr;
 use crate::dataflow::logging;
 use crate::dataflow::logging::materialized::MaterializedEvent;
 use crate::dataflow::{Dataflow, Timestamp, View};
 use crate::glue::*;
+use expr::RelationExpr;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -7,14 +7,12 @@
 
 mod arrangement;
 pub mod logging;
-mod optimize;
 mod render;
 mod sink;
 mod source;
 mod types;
 
 pub mod coordinator;
-pub mod func;
 pub mod server;
 pub mod transform;
 

@@ -36,7 +36,7 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::dataflow::RelationExpr;
+use expr::RelationExpr;
 use repr::RelationType;
 
 pub struct Filter;

@@ -6,7 +6,8 @@
 //! Types and data structures used to glue the various components of
 //! Materialize together.
 
-use crate::dataflow::{Dataflow, RelationExpr, Timestamp};
+use crate::dataflow::{Dataflow, Timestamp};
+use expr::RelationExpr;
 use failure::{ensure, format_err};
 use repr::{Datum, RelationType};
 use serde::{Deserialize, Serialize};
