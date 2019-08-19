@@ -14,7 +14,7 @@ use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use ore::mpmc::Mux;
 
 pub fn serve(
-    sql_command_receiver: UnboundedReceiver<(SqlCommand, CommandMeta)>,
+    sql_command_receiver: UnboundedReceiver<SqlCommand>,
     sql_result_mux: Mux<SqlResult>,
     dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
     worker0_thread: std::thread::Thread,
@@ -22,8 +22,8 @@ pub fn serve(
     std::thread::spawn(move || {
         let mut planner = sql::Planner::default();
         for msg in sql_command_receiver.wait() {
-            let (mut cmd, command_meta) = msg.unwrap();
-            let connection_uuid = command_meta.connection_uuid;
+            let mut cmd = msg.unwrap();
+            let connection_uuid = cmd.connection_uuid;
 
             let (sql_result, dataflow_command) =
                 match planner.handle_command(&mut cmd.session, cmd.sql) {
@@ -33,7 +33,12 @@ pub fn serve(
 
             if let Some(dataflow_command) = dataflow_command {
                 dataflow_command_sender
-                    .unbounded_send((dataflow_command.clone(), command_meta.clone()))
+                    .unbounded_send((
+                        dataflow_command.clone(),
+                        CommandMeta {
+                            connection_uuid: connection_uuid,
+                        },
+                    ))
                     // if the dataflow server has gone down, just explode
                     .unwrap();
 

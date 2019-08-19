@@ -17,7 +17,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
 use crate::dataflow::{DataflowResults, Update};
-use crate::glue::*;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
@@ -28,7 +27,7 @@ use std::io::Write;
 
 pub struct Context {
     pub uuid: Uuid,
-    pub sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
+    pub sql_command_sender: UnboundedSender<SqlCommand>,
     pub sql_result_receiver: UnboundedReceiver<SqlResult>,
     pub dataflow_results_receiver: UnboundedReceiver<DataflowResults>,
     pub num_timely_workers: usize,
@@ -306,15 +305,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         match msg {
             FrontendMessage::Query { query } => {
                 let sql = String::from(String::from_utf8_lossy(&query));
-                context.sql_command_sender.unbounded_send((
-                    SqlCommand {
-                        sql,
-                        session: state.session,
-                    },
-                    CommandMeta {
-                        connection_uuid: context.uuid,
-                    },
-                ))?;
+                context.sql_command_sender.unbounded_send(SqlCommand {
+                    sql,
+                    session: state.session,
+                    connection_uuid: context.uuid,
+                })?;
                 transition!(HandleQuery { conn })
             }
             FrontendMessage::Terminate => transition!(Done(())),

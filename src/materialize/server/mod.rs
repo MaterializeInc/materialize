@@ -92,7 +92,7 @@ impl Default for Config {
 
 fn handle_connection(
     tcp_stream: TcpStream,
-    sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
+    sql_command_sender: UnboundedSender<SqlCommand>,
     sql_result_mux: Mux<SqlResult>,
     dataflow_results_mux: Mux<DataflowResults>,
     num_timely_workers: usize,
@@ -133,7 +133,7 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
-    let (sql_command_sender, sql_command_receiver) = mpsc::unbounded::<(SqlCommand, CommandMeta)>();
+    let (sql_command_sender, sql_command_receiver) = mpsc::unbounded::<SqlCommand>();
     let sql_result_mux = Mux::default();
     let (dataflow_command_sender, dataflow_command_receiver) =
         mpsc::unbounded::<(DataflowCommand, CommandMeta)>();

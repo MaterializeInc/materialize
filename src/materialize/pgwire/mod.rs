@@ -23,7 +23,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
 use crate::dataflow::DataflowResults;
-use crate::glue::*;
 use crate::sql::{SqlCommand, SqlResult};
 use ore::mpmc::Mux;
 
@@ -37,7 +36,7 @@ pub use protocol::match_handshake;
 
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
-    sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
+    sql_command_sender: UnboundedSender<SqlCommand>,
     sql_result_mux: Mux<SqlResult>,
     dataflow_results_mux: Mux<DataflowResults>,
     num_timely_workers: usize,

@@ -45,6 +45,7 @@ pub mod store;
 
 /// Incoming raw SQL from users.
 pub struct SqlCommand {
+    pub connection_uuid: Uuid,
     pub sql: String,
     pub session: crate::sql::Session,
 }
