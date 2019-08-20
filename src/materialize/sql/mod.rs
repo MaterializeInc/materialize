@@ -574,14 +574,17 @@ impl Planner {
                         } else {
                             left_expr.union(right_expr).distinct()
                         }
-                    },
+                    }
                     SetOperator::Except => {
                         if *all {
                             left_expr.union(right_expr.negate()).threshold()
                         } else {
-                            left_expr.distinct().union(right_expr.distinct().negate()).threshold()
+                            left_expr
+                                .distinct()
+                                .union(right_expr.distinct().negate())
+                                .threshold()
                         }
-                    },
+                    }
                     SetOperator::Intersect => {
                         // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
                         // Though we believe that render() does The Right Thing (TM)
@@ -590,11 +593,14 @@ impl Planner {
                         // i.e., the record counts for differential data flow definitely remain non-negative.
                         let left_clone = left_expr.clone();
                         if *all {
-                            left_expr.union(left_clone.union(right_expr.negate()).threshold().negate())
+                            left_expr
+                                .union(left_clone.union(right_expr.negate()).threshold().negate())
                         } else {
-                            left_expr.union(left_clone.union(right_expr.negate()).threshold().negate()).distinct()
+                            left_expr
+                                .union(left_clone.union(right_expr.negate()).threshold().negate())
+                                .distinct()
                         }
-                    },
+                    }
                 };
                 Ok(relation_expr)
             }
