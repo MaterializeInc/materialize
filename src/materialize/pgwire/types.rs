@@ -38,6 +38,12 @@ pub const INT8: PgType = PgType { oid: 20, typlen: 8 };
 /// 32-bit integer.
 pub const INT4: PgType = PgType { oid: 23, typlen: 4 };
 
+/// A date. Internally a 32-bit number of days from the epoch.
+pub const DATE: PgType = PgType {
+    oid: 1082,
+    typlen: 4,
+};
+
 /// Variable-length string.
 pub const TEXT: PgType = PgType {
     oid: 25,
@@ -84,7 +90,7 @@ impl From<&ScalarType> for PgType {
             ScalarType::Float32 => FLOAT4,
             ScalarType::Float64 => FLOAT8,
             ScalarType::Decimal { .. } => NUMERIC,
-            ScalarType::Date => unimplemented!(),
+            ScalarType::Date => DATE,
             ScalarType::Timestamp => unimplemented!(),
             ScalarType::Time => unimplemented!(),
             ScalarType::Bytes => BYTEA,

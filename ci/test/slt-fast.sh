@@ -125,7 +125,7 @@ tests=(
     test/cockroach/table.slt
     # test/cockroach/target_names.slt
     # test/cockroach/time.slt
-    # test/cockroach/timestamp.slt
+    test/cockroach/timestamp.slt
     test/cockroach/truncate.slt
     test/cockroach/tuple.slt
     # test/cockroach/typing.slt

@@ -5,11 +5,13 @@
 
 //! SQL-dataflow translation.
 
+use std::convert::TryInto;
+
 use failure::{bail, ensure, format_err};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
-    ObjectType, Query, Select, SelectItem, SetExpr, SetOperator, SetVariableValue,
+    ObjectType, ParsedDate, Query, Select, SelectItem, SetExpr, SetOperator, SetVariableValue,
     ShowStatementFilter, SourceSchema, Stage, Statement, TableAlias, TableFactor, TableWithJoins,
     UnaryOperator, Value, Values,
 };
@@ -1886,12 +1888,21 @@ impl Planner {
                 false => (Datum::False, ScalarType::Bool),
                 true => (Datum::True, ScalarType::Bool),
             },
-            Value::Date(_) => bail!("DATE literals are not supported: {}", l.to_string()),
+            Value::Date(_, ParsedDate { year, month, day }) => (
+                Datum::from_ymd(
+                    (*year)
+                        .try_into()
+                        .map_err(|e| format_err!("Year is too large {}: {}", year, e))?,
+                    *month,
+                    *day,
+                )?,
+                ScalarType::Date,
+            ),
             Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
-            Value::Timestamp(_) => bail!("TIMESTAMP literals are not supported: {}", l.to_string()),
-            Value::Interval { .. } => {
-                bail!("INTERVAL literals are not supported: {}", l.to_string())
+            Value::Timestamp(_, _) => {
+                bail!("TIMESTAMP literals are not supported: {}", l.to_string())
             }
+            Value::Interval(_) => bail!("INTERVAL literals are not supported: {}", l.to_string()),
             Value::Null => (Datum::Null, ScalarType::Null),
         };
         let nullable = datum == Datum::Null;

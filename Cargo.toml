@@ -24,3 +24,9 @@ debug = true
 rdkafka = { git = "ssh://git@github.com/MaterializeInc/rust-rdkafka.git" }
 avro-rs = { git = "ssh://git@github.com/MaterializeInc/avro-rs.git" }
 futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch = "0.1" }
+
+# This is a slightly confusing syntax because of the fact that ssh urls use `:`
+# instead of `/` to separate the domain, so this serves as an example
+#
+# [patch."ssh://git@github.com/MaterializeInc/sqlparser.git"]
+# sqlparser = { path = "../sqlparser" }
