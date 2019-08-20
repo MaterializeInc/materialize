@@ -98,10 +98,7 @@ CREATE TABLE lineitem (
     PRIMARY KEY (l_orderkey, l_linenumber)
 )
 
-# TODO(benesch): remove when these queries actually pass.
-halt
-
-query TTT valuesort
+query TTIIIIIIII valuesort
 -- Query 01
 SELECT
 	l_returnflag,
@@ -117,14 +114,105 @@ SELECT
 FROM
 	lineitem
 WHERE
---	l_shipdate <= date '1998-12-01' - interval ':1' day (3)
-    l_shipdate <= cast(10562 as smallint)
+    l_shipdate <= date '1998-12-01' -- - interval ':1' day (3)
 GROUP BY
 	l_returnflag,
 	l_linestatus
 -- ORDER BY
 -- 	l_returnflag,
 -- 	l_linestatus
+
+query IITI valuesort
+-- Query 03
+select
+    l_orderkey,
+    sum(l_extendedprice * (1 - l_discount)) as revenue,
+    o_orderdate,
+    o_shippriority
+from
+    customer,
+    orders,
+    lineitem
+where
+    c_mktsegment = 'BUILDING'
+    and c_custkey = o_custkey
+    and l_orderkey = o_orderkey
+    and o_orderdate < date '1995-03-15'
+    and l_shipdate > date '1995-03-15'
+group by
+    l_orderkey,
+    o_orderdate,
+    o_shippriority
+-- order by
+--     revenue desc,
+--     o_orderdate;
+
+query TI valuesort
+-- Query 05
+select
+    n_name,
+    sum(l_extendedprice * (1 - l_discount)) as revenue
+from
+    customer,
+    orders,
+    lineitem,
+    supplier,
+    nation,
+    region
+where
+    c_custkey = o_custkey
+    and l_orderkey = o_orderkey
+    and l_suppkey = s_suppkey
+    and c_nationkey = s_nationkey
+    and s_nationkey = n_nationkey
+    and n_regionkey = r_regionkey
+    and r_name = 'ASIA'
+    and o_orderdate >= date '1994-01-01'
+    and o_orderdate < date '1995-01-01'
+group by
+    n_name
+-- order by
+--     revenue desc;
+
+query ITIITTTT valuesort
+-- Query 10
+select
+    c_custkey,
+    c_name,
+    sum(l_extendedprice * (1 - l_discount)) as revenue,
+    c_acctbal,
+    n_name,
+    c_address,
+    c_phone,
+    c_comment
+from
+    customer,
+    orders,
+    lineitem,
+    nation
+where
+    c_custkey = o_custkey
+    and l_orderkey = o_orderkey
+    and o_orderdate >= date '1993-10-01'
+    and o_orderdate < date '1994-01-01'
+--    and o_orderdate < date '1993-10-01' -- + interval '3' month
+    and l_returnflag = 'R'
+    and c_nationkey = n_nationkey
+group by
+    c_custkey,
+    c_name,
+    c_acctbal,
+    c_phone,
+    n_name,
+    c_address,
+    c_comment
+-- order by
+--     revenue desc;
+
+#----------------------------------------------------------------------
+#-- TODO(benesch): remove when these queries actually pass.
+halt
+#----------------------------------------------------------------------
 
 query TTT valuesort
 -- Query 02
@@ -165,34 +253,6 @@ WHERE
 
 
 query TTT valuesort
--- Query 03
-select
-    l_orderkey,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
-    o_orderdate,
-    o_shippriority
-from
-    customer,
-    orders,
-    lineitem
-where
-    c_mktsegment = 'BUILDING'
-    and c_custkey = o_custkey
-    and l_orderkey = o_orderkey
---  and o_orderdate < date '1995-03-15'
---  and l_shipdate > date '1995-03-15'
-    and o_orderdate < 9203
-    and l_shipdate > 9203
-group by
-    l_orderkey,
-    o_orderdate,
-    o_shippriority
--- order by
---     revenue desc,
---     o_orderdate;
-
-
-query TTT valuesort
 -- Query 04
 select
     o_orderpriority,
@@ -200,8 +260,9 @@ select
 from
     orders
 where
-    o_orderdate >= cast(741484800/86400 as smallint)
+    o_orderdate >= date '1993-07-01'
     and o_orderdate < cast(749433600/86400 as smallint)
+    -- and o_orderdate < date '1993-07-01' + interval '3' month
     and exists (
         select
             *
@@ -216,38 +277,7 @@ group by
 -- order by
 --     o_orderpriority;
 
-
-query TTT valuesort
--- Query 05
-select
-    n_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue
-from
-    customer,
-    orders,
-    lineitem,
-    supplier,
-    nation,
-    region
-where
-    c_custkey = o_custkey
-    and l_orderkey = o_orderkey
-    and l_suppkey = s_suppkey
-    and c_nationkey = s_nationkey
-    and s_nationkey = n_nationkey
-    and n_regionkey = r_regionkey
-    and r_name = 'ASIA'
---  and o_orderdate >= date '1994-01-01'
---  and o_orderdate < date '1995-01-01'
-    and o_orderdate >= cast(8765 as smallint)
-    and o_orderdate < cast(9130 as smallint)
-group by
-    n_name
--- order by
---     revenue desc;
-
-
-query TTT valuesort
+query I valuesort
 -- Query 06
 select
     sum(l_extendedprice * l_discount) as revenue
@@ -255,12 +285,11 @@ from
     lineitem
 where
     l_quantity < 24
---  and l_shipdate >= date '1994-01-01'
---  and l_shipdate < date '1994-01-01' + interval '1' year
-    and l_shipdate >= cast(8765 as smallint)
-    and l_shipdate < cast(9130 as smallint)
+    and l_shipdate >= date '1994-01-01'
+    and l_shipdate < date '1994-01-01' -- + interval '1' year
     and l_discount between 0.06 - 0.01 and 0.07
     ;
+
 
 query TTT valuesort
 -- Query 07
@@ -381,44 +410,6 @@ group by
 --     nation,
 --     o_year desc;
 
-
-query TTT valuesort
--- Query 10
-select
-    c_custkey,
-    c_name,
-    sum(l_extendedprice * (1 - l_discount)) as revenue,
-    c_acctbal,
-    n_name,
-    c_address,
-    c_phone,
-    c_comment
-from
-    customer,
-    orders,
-    lineitem,
-    nation
-where
-    c_custkey = o_custkey
-    and l_orderkey = o_orderkey
---  and o_orderdate >= date '1993-10-01'
---  and o_orderdate < date '1993-10-01' + interval '3' month
-    and o_orderdate >= 8673
-    and o_orderdate < 8765
-    and l_returnflag = 'R'
-    and c_nationkey = n_nationkey
-group by
-    c_custkey,
-    c_name,
-    c_acctbal,
-    c_phone,
-    n_name,
-    c_address,
-    c_comment
--- order by
---     revenue desc;
-
-
 query TTT valuesort
 -- Query 11
 select
@@ -448,7 +439,6 @@ group by
         )
 -- order by
 --     value desc;
-
 
 query TTT valuesort
 -- Query 12
@@ -523,6 +513,7 @@ where
     and l_shipdate < cast(812505600/86400 as smallint);
 
 
+
 query TTT valuesort
 -- Query 15
 create view revenue (supplier_no, total_revenue) as
@@ -532,8 +523,9 @@ create view revenue (supplier_no, total_revenue) as
     from
         lineitem
     where
-        l_shipdate >= cast(820454400/86400 as smallint)
-        and l_shipdate < cast(828316800/86400 as smallint)
+        l_shipdate >= date '1996-01-01'
+        and l_shipdate < date '1996-04-01'
+--      and l_shipdate < date '1996-01-01' + interval '3' month
     group by
         l_suppkey;
 

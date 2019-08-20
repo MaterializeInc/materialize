@@ -6,9 +6,12 @@
 pub mod decimal;
 pub mod regex;
 
+use std::fmt;
+
+use chrono::NaiveDate;
+use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 use self::decimal::Significand;
 use self::regex::Regex;
@@ -35,6 +38,8 @@ pub enum Datum {
     Float32(OrderedFloat<f32>),
     /// A 64-bit floating point number.
     Float64(OrderedFloat<f64>),
+    /// A Date
+    Date(NaiveDate),
     /// An exact decimal number, possibly with a fractional component, with up
     /// to 38 digits of precision.
     Decimal(Significand),
@@ -52,6 +57,15 @@ impl Datum {
             Datum::Null => true,
             _ => false,
         }
+    }
+
+    /// Create a Datum representing a Date
+    ///
+    /// Errors if the the combination of year/month/day is invalid
+    pub fn from_ymd(year: i32, month: u8, day: u8) -> Result<Datum, failure::Error> {
+        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
+            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?;
+        Ok(Datum::Date(d))
     }
 
     pub fn unwrap_bool(&self) -> bool {
@@ -104,6 +118,13 @@ impl Datum {
         }
     }
 
+    pub fn unwrap_date(&self) -> chrono::NaiveDate {
+        match self {
+            Datum::Date(d) => *d,
+            _ => panic!("Datum::unwrap_date called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_decimal(&self) -> Significand {
         match self {
             Datum::Decimal(d) => *d,
@@ -141,6 +162,7 @@ impl Datum {
             (Datum::Int64(_), ScalarType::Int64) => true,
             (Datum::Float32(_), ScalarType::Float32) => true,
             (Datum::Float64(_), ScalarType::Float64) => true,
+            (Datum::Date(_), ScalarType::Date) => true,
             (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
             (Datum::Bytes(_), ScalarType::Bytes) => true,
             (Datum::String(_), ScalarType::String) => true,
@@ -259,6 +281,7 @@ pub enum ScalarType {
     /// This is uncommon. Most [`Datum:Null`]s appear with a different type.
     Null,
     Bool,
+    Date,
     Int32,
     Int64,
     Float32,
@@ -269,7 +292,6 @@ pub enum ScalarType {
     /// maximum precision is [`decimal::MAX_DECIMAL_PRECISION`]. The scale must
     /// be less than or equal to the precision.
     Decimal(u8, u8),
-    Date,
     Time,
     Timestamp,
     Bytes,

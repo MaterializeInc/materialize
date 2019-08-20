@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use bytes::Bytes;
+use chrono::NaiveDate;
 
 use super::types::PgType;
 use repr::decimal::Decimal;
@@ -85,6 +86,7 @@ pub enum FieldFormat {
     Binary = 1,
 }
 
+/// PGWire-specific representations of Datums
 #[derive(Debug)]
 pub enum FieldValue {
     Bool(bool),
@@ -93,6 +95,7 @@ pub enum FieldValue {
     Int8(i64),
     Float4(f32),
     Float8(f64),
+    Date(NaiveDate),
     Text(String),
     Numeric(Decimal),
 }
@@ -107,6 +110,7 @@ impl FieldValue {
             Datum::Int64(i) => Some(FieldValue::Int8(i)),
             Datum::Float32(f) => Some(FieldValue::Float4(*f)),
             Datum::Float64(f) => Some(FieldValue::Float8(*f)),
+            Datum::Date(d) => Some(FieldValue::Date(d)),
             Datum::Decimal(d) => {
                 let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
                 Some(FieldValue::Numeric(d.with_scale(scale)))
