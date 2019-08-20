@@ -1416,6 +1416,39 @@ impl Planner {
         let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
         let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
 
+        let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
+            (ScalarType::Decimal(_, _), ScalarType::Decimal(_, _)) => true,
+            _ => false,
+        };
+
+        let is_cmp = op == &BinaryOperator::Lt
+            || op == &BinaryOperator::LtEq
+            || op == &BinaryOperator::Gt
+            || op == &BinaryOperator::GtEq
+            || op == &BinaryOperator::Eq
+            || op == &BinaryOperator::NotEq;
+
+        let is_arithmetic = op == &BinaryOperator::Plus
+            || op == &BinaryOperator::Minus
+            || op == &BinaryOperator::Multiply
+            || op == &BinaryOperator::Divide;
+
+        // For arithmetic where both inputs are already decimals, we skip
+        // coalescing, which could result in a rescale if the decimals have
+        // different precisions, because we tightly control the rescale when
+        // planning the arithmetic operation (below). E.g., decimal
+        // multiplication does not need to rescale its inputs, even when the
+        // inputs have different scales.
+        if is_cmp || (is_arithmetic && !both_decimals) {
+            let ctx = op.to_string();
+            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
+            assert_eq!(exprs.len(), 2);
+            rexpr = exprs.pop().unwrap();
+            lexpr = exprs.pop().unwrap();
+            rtype = typ.clone();
+            ltype = typ;
+        }
+
         // Arithmetic operations follow Snowflake's rules for precision/scale
         // conversions. [0]
         //
@@ -1462,26 +1495,6 @@ impl Planner {
                 return Ok((expr, typ));
             }
             _ => (),
-        }
-
-        if op == &BinaryOperator::Plus
-            || op == &BinaryOperator::Minus
-            || op == &BinaryOperator::Multiply
-            || op == &BinaryOperator::Divide
-            || op == &BinaryOperator::Lt
-            || op == &BinaryOperator::LtEq
-            || op == &BinaryOperator::Gt
-            || op == &BinaryOperator::GtEq
-            || op == &BinaryOperator::Eq
-            || op == &BinaryOperator::NotEq
-        {
-            let ctx = op.to_string();
-            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
-            assert_eq!(exprs.len(), 2);
-            rexpr = exprs.pop().unwrap();
-            lexpr = exprs.pop().unwrap();
-            rtype = typ.clone();
-            ltype = typ;
         }
 
         let (func, scalar_type) = match op {
