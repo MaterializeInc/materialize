@@ -585,6 +585,9 @@ impl Planner {
                     SetOperator::Intersect => {
                         // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
                         // Though we believe that render() does The Right Thing (TM)
+                        // Also note that we do *not* need another threshold() at the end of the method chain
+                        // because the right-hand side of the outer union only produces existing records,
+                        // i.e., the record counts for differential data flow definitely remain non-negative.
                         let left_clone = left_expr.clone();
                         if *all {
                             left_expr.union(left_clone.union(right_expr.negate()).threshold().negate())
