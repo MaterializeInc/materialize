@@ -555,7 +555,7 @@ impl Planner {
         match q {
             SetExpr::Select(select) => self.plan_view_select(select),
             SetExpr::SetOperation {
-                op: SetOperator::Union,
+                op,
                 all,
                 left,
                 right,
@@ -568,29 +568,53 @@ impl Planner {
                 let right_types = &right_expr.typ().column_types;
                 if left_types.len() != right_types.len() {
                     bail!(
-                        "Each UNION should have the same number of columns: {:?} UNION {:?}",
-                        left,
-                        right
+                        "set operation {:?} with {:?} and {:?} columns not supported",
+                        op,
+                        left_types.len(),
+                        right_types.len(),
                     );
                 }
                 for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
                     left_col_type.union(right_col_type)?;
                 }
 
-                let relation_expr = RelationExpr::Union {
-                    left: Box::new(left_expr),
-                    right: Box::new(right_expr),
-                };
-                let relation_expr = if *all {
-                    relation_expr
-                } else {
-                    RelationExpr::Distinct {
-                        input: Box::new(relation_expr),
+                let relation_expr = match op {
+                    SetOperator::Union => {
+                        if *all {
+                            left_expr.union(right_expr)
+                        } else {
+                            left_expr.union(right_expr).distinct()
+                        }
+                    }
+                    SetOperator::Except => {
+                        if *all {
+                            left_expr.union(right_expr.negate()).threshold()
+                        } else {
+                            left_expr
+                                .distinct()
+                                .union(right_expr.distinct().negate())
+                                .threshold()
+                        }
+                    }
+                    SetOperator::Intersect => {
+                        // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
+                        // Though we believe that render() does The Right Thing (TM)
+                        // Also note that we do *not* need another threshold() at the end of the method chain
+                        // because the right-hand side of the outer union only produces existing records,
+                        // i.e., the record counts for differential data flow definitely remain non-negative.
+                        let left_clone = left_expr.clone();
+                        if *all {
+                            left_expr
+                                .union(left_clone.union(right_expr.negate()).threshold().negate())
+                        } else {
+                            left_expr
+                                .union(left_clone.union(right_expr.negate()).threshold().negate())
+                                .distinct()
+                        }
                     }
                 };
                 Ok(relation_expr)
             }
-            SetExpr::SetOperation { op, .. } => bail!("set operation {:?} is not supported", op),
             SetExpr::Values(Values(values)) => {
                 ensure!(
                     !values.is_empty(),
@@ -1432,7 +1456,7 @@ impl Planner {
                 let si = cmp::max(s + 1, *s2);
                 lexpr = rescale_decimal(lexpr, *s1, si);
                 let expr = lexpr.call_binary(rexpr, BinaryFunc::DivDecimal);
-                let expr = rescale_decimal(expr, si - s2, s);
+                let expr = rescale_decimal(expr, si - *s2, s);
                 let p = (p1 - s1) + s2 + s;
                 let typ = ColumnType::new(ScalarType::Decimal(p, s)).nullable(true);
                 return Ok((expr, typ));
