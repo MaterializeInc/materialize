@@ -19,7 +19,7 @@ use repr::Datum;
 pub fn kafka<G>(
     scope: &G,
     name: &str,
-    connector: &KafkaSourceConnector,
+    connector: KafkaSourceConnector,
     read_kafka: bool,
 ) -> (
     Stream<G, (Vec<Datum>, Timestamp, Diff)>,
@@ -28,6 +28,12 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let KafkaSourceConnector {
+        addr,
+        topic,
+        raw_schema,
+        schema_registry_url,
+    } = connector;
     let (stream, capability) = source(scope, name, move |info| {
         let name = name.to_owned();
         let activator = scope.activator_for(&info.address[..]);
@@ -43,7 +49,7 @@ where
             .set("session.timeout.ms", "6000")
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
-            .set("bootstrap.servers", &connector.addr.to_string());
+            .set("bootstrap.servers", &addr.to_string());
 
         let mut consumer: Option<BaseConsumer<DefaultConsumerContext>> = if read_kafka {
             Some(config.create().expect("Failed to create Kafka Consumer"))
@@ -52,7 +58,7 @@ where
         };
 
         if let Some(consumer) = consumer.as_mut() {
-            consumer.subscribe(&[&connector.topic]).unwrap();
+            consumer.subscribe(&[&topic]).unwrap();
         }
 
         move |cap, output| {
@@ -120,8 +126,7 @@ where
         Exchange::new(|x: &Vec<u8>| x.hashed()),
         "AvroDecode",
         move |_, _| {
-            let mut decoder =
-                avro::Decoder::new(&connector.raw_schema, connector.schema_registry_url.clone());
+            let mut decoder = avro::Decoder::new(&raw_schema, schema_registry_url);
             move |input, output| {
                 input.for_each(|cap, data| {
                     let mut session = output.session(&cap);

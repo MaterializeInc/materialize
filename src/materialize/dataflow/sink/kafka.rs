@@ -18,7 +18,7 @@ use crate::dataflow::types::{Diff, KafkaSinkConnector, Timestamp};
 pub fn kafka<G, B, K, V>(
     stream: &Stream<G, B>,
     name: &str,
-    _connector: &KafkaSinkConnector,
+    _connector: KafkaSinkConnector,
     _done: Rc<Cell<bool>>,
     _timer: std::time::Instant,
 ) where

@@ -99,7 +99,7 @@ impl Planner {
     fn handle_statement(&mut self, session: &mut Session, stmt: Statement) -> PlannerResult {
         match stmt {
             Statement::Peek { name, immediate } => self.handle_peek(name, immediate),
-            Statement::Tail { .. } => bail!("TAIL is not implemented yet"),
+            Statement::Tail { name } => self.handle_tail(name),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
             | Statement::CreateView { .. }
@@ -178,6 +178,17 @@ impl Planner {
                 None,
             ))
         }
+    }
+
+    fn handle_tail(&mut self, name: ObjectName) -> PlannerResult {
+        let name = name.to_string();
+        Ok((
+            SqlResponse::Tailing,
+            Some(DataflowCommand::Tail {
+                typ: self.dataflows.get_type(&name)?.clone(),
+                name: name.to_owned(),
+            }),
+        ))
     }
 
     fn handle_show_objects(&mut self, object_type: ObjectType) -> PlannerResult {

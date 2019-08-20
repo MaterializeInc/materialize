@@ -62,6 +62,8 @@ pub enum BackendMessage {
         message: String,
         detail: Option<String>,
     },
+    CopyOutResponse,
+    CopyData(Vec<u8>),
 }
 
 #[derive(Debug)]
