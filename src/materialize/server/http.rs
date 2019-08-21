@@ -9,7 +9,7 @@ use hyper::service;
 use hyper::{Body, Method, Request, Response};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use dataflow::DataflowResults;
+use dataflow::Exfiltration;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 
@@ -50,7 +50,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 
 pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
     a: A,
-    dataflow_results_mux: Mux<DataflowResults>,
+    dataflow_results_mux: Mux<Exfiltration>,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let svc =
         service::service_fn(
@@ -80,7 +80,7 @@ fn handle_unknown(_: Request<Body>) -> FutureResponse {
 
 fn handle_dataflow_results(
     req: Request<Body>,
-    dataflow_results_mux: Mux<DataflowResults>,
+    dataflow_results_mux: Mux<Exfiltration>,
 ) -> Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send> {
     Box::new(
         future::lazy(move || {
@@ -93,7 +93,7 @@ fn handle_dataflow_results(
         })
         .and_then(move |(uuid, req)| {
             req.into_body().concat2().from_err().and_then(move |body| {
-                let rows: DataflowResults = bincode::deserialize(&body).unwrap();
+                let rows: Exfiltration = bincode::deserialize(&body).unwrap();
                 // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
                 if let Ok(sender) = dataflow_results_mux.read().unwrap().sender(&uuid) {
                     drop(sender.unbounded_send(rows))

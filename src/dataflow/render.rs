@@ -7,7 +7,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::{AsCollection, Collection};
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use timely::communication::Allocate;
@@ -21,6 +21,7 @@ use super::source::SharedCapability;
 use super::types::*;
 use crate::arrangement::TraceManager;
 use crate::arrangement::{context::ArrangementFlavor, Context};
+use crate::exfiltrate::Exfiltrator;
 use expr::RelationExpr;
 use ore::mpmc::Mux;
 use repr::Datum;
@@ -35,7 +36,7 @@ pub fn build_dataflow<A: Allocate>(
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
     local_input_mux: &mut Mux<LocalInput>,
-    rpc_client: Rc<RefCell<reqwest::Client>>,
+    exfiltrator: Rc<Exfiltrator>,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
@@ -89,7 +90,7 @@ pub fn build_dataflow<A: Allocate>(
                     sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
                 }
                 SinkConnector::Tail(c) => {
-                    sink::tail(&arrangement.stream, &sink.name, c, rpc_client)
+                    sink::tail(&arrangement.stream, &sink.name, c, exfiltrator)
                 }
             }
         }

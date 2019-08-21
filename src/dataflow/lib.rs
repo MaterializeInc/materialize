@@ -6,14 +6,16 @@
 //! Driver for timely/differential dataflow.
 
 mod arrangement;
-pub mod logging;
+mod exfiltrate;
 mod render;
 mod sink;
 mod source;
 mod types;
 
 pub mod coordinator;
+pub mod logging;
 pub mod server;
 
-pub use server::{serve, DataflowResultsHandler};
+pub use exfiltrate::{Exfiltration, ExfiltratorConfig};
+pub use server::serve;
 pub use types::*;

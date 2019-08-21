@@ -23,7 +23,7 @@ use regex::Regex;
 use uuid::Uuid;
 
 use dataflow::{
-    self, Dataflow, DataflowCommand, DataflowResults, LocalInput, LocalSourceConnector, PeekWhen,
+    self, Dataflow, DataflowCommand, Exfiltration, LocalInput, LocalSourceConnector, PeekWhen,
     Source, SourceConnector, Update,
 };
 use ore::collections::CollectionExt;
@@ -623,7 +623,7 @@ struct FullState {
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: Mux<LocalInput>,
-    dataflow_results_mux: Mux<DataflowResults>,
+    dataflow_results_mux: Mux<Exfiltration>,
 }
 
 fn format_row(
@@ -693,7 +693,7 @@ impl FullState {
         let dataflow_workers = dataflow::serve(
             dataflow_command_receiver,
             local_input_mux.clone(),
-            dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone()),
+            dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone()),
             timely::Configuration::Process(NUM_TIMELY_WORKERS),
             None, // disable logging
         )
@@ -718,7 +718,7 @@ impl FullState {
     fn send_dataflow_command(
         &self,
         dataflow_command: DataflowCommand,
-    ) -> UnboundedReceiver<DataflowResults> {
+    ) -> UnboundedReceiver<Exfiltration> {
         let receiver = {
             let mut mux = self.dataflow_results_mux.write().unwrap();
             mux.channel(self.connection_uuid).unwrap();
@@ -731,14 +731,11 @@ impl FullState {
         receiver
     }
 
-    fn receive_peek_results(
-        &self,
-        receiver: UnboundedReceiver<DataflowResults>,
-    ) -> Vec<Vec<Datum>> {
+    fn receive_peek_results(&self, receiver: UnboundedReceiver<Exfiltration>) -> Vec<Vec<Datum>> {
         let mut results = vec![];
         let mut receiver = receiver.wait();
         for _ in 0..NUM_TIMELY_WORKERS {
-            results.append(&mut receiver.next().unwrap().unwrap().unwrap_peeked());
+            results.append(&mut receiver.next().unwrap().unwrap().unwrap_peek());
         }
         results
     }

@@ -20,7 +20,7 @@ use uuid::Uuid;
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
-use dataflow::{DataflowResults, Update};
+use dataflow::{Exfiltration, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
 use sql::{Session, SqlCommand, SqlResponse, SqlResult};
@@ -29,7 +29,7 @@ pub struct Context {
     pub uuid: Uuid,
     pub sql_command_sender: UnboundedSender<SqlCommand>,
     pub sql_result_receiver: UnboundedReceiver<SqlResult>,
-    pub dataflow_results_receiver: UnboundedReceiver<DataflowResults>,
+    pub dataflow_results_receiver: UnboundedReceiver<Exfiltration>,
     pub num_timely_workers: usize,
 }
 
@@ -431,12 +431,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(Some(results))) => {
                 let state = state.take();
-                let results = match results {
-                    DataflowResults::Tailed(results) => results,
-                    _ => panic!("Unexpected dataflow result type"),
-                };
                 let stream: MessageStream = Box::new(futures::stream::iter_ok(
-                    results.into_iter().map(format_update),
+                    results.unwrap_tail().into_iter().map(format_update),
                 ));
                 transition!(SendUpdates {
                     send: Box::new(stream.forward(state.conn)),
@@ -456,7 +452,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(Some(results))) => {
                 let mut state = state.take();
-                state.peek_results.extend(results.unwrap_peeked());
+                state.peek_results.extend(results.unwrap_peek());
                 state.remaining_results -= 1;
                 if state.remaining_results == 0 {
                     let mut peek_results = state.peek_results;

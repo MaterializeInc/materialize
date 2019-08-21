@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use dataflow::{
     Dataflow, DataflowCommand, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink,
-    SinkConnector, Source, SourceConnector, View,
+    SinkConnector, Source, SourceConnector, TailSinkConnector, View,
 };
 use expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
@@ -225,15 +225,19 @@ impl Planner {
         }
     }
 
-    fn handle_tail(&mut self, connection_uuid: Uuid, name: ObjectName) -> PlannerResult {
-        let name = name.to_string();
+    fn handle_tail(&mut self, connection_uuid: Uuid, from: ObjectName) -> PlannerResult {
+        let name = format!("<temp_{}>", Uuid::new_v4());
+        let from = extract_sql_object_name(&from)?;
+        let dataflow = self.dataflows.get(&from)?;
         Ok((
             SqlResponse::Tailing,
-            Some(DataflowCommand::Tail {
-                connection_uuid,
-                typ: self.dataflows.get_type(&name)?.clone(),
-                name: name.to_owned(),
-            }),
+            Some(DataflowCommand::CreateDataflows(vec![Dataflow::Sink(
+                Sink {
+                    name,
+                    from: (from, dataflow.typ().clone()),
+                    connector: SinkConnector::Tail(TailSinkConnector { connection_uuid }),
+                },
+            )])),
         ))
     }
 

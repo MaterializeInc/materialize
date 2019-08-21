@@ -17,7 +17,7 @@ use tokio::prelude::*;
 
 use crate::pgwire;
 use crate::queue;
-use dataflow::{self, DataflowCommand, DataflowResults, LocalInput};
+use dataflow::{self, DataflowCommand, Exfiltration, ExfiltratorConfig, LocalInput};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
@@ -93,7 +93,7 @@ fn handle_connection(
     tcp_stream: TcpStream,
     sql_command_sender: UnboundedSender<SqlCommand>,
     sql_result_mux: Mux<SqlResult>,
-    dataflow_results_mux: Mux<DataflowResults>,
+    dataflow_results_mux: Mux<Exfiltration>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
@@ -157,16 +157,14 @@ pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
 
     // Construct timely dataflow instance.
     let local_input_mux = Mux::default();
-    let dataflow_results_handler = match config.dataflow_results {
-        DataflowResultsConfig::Local => {
-            dataflow::DataflowResultsHandler::Local(dataflow_results_mux.clone())
-        }
-        DataflowResultsConfig::Remote(address) => dataflow::DataflowResultsHandler::Remote(address),
+    let exfiltrator_config = match config.dataflow_results {
+        DataflowResultsConfig::Local => ExfiltratorConfig::Local(dataflow_results_mux.clone()),
+        DataflowResultsConfig::Remote(address) => ExfiltratorConfig::Remote(address),
     };
     let dd_workers = dataflow::serve(
         dataflow_command_receiver,
         local_input_mux.clone(),
-        dataflow_results_handler,
+        exfiltrator_config,
         config.timely_configuration,
         Some(Default::default()), // 10ms logging granularity
     )?;
