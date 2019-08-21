@@ -525,6 +525,7 @@ impl Planner {
                 )?)])
             }
             Statement::CreateSources {
+                like,
                 url,
                 schema_registry,
                 with_options,
@@ -536,7 +537,13 @@ impl Planner {
                 // but for now we just want it working for demo purposes...
                 let schema_registry_url: Url = schema_registry.parse()?;
                 let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
-                let subjects = ccsr_client.list_subjects()?;
+                let mut subjects = ccsr_client.list_subjects()?;
+                if let Some(value) = like {
+                    let parsed = &value.clone()[1..&value.len()-1];
+                    subjects.retain(|a| a.contains(parsed))
+                }
+
+
                 let topic_names = subjects
                     .iter()
                     .filter_map(|s| {

@@ -112,14 +112,20 @@ $ kafka-ingest format=avro topic=my_topic schema=${schema_v2} publish=true times
 $ kafka-ingest format=avro topic=my_topic schema=${schema_v2} publish=true timestamp=6
 {"before": null, "after": null}
 
-> CREATE SOURCES FROM 'kafka://${testdrive.kafka-addr}/'
+> CREATE SOURCES LIKE '%testdrive-my_topic%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
 testdrive-my_topic-${testdrive.seed}
+
+> CREATE SOURCES FROM 'kafka://${testdrive.kafka-addr}/'
+  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+Topic
+---
 testdrive-data-${testdrive.seed}
 
 > CREATE SOURCES FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
+
