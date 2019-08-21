@@ -28,6 +28,7 @@ use dataflow::{
 };
 use ore::collections::CollectionExt;
 use ore::mpmc::Mux;
+use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
 use sql::{Planner, Session, SqlResponse};
@@ -483,7 +484,10 @@ impl fmt::Display for Outcome<'_> {
                 inferred_types,
             } => write!(
                 f,
-                "Inference Failure!{}expected types: {}{}inferred types: {}",
+                "Inference Failure!{}\
+                 expected types: {}{}\
+                 inferred types: {}{}\
+                 column names:   {}",
                 INDENT,
                 expected_types
                     .iter()
@@ -493,9 +497,15 @@ impl fmt::Display for Outcome<'_> {
                 INDENT,
                 inferred_types
                     .iter()
-                    .map(|s| format!("{:?}", s))
+                    .map(|s| format!("{}", s.scalar_type))
                     .collect::<Vec<_>>()
-                    .join(" ")
+                    .join(" "),
+                INDENT,
+                inferred_types
+                    .iter()
+                    .map(|s| format!("{}", s.name.as_deref().unwrap_or("?")))
+                    .collect::<Vec<_>>()
+                    .join(" "),
             ),
             WrongColumnNames {
                 expected_column_names,
