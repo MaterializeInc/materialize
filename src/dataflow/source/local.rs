@@ -7,8 +7,8 @@ use timely::dataflow::{Scope, Stream};
 
 use super::util::source;
 use super::SharedCapability;
-use crate::dataflow::types::{Diff, LocalSourceConnector, Timestamp};
-use crate::glue::{LocalInput, LocalInputMux};
+use crate::types::{Diff, LocalInput, LocalSourceConnector, Timestamp};
+use ore::mpmc::Mux;
 use repr::Datum;
 
 pub fn local<G>(
@@ -16,7 +16,7 @@ pub fn local<G>(
     name: &str,
     connector: LocalSourceConnector,
     read_input: bool,
-    local_input_mux: &mut LocalInputMux,
+    local_input_mux: &mut Mux<LocalInput>,
 ) -> (
     Stream<G, (Vec<Datum>, Timestamp, Diff)>,
     Option<SharedCapability>,

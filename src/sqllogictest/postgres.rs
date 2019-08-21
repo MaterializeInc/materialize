@@ -15,9 +15,9 @@ use byteorder::{NetworkEndian, ReadBytesExt};
 use failure::{bail, ensure, format_err};
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
-use materialize::sql::scalar_type_from_sql;
 use repr::decimal::Significand;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
+use sql::scalar_type_from_sql;
 
 pub struct Postgres {
     client: Client,

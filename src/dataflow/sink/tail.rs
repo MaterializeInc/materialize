@@ -3,8 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::dataflow::{Diff, TailSinkConnector, Timestamp};
-use crate::glue::{DataflowResults, Update};
+use crate::{DataflowResults, Diff, TailSinkConnector, Timestamp, Update};
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use repr::Datum;

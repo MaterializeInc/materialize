@@ -13,7 +13,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
 use super::SharedCapability;
-use crate::dataflow::Timestamp;
+use crate::Timestamp;
 
 pub fn source<G, D, B, L>(scope: &G, name: &str, construct: B) -> (Stream<G, D>, SharedCapability)
 where

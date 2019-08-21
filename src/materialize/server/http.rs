@@ -9,8 +9,9 @@ use hyper::service;
 use hyper::{Body, Method, Request, Response};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::glue::*;
+use dataflow::DataflowResults;
 use ore::future::FutureExt;
+use ore::mpmc::Mux;
 
 struct FutureResponse(Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send>);
 
@@ -49,7 +50,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 
 pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
     a: A,
-    dataflow_results_mux: DataflowResultsMux,
+    dataflow_results_mux: Mux<DataflowResults>,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let svc =
         service::service_fn(
@@ -79,7 +80,7 @@ fn handle_unknown(_: Request<Body>) -> FutureResponse {
 
 fn handle_dataflow_results(
     req: Request<Body>,
-    dataflow_results_mux: DataflowResultsMux,
+    dataflow_results_mux: Mux<DataflowResults>,
 ) -> Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send> {
     Box::new(
         future::lazy(move || {

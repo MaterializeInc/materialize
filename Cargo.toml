@@ -2,11 +2,14 @@
 members = [
     "fuzz",
     "src/ccsr",
+    "src/dataflow",
     "src/expr",
+    "src/interchange",
     "src/metastore",
     "src/materialize",
     "src/ore",
     "src/repr",
+    "src/sql",
     "src/testdrive",
     "src/sqllogictest",
 ]

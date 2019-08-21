@@ -4,8 +4,8 @@
 // distributed without the express permission of Materialize, Inc.
 
 use super::{DifferentialLog, LogVariant};
-use crate::dataflow::arrangement::KeysOnlyHandle;
-use crate::dataflow::types::Timestamp;
+use crate::arrangement::KeysOnlyHandle;
+use crate::types::Timestamp;
 use differential_dataflow::logging::DifferentialEvent;
 use repr::Datum;
 use std::time::Duration;

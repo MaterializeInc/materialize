@@ -14,28 +14,32 @@ use timely::progress::frontier::Antichain;
 use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
+use futures::sync::mpsc::UnboundedReceiver;
+use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
+use uuid::Uuid;
 
 use super::render;
 use super::render::InputCapability;
-use crate::dataflow::arrangement::{manager::KeysOnlyHandle, TraceManager};
-use crate::dataflow::{Dataflow, Sink, SinkConnector, TailSinkConnector, Timestamp};
-use crate::glue::*;
-
-use crate::dataflow::coordinator;
-use crate::dataflow::logging;
-use crate::dataflow::logging::materialized::MaterializedEvent;
-use std::cell::RefCell;
-use std::rc::Rc;
+use crate::arrangement::{manager::KeysOnlyHandle, TraceManager};
+use crate::coordinator;
+use crate::logging;
+use crate::logging::materialized::MaterializedEvent;
+use crate::{
+    Dataflow, DataflowCommand, DataflowResults, LocalInput, Sink, SinkConnector, TailSinkConnector,
+    Timestamp,
+};
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
-    dataflow_command_receiver: UnboundedReceiver<(DataflowCommand, CommandMeta)>,
-    local_input_mux: LocalInputMux,
+    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+    local_input_mux: Mux<LocalInput>,
     dataflow_results_handler: DataflowResultsHandler,
     timely_configuration: timely::Configuration,
     logging_config: Option<logging::LoggingConfiguration>,
@@ -63,7 +67,7 @@ pub fn serve(
 #[derive(Clone, Debug)]
 pub enum DataflowResultsHandler {
     /// A local exchange fabric.
-    Local(DataflowResultsMux),
+    Local(Mux<DataflowResults>),
     /// An address to post results at.
     Remote(String),
 }
@@ -85,13 +89,13 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    local_input_mux: LocalInputMux,
+    local_input_mux: Mux<LocalInput>,
     dataflow_results_handler: DataflowResultsHandler,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
     rpc_client: Rc<RefCell<reqwest::Client>>,
     inputs: HashMap<String, InputCapability>,
-    sequencer: Sequencer<(coordinator::SequencedCommand, CommandMeta)>,
+    sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<logging::LoggingConfiguration>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
     materialized_logger: Option<logging::materialized::Logger>,
@@ -103,8 +107,8 @@ where
 {
     fn new(
         w: &'w mut TimelyWorker<A>,
-        dataflow_command_receiver: Option<UnboundedReceiver<(DataflowCommand, CommandMeta)>>,
-        local_input_mux: LocalInputMux,
+        dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
+        local_input_mux: Mux<LocalInput>,
         dataflow_results_handler: DataflowResultsHandler,
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {
@@ -139,7 +143,7 @@ where
     /// if logging is not initialized and anyone tries to use it.
     fn initialize_logging(&mut self) {
         if let Some(logging) = &self.logging_config {
-            use crate::dataflow::logging::BatchLogger;
+            use crate::logging::BatchLogger;
             use timely::dataflow::operators::capture::event::link::EventLink;
 
             // Establish loggers first, so we can either log the logging or not, as we like.
@@ -243,11 +247,11 @@ where
             }
 
             // Handle any received commands
-            while let Some((cmd, cmd_meta)) = self.sequencer.next() {
+            while let Some(cmd) = self.sequencer.next() {
                 if let coordinator::SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
-                self.handle_command(cmd, cmd_meta);
+                self.handle_command(cmd);
             }
 
             if !shutdown {
@@ -256,7 +260,7 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: coordinator::SequencedCommand, cmd_meta: CommandMeta) {
+    fn handle_command(&mut self, cmd: coordinator::SequencedCommand) {
         match cmd {
             coordinator::SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
@@ -290,6 +294,7 @@ where
             coordinator::SequencedCommand::Peek {
                 name,
                 timestamp,
+                connection_uuid,
                 drop_after_peek,
             } => {
                 let mut trace = self
@@ -301,13 +306,13 @@ where
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
                     name,
-                    connection_uuid: cmd_meta.connection_uuid,
+                    connection_uuid,
                     timestamp,
                     drop_after_peek,
                 };
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(
-                        crate::dataflow::logging::materialized::Peek::new(
+                        crate::logging::materialized::Peek::new(
                             &pending_peek.name,
                             pending_peek.timestamp,
                             &pending_peek.connection_uuid,
@@ -324,14 +329,18 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Tail { typ, name } => {
+            coordinator::SequencedCommand::Tail {
+                connection_uuid,
+                typ,
+                name,
+            } => {
                 let sink_name = format!("<temp_{}>", Uuid::new_v4());
                 if let DataflowResultsHandler::Remote(path) = &self.dataflow_results_handler {
                     let dataflow = Dataflow::Sink(Sink {
                         name: sink_name,
                         from: (name, typ),
                         connector: SinkConnector::Tail(TailSinkConnector {
-                            connection_uuid: cmd_meta.connection_uuid,
+                            connection_uuid,
                             handler: path.clone(),
                         }),
                     });
@@ -434,7 +443,7 @@ where
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
                 logger.log(MaterializedEvent::Peek(
-                    crate::dataflow::logging::materialized::Peek::new(
+                    crate::logging::materialized::Peek::new(
                         &peek.name,
                         peek.timestamp,
                         &peek.connection_uuid,
@@ -449,12 +458,9 @@ where
         });
         mem::replace(&mut self.pending_peeks, pending_peeks);
         if !dataflows_to_be_dropped.is_empty() {
-            self.handle_command(
-                coordinator::SequencedCommand::DropDataflows(dataflows_to_be_dropped),
-                CommandMeta {
-                    connection_uuid: Uuid::nil(),
-                },
-            );
+            self.handle_command(coordinator::SequencedCommand::DropDataflows(
+                dataflows_to_be_dropped,
+            ));
         }
     }
 }

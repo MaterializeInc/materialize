@@ -19,10 +19,10 @@ use super::sink;
 use super::source;
 use super::source::SharedCapability;
 use super::types::*;
-use crate::dataflow::arrangement::TraceManager;
-use crate::dataflow::arrangement::{context::ArrangementFlavor, Context};
-use crate::glue::LocalInputMux;
+use crate::arrangement::TraceManager;
+use crate::arrangement::{context::ArrangementFlavor, Context};
 use expr::RelationExpr;
+use ore::mpmc::Mux;
 use repr::Datum;
 
 pub enum InputCapability {
@@ -34,7 +34,7 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
-    local_input_mux: &mut LocalInputMux,
+    local_input_mux: &mut Mux<LocalInput>,
     rpc_client: Rc<RefCell<reqwest::Client>>,
 ) {
     let worker_timer = worker.timer();
@@ -66,7 +66,7 @@ pub fn build_dataflow<A: Allocate>(
                 }
             };
 
-            use crate::dataflow::arrangement::manager::KeysOnlySpine;
+            use crate::arrangement::manager::KeysOnlySpine;
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
             let arrangement = relation_expr
@@ -143,7 +143,7 @@ pub fn build_dataflow<A: Allocate>(
                     transform.transform(&mut view.relation_expr, &view.typ);
                 }
 
-                use crate::dataflow::arrangement::manager::KeysOnlySpine;
+                use crate::arrangement::manager::KeysOnlySpine;
                 use differential_dataflow::operators::arrange::arrangement::Arrange;
 
                 let arrangement = build_relation_expr(

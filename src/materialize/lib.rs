@@ -10,13 +10,9 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-pub mod dataflow;
-pub mod glue;
-pub mod interchange;
 pub mod pgwire;
 pub mod queue;
 pub mod server;
-pub mod sql;
 
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;

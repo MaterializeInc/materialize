@@ -4,8 +4,8 @@
 // distributed without the express permission of Materialize, Inc.
 
 use super::{LogVariant, MaterializedLog};
-use crate::dataflow::arrangement::KeysOnlyHandle;
-use crate::dataflow::types::Timestamp;
+use crate::arrangement::KeysOnlyHandle;
+use crate::types::Timestamp;
 use repr::Datum;
 use std::time::Duration;
 use timely::communication::Allocate;

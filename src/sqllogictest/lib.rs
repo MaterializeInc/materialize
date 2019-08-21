@@ -16,18 +16,21 @@ use std::str::FromStr;
 
 use failure::{bail, format_err, ResultExt};
 use futures::stream::Stream;
+use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
-use materialize::dataflow;
-use materialize::dataflow::{Dataflow, LocalSourceConnector, Source, SourceConnector};
-use materialize::glue::*;
-use materialize::sql::store::RemoveMode;
-use materialize::sql::{Planner, Session};
+use dataflow::{
+    self, Dataflow, DataflowCommand, DataflowResults, LocalInput, LocalSourceConnector, PeekWhen,
+    Source, SourceConnector, Update,
+};
 use ore::collections::CollectionExt;
+use ore::mpmc::Mux;
 use repr::{ColumnType, Datum};
+use sql::store::RemoveMode;
+use sql::{Planner, Session, SqlResponse};
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -612,14 +615,15 @@ struct FullState {
     postgres: Postgres,
     planner: Planner,
     session: Session,
-    dataflow_command_sender: UnboundedSender<(DataflowCommand, CommandMeta)>,
+    connection_uuid: Uuid,
+    dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,
     // this is only here to avoid dropping it too early
     _dataflow_workers: Box<dyn Drop>,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
-    local_input_mux: LocalInputMux,
-    dataflow_results_mux: DataflowResultsMux,
+    local_input_mux: Mux<LocalInput>,
+    dataflow_results_mux: Mux<DataflowResults>,
 }
 
 fn format_row(
@@ -683,9 +687,9 @@ impl FullState {
         let postgres = Postgres::open_and_erase()?;
         let planner = Planner::default();
         let session = Session::default();
-        let (dataflow_command_sender, dataflow_command_receiver) = unbounded();
-        let local_input_mux = LocalInputMux::default();
-        let dataflow_results_mux = DataflowResultsMux::default();
+        let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
+        let local_input_mux = Mux::default();
+        let dataflow_results_mux = Mux::default();
         let dataflow_workers = dataflow::serve(
             dataflow_command_receiver,
             local_input_mux.clone(),
@@ -700,6 +704,7 @@ impl FullState {
             postgres,
             planner,
             session,
+            connection_uuid: Uuid::new_v4(),
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
             current_timestamp: 1,
@@ -714,19 +719,13 @@ impl FullState {
         &self,
         dataflow_command: DataflowCommand,
     ) -> UnboundedReceiver<DataflowResults> {
-        let uuid = Uuid::new_v4();
         let receiver = {
             let mut mux = self.dataflow_results_mux.write().unwrap();
-            mux.channel(uuid).unwrap();
-            mux.receiver(&uuid).unwrap()
+            mux.channel(self.connection_uuid).unwrap();
+            mux.receiver(&self.connection_uuid).unwrap()
         };
         self.dataflow_command_sender
-            .unbounded_send((
-                dataflow_command.clone(),
-                CommandMeta {
-                    connection_uuid: uuid,
-                },
-            ))
+            .unbounded_send(dataflow_command.clone())
             .unwrap();
         self.worker0_thread.unpark();
         receiver
@@ -865,7 +864,7 @@ impl RecordRunner for FullState {
                                     .expect("Unknown table in update");
                                 {
                                     let mux = self.local_input_mux.read().unwrap();
-                                    for (uuid, sender) in &mux.senders {
+                                    for (uuid, sender) in mux.senders() {
                                         if uuid == updated_uuid {
                                             sender
                                                 .unbounded_send(LocalInput::Updates(
@@ -907,21 +906,25 @@ impl RecordRunner for FullState {
                     | Statement::CreateSource { .. }
                     | Statement::CreateSink { .. }
                     | Statement::Drop { .. } => {
-                        let (_response, dataflow_command) = match self
-                            .planner
-                            .handle_command(&mut self.session, sql.to_owned())
-                        {
+                        let (_response, dataflow_command) = match self.planner.handle_command(
+                            &mut self.session,
+                            self.connection_uuid,
+                            sql.to_owned(),
+                        ) {
                             Ok((response, dataflow_command)) => (response, dataflow_command),
                             Err(error) => return Ok(Outcome::PlanFailure { error }),
                         };
                         // make sure we peek at the correct time
                         let dataflow_command = match dataflow_command {
-                            Some(DataflowCommand::Peek { source, .. }) => {
-                                Some(DataflowCommand::Peek {
-                                    source,
-                                    when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
-                                })
-                            }
+                            Some(DataflowCommand::Peek {
+                                source,
+                                connection_uuid,
+                                ..
+                            }) => Some(DataflowCommand::Peek {
+                                source,
+                                connection_uuid,
+                                when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
+                            }),
                             other => other,
                         };
                         let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
@@ -957,10 +960,11 @@ impl RecordRunner for FullState {
                     }
                 }
 
-                let (typ, dataflow_command, immediate_rows) = match self
-                    .planner
-                    .handle_command(&mut self.session, sql.to_string())
-                {
+                let (typ, dataflow_command, immediate_rows) = match self.planner.handle_command(
+                    &mut self.session,
+                    self.connection_uuid,
+                    sql.to_string(),
+                ) {
                     Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
                         (typ, dataflow_command, None)
                     }
@@ -1052,12 +1056,15 @@ impl RecordRunner for FullState {
                             ),
                             None => {
                                 let dataflow_command = match dataflow_command {
-                                    Some(DataflowCommand::Peek { source, .. }) => {
-                                        Some(DataflowCommand::Peek {
-                                            source,
-                                            when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
-                                        })
-                                    }
+                                    Some(DataflowCommand::Peek {
+                                        source,
+                                        connection_uuid,
+                                        ..
+                                    }) => Some(DataflowCommand::Peek {
+                                        source,
+                                        connection_uuid,
+                                        when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
+                                    }),
                                     other => other,
                                 };
                                 let receiver =
@@ -1137,12 +1144,10 @@ impl RecordRunner for FullState {
 
 impl Drop for FullState {
     fn drop(&mut self) {
-        drop(self.dataflow_command_sender.unbounded_send((
-            DataflowCommand::Shutdown,
-            CommandMeta {
-                connection_uuid: Uuid::nil(),
-            },
-        )));
+        drop(
+            self.dataflow_command_sender
+                .unbounded_send(DataflowCommand::Shutdown),
+        );
 
         self.worker0_thread.unpark();
     }
@@ -1287,9 +1292,10 @@ pub fn run_stdin(verbosity: usize, only_parse: bool) -> Outcomes {
 pub fn fuzz(sqls: &str) {
     let mut state = FullState::start().unwrap();
     for sql in sqls.split(';') {
-        if let Ok((sql_response, dataflow_command)) = state
-            .planner
-            .handle_command(&mut state.session, sql.to_owned())
+        if let Ok((sql_response, dataflow_command)) =
+            state
+                .planner
+                .handle_command(&mut state.session, state.connection_uuid, sql.to_owned())
         {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);

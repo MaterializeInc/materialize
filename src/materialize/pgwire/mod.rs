@@ -16,11 +16,15 @@
 //!   * [CockroachDB pgwire implementation](https://github.com/cockroachdb/cockroach/tree/master/pkg/sql/pgwire)
 //!   * ["Postgres on the wire" PGCon talk](https://www.pgcon.org/2014/schedule/attachments/330_postgres-for-the-wire.pdf)
 
+use futures::sync::mpsc::UnboundedSender;
 use futures::Future;
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
+use uuid::Uuid;
 
-use crate::glue::*;
+use dataflow::DataflowResults;
+use ore::mpmc::Mux;
+use sql::{SqlCommand, SqlResult};
 
 mod codec;
 mod message;
@@ -32,9 +36,9 @@ pub use protocol::match_handshake;
 
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
-    sql_command_sender: UnboundedSender<(SqlCommand, CommandMeta)>,
-    sql_result_mux: SqlResultMux,
-    dataflow_results_mux: DataflowResultsMux,
+    sql_command_sender: UnboundedSender<SqlCommand>,
+    sql_result_mux: Mux<SqlResult>,
+    dataflow_results_mux: Mux<DataflowResults>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let uuid = Uuid::new_v4();
@@ -51,7 +55,7 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     };
     protocol::StateMachine::start(
         stream,
-        crate::sql::Session::default(),
+        sql::Session::default(),
         protocol::Context {
             uuid,
             sql_command_sender,

@@ -16,6 +16,7 @@ pub mod future;
 pub mod hash;
 pub mod iter;
 pub mod log;
+pub mod mpmc;
 pub mod netio;
 pub mod option;
 pub mod panic;

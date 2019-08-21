@@ -8,13 +8,78 @@ use url::Url;
 use uuid::Uuid;
 
 use expr::RelationExpr;
-use repr::RelationType;
+use repr::{Datum, RelationType};
 
 /// System-wide update type.
 pub type Diff = isize;
 
 /// System-wide timestamp type.
 pub type Timestamp = u64;
+
+/// The commands that a running dataflow server can accept.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DataflowCommand {
+    CreateDataflows(Vec<Dataflow>),
+    DropDataflows(Vec<String>),
+    Peek {
+        connection_uuid: Uuid,
+        source: RelationExpr,
+        when: PeekWhen,
+    },
+    Tail {
+        connection_uuid: Uuid,
+        typ: RelationType,
+        name: String,
+    },
+    Shutdown,
+}
+
+/// Specifies when a `Peek` should occur.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PeekWhen {
+    /// The peek should occur at the latest possible timestamp that allows the
+    /// peek to complete immediately.
+    Immediately,
+    /// The peek should occur at the latest possible timestamp that has been
+    /// accepted by each input source.
+    EarliestSource,
+    /// The peek should occur at the specified timestamp.
+    AtTimestamp(Timestamp),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+/// A batch of updates to be fed to a local input
+pub struct Update {
+    pub row: Vec<Datum>,
+    pub timestamp: u64,
+    pub diff: isize,
+}
+
+#[derive(Debug, Clone)]
+pub enum LocalInput {
+    /// Send a batch of updates to the input
+    Updates(Vec<Update>),
+    /// All future updates will have timestamps >= this timestamp
+    Watermark(u64),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum DataflowResults {
+    Peeked(Vec<Vec<Datum>>),
+    Tailed(Vec<Update>),
+}
+
+impl DataflowResults {
+    pub fn unwrap_peeked(self) -> Vec<Vec<Datum>> {
+        match self {
+            DataflowResults::Peeked(v) => v,
+            _ => panic!(
+                "DataflowResults::unwrap_peeked called on a {:?} variant",
+                self
+            ),
+        }
+    }
+}
 
 /// A named stream of data.
 #[serde(rename_all = "snake_case")]
@@ -58,8 +123,6 @@ impl Dataflow {
         out
     }
 }
-
-impl metastore::Dataflow for Dataflow {}
 
 /// A source materializes data. It typically represents an external source of
 /// data, like a topic from Apache Kafka.
