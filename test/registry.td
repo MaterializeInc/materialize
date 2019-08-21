@@ -118,13 +118,13 @@ Topic
 ---
 testdrive-my_topic-${testdrive.seed}
 
-> CREATE SOURCES FROM 'kafka://${testdrive.kafka-addr}/'
+> CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
 testdrive-data-${testdrive.seed}
 
-> CREATE SOURCES FROM 'kafka://${testdrive.kafka-addr}/'
+> CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
