@@ -67,6 +67,7 @@ pub struct CommandCoordinator {
     command_receiver: UnboundedReceiver<DataflowCommand>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     pub logger: Option<logging::materialized::Logger>,
+    optimizer: expr::transform::Optimizer,
 }
 
 impl CommandCoordinator {
@@ -77,6 +78,7 @@ impl CommandCoordinator {
             command_receiver,
             logger: None,
             since_updates: Vec::new(),
+            optimizer: Default::default(),
         }
     }
 
@@ -94,10 +96,15 @@ impl CommandCoordinator {
         sequencer: &mut Sequencer<SequencedCommand>,
     ) {
         match command {
-            DataflowCommand::CreateDataflows(dataflows) => {
-                for dataflow in dataflows.iter() {
+            DataflowCommand::CreateDataflows(mut dataflows) => {
+                // Transforms and registers the dataflow.
+                for dataflow in dataflows.iter_mut() {
+                    if let Dataflow::View(view) = dataflow {
+                        self.optimizer.optimize(&mut view.relation_expr, &view.typ);
+                    }
                     self.insert_view(dataflow);
                 }
+
                 sequencer.push(SequencedCommand::CreateDataflows(dataflows));
             }
             DataflowCommand::DropDataflows(dataflows) => {

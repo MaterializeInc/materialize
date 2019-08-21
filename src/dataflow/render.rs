@@ -124,25 +124,6 @@ pub fn build_dataflow<A: Allocate>(
                     }
                 });
 
-                // Push predicates down a few times.
-                let mut view = view.clone();
-
-                let transforms: Vec<Box<dyn expr::transform::Transform>> = vec![
-                    Box::new(expr::transform::reduction::FoldConstants),
-                    Box::new(expr::transform::reduction::DeMorgans),
-                    Box::new(expr::transform::reduction::UndistributeAnd),
-                    Box::new(expr::transform::split_predicates::SplitPredicates),
-                    Box::new(expr::transform::fusion::join::Join),
-                    Box::new(expr::transform::predicate_pushdown::PredicatePushdown),
-                    Box::new(expr::transform::fusion::filter::Filter),
-                    Box::new(expr::transform::join_order::JoinOrder),
-                    Box::new(expr::transform::empty_map::EmptyMap),
-                    // Box::new(expr::transform::aggregation::FractureReduce),
-                ];
-                for transform in transforms.iter() {
-                    transform.transform(&mut view.relation_expr, &view.typ);
-                }
-
                 use crate::arrangement::manager::KeysOnlySpine;
                 use differential_dataflow::operators::arrange::arrangement::Arrange;
 
