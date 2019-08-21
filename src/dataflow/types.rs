@@ -26,11 +26,6 @@ pub enum DataflowCommand {
         source: RelationExpr,
         when: PeekWhen,
     },
-    Tail {
-        connection_uuid: Uuid,
-        typ: RelationType,
-        name: String,
-    },
     Shutdown,
 }
 
@@ -61,24 +56,6 @@ pub enum LocalInput {
     Updates(Vec<Update>),
     /// All future updates will have timestamps >= this timestamp
     Watermark(u64),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum DataflowResults {
-    Peeked(Vec<Vec<Datum>>),
-    Tailed(Vec<Update>),
-}
-
-impl DataflowResults {
-    pub fn unwrap_peeked(self) -> Vec<Vec<Datum>> {
-        match self {
-            DataflowResults::Peeked(v) => v,
-            _ => panic!(
-                "DataflowResults::unwrap_peeked called on a {:?} variant",
-                self
-            ),
-        }
-    }
 }
 
 /// A named stream of data.
@@ -178,7 +155,6 @@ pub struct KafkaSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub connection_uuid: uuid::Uuid,
-    pub handler: String,
 }
 
 /// A view transforms one dataflow into another.

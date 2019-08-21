@@ -3,37 +3,22 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{DataflowResults, Diff, TailSinkConnector, Timestamp, Update};
+use crate::exfiltrate::Exfiltrator;
+use crate::{Diff, TailSinkConnector, Timestamp, Update};
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use repr::Datum;
-use std::cell::RefCell;
 use std::rc::Rc;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-fn push_tail_update(
-    c: &TailSinkConnector,
-    k: Vec<Update>,
-    rpc_client: &Rc<RefCell<reqwest::Client>>,
-) {
-    let encoded = bincode::serialize(&DataflowResults::Tailed(k)).unwrap();
-    rpc_client
-        .borrow_mut()
-        .post(&c.handler)
-        .header("X-Materialize-Query-UUID", c.connection_uuid.to_string())
-        .body(encoded)
-        .send()
-        .unwrap();
-}
-
 pub fn tail<G, B>(
     stream: &Stream<G, B>,
     name: &str,
     connector: TailSinkConnector,
-    rpc_client: Rc<RefCell<reqwest::Client>>,
+    exfiltrator: Rc<Exfiltrator>,
 ) where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<Vec<Datum>, (), Timestamp, Diff>,
@@ -54,7 +39,7 @@ pub fn tail<G, B>(
                     cur.step_key(&batch);
                 }
             }
-            push_tail_update(&connector, result, &rpc_client);
+            exfiltrator.send_tail(connector.connection_uuid, result);
         });
     })
 }

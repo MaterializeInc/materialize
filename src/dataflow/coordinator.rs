@@ -28,7 +28,6 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::{Dataflow, DataflowCommand, PeekWhen, Timestamp, View};
 use expr::RelationExpr;
-use repr::RelationType;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,12 +49,6 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(String, Vec<Timestamp>)>),
-    /// Currently unimplemented.
-    Tail {
-        connection_uuid: Uuid,
-        typ: RelationType,
-        name: String,
-    },
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -149,17 +142,6 @@ impl CommandCoordinator {
                     drop_after_peek: drop,
                 };
                 sequencer.push(peek_command);
-            }
-            DataflowCommand::Tail {
-                connection_uuid,
-                typ,
-                name,
-            } => {
-                sequencer.push(SequencedCommand::Tail {
-                    connection_uuid,
-                    typ,
-                    name,
-                });
             }
             DataflowCommand::Shutdown => {
                 sequencer.push(SequencedCommand::Shutdown);

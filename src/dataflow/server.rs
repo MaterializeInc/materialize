@@ -17,7 +17,6 @@ use timely::worker::Worker as TimelyWorker;
 use futures::sync::mpsc::UnboundedReceiver;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
 use std::rc::Rc;
@@ -29,18 +28,16 @@ use super::render;
 use super::render::InputCapability;
 use crate::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use crate::coordinator;
+use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
-use crate::{
-    Dataflow, DataflowCommand, DataflowResults, LocalInput, Sink, SinkConnector, TailSinkConnector,
-    Timestamp,
-};
+use crate::{DataflowCommand, LocalInput, Timestamp};
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
     local_input_mux: Mux<LocalInput>,
-    dataflow_results_handler: DataflowResultsHandler,
+    exfiltrator_config: ExfiltratorConfig,
     timely_configuration: timely::Configuration,
     logging_config: Option<logging::LoggingConfiguration>,
 ) -> Result<WorkerGuards<()>, String> {
@@ -56,20 +53,11 @@ pub fn serve(
             worker,
             dataflow_command_receiver,
             local_input_mux.clone(),
-            dataflow_results_handler.clone(),
+            exfiltrator_config.clone(),
             logging_config.clone(),
         )
         .run()
     })
-}
-
-/// Options for how dataflow results return to those that posed the queries.
-#[derive(Clone, Debug)]
-pub enum DataflowResultsHandler {
-    /// A local exchange fabric.
-    Local(Mux<DataflowResults>),
-    /// An address to post results at.
-    Remote(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -77,7 +65,7 @@ struct PendingPeek {
     /// The name of the dataflow to peek.
     name: String,
     /// Identifies intended recipient of the peek.
-    connection_uuid: uuid::Uuid,
+    connection_uuid: Uuid,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Whether to drop the dataflow when the peek completes.
@@ -90,10 +78,9 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     local_input_mux: Mux<LocalInput>,
-    dataflow_results_handler: DataflowResultsHandler,
+    exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
-    rpc_client: Rc<RefCell<reqwest::Client>>,
     inputs: HashMap<String, InputCapability>,
     sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<logging::LoggingConfiguration>,
@@ -109,7 +96,7 @@ where
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
         local_input_mux: Mux<LocalInput>,
-        dataflow_results_handler: DataflowResultsHandler,
+        exfiltrator_config: ExfiltratorConfig,
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
@@ -119,15 +106,9 @@ where
         Worker {
             inner: w,
             local_input_mux,
-            dataflow_results_handler,
+            exfiltrator: Rc::new(exfiltrator_config.into()),
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
-            rpc_client: Rc::new(RefCell::new(
-                reqwest::Client::builder()
-                    .tcp_nodelay()
-                    .build()
-                    .expect("building reqwest client failed"),
-            )),
             inputs: HashMap::new(),
             sequencer,
             logging_config,
@@ -276,7 +257,7 @@ where
                         self.inner,
                         &mut self.inputs,
                         &mut self.local_input_mux,
-                        self.rpc_client.clone(),
+                        self.exfiltrator.clone(),
                     );
                 }
             }
@@ -329,33 +310,6 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Tail {
-                connection_uuid,
-                typ,
-                name,
-            } => {
-                let sink_name = format!("<temp_{}>", Uuid::new_v4());
-                if let DataflowResultsHandler::Remote(path) = &self.dataflow_results_handler {
-                    let dataflow = Dataflow::Sink(Sink {
-                        name: sink_name,
-                        from: (name, typ),
-                        connector: SinkConnector::Tail(TailSinkConnector {
-                            connection_uuid,
-                            handler: path.clone(),
-                        }),
-                    });
-                    render::build_dataflow(
-                        dataflow,
-                        &mut self.traces,
-                        self.inner,
-                        &mut self.inputs,
-                        &mut self.local_input_mux,
-                        self.rpc_client.clone(),
-                    );
-                } else {
-                    unimplemented!()
-                }
-            }
             coordinator::SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.inputs.clear();
@@ -417,30 +371,7 @@ where
 
                 cur.step_key(&storage)
             }
-            let result = DataflowResults::Peeked(results);
-            match &self.dataflow_results_handler {
-                DataflowResultsHandler::Local(peek_results_mux) => {
-                    // The sender is allowed disappear at any time, so the
-                    // error handling here is deliberately relaxed.
-                    if let Ok(sender) = peek_results_mux
-                        .read()
-                        .unwrap()
-                        .sender(&peek.connection_uuid)
-                    {
-                        drop(sender.unbounded_send(result))
-                    }
-                }
-                DataflowResultsHandler::Remote(response_address) => {
-                    let encoded = bincode::serialize(&result).unwrap();
-                    self.rpc_client
-                        .borrow_mut()
-                        .post(response_address)
-                        .header("X-Materialize-Query-UUID", peek.connection_uuid.to_string())
-                        .body(encoded)
-                        .send()
-                        .unwrap();
-                }
-            }
+            self.exfiltrator.send_peek(peek.connection_uuid, results);
             if let Some(logger) = self.materialized_logger.as_mut() {
                 logger.log(MaterializedEvent::Peek(
                     crate::logging::materialized::Peek::new(
