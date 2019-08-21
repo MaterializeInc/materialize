@@ -11,35 +11,35 @@ set -euo pipefail
 
 
 tests=(
-    # sqllogictest/test/evidence/in1.test
-    # sqllogictest/test/evidence/in2.test
-    sqllogictest/test/evidence/slt_lang_aggfunc.test
-    sqllogictest/test/evidence/slt_lang_createtrigger.test
-    sqllogictest/test/evidence/slt_lang_createview.test
-    sqllogictest/test/evidence/slt_lang_dropindex.test
-    sqllogictest/test/evidence/slt_lang_droptable.test
-    sqllogictest/test/evidence/slt_lang_droptrigger.test
-    sqllogictest/test/evidence/slt_lang_dropview.test
-    sqllogictest/test/evidence/slt_lang_reindex.test
-    sqllogictest/test/evidence/slt_lang_replace.test
-    # sqllogictest/test/evidence/slt_lang_update.test
-    # sqllogictest/test/index/between/1/slt_good_0.test
-    # sqllogictest/test/index/commute/10/slt_good_0.test
-    # sqllogictest/test/index/delete/1/slt_good_0.test
-    # sqllogictest/test/index/in/10/slt_good_0.test
-    # sqllogictest/test/index/orderby_nosort/10/slt_good_0.test
-    # sqllogictest/test/index/orderby/10/slt_good_0.test
-    sqllogictest/test/index/random/10/slt_good_0.test
-    sqllogictest/test/index/view/10/slt_good_0.test
-    sqllogictest/test/random/aggregates/slt_good_0.test
-    sqllogictest/test/random/expr/slt_good_0.test
-    sqllogictest/test/random/groupby/slt_good_0.test
-    sqllogictest/test/random/select/slt_good_0.test
-    # sqllogictest/test/select1.test
-    # sqllogictest/test/select2.test
-    # sqllogictest/test/select3.test
-    # sqllogictest/test/select4.test
-    sqllogictest/test/select5.test
+    # test/sqlite/test/evidence/in1.test
+    # test/sqlite/test/evidence/in2.test
+    test/sqlite/test/evidence/slt_lang_aggfunc.test
+    test/sqlite/test/evidence/slt_lang_createtrigger.test
+    test/sqlite/test/evidence/slt_lang_createview.test
+    test/sqlite/test/evidence/slt_lang_dropindex.test
+    test/sqlite/test/evidence/slt_lang_droptable.test
+    test/sqlite/test/evidence/slt_lang_droptrigger.test
+    test/sqlite/test/evidence/slt_lang_dropview.test
+    test/sqlite/test/evidence/slt_lang_reindex.test
+    test/sqlite/test/evidence/slt_lang_replace.test
+    # test/sqlite/test/evidence/slt_lang_update.test
+    # test/sqlite/test/index/between/1/slt_good_0.test
+    # test/sqlite/test/index/commute/10/slt_good_0.test
+    # test/sqlite/test/index/delete/1/slt_good_0.test
+    # test/sqlite/test/index/in/10/slt_good_0.test
+    # test/sqlite/test/index/orderby_nosort/10/slt_good_0.test
+    # test/sqlite/test/index/orderby/10/slt_good_0.test
+    test/sqlite/test/index/random/10/slt_good_0.test
+    test/sqlite/test/index/view/10/slt_good_0.test
+    test/sqlite/test/random/aggregates/slt_good_0.test
+    test/sqlite/test/random/expr/slt_good_0.test
+    test/sqlite/test/random/groupby/slt_good_0.test
+    test/sqlite/test/random/select/slt_good_0.test
+    # test/sqlite/test/select1.test
+    # test/sqlite/test/select2.test
+    # test/sqlite/test/select3.test
+    # test/sqlite/test/select4.test
+    test/sqlite/test/select5.test
     test/*.slt
     # test/cockroach/aggregate.slt
     test/cockroach/alias_types.slt
