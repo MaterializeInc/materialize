@@ -15,8 +15,8 @@ use std::path::Path;
 use std::str::FromStr;
 
 use failure::{bail, format_err, ResultExt};
-use futures::stream::Stream;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::{Future, Stream};
 use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -732,12 +732,15 @@ impl FullState {
     }
 
     fn receive_peek_results(&self, receiver: UnboundedReceiver<Exfiltration>) -> Vec<Vec<Datum>> {
-        let mut results = vec![];
-        let mut receiver = receiver.wait();
-        for _ in 0..NUM_TIMELY_WORKERS {
-            results.append(&mut receiver.next().unwrap().unwrap().unwrap_peek());
-        }
-        results
+        receiver
+            .take(NUM_TIMELY_WORKERS as u64)
+            .map(|ex| match ex {
+                Exfiltration::Peek(results) => results,
+                _ => panic!("expected Exfiltration::Peek, but got {:?}", ex),
+            })
+            .concat2()
+            .wait()
+            .unwrap()
     }
 }
 

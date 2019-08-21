@@ -30,22 +30,6 @@ pub enum Exfiltration {
     Tail(Vec<Update>),
 }
 
-impl Exfiltration {
-    pub fn unwrap_peek(self) -> Vec<Vec<Datum>> {
-        match self {
-            Exfiltration::Peek(v) => v,
-            _ => panic!("Exfiltration::unwrap_peeked called on a {:?} variant", self),
-        }
-    }
-
-    pub fn unwrap_tail(self) -> Vec<Update> {
-        match self {
-            Exfiltration::Tail(v) => v,
-            _ => panic!("Exfiltration::unwrap_tail called on a {:?} variant", self),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Exfiltrator {
     Local(Mux<Exfiltration>),
@@ -57,8 +41,8 @@ impl Exfiltrator {
         let exfiltration = Exfiltration::Peek(rows);
         match self {
             Exfiltrator::Local(mux) => {
-                // The sender is allowed disappear at any time, so the
-                // error handling here is deliberately relaxed.
+                // The sender is allowed to disappear at any time, so the error
+                // handling here is deliberately relaxed.
                 let mux = mux.read().unwrap();
                 if let Ok(sender) = mux.sender(&connection_uuid) {
                     drop(sender.unbounded_send(exfiltration))

@@ -141,7 +141,7 @@ pub enum StateMachine<A: Conn + 'static> {
         rows: Option<Vec<Vec<Datum>>>,
     },
 
-    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
+    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
     WaitForRows {
         conn: A,
         session: Session,
@@ -150,15 +150,16 @@ pub enum StateMachine<A: Conn + 'static> {
         remaining_results: usize,
     },
 
-    #[state_machine_future(transitions(WaitForUpdates, SendUpdates, Error))]
-    WaitForUpdates { conn: A },
+    #[state_machine_future(transitions(WaitForUpdates, SendUpdates, SendError, Error))]
+    WaitForUpdates { conn: A, session: Session },
 
     #[state_machine_future(transitions(WaitForUpdates, Error))]
-    StartCopyOut { send: SinkSend<A> },
+    StartCopyOut { send: SinkSend<A>, session: Session },
 
     #[state_machine_future(transitions(SendError, Error, WaitForUpdates))]
     SendUpdates {
         send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
+        session: Session,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, Error))]
@@ -293,7 +294,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterStartCopyOut<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
-        transition!(WaitForUpdates { conn })
+        let state = state.take();
+        transition!(WaitForUpdates {
+            conn,
+            session: state.session
+        })
     }
 
     fn poll_recv_query<'s, 'c>(
@@ -378,6 +383,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     SqlResponse::SetVariable => command_complete!("SET"),
                     SqlResponse::Tailing => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
+                        session,
                     }),
                 }
             }
@@ -431,11 +437,27 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(Some(results))) => {
                 let state = state.take();
+                let results = if let Exfiltration::Tail(results) = results {
+                    results
+                } else {
+                    transition!(SendError {
+                        send: state.conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "99999",
+                            message: "internal error: did not receive results of the right type"
+                                .into(),
+                            detail: None,
+                        }),
+                        session: state.session,
+                        fatal: true,
+                    })
+                };
                 let stream: MessageStream = Box::new(futures::stream::iter_ok(
-                    results.unwrap_tail().into_iter().map(format_update),
+                    results.into_iter().map(format_update),
                 ));
                 transition!(SendUpdates {
                     send: Box::new(stream.forward(state.conn)),
+                    session: state.session,
                 })
             }
             Ok(Async::Ready(None)) | Err(()) => {
@@ -452,7 +474,21 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(Some(results))) => {
                 let mut state = state.take();
-                state.peek_results.extend(results.unwrap_peek());
+                if let Exfiltration::Peek(results) = results {
+                    state.peek_results.extend(results)
+                } else {
+                    transition!(SendError {
+                        send: state.conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "99999",
+                            message: "internal error: did not receive results of the right type"
+                                .into(),
+                            detail: None,
+                        }),
+                        session: state.session,
+                        fatal: true,
+                    })
+                }
                 state.remaining_results -= 1;
                 if state.remaining_results == 0 {
                     let mut peek_results = state.peek_results;
@@ -474,7 +510,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendUpdates<A>, failure::Error> {
         let (_, conn) = try_ready!(state.send.poll());
-        transition!(WaitForUpdates { conn: conn })
+        let state = state.take();
+        transition!(WaitForUpdates {
+            conn: conn,
+            session: state.session
+        })
     }
 
     fn poll_send_command_complete<'s, 'c>(
