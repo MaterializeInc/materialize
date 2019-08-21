@@ -51,6 +51,23 @@ SELECT a * 0.2 FROM basic
 ----
 0.02
 
+# Arithmetic that involves coercion of integer literals.
+
+query R
+SELECT a + 2 FROM basic
+----
+2.1
+
+query R
+SELECT a - 2 FROM basic
+----
+-1.9
+
+query R
+SELECT a * 2 FROM basic
+----
+0.20
+
 # Arithmetic that involves simple rescaling.
 
 query RR
