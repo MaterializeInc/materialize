@@ -111,6 +111,11 @@ sync. In other words, trust the output of `confluent log` and `ps ... | grep`
 over the output of `confluent status`. Still, it's reliable enough to be more
 convenient than managing each service manually.
 
+## Testing
+
+Materialize's testing philosophy is sufficiently complex that it warrants its
+own document. See [Developer guide: testing](develop-testing.md).
+
 ## Git workflow
 
 ### Submitting changes
