@@ -168,10 +168,12 @@ impl CommandCoordinator {
     /// receive, and so cannot be owned only by the coordinator.
     pub fn maintenance(&mut self, sequencer: &mut Sequencer<SequencedCommand>) {
         // Take this opportunity to drain `since_update` commands.
-        sequencer.push(SequencedCommand::AllowCompaction(std::mem::replace(
-            &mut self.since_updates,
-            Vec::new(),
-        )));
+        if !self.since_updates.is_empty() {
+            sequencer.push(SequencedCommand::AllowCompaction(std::mem::replace(
+                &mut self.since_updates,
+                Vec::new(),
+            )));
+        }
     }
 
     /// A policy for determining the timestamp for a peek.
