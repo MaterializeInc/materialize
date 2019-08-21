@@ -114,7 +114,7 @@ impl CommandCoordinator {
                 sequencer.push(SequencedCommand::DropDataflows(dataflows));
             }
             DataflowCommand::Peek {
-                source,
+                mut source,
                 connection_uuid,
                 when,
             } => {
@@ -139,6 +139,9 @@ impl CommandCoordinator {
                     // peek completes.
                     let name = format!("<temp_{}>", Uuid::new_v4());
                     let typ = source.typ();
+
+                    self.optimizer.optimize(&mut source, &typ);
+
                     let create_command =
                         SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
                             name: name.clone(),
