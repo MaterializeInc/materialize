@@ -576,9 +576,16 @@ impl FromStr for Outcomes {
 
 impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let total: usize = self.0.iter().sum();
+        let status = if self.0[9] == total {
+            "SUCCESS!"
+        } else {
+            "FAIL!"
+        };
         write!(
             f,
-            "unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
+            "{} unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
+            status,
             self.0[0],
             self.0[1],
             self.0[2],
@@ -589,7 +596,7 @@ impl fmt::Display for Outcomes {
             self.0[7],
             self.0[8],
             self.0[9],
-            self.0.iter().sum::<usize>(),
+            total,
         )
     }
 }
