@@ -52,7 +52,7 @@ pub fn build_like_regex_from_string(like_string: &String) -> Result<Regex, failu
         let built_regex = Regex::new(&regex);
         match built_regex {
             Ok(regex) => Ok(regex),
-            _ => failure::bail!("Failed to build Regex from String!"),
+            Err(err) => Err(failure::Error::from(err)),
         }
     }
 }
