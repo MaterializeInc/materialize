@@ -5,7 +5,7 @@
 
 use regex::Regex;
 
-pub fn build_like_regex_from_string(like_string: &String) -> Result<Regex, failure::Error> {
+pub fn build_like_regex_from_string(like_string: &str) -> Result<Regex, failure::Error> {
     // The goal is to build a regex that matches the same strings as the LIKE
     // pattern.
     //
