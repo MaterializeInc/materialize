@@ -5,6 +5,7 @@ use std::fmt;
 
 use digest::Digest;
 use failure::{Error, Fail};
+use log::{debug, warn};
 use serde::{
     ser::{SerializeMap, SerializeSeq},
     Serialize, Serializer,
@@ -66,6 +67,8 @@ pub enum Schema {
     Float,
     /// A `double` Avro schema.
     Double,
+    /// An `Int` Avro schema with a semantic type being days since the unix epoch.
+    Date,
     /// A `bytes` or `fixed` Avro schema with a logical type of `decimal` and
     /// the specified precision and scale. If the underlying type is `fixed`,
     /// the `fixed_size` field specifies the size.
@@ -119,14 +122,17 @@ pub enum Schema {
 /// _should_ compile into a jump-table for the conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SchemaKind {
+    // Fixed-length types
     Null,
     Boolean,
     Int,
     Long,
     Float,
+    Date,
     Double,
-    Decimal,
+    // Variable-length types
     Bytes,
+    Decimal,
     String,
     Array,
     Map,
@@ -141,12 +147,15 @@ impl<'a> From<&'a Schema> for SchemaKind {
     fn from(schema: &'a Schema) -> SchemaKind {
         // NOTE: I _believe_ this will always be fast as it should convert into a jump table.
         match schema {
+            // Fixed-length types
             Schema::Null => SchemaKind::Null,
             Schema::Boolean => SchemaKind::Boolean,
             Schema::Int => SchemaKind::Int,
             Schema::Long => SchemaKind::Long,
             Schema::Float => SchemaKind::Float,
+            Schema::Date => SchemaKind::Date,
             Schema::Double => SchemaKind::Double,
+            // Variable-length types
             Schema::Decimal { .. } => SchemaKind::Decimal,
             Schema::Bytes => SchemaKind::Bytes,
             Schema::String => SchemaKind::String,
@@ -170,6 +179,8 @@ impl<'a> From<&'a types::Value> for SchemaKind {
             types::Value::Long(_) => SchemaKind::Long,
             types::Value::Float(_) => SchemaKind::Float,
             types::Value::Double(_) => SchemaKind::Double,
+            types::Value::Date(_) => SchemaKind::Date,
+            // Variable-length types
             types::Value::Decimal { .. } => SchemaKind::Decimal,
             types::Value::Bytes(_) => SchemaKind::Bytes,
             types::Value::String(_) => SchemaKind::String,
@@ -459,6 +470,7 @@ impl Schema {
                 "map" => Schema::parse_map(complex),
                 "fixed" => Schema::parse_fixed(complex),
                 "bytes" => Schema::parse_bytes(complex),
+                "int" => Schema::parse_int(complex),
                 other => Schema::parse_primitive(other),
             },
             Some(&Value::Object(ref data)) => match data.get("type") {
@@ -615,8 +627,44 @@ impl Schema {
                 let fixed_size = None;
                 Schema::parse_decimal(fixed_size, complex)
             }
-            _ => Ok(Schema::Bytes),
+            _ => {
+                debug!("parsing complex type as regular bytes: {:?}", complex);
+                Ok(Schema::Bytes)
+            }
         }
+    }
+
+    /// Parse a [`serde_json::Value`] representing an Avro Int type
+    ///
+    /// If the complex type has a `connect.name` tag (as [emitted by
+    /// Debezium][1]) that matches a `Date` tag, we specify that the correct
+    /// schema to use is `Date`.
+    ///
+    /// [1]: https://debezium.io/docs/connectors/mysql/#temporal-values
+    fn parse_int(complex: &Map<String, Value>) -> Result<Self, Error> {
+        const AVRO_DATE: &str = "date";
+        const DEBEZIUM_DATE: &str = "io.debezium.time.Date";
+        const KAFKA_DATE: &str = "org.apache.kafka.connect.data.Date";
+        if let Some(name) = complex.get("connect.name") {
+            if name == DEBEZIUM_DATE || name == KAFKA_DATE {
+                if name == KAFKA_DATE {
+                    warn!("Using deprecated debezium date format");
+                }
+                return Ok(Schema::Date);
+            }
+        }
+        // Put this after the custom semantic types so that the debezium
+        // warning is emitted, since the logicalType tag shows up in the
+        // deprecated debezium format :-/
+        if let Some(name) = complex.get("logicalType") {
+            if name == AVRO_DATE {
+                return Ok(Schema::Date);
+            }
+        }
+        if !complex.is_empty() {
+            debug!("parsing complex type as regular int: {:?}", complex);
+        }
+        Ok(Schema::Int)
     }
 
     /// Parse a `serde_json::Value` representing a Avro fixed type into a
@@ -653,6 +701,12 @@ impl Serialize for Schema {
             Schema::Long => serializer.serialize_str("long"),
             Schema::Float => serializer.serialize_str("float"),
             Schema::Double => serializer.serialize_str("double"),
+            Schema::Date => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "int")?;
+                map.serialize_entry("logicalType", "date")?;
+                map.end()
+            }
             Schema::Decimal {
                 precision,
                 scale,
@@ -1000,6 +1054,36 @@ mod tests {
         };
 
         assert_eq!(expected, schema);
+    }
+
+    #[test]
+    fn test_date_schema() {
+        let kinds = &[
+            r#"{
+                "type": "int",
+                "name": "datish",
+                "logicalType": "date"
+            }"#,
+            r#"{
+                "type": "int",
+                "name": "datish",
+                "connect.name": "io.debezium.time.Date"
+            }"#,
+            r#"{
+                "type": "int",
+                "name": "datish",
+                "connect.name": "org.apache.kafka.connect.data.Date"
+            }"#,
+        ];
+        for kind in kinds {
+            let schema = Schema::parse_str(kind).unwrap();
+            assert_eq!(schema, Schema::Date);
+
+            assert_eq!(
+                serde_json::to_string(&schema).unwrap(),
+                r#"{"type":"int","logicalType":"date"}"#
+            );
+        }
     }
 
     #[test]

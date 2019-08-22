@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::mem::transmute;
 
 use crate::schema::Schema;
@@ -39,6 +40,15 @@ pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
         Value::Int(i) => encode_int(*i, buffer),
         Value::Long(i) => encode_long(*i, buffer),
         Value::Float(x) => buffer.extend_from_slice(&unsafe { transmute::<f32, [u8; 4]>(*x) }),
+        Value::Date(d) => {
+            let span = (*d) - chrono::NaiveDate::from_ymd(1970, 1, 1);
+            encode_int(
+                span.num_days()
+                    .try_into()
+                    .expect("Num days is too large to encode as i32"),
+                buffer,
+            )
+        }
         Value::Double(x) => buffer.extend_from_slice(&unsafe { transmute::<f64, [u8; 8]>(*x) }),
         Value::Decimal { unscaled, .. } => match *schema {
             Schema::Decimal {

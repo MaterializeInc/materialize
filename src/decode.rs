@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::mem::transmute;
 
+use chrono::NaiveDate;
 use failure::Error;
 
 use crate::schema::Schema;
@@ -49,6 +50,18 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             reader.read_exact(&mut buf[..])?;
             Ok(Value::Double(unsafe { transmute::<[u8; 8], f64>(buf) }))
         }
+        Schema::Date => match decode_int(reader)? {
+            Value::Int(days) => Ok(Value::Date(
+                NaiveDate::from_ymd(1970, 1, 1)
+                    .checked_add_signed(chrono::Duration::days(days.into()))
+                    .ok_or_else(|| {
+                        DecodeError::new(format!("Invalid num days from epoch: {0}", days))
+                    })?,
+            )),
+            other => {
+                Err(DecodeError::new(format!("not an Int32 input for Date: {:?}", other)).into())
+            }
+        },
         Schema::Decimal {
             precision,
             scale,
