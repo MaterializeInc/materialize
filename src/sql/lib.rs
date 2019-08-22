@@ -541,9 +541,8 @@ impl Planner {
                 let mut subjects = ccsr_client.list_subjects()?;
                 if let Some(value) = like {
                     let like_regex = build_like_regex_from_string(value);
-                    match like_regex {
-                        Ok(regex) => subjects.retain(|a| regex.is_match(a)),
-                        _ => (), // If you don't get a regex back, don't filter
+                    if let Ok(regex) = like_regex {
+                        subjects.retain(|a| regex.is_match(a))
                     }
                 }
 

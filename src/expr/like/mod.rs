@@ -49,10 +49,6 @@ pub fn build_like_regex_from_string(like_string: &str) -> Result<Regex, failure:
         // runtime errors yet, so just return NULL for now.
         failure::bail!("Unterminated escape sequence for LIKE!")
     } else {
-        let built_regex = Regex::new(&regex);
-        match built_regex {
-            Ok(regex) => Ok(regex),
-            Err(err) => Err(failure::Error::from(err)),
-        }
+        Ok(Regex::new(&regex)?)
     }
 }
