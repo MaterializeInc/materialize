@@ -27,6 +27,7 @@ use dataflow::{
     Dataflow, DataflowCommand, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink,
     SinkConnector, Source, SourceConnector, TailSinkConnector, View,
 };
+use expr::like::build_like_regex_from_string;
 use expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
@@ -539,10 +540,12 @@ impl Planner {
                 let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
                 let mut subjects = ccsr_client.list_subjects()?;
                 if let Some(value) = like {
-                    let parsed = &value.clone()[1..&value.len()-1];
-                    subjects.retain(|a| a.contains(parsed))
+                    let like_regex = build_like_regex_from_string(value);
+                    match like_regex {
+                        Ok(regex) => subjects.retain(|a| regex.is_match(a)),
+                        _ => (), // If you don't get a regex back, don't filter
+                    }
                 }
-
 
                 let topic_names = subjects
                     .iter()
