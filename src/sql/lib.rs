@@ -27,6 +27,7 @@ use dataflow::{
     Dataflow, DataflowCommand, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink,
     SinkConnector, Source, SourceConnector, TailSinkConnector, View,
 };
+use expr::like::build_like_regex_from_string;
 use expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
@@ -525,6 +526,7 @@ impl Planner {
                 )?)])
             }
             Statement::CreateSources {
+                like,
                 url,
                 schema_registry,
                 with_options,
@@ -536,7 +538,12 @@ impl Planner {
                 // but for now we just want it working for demo purposes...
                 let schema_registry_url: Url = schema_registry.parse()?;
                 let ccsr_client = ccsr::Client::new(schema_registry_url.clone());
-                let subjects = ccsr_client.list_subjects()?;
+                let mut subjects = ccsr_client.list_subjects()?;
+                if let Some(value) = like {
+                    let like_regex = build_like_regex_from_string(value)?;
+                    subjects.retain(|a| like_regex.is_match(a))
+                }
+
                 let topic_names = subjects
                     .iter()
                     .filter_map(|s| {

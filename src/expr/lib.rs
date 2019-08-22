@@ -5,6 +5,7 @@
 
 //! Core expression language.
 
+pub mod like;
 mod relation;
 mod scalar;
 

@@ -2389,7 +2389,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#c17eb41cc1c69098b38fab5841fc4701e9a4e5bb"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#402d430599e6ed4e446bfe34ef306763391bfddb"
 dependencies = [
  "bigdecimal 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
