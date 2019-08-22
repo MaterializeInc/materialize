@@ -19,7 +19,8 @@ members = [
 debug = true
 
 [patch.crates-io]
-# TODO(benesch): remove rdkafka patch when 0.22 is released.
-rdkafka = { git = "ssh://git@github.com/fede1024/rust-rdkafka.git" }
+# TODO(benesch): remove rdkafka patch when our message queue nonempty callbacks
+# patch lands upstream.
+rdkafka = { git = "ssh://git@github.com/MaterializeInc/rust-rdkafka.git" }
 avro-rs = { git = "ssh://git@github.com/MaterializeInc/avro-rs.git" }
 futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch = "0.1" }

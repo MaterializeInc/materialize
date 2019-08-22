@@ -4,11 +4,13 @@
 // distributed without the express permission of Materialize, Inc.
 
 use log::error;
-use rdkafka::config::ClientConfig;
-use rdkafka::consumer::{BaseConsumer, Consumer, DefaultConsumerContext};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::{ClientConfig, ClientContext};
 use rdkafka::{Message, Timestamp as KafkaTimestamp};
+use std::sync::Mutex;
 use std::time::Duration;
 use timely::dataflow::{Scope, Stream};
+use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
 use super::SharedCapability;
@@ -51,8 +53,13 @@ where
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &addr.to_string());
 
-        let mut consumer: Option<BaseConsumer<DefaultConsumerContext>> = if read_kafka {
-            Some(config.create().expect("Failed to create Kafka Consumer"))
+        let mut consumer: Option<BaseConsumer<GlueConsumerContext>> = if read_kafka {
+            let cx = GlueConsumerContext(Mutex::new(scope.sync_activator_for(&info.address[..])));
+            Some(
+                config
+                    .create_with_context(cx)
+                    .expect("Failed to create Kafka Consumer"),
+            )
         } else {
             None
         };
@@ -63,9 +70,6 @@ where
 
         move |cap, output| {
             if let Some(consumer) = consumer.as_mut() {
-                // Indicate that we should run again.
-                activator.activate();
-
                 // Repeatedly interrogate Kafka for messages. Cease only when
                 // Kafka stops returning new data. We could cease earlier, if we
                 // had a better policy.
@@ -111,6 +115,12 @@ where
                     }
 
                     if timer.elapsed().as_millis() > 10 {
+                        // We didn't drain the entire queue, so indicate that we
+                        // should run again. We suppress the activation when the
+                        // queue is drained, as in that case librdkafka is
+                        // configured to unpark our thread when a new message
+                        // arrives.
+                        activator.activate();
                         return;
                     }
                 }
@@ -152,5 +162,20 @@ where
         (stream, Some(capability))
     } else {
         (stream, None)
+    }
+}
+
+/// An implementation of [`ConsumerContext`] that unparks the wrapped thread
+/// when the message queue switches from nonempty to empty.
+struct GlueConsumerContext(Mutex<SyncActivator>);
+
+impl ClientContext for GlueConsumerContext {}
+
+impl ConsumerContext for GlueConsumerContext {
+    fn message_queue_nonempty_callback(&self) {
+        let activator = self.0.lock().unwrap();
+        activator
+            .activate()
+            .expect("timely operator hung up while Kafka source active");
     }
 }

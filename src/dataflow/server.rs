@@ -207,10 +207,11 @@ where
             // Enable trace compaction.
             self.traces.maintenance();
 
-            // Ask Timely to execute a unit of work.
-            // Can either yield tastefully, or busy-wait.
-            // self.inner.step_or_park(None);
-            self.inner.step();
+            // Ask Timely to execute a unit of work. If Timely decides there's
+            // nothing to do, it will park the thread. We rely on another thread
+            // unparking us when there's new work to be done, e.g., when sending
+            // a command or when new Kafka messages have arrived.
+            self.inner.step_or_park(None);
 
             if let Some(coordinator) = &mut self.command_coordinator {
                 // Sequence any pending commands.
