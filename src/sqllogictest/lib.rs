@@ -685,7 +685,8 @@ fn format_row(
 impl FullState {
     fn start() -> Result<Self, failure::Error> {
         let postgres = Postgres::open_and_erase()?;
-        let planner = Planner::default();
+        let logging_config = None;
+        let planner = Planner::new(logging_config);
         let session = Session::default();
         let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
         let local_input_mux = Mux::default();

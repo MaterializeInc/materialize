@@ -124,6 +124,10 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         None
     };
 
+    let logging_config = config
+        .logging_granularity
+        .map(|d| LoggingConfiguration::new(d));
+
     // Construct timely dataflow instance.
     let local_input_mux = Mux::default();
     let dd_workers = dataflow::serve(
@@ -131,15 +135,14 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         local_input_mux.clone(),
         ExfiltratorConfig::Remote(post_address),
         config.timely,
-        config
-            .logging_granularity
-            .map(|d| LoggingConfiguration::new(d)),
+        logging_config.clone(),
     )
     .map_err(|s| format_err!("{}", s))?;
 
     // Initialize command queue and sql planner
     let worker0_thread = dd_workers.guards().into_first().thread();
     queue::transient::serve(
+        logging_config.as_ref(),
         sql_command_receiver,
         sql_result_mux.clone(),
         dataflow_command_sender,
