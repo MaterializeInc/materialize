@@ -121,7 +121,7 @@ static LOG_INIT: Once = Once::new();
 /// call `init`.
 pub fn init() {
     LOG_INIT.call_once(|| {
-        env_logger::Builder::from_default_env()
+        env_logger::Builder::from_env(env_logger::Env::new().filter_or("MTRLZ_LOG", "info"))
             .format(|buf, record| {
                 // TODO(benesch): this allocates a lot. At the time of writing, the
                 // only goal was to prevent my eyes from bleeding when looking at
