@@ -20,10 +20,10 @@ pub struct LoggingConfiguration {
     pub active_logs: std::collections::HashSet<LogVariant>,
 }
 
-impl Default for LoggingConfiguration {
-    fn default() -> Self {
+impl LoggingConfiguration {
+    pub fn new(granularity: Duration) -> LoggingConfiguration {
         Self {
-            granularity_ns: 10_000_000,
+            granularity_ns: granularity.as_nanos(),
             active_logs: LogVariant::default_logs().into_iter().collect(),
         }
     }

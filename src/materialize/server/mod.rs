@@ -5,19 +5,20 @@
 
 //! Main materialized server.
 
+use failure::format_err;
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::Future;
 use log::error;
-use std::boxed::Box;
-use std::error::Error as StdError;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
 use crate::pgwire;
 use crate::queue;
-use dataflow::{self, DataflowCommand, Exfiltration, ExfiltratorConfig, LocalInput};
+use dataflow::logging::LoggingConfiguration;
+use dataflow::{self, DataflowCommand, Exfiltration, ExfiltratorConfig};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
@@ -27,65 +28,21 @@ use sql::{SqlCommand, SqlResult};
 
 mod http;
 
-pub enum QueueConfig {
-    Transient,
-}
-
-/// Options for how to return dataflow results.
-pub enum DataflowResultsConfig {
-    /// A process local exchange fabric.
-    Local,
-    /// An address for an HTTP listener.
-    Remote(String),
-}
-
 pub struct Config {
-    queue: QueueConfig,
-    dataflow_results: DataflowResultsConfig,
-    timely_configuration: timely::Configuration,
+    pub logging_granularity: Option<Duration>,
+    pub timely: timely::Configuration,
 }
 
 impl Config {
-    /// Constructs a materialize configuration from a timely dataflow configuration.
-    pub fn from_timely(timely_configuration: timely::Configuration) -> Self {
-        let post_address = match &timely_configuration {
-            timely::Configuration::Thread => {
-                "http://localhost:6875/api/dataflow-results".to_owned()
-            }
-            timely::Configuration::Process(_) => {
-                "http://localhost:6875/api/dataflow-results".to_owned()
-            }
-            timely::Configuration::Cluster { addresses, .. } => {
-                let address = addresses[0]
-                    .split(':')
-                    .next()
-                    .expect("Failed to find port in timely address");
-                format!("http://{}:6875/api/dataflow-results", address)
-            }
-        };
-
-        Self {
-            queue: QueueConfig::Transient,
-            dataflow_results: DataflowResultsConfig::Remote(post_address),
-            timely_configuration,
-        }
-    }
-
     /// The number of timely workers described the by the configuration.
     pub fn num_timely_workers(&self) -> usize {
-        match &self.timely_configuration {
+        match &self.timely {
             timely::Configuration::Thread => 1,
             timely::Configuration::Process(n) => *n,
             timely::Configuration::Cluster {
                 threads, addresses, ..
             } => threads * addresses.len(),
         }
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self::from_timely(timely::Configuration::Thread)
     }
 }
 
@@ -130,7 +87,7 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 }
 
 /// Start the materialized server.
-pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
+pub fn serve(config: Config) -> Result<(), failure::Error> {
     // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
     let (sql_command_sender, sql_command_receiver) = mpsc::unbounded::<SqlCommand>();
     let sql_result_mux = Mux::default();
@@ -139,10 +96,22 @@ pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
 
     // Extract timely dataflow parameters.
     let num_timely_workers = config.num_timely_workers();
-    let is_primary = match &config.timely_configuration {
+    let is_primary = match &config.timely {
         timely::Configuration::Thread => true,
         timely::Configuration::Process(_) => true,
         timely::Configuration::Cluster { process, .. } => process == &0,
+    };
+    let post_address = match &config.timely {
+        timely::Configuration::Thread | timely::Configuration::Process(_) => {
+            "http://localhost:6875/api/dataflow-results".to_owned()
+        }
+        timely::Configuration::Cluster { addresses, .. } => {
+            let address = addresses[0]
+                .split(':')
+                .next()
+                .expect("Failed to find port in timely address");
+            format!("http://{}:6875/api/dataflow-results", address)
+        }
     };
 
     // Initialize pgwire / http listener.
@@ -157,30 +126,25 @@ pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
 
     // Construct timely dataflow instance.
     let local_input_mux = Mux::default();
-    let exfiltrator_config = match config.dataflow_results {
-        DataflowResultsConfig::Local => ExfiltratorConfig::Local(dataflow_results_mux.clone()),
-        DataflowResultsConfig::Remote(address) => ExfiltratorConfig::Remote(address),
-    };
     let dd_workers = dataflow::serve(
         dataflow_command_receiver,
         local_input_mux.clone(),
-        exfiltrator_config,
-        config.timely_configuration,
-        Some(Default::default()), // 10ms logging granularity
-    )?;
+        ExfiltratorConfig::Remote(post_address),
+        config.timely,
+        config
+            .logging_granularity
+            .map(|d| LoggingConfiguration::new(d)),
+    )
+    .map_err(|s| format_err!("{}", s))?;
 
     // Initialize command queue and sql planner
-    match &config.queue {
-        QueueConfig::Transient => {
-            let worker0_thread = dd_workers.guards().into_first().thread();
-            queue::transient::serve(
-                sql_command_receiver,
-                sql_result_mux.clone(),
-                dataflow_command_sender,
-                worker0_thread.clone(),
-            );
-        }
-    }
+    let worker0_thread = dd_workers.guards().into_first().thread();
+    queue::transient::serve(
+        sql_command_receiver,
+        sql_result_mux.clone(),
+        dataflow_command_sender,
+        worker0_thread.clone(),
+    );
 
     // Draw connections off of the listener.
     if let Some(listener) = listener {
@@ -217,5 +181,5 @@ pub fn serve(config: Config) -> Result<Mux<LocalInput>, Box<dyn StdError>> {
         tokio::run(start);
     }
 
-    Ok(local_input_mux)
+    Ok(())
 }

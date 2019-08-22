@@ -14,24 +14,121 @@
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
 use backtrace::Backtrace;
-// use getopts::Options;
+use failure::{bail, ResultExt};
 use lazy_static::lazy_static;
-// use std::env;
-use std::error::Error;
+use std::env;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::panic;
 use std::panic::PanicInfo;
 use std::process;
 use std::sync::Mutex;
 use std::thread;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("materialized: {}", err);
+        process::exit(1);
+    }
+}
+
+fn run() -> Result<(), failure::Error> {
     panic::set_hook(Box::new(handle_panic));
     ore::log::init();
 
-    let timely_configuration = timely::Configuration::from_args(std::env::args())?;
-    let materialize_configuration = materialize::server::Config::from_timely(timely_configuration);
-    materialize::server::serve(materialize_configuration)?;
-    Ok(())
+    let args: Vec<_> = env::args().collect();
+
+    let mut opts = getopts::Options::new();
+    opts.optflag("h", "help", "show this usage information");
+    opts.optflag("v", "version", "print version and exit");
+    opts.optopt(
+        "l",
+        "logging-granularity",
+        "dataflow logging granularity (default off)",
+        "DURATION",
+    );
+    opts.optopt(
+        "w",
+        "threads",
+        "number of per-process worker threads (default 1)",
+        "N",
+    );
+    opts.optopt(
+        "p",
+        "process",
+        "identity of this process (default 0)",
+        "INDEX",
+    );
+    opts.optopt(
+        "n",
+        "processes",
+        "total number of processes (default 1)",
+        "N",
+    );
+    opts.optopt(
+        "a",
+        "address-file",
+        "text file whose lines are process addresses",
+        "FILE",
+    );
+
+    let popts = opts.parse(&args[1..])?;
+    if popts.opt_present("h") {
+        print!("{}", opts.usage("usage: materialized [options]"));
+        return Ok(());
+    } else if popts.opt_present("v") {
+        println!("materialized v{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    let logging_granularity = match popts.opt_str("logging-granularity") {
+        None => None,
+        Some(d) => Some(parse_duration::parse(&d)?),
+    };
+    let threads = popts.opt_get_default("threads", 1)?;
+    let process = popts.opt_get_default("process", 0)?;
+    let processes = popts.opt_get_default("processes", 1)?;
+    let address_file = popts.opt_str("address-file");
+
+    if process >= processes {
+        bail!("process ID {} is not between 0 and {}", process, processes);
+    }
+
+    let timely_config = if processes > 1 {
+        let addresses = match address_file {
+            None => (0..processes)
+                .map(|i| format!("localhost:{}", 2101 + i))
+                .collect(),
+            Some(address_file) => read_address_file(&address_file, processes)?,
+        };
+        timely::Configuration::Cluster {
+            threads,
+            process,
+            addresses,
+            report: false,
+            log_fn: Box::new(|_| None),
+        }
+    } else if threads > 1 {
+        timely::Configuration::Process(threads)
+    } else {
+        timely::Configuration::Thread
+    };
+
+    materialize::server::serve(materialize::server::Config {
+        logging_granularity,
+        timely: timely_config,
+    })
+}
+
+fn read_address_file(path: &str, n: usize) -> Result<Vec<String>, failure::Error> {
+    let file =
+        File::open(path).with_context(|err| format!("opening address file {}: {}", path, err))?;
+    let mut lines = BufReader::new(file).lines();
+    let addrs = lines.by_ref().take(n).collect::<Result<Vec<_>, _>>()?;
+    if addrs.len() < n || lines.next().is_some() {
+        bail!("address file does not contain exactly {} lines", n);
+    }
+    Ok(addrs)
 }
 
 lazy_static! {
