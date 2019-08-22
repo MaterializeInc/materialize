@@ -623,6 +623,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dataflow-bin"
+version = "0.1.0"
+dependencies = [
+ "getopts 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
+ "timely 0.10.0 (git+https://github.com/TimelyDataflow/timely-dataflow.git)",
+]
+
+[[package]]
 name = "derive_state_machine_future"
 version = "0.2.0"
 source = "git+https://github.com/benesch/state_machine_future.git?branch=context-generic-bounds#8830f127c297930d8c107fc8668fb1af6dc3e9e4"

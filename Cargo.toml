@@ -3,6 +3,7 @@ members = [
     "fuzz",
     "src/ccsr",
     "src/dataflow",
+    "src/dataflow-bin",
     "src/expr",
     "src/interchange",
     "src/metastore",
