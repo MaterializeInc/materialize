@@ -123,12 +123,10 @@ pub fn init() {
     LOG_INIT.call_once(|| {
         env_logger::Builder::from_env(env_logger::Env::new().filter_or("MTRLZ_LOG", "info"))
             .format(|buf, record| {
-                // TODO(benesch): this allocates a lot. At the time of writing, the
-                // only goal was to prevent my eyes from bleeding when looking at
-                // log messages.
                 let ts = buf.precise_timestamp();
                 let level = buf.default_styled_level(record.level());
-                let fileline = match (record.file(), record.line()) {
+                write!(buf, "[{} {} ", ts, level)?;
+                match (record.file(), record.line()) {
                     (Some(file), Some(line)) => {
                         let search = "/.cargo/";
                         let file = match file.find(search) {
@@ -137,11 +135,11 @@ pub fn init() {
                         }
                         .trim_start_matches("registry/src/")
                         .trim_start_matches("git/checkouts/");
-                        format!("{}:{}", file, line)
+                        write!(buf, "{}:{}", file, line)?;
                     }
-                    _ => "(unknown)".to_string(),
+                    _ => write!(buf, "(unknown)")?,
                 };
-                writeln!(buf, "[{} {} {}] {}", level, ts, fileline, record.args())
+                writeln!(buf, "] {}", record.args())
             })
             .init();
     });
