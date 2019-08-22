@@ -22,15 +22,15 @@ mtrlz-start() {
     fi
 
     echo "Ensuring confluent services are running"
-    confluent start connect 2>&1 | tee "$_MTRLZ_LOGFILE"
-    if (confluent status | grep -E '(connect|schema-registry|kafka|zookeepr).*DOWN\]') ; then
+    confluent local start connect 2>&1 | tee "$_MTRLZ_LOGFILE"
+    if (confluent local status | grep -E '(connect|schema-registry|kafka|zookeepr).*DOWN\]') ; then
         echo "Restarting all confluent services"
-        confluent stop
-        confluent start connect
+        confluent local stop
+        confluent local start connect
     fi
     if ! (pgrep 'materialized' >/dev/null) ; then
         echo "Starting materialized"
-        cargo run --release --bin materialized
+        cargo build --release --bin materialized && ./target/release/materialized
     else
         echo "materialized is already running!"
     fi

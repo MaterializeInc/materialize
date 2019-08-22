@@ -1967,11 +1967,12 @@ where
     let expr = match (&from_type.scalar_type, &to_type.scalar_type) {
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
         (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
-        (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
+        (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
         (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, *s),
         (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, *s),
         (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
         (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
+        (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
         (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
         (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
         (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
