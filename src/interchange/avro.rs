@@ -98,6 +98,7 @@ fn validate_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
         Schema::Long => ScalarType::Int64,
         Schema::Float => ScalarType::Float32,
         Schema::Double => ScalarType::Float64,
+        Schema::Date => ScalarType::Date,
         Schema::Decimal {
             precision, scale, ..
         } => {
@@ -225,6 +226,7 @@ fn first_mismatched_schema_types<'a>(
         (Schema::Float, Schema::Float) => None,
         (Schema::Double, Schema::Double) => None,
         (Schema::Bytes, Schema::Bytes) => None,
+        (Schema::Date, Schema::Date) => None,
         (
             Schema::Decimal {
                 precision: p1,
@@ -351,13 +353,18 @@ impl Decoder {
                 Value::Long(i) => Ok(Datum::Int64(i)),
                 Value::Float(f) => Ok(Datum::Float32(f.into())),
                 Value::Double(f) => Ok(Datum::Float64(f.into())),
+                Value::Date(d) => Ok(Datum::Date(d)),
                 Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
                     Significand::from_twos_complement_be(&unscaled)?,
                 )),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
                 Value::String(s) => Ok(Datum::String(s)),
                 Value::Union(v) => value_to_datum(*v),
-                other => bail!("unsupported avro value: {:?}", other),
+                other @ Value::Fixed(..)
+                | other @ Value::Enum(..)
+                | other @ Value::Array(_)
+                | other @ Value::Map(_)
+                | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
             }
         };
 
