@@ -544,17 +544,19 @@ impl Planner {
                     subjects.retain(|a| like_regex.is_match(a))
                 }
 
-                let topic_names = subjects
+                let names = subjects
                     .iter()
                     .filter_map(|s| {
                         let parts: Vec<&str> = s.rsplitn(2, '-').collect();
                         if parts.len() == 2 && parts[0] == "value" {
-                            Some(parts[1])
+                            let topic_name = parts[1];
+                            let sql_name = sanitize_kafka_topic_name(parts[1]);
+                            Some((topic_name, sql_name))
                         } else {
                             None
                         }
                     })
-                    .filter(|topic| self.dataflows.try_get(topic).is_none());
+                    .filter(|(_tn, sn)| self.dataflows.try_get(sn).is_none());
                 let (addr, topic) = parse_kafka_url(url)?;
                 if let Some(s) = topic {
                     bail!(
@@ -562,13 +564,13 @@ impl Planner {
                         s
                     );
                 }
-                let results: Result<Vec<_>, failure::Error> = topic_names
-                    .map(|name| {
+                let results: Result<Vec<_>, failure::Error> = names
+                    .map(|(topic_name, sql_name)| {
                         Ok(Dataflow::Source(build_source(
                             &SourceSchema::Registry(schema_registry.to_owned()),
                             addr,
-                            name.to_owned(),
-                            name.to_owned(),
+                            sql_name,
+                            topic_name.to_owned(),
                         )?))
                     })
                     .collect();
@@ -2058,6 +2060,21 @@ fn parse_kafka_topic_url(url: &str) -> Result<(SocketAddr, String), failure::Err
     } else {
         bail!("source URL missing topic path: {}")
     }
+}
+
+fn sanitize_kafka_topic_name(topic_name: &str) -> String {
+    // Kafka topics can contain alphanumerics, dots (.), underscores (_), and
+    // hyphens (-), and most Kafka topics contain at least one of these special
+    // characters for namespacing, as in "mysql.tbl". Since non-quoted SQL
+    // identifiers cannot contain dots or hyphens, if we were to use the topic
+    // name directly as the name of the source, it would be impossible to refer
+    // to in SQL without quoting. So we replace hyphens and dots with
+    // underscores to make a valid SQL identifier.
+    //
+    // This scheme has the potential for collisions, but if you're creating
+    // Kafka topics like "a.b", "a_b", and "a-b", well... that's why we let you
+    // manually create sources with custom names using CREATE SOURCE.
+    topic_name.replace("-", "_").replace(".", "_")
 }
 
 struct AggregateFuncVisitor<'ast> {
