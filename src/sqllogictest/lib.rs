@@ -31,7 +31,7 @@ use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
-use sql::{Planner, Session, SqlResponse};
+use sql::{Planner, Session, SqlResponse, WaitFor};
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -982,15 +982,27 @@ impl RecordRunner for FullState {
                     self.connection_uuid,
                     sql.to_string(),
                 ) {
-                    Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
-                        (typ, dataflow_command, None)
-                    }
+                    Ok((
+                        SqlResponse::SendRows {
+                            typ,
+                            rows: _,
+                            wait_for: WaitFor::Workers,
+                        },
+                        dataflow_command,
+                    )) => (typ, dataflow_command, None),
                     // impossible for there to be a dataflow command
-                    Ok((SqlResponse::SendRows { typ, rows }, None)) => (typ, None, Some(rows)),
+                    Ok((
+                        SqlResponse::SendRows {
+                            typ,
+                            rows,
+                            wait_for: WaitFor::NoOne,
+                        },
+                        None,
+                    )) => (typ, None, Some(rows)),
                     Ok(other) => {
                         return Ok(Outcome::PlanFailure {
                             error: failure::format_err!(
-                                "Query did not result in Peeking, instead got {:?}",
+                                "Query did not result in SendRows modulo WaitFor::Optimizer, instead got {:?}",
                                 other
                             ),
                         });
@@ -1316,7 +1328,13 @@ pub fn fuzz(sqls: &str) {
         {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);
-                if let SqlResponse::Peeking { typ } = sql_response {
+                if let SqlResponse::SendRows {
+                    typ,
+                    rows,
+                    wait_for: WaitFor::Workers,
+                } = sql_response
+                {
+                    assert!(rows.is_empty());
                     for row in state.receive_peek_results(receiver) {
                         for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
                             assert!(datum.is_instance_of(typ));
