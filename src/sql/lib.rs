@@ -57,6 +57,14 @@ pub struct SqlResult {
     pub session: crate::Session,
 }
 
+/// Flag for whether optimizer or workers will chime in as well.
+#[derive(Debug)]
+pub enum WaitFor {
+    NoOne,
+    Optimizer,
+    Workers,
+}
+
 #[derive(Debug)]
 /// Responses from the planner to SQL commands.
 pub enum SqlResponse {
@@ -66,12 +74,10 @@ pub enum SqlResponse {
     DroppedSource,
     DroppedView,
     EmptyQuery,
-    Peeking {
-        typ: RelationType,
-    },
     SendRows {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
+        wait_for: WaitFor,
     },
     SetVariable,
     Tailing,
@@ -88,9 +94,8 @@ pub struct Planner {
 /// The `Ok` variant bundles a [`SQLResponse`] and an optional
 /// [`DataflowCommand`]. The `SQLResponse` is meant for the end user, while the
 /// `DataflowCommand` is meant to drive a running dataflow server. Typically the
-/// `SQLResponse` can be sent directly to the client, though
-/// [`SQLResponse::Peeking`] requires special handling in order to route results
-/// from the dataflow server to the client.
+/// `SQLResponse` can be sent directly to the client, though some commands require
+/// special handling as indicated by [`WaitFor`].
 pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure::Error>;
 
 /// Whether a SQL object type can be interpreted as matching the type of the given Dataflow.
@@ -207,6 +212,7 @@ impl Planner {
                         .iter()
                         .map(|v| vec![v.name().into(), v.value().into(), v.description().into()])
                         .collect(),
+                    wait_for: WaitFor::NoOne,
                 },
                 None,
             ))
@@ -220,6 +226,7 @@ impl Planner {
                         ],
                     },
                     rows: vec![vec![variable.value().into()]],
+                    wait_for: WaitFor::NoOne,
                 },
                 None,
             ))
@@ -256,6 +263,7 @@ impl Planner {
                         .name(object_type_as_plural_str(object_type).to_owned())],
                 },
                 rows,
+                wait_for: WaitFor::NoOne,
             },
             None,
         ))
@@ -300,6 +308,7 @@ impl Planner {
                     column_types: vec![col_name("Field"), col_name("Nullable"), col_name("Type")],
                 },
                 rows: column_descriptions,
+                wait_for: WaitFor::NoOne,
             },
             None,
         ))
@@ -319,6 +328,7 @@ impl Planner {
                     .iter()
                     .map(|df| vec![Datum::from(df.name().to_owned())])
                     .collect(),
+                wait_for: WaitFor::NoOne,
             },
             _ => unreachable!(),
         };
@@ -379,8 +389,10 @@ impl Planner {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
         Ok((
-            SqlResponse::Peeking {
+            SqlResponse::SendRows {
                 typ: dataflow.typ().clone(),
+                rows: Vec::new(),
+                wait_for: WaitFor::Workers,
             },
             Some(DataflowCommand::Peek {
                 connection_uuid,
@@ -400,8 +412,10 @@ impl Planner {
     pub fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
         let relation_expr = self.plan_query(&query)?;
         Ok((
-            SqlResponse::Peeking {
+            SqlResponse::SendRows {
                 typ: relation_expr.typ(),
+                rows: Vec::new(),
+                wait_for: WaitFor::Workers,
             },
             Some(DataflowCommand::Peek {
                 connection_uuid,
