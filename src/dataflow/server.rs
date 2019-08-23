@@ -36,7 +36,7 @@ use crate::{DataflowCommand, LocalInput, Timestamp};
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
-    local_input_mux: Mux<LocalInput>,
+    local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
     timely_configuration: timely::Configuration,
     logging_config: Option<logging::LoggingConfiguration>,
@@ -77,7 +77,7 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    local_input_mux: Mux<LocalInput>,
+    local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
@@ -95,7 +95,7 @@ where
     fn new(
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
-        local_input_mux: Mux<LocalInput>,
+        local_input_mux: Mux<Uuid, LocalInput>,
         exfiltrator_config: ExfiltratorConfig,
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {

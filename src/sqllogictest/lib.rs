@@ -639,8 +639,8 @@ struct FullState {
     _dataflow_workers: Box<dyn Drop>,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
-    local_input_mux: Mux<LocalInput>,
-    dataflow_results_mux: Mux<Exfiltration>,
+    local_input_mux: Mux<Uuid, LocalInput>,
+    dataflow_results_mux: Mux<Uuid, Exfiltration>,
 }
 
 fn format_row(

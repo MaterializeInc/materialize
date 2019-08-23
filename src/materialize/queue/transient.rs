@@ -5,10 +5,9 @@
 
 //! A trivial single-node command queue that doesn't store state at all.
 
-use futures::Stream;
-
 use dataflow::DataflowCommand;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::Stream;
 
 use super::{Command, Response};
 

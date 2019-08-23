@@ -130,7 +130,10 @@ pub enum StateMachine<A: Conn + 'static> {
         SendError,
         Error
     ))]
-    HandleQuery { conn: A, rx: futures::sync::oneshot::Receiver<queue::Response>, },
+    HandleQuery {
+        conn: A,
+        rx: futures::sync::oneshot::Receiver<queue::Response>,
+    },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
     SendRowDescription {

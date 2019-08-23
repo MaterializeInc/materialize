@@ -14,6 +14,7 @@ use timely::communication::Allocate;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
+use uuid::Uuid;
 
 use super::sink;
 use super::source;
@@ -35,7 +36,7 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
-    local_input_mux: &mut Mux<LocalInput>,
+    local_input_mux: &mut Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
 ) {
     let worker_timer = worker.timer();

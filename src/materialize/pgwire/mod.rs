@@ -22,9 +22,9 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
+use crate::queue;
 use dataflow::Exfiltration;
 use ore::mpmc::Mux;
-use crate::queue;
 
 mod codec;
 mod message;
@@ -37,7 +37,7 @@ pub use protocol::match_handshake;
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
     cmdq_tx: UnboundedSender<queue::Command>,
-    dataflow_results_mux: Mux<Exfiltration>,
+    dataflow_results_mux: Mux<Uuid, Exfiltration>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let uuid = Uuid::new_v4();

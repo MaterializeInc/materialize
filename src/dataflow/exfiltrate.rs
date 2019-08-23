@@ -16,7 +16,7 @@ use repr::Datum;
 #[derive(Clone, Debug)]
 pub enum ExfiltratorConfig {
     /// A local exchange fabric that backed by inter-thread channels.
-    Local(Mux<Exfiltration>),
+    Local(Mux<Uuid, Exfiltration>),
     /// An address to send results to via the network.
     Remote(String),
 }
@@ -32,7 +32,7 @@ pub enum Exfiltration {
 
 #[derive(Clone, Debug)]
 pub enum Exfiltrator {
-    Local(Mux<Exfiltration>),
+    Local(Mux<Uuid, Exfiltration>),
     Remote(Rc<RpcClient>),
 }
 

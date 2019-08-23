@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
+use uuid::Uuid;
 
 use crate::pgwire;
 use crate::queue;
@@ -48,7 +49,7 @@ impl Config {
 fn handle_connection(
     tcp_stream: TcpStream,
     cmdq_tx: UnboundedSender<queue::Command>,
-    dataflow_results_mux: Mux<Exfiltration>,
+    dataflow_results_mux: Mux<Uuid, Exfiltration>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
