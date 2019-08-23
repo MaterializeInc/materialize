@@ -28,6 +28,7 @@ use dataflow::{
 };
 use ore::collections::CollectionExt;
 use ore::mpmc::Mux;
+use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
 use sql::{Planner, Session, SqlResponse};
@@ -483,7 +484,10 @@ impl fmt::Display for Outcome<'_> {
                 inferred_types,
             } => write!(
                 f,
-                "Inference Failure!{}expected types: {}{}inferred types: {}",
+                "Inference Failure!{}\
+                 expected types: {}{}\
+                 inferred types: {}{}\
+                 column names:   {}",
                 INDENT,
                 expected_types
                     .iter()
@@ -493,9 +497,15 @@ impl fmt::Display for Outcome<'_> {
                 INDENT,
                 inferred_types
                     .iter()
-                    .map(|s| format!("{:?}", s))
+                    .map(|s| format!("{}", s.scalar_type))
                     .collect::<Vec<_>>()
-                    .join(" ")
+                    .join(" "),
+                INDENT,
+                inferred_types
+                    .iter()
+                    .map(|s| s.name.as_deref().unwrap_or("?").to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
             ),
             WrongColumnNames {
                 expected_column_names,
@@ -566,9 +576,16 @@ impl FromStr for Outcomes {
 
 impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let total: usize = self.0.iter().sum();
+        let status = if self.0[9] == total {
+            "SUCCESS!"
+        } else {
+            "FAIL!"
+        };
         write!(
             f,
-            "unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
+            "{} unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
+            status,
             self.0[0],
             self.0[1],
             self.0[2],
@@ -579,7 +596,7 @@ impl fmt::Display for Outcomes {
             self.0[7],
             self.0[8],
             self.0[9],
-            self.0.iter().sum::<usize>(),
+            total,
         )
     }
 }
