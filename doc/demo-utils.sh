@@ -39,9 +39,9 @@ mtrlz-start() {
 _mtrlz-cleardata() {
     local topic="$1"
 
-    _log "clearing existing kafka topic"
+    _log "clearing existing kafka topic $topic"
     kafka-topics --zookeeper localhost:2181 --delete --topic "$topic" >> "$_MTRLZ_LOGFILE" 2>&1
-    _log "clearing subject"
+    _log "clearing subject ${topic}-value"
     curl -X DELETE "http://localhost:8081/subjects/${topic}-value" >> "$_MTRLZ_LOGFILE" 2>&1
     echo >> "$_MTRLZ_LOGFILE"
 }
