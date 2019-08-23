@@ -755,7 +755,7 @@ impl Planner {
                 )
             })
             .unwrap_or_else(|| {
-                let typ = RelationType::new(vec![ColumnType::new(ScalarType::String)]);
+                let typ = RelationType::new(vec![ColumnType::new(ScalarType::String).name("x")]);
                 Ok((
                     RelationExpr::Constant {
                         rows: vec![vec![Datum::String("X".into())]],
@@ -808,11 +808,7 @@ impl Planner {
                     _ => {
                         group_key.push(from_scope.len() + group_exprs.len());
                         group_exprs.push((expr, typ.clone()));
-                        group_scope.items.push(ScopeItem {
-                            table_name: None,
-                            column_name: None,
-                            typ,
-                        });
+                        group_scope.items.push(ScopeItem { names: vec![], typ });
                     }
                 }
             }
@@ -838,11 +834,7 @@ impl Planner {
                     (group_key.len() + aggregates.len(), typ.clone()),
                 );
                 aggregates.push((expr, typ.clone()));
-                group_scope.items.push(ScopeItem {
-                    table_name: None,
-                    column_name: None,
-                    typ,
-                });
+                group_scope.items.push(ScopeItem { names: vec![], typ });
             }
             if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
                 // apply GROUP BY / aggregates
@@ -968,14 +960,7 @@ impl Planner {
                 .enumerate()
                 .map(|(i, item)| {
                     let j = select_all_mapping.get(&i).ok_or_else(|| {
-                        format_err!(
-                            "no column named {}{} in scope",
-                            item.table_name
-                                .as_deref()
-                                .map(|s| format!("{}.", s))
-                                .unwrap_or_else(|| "".to_owned()),
-                            item.column_name.as_deref().unwrap_or("")
-                        )
+                        format_err!("internal error: unable to resolve scope item {:?}", item)
                     })?;
                     Ok((ScalarExpr::Column(*j), item.typ.clone()))
                 })
@@ -986,17 +971,15 @@ impl Planner {
                     .items
                     .iter()
                     .enumerate()
-                    .filter(|(_, item)| item.table_name.as_ref() == Some(&table_name))
+                    .filter_map(|(i, item)| {
+                        item.names
+                            .iter()
+                            .find(|name| name.table_name == table_name)
+                            .map(|_name| (i, item))
+                    })
                     .map(|(i, item)| {
                         let j = select_all_mapping.get(&i).ok_or_else(|| {
-                            format_err!(
-                                "no column named {}{} in scope",
-                                item.table_name
-                                    .as_deref()
-                                    .map(|s| format!("{}.", s))
-                                    .unwrap_or_else(|| "".to_owned()),
-                                item.column_name.as_deref().unwrap_or("")
-                            )
+                            format_err!("internal error: unable to resolve scope item {:?}", item)
                         })?;
                         Ok((ScalarExpr::Column(*j), item.typ.clone()))
                     })
@@ -1028,13 +1011,15 @@ impl Planner {
                     name: name.clone(),
                     typ: typ.clone(),
                 };
-                let mut scope = Scope::from_source(&name, typ.clone());
-                if let Some(TableAlias { name, columns }) = alias {
+                let alias = if let Some(TableAlias { name, columns }) = alias {
                     if !columns.is_empty() {
                         bail!("aliasing columns is not yet supported");
                     }
-                    scope = scope.alias_table(&name);
-                }
+                    name.to_owned()
+                } else {
+                    name
+                };
+                let scope = Scope::from_source(&alias, typ.clone());
                 Ok((expr, scope))
             }
             TableFactor::Derived { .. } => {
@@ -1136,13 +1121,31 @@ impl Planner {
         match constraint {
             JoinConstraint::On(expr) => {
                 let product = left.product(right);
-                let product_scope = left_scope.product(right_scope);
+                let mut product_scope = left_scope.product(right_scope);
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
                     aggregate_context: None,
                 };
                 let (predicate, _) = self.plan_expr(ctx, expr)?;
+                for (l, r) in find_trivial_column_equivalences(&predicate) {
+                    // When we can statically prove that two columns are
+                    // equivalent after a join, the right column becomes
+                    // unnamable and the left column assumes both names. This
+                    // permits queries like
+                    //
+                    //     SELECT rhs.a FROM lhs JOIN rhs ON lhs.a = rhs.a
+                    //     GROUP BY lhs.a
+                    //
+                    // which otherwise would fail because rhs.a appears to be
+                    // a column that does not appear in the GROUP BY.
+                    //
+                    // Note that this is a MySQL-ism; PostgreSQL does not do
+                    // this sort of equivalence detection for ON constraints.
+                    let right_names =
+                        std::mem::replace(&mut product_scope.items[r].names, Vec::new());
+                    product_scope.items[l].names.extend(right_names);
+                }
                 with_both(product.filter(vec![predicate]), product_scope)
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
@@ -1156,11 +1159,14 @@ impl Planner {
             JoinConstraint::Natural => {
                 let mut column_names = vec![];
                 for item in left_scope.items.iter() {
-                    if let Some(column_name) = &item.column_name {
-                        if left_scope.resolve_column(column_name).is_ok()
-                            && right_scope.resolve_column(column_name).is_ok()
-                        {
-                            column_names.push(column_name.clone());
+                    for name in &item.names {
+                        if let Some(column_name) = &name.column_name {
+                            if left_scope.resolve_column(column_name).is_ok()
+                                && right_scope.resolve_column(column_name).is_ok()
+                            {
+                                column_names.push(column_name.clone());
+                                break;
+                            }
                         }
                     }
                 }
@@ -1212,11 +1218,9 @@ impl Planner {
                 },
                 typ.clone(),
             ));
-            new_items.push(ScopeItem {
-                table_name: None,
-                column_name: typ.name.clone(),
-                typ,
-            });
+            let mut names = l_item.names.clone();
+            names.extend(r_item.names.clone());
+            new_items.push(ScopeItem { names, typ });
             dropped_columns.insert(l);
             dropped_columns.insert(left_scope.len() + r);
         }
@@ -1908,6 +1912,36 @@ fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
     Ok(n.to_string())
 }
 
+fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
+    use BinaryFunc::*;
+    use ScalarExpr::*;
+    let mut exprs = vec![expr];
+    let mut equivalences = vec![];
+    while let Some(expr) = exprs.pop() {
+        match expr {
+            CallBinary {
+                func: Eq,
+                expr1,
+                expr2,
+            } => {
+                if let (Column(l), Column(r)) = (&**expr1, &**expr2) {
+                    equivalences.push((*l, *r));
+                }
+            }
+            CallBinary {
+                func: And,
+                expr1,
+                expr2,
+            } => {
+                exprs.push(expr1);
+                exprs.push(expr2);
+            }
+            _ => (),
+        }
+    }
+    equivalences
+}
+
 // When types don't match exactly, SQL has some poorly-documented type promotion
 // rules. For now, just promote integers into decimals or floats, decimals into
 // floats, and small Xs into bigger Xs.
@@ -2113,9 +2147,14 @@ struct ExprContext<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScopeItem {
-    table_name: Option<String>,
+struct ScopeItemName {
+    table_name: String,
     column_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ScopeItem {
+    names: Vec<ScopeItemName>,
     typ: ColumnType,
 }
 
@@ -2135,8 +2174,10 @@ impl Scope {
                 .column_types
                 .into_iter()
                 .map(|typ| ScopeItem {
-                    table_name: Some(table_name.to_owned()),
-                    column_name: typ.name.clone(),
+                    names: vec![ScopeItemName {
+                        table_name: table_name.to_owned(),
+                        column_name: typ.name.clone(),
+                    }],
                     typ,
                 })
                 .collect(),
@@ -2147,11 +2188,12 @@ impl Scope {
         self.items.len()
     }
 
-    fn alias_table(mut self, table_name: &str) -> Self {
-        for item in &mut self.items {
-            item.table_name = Some(table_name.to_owned());
-        }
-        self
+    fn iter_names(&self) -> impl Iterator<Item = (usize, &ScopeItem, &ScopeItemName)> {
+        self.items
+            .iter()
+            .enumerate()
+            .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
+            .flatten()
     }
 
     fn resolve_column<'a>(
@@ -2159,15 +2201,16 @@ impl Scope {
         column_name: &str,
     ) -> Result<(usize, &'a ScopeItem), failure::Error> {
         let mut results = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.column_name.as_deref() == Some(column_name));
-        match (results.next(), results.next()) {
-            (None, None) => bail!("no column named {} in scope", column_name),
-            (Some((i, item)), None) => Ok((i, item)),
-            (Some(_), Some(_)) => bail!("column name {} is ambiguous", column_name),
-            _ => unreachable!(),
+            .iter_names()
+            .filter(|(_pos, _item, name)| name.column_name.as_deref() == Some(column_name));
+        if let Some((pos, item, _name)) = results.next() {
+            if results.find(|(i, _item, _name)| pos != *i).is_none() {
+                Ok((pos, item))
+            } else {
+                bail!("column name {} is ambiguous", column_name)
+            }
+        } else {
+            bail!("no column named {} in scope", column_name)
         }
     }
 
@@ -2176,15 +2219,17 @@ impl Scope {
         table_name: &str,
         column_name: &str,
     ) -> Result<(usize, &'a ScopeItem), failure::Error> {
-        let mut results = self.items.iter().enumerate().filter(|(_, item)| {
-            item.table_name.as_deref() == Some(table_name)
-                && item.column_name.as_deref() == Some(column_name)
+        let mut results = self.iter_names().filter(|(_pos, _item, name)| {
+            name.table_name == table_name && name.column_name.as_deref() == Some(column_name)
         });
-        match (results.next(), results.next()) {
-            (None, None) => bail!("no column named {}.{} in scope", table_name, column_name),
-            (Some((i, item)), None) => Ok((i, item)),
-            (Some(_), Some(_)) => bail!("column name {}.{} is ambiguous", table_name, column_name),
-            _ => unreachable!(),
+        if let Some((pos, item, _name)) = results.next() {
+            if results.find(|(i, _item, _name)| pos != *i).is_none() {
+                Ok((pos, item))
+            } else {
+                bail!("column name {}.{} is ambiguous", table_name, column_name)
+            }
+        } else {
+            bail!("no column named {}.{} in scope", table_name, column_name)
         }
     }
 

@@ -1,0 +1,39 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (a int);
+
+statement ok
+CREATE TABLE t2 (a int);
+
+# This works in MySQL, but not PostgreSQL.
+query I
+SELECT t1.a FROM t1 JOIN t2 ON t1.a = t2.a GROUP BY t2.a
+
+# This works in PostgreSQL.
+query I
+SELECT t1.a FROM t1 NATURAL JOIN t2
+
+# This works in PostgreSQL too.
+query I
+SELECT t2.a FROM t1 NATURAL JOIN t2
+
+# Test sources with unnamed columns.
+
+statement ok
+CREATE VIEW v1 AS SELECT 1, 2
+
+query II
+SELECT * FROM v1
+----
+1  2
+
+query II
+SELECT v1.* FROM v1
+----
+1  2
