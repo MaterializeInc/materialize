@@ -84,7 +84,7 @@ pub enum SqlResponse {
 }
 
 /// Converts raw SQL queries into dataflow commands.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Planner {
     pub dataflows: DataflowStore,
 }
@@ -124,6 +124,12 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 }
 
 impl Planner {
+    pub fn new(logging_config: Option<&dataflow::logging::LoggingConfiguration>) -> Planner {
+        Planner {
+            dataflows: DataflowStore::new(logging_config),
+        }
+    }
+
     /// Parses and plans a raw SQL query. See the documentation for
     /// [`PlannerResult`] for details about the meaning of the return type.
     pub fn handle_command(

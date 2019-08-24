@@ -1,0 +1,14 @@
+[package]
+name = "dataflow-bin"
+description = "Utility binaries for the dataflow crate."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[[bin]]
+name = "dataflow-logview"
+path = "bin/dataflow-logview.rs"
+
+[dependencies]
+getopts = "0.2"
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
