@@ -15,7 +15,6 @@ use std::iter;
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
-use uuid::Uuid;
 
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
@@ -27,7 +26,7 @@ use repr::{Datum, RelationType};
 use sql::{Session, SqlResponse, WaitFor};
 
 pub struct Context {
-    pub uuid: Uuid,
+    pub conn_id: u32,
     pub cmdq_tx: UnboundedSender<queue::Command>,
     pub dataflow_results_receiver: UnboundedReceiver<Exfiltration>,
     pub num_timely_workers: usize,
@@ -318,7 +317,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 context.cmdq_tx.unbounded_send(queue::Command {
                     sql,
                     session: state.session,
-                    connection_uuid: context.uuid,
+                    conn_id: context.conn_id,
                     tx,
                 })?;
                 transition!(HandleQuery { conn, rx })

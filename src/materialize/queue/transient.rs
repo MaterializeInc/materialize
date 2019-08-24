@@ -23,7 +23,7 @@ pub fn serve(
             let mut cmd = msg.unwrap();
 
             let (sql_result, dataflow_command) =
-                match planner.handle_command(&mut cmd.session, cmd.connection_uuid, cmd.sql) {
+                match planner.handle_command(&mut cmd.session, cmd.conn_id, cmd.sql) {
                     Ok((resp, cmd)) => (Ok(resp), cmd),
                     Err(err) => (Err(err), None),
                 };

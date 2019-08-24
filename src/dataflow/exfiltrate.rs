@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
-use uuid::Uuid;
 
 use crate::Update;
 use ore::mpmc::Mux;
@@ -16,7 +15,7 @@ use repr::Datum;
 #[derive(Clone, Debug)]
 pub enum ExfiltratorConfig {
     /// A local exchange fabric that backed by inter-thread channels.
-    Local(Mux<Uuid, Exfiltration>),
+    Local(Mux<u32, Exfiltration>),
     /// An address to send results to via the network.
     Remote(String),
 }
@@ -32,34 +31,34 @@ pub enum Exfiltration {
 
 #[derive(Clone, Debug)]
 pub enum Exfiltrator {
-    Local(Mux<Uuid, Exfiltration>),
+    Local(Mux<u32, Exfiltration>),
     Remote(Rc<RpcClient>),
 }
 
 impl Exfiltrator {
-    pub fn send_peek(&self, connection_uuid: Uuid, rows: Vec<Vec<Datum>>) {
+    pub fn send_peek(&self, conn_id: u32, rows: Vec<Vec<Datum>>) {
         let exfiltration = Exfiltration::Peek(rows);
         match self {
             Exfiltrator::Local(mux) => {
                 // The sender is allowed to disappear at any time, so the error
                 // handling here is deliberately relaxed.
                 let mux = mux.read().unwrap();
-                if let Ok(sender) = mux.sender(&connection_uuid) {
+                if let Ok(sender) = mux.sender(&conn_id) {
                     drop(sender.unbounded_send(exfiltration))
                 }
             }
             Exfiltrator::Remote(rpc_client) => {
-                rpc_client.post(connection_uuid, exfiltration);
+                rpc_client.post(conn_id, exfiltration);
             }
         }
     }
 
-    pub fn send_tail(&self, connection_uuid: Uuid, updates: Vec<Update>) {
+    pub fn send_tail(&self, conn_id: u32, updates: Vec<Update>) {
         let exfiltration = Exfiltration::Tail(updates);
         match self {
             Exfiltrator::Local(_) => unimplemented!(),
             Exfiltrator::Remote(rpc_client) => {
-                rpc_client.post(connection_uuid, exfiltration);
+                rpc_client.post(conn_id, exfiltration);
             }
         }
     }
@@ -93,12 +92,12 @@ impl RpcClient {
         }
     }
 
-    fn post(&self, connection_uuid: Uuid, exfiltration: Exfiltration) {
+    fn post(&self, conn_id: u32, exfiltration: Exfiltration) {
         let encoded = bincode::serialize(&exfiltration).unwrap();
         self.inner
             .borrow_mut()
             .post(&self.addr)
-            .header("X-Materialize-Query-UUID", connection_uuid.to_string())
+            .header("X-Materialize-Connection-Id", conn_id.to_string())
             .body(encoded)
             .send()
             .unwrap();

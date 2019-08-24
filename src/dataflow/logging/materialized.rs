@@ -34,16 +34,16 @@ pub struct Peek {
     name: String,
     /// The logical timestamp requested.
     time: Timestamp,
-    /// The UUID of the peek.
-    uuid: uuid::Uuid,
+    /// The connection ID of the peek.
+    conn_id: u32,
 }
 
 impl Peek {
-    pub fn new(name: &str, time: Timestamp, uuid: &uuid::Uuid) -> Self {
+    pub fn new(name: &str, time: Timestamp, conn_id: u32) -> Self {
         Self {
             name: name.to_string(),
             time,
-            uuid: *uuid,
+            conn_id,
         }
     }
 }
@@ -126,7 +126,7 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .map(|(peek, worker)| {
                 vec![
-                    Datum::String(format!("{}", peek.uuid)),
+                    Datum::String(format!("{}", peek.conn_id)),
                     Datum::Int64(worker as i64),
                     Datum::String(peek.name),
                     Datum::Int64(peek.time as i64),
@@ -160,7 +160,7 @@ pub fn construct<A: Allocate>(
                             data.swap(&mut vec);
                             let mut session = output.session(&time);
                             for (peek, worker, is_install, time_ns) in vec.drain(..) {
-                                let key = (worker, peek.uuid);
+                                let key = (worker, peek.conn_id);
                                 if is_install {
                                     assert!(!map.contains_key(&key));
                                     map.insert(key, time_ns);

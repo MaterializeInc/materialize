@@ -9,13 +9,11 @@
 //! provide distribution, replication, and durability. At the moment,
 //! only a simple, transient, single-node queue is provided.
 
-use uuid::Uuid;
-
 pub mod transient;
 
 /// Incoming raw SQL from users.
 pub struct Command {
-    pub connection_uuid: Uuid,
+    pub conn_id: u32,
     pub sql: String,
     pub session: sql::Session,
     pub tx: futures::sync::oneshot::Sender<Response>,

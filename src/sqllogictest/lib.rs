@@ -632,7 +632,7 @@ struct FullState {
     postgres: Postgres,
     planner: Planner,
     session: Session,
-    connection_uuid: Uuid,
+    conn_id: u32,
     dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,
     // this is only here to avoid dropping it too early
@@ -640,7 +640,7 @@ struct FullState {
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    dataflow_results_mux: Mux<Uuid, Exfiltration>,
+    dataflow_results_mux: Mux<u32, Exfiltration>,
 }
 
 fn format_row(
@@ -722,7 +722,7 @@ impl FullState {
             postgres,
             planner,
             session,
-            connection_uuid: Uuid::new_v4(),
+            conn_id: 1,
             dataflow_command_sender,
             _dataflow_workers: Box::new(dataflow_workers),
             current_timestamp: 1,
@@ -739,8 +739,8 @@ impl FullState {
     ) -> UnboundedReceiver<Exfiltration> {
         let receiver = {
             let mut mux = self.dataflow_results_mux.write().unwrap();
-            mux.channel(self.connection_uuid).unwrap();
-            mux.receiver(&self.connection_uuid).unwrap()
+            mux.channel(self.conn_id).unwrap();
+            mux.receiver(&self.conn_id).unwrap()
         };
         self.dataflow_command_sender
             .unbounded_send(dataflow_command.clone())
@@ -926,7 +926,7 @@ impl RecordRunner for FullState {
                     | Statement::Drop { .. } => {
                         let (_response, dataflow_command) = match self.planner.handle_command(
                             &mut self.session,
-                            self.connection_uuid,
+                            self.conn_id,
                             sql.to_owned(),
                         ) {
                             Ok((response, dataflow_command)) => (response, dataflow_command),
@@ -935,12 +935,10 @@ impl RecordRunner for FullState {
                         // make sure we peek at the correct time
                         let dataflow_command = match dataflow_command {
                             Some(DataflowCommand::Peek {
-                                source,
-                                connection_uuid,
-                                ..
+                                source, conn_id, ..
                             }) => Some(DataflowCommand::Peek {
                                 source,
-                                connection_uuid,
+                                conn_id,
                                 when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
                             }),
                             other => other,
@@ -980,7 +978,7 @@ impl RecordRunner for FullState {
 
                 let (typ, dataflow_command, immediate_rows) = match self.planner.handle_command(
                     &mut self.session,
-                    self.connection_uuid,
+                    self.conn_id,
                     sql.to_string(),
                 ) {
                     Ok((
@@ -1087,12 +1085,10 @@ impl RecordRunner for FullState {
                             None => {
                                 let dataflow_command = match dataflow_command {
                                     Some(DataflowCommand::Peek {
-                                        source,
-                                        connection_uuid,
-                                        ..
+                                        source, conn_id, ..
                                     }) => Some(DataflowCommand::Peek {
                                         source,
-                                        connection_uuid,
+                                        conn_id,
                                         when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
                                     }),
                                     other => other,
@@ -1325,7 +1321,7 @@ pub fn fuzz(sqls: &str) {
         if let Ok((sql_response, dataflow_command)) =
             state
                 .planner
-                .handle_command(&mut state.session, state.connection_uuid, sql.to_owned())
+                .handle_command(&mut state.session, state.conn_id, sql.to_owned())
         {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);

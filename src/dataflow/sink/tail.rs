@@ -39,7 +39,7 @@ pub fn tail<G, B>(
                     cur.step_key(&batch);
                 }
             }
-            exfiltrator.send_tail(connector.connection_uuid, result);
+            exfiltrator.send_tail(connector.conn_id, result);
         });
     })
 }

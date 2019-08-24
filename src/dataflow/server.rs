@@ -65,7 +65,7 @@ struct PendingPeek {
     /// The name of the dataflow to peek.
     name: String,
     /// Identifies intended recipient of the peek.
-    connection_uuid: Uuid,
+    conn_id: u32,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Whether to drop the dataflow when the peek completes.
@@ -277,7 +277,7 @@ where
             coordinator::SequencedCommand::Peek {
                 name,
                 timestamp,
-                connection_uuid,
+                conn_id,
                 drop_after_peek,
             } => {
                 let mut trace = self
@@ -289,7 +289,7 @@ where
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
                     name,
-                    connection_uuid,
+                    conn_id,
                     timestamp,
                     drop_after_peek,
                 };
@@ -298,7 +298,7 @@ where
                         crate::logging::materialized::Peek::new(
                             &pending_peek.name,
                             pending_peek.timestamp,
-                            &pending_peek.connection_uuid,
+                            pending_peek.conn_id,
                         ),
                         true,
                     ));
@@ -373,13 +373,13 @@ where
 
                 cur.step_key(&storage)
             }
-            self.exfiltrator.send_peek(peek.connection_uuid, results);
+            self.exfiltrator.send_peek(peek.conn_id, results);
             if let Some(logger) = self.materialized_logger.as_mut() {
                 logger.log(MaterializedEvent::Peek(
                     crate::logging::materialized::Peek::new(
                         &peek.name,
                         peek.timestamp,
-                        &peek.connection_uuid,
+                        peek.conn_id,
                     ),
                     false,
                 ));
