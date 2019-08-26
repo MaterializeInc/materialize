@@ -29,7 +29,7 @@ sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rand = "0.7.0"
 rdkafka = "0.21"
 regex = "1"
-reqwest = "0.9.19"
+reqwest = "0.9.20"
 termcolor = "1.0.5"
 
 [dev-dependencies]
