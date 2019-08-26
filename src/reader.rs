@@ -400,7 +400,7 @@ mod tests {
     #[test]
     fn test_reader_empty_buffer() {
         let empty = Cursor::new(Vec::new());
-        Reader::new(empty).is_err();
+        assert!(Reader::new(empty).is_err());
     }
 
     #[test]
