@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::u8;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use failure::{Error, Fail};
 use serde_json::Value as JsonValue;
 
@@ -43,6 +43,8 @@ pub enum Value {
     Double(f64),
     /// A `Date` coming from an avro Logical `Date`
     Date(NaiveDate),
+    /// A `DateTime` coming from an avro Logical `Timestamp`
+    Timestamp(NaiveDateTime),
 
     // Variable-length types
     /// A `decimal` Avro value
@@ -279,6 +281,8 @@ impl Value {
             (&Value::Float(_), &Schema::Float) => true,
             (&Value::Double(_), &Schema::Double) => true,
             (&Value::Date(_), &Schema::Date) => true,
+            (&Value::Timestamp(_), &Schema::TimestampMicro) => true,
+            (&Value::Timestamp(_), &Schema::TimestampMilli) => true,
             (
                 &Value::Decimal {
                     precision: vp,
@@ -346,7 +350,10 @@ impl Value {
             Schema::Long => self.resolve_long(),
             Schema::Float => self.resolve_float(),
             Schema::Double => self.resolve_double(),
-            Schema::Date => self.resolve_date(),
+            Schema::Date | Schema::TimestampMilli | Schema::TimestampMicro => {
+                // Datelike things only have a single representation
+                self.resolve_datelike()
+            }
             Schema::Decimal {
                 precision, scale, ..
             } => self.resolve_decimal(precision, scale),
@@ -423,12 +430,13 @@ impl Value {
         }
     }
 
-    fn resolve_date(self) -> Result<Self, Error> {
+    fn resolve_datelike(self) -> Result<Self, Error> {
         match self {
             Value::Date(_) => Ok(self),
-            other => {
-                Err(SchemaResolutionError::new(format!("Date expected, got {:?}", other)).into())
-            }
+            Value::Timestamp(_) => Ok(self),
+            other => Err(
+                SchemaResolutionError::new(format!("Datelike expected, got {:?}", other)).into(),
+            ),
         }
     }
 

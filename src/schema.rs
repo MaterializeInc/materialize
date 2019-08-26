@@ -69,6 +69,14 @@ pub enum Schema {
     Double,
     /// An `Int` Avro schema with a semantic type being days since the unix epoch.
     Date,
+    /// An `Int64` Avro schema with a semantic type being milliseconds since the unix epoch.
+    ///
+    /// https://avro.apache.org/docs/current/spec.html#Timestamp+%28millisecond+precision%29
+    TimestampMilli,
+    /// An `Int64` Avro schema with a semantic type being microseconds since the unix epoch.
+    ///
+    /// https://avro.apache.org/docs/current/spec.html#Timestamp+%28microsecond+precision%29
+    TimestampMicro,
     /// A `bytes` or `fixed` Avro schema with a logical type of `decimal` and
     /// the specified precision and scale. If the underlying type is `fixed`,
     /// the `fixed_size` field specifies the size.
@@ -129,6 +137,7 @@ pub(crate) enum SchemaKind {
     Long,
     Float,
     Date,
+    DateTime,
     Double,
     // Variable-length types
     Bytes,
@@ -154,6 +163,7 @@ impl<'a> From<&'a Schema> for SchemaKind {
             Schema::Long => SchemaKind::Long,
             Schema::Float => SchemaKind::Float,
             Schema::Date => SchemaKind::Date,
+            Schema::TimestampMilli | Schema::TimestampMicro => SchemaKind::DateTime,
             Schema::Double => SchemaKind::Double,
             // Variable-length types
             Schema::Decimal { .. } => SchemaKind::Decimal,
@@ -180,6 +190,7 @@ impl<'a> From<&'a types::Value> for SchemaKind {
             types::Value::Float(_) => SchemaKind::Float,
             types::Value::Double(_) => SchemaKind::Double,
             types::Value::Date(_) => SchemaKind::Date,
+            types::Value::Timestamp(_) => SchemaKind::DateTime,
             // Variable-length types
             types::Value::Decimal { .. } => SchemaKind::Decimal,
             types::Value::Bytes(_) => SchemaKind::Bytes,
@@ -471,6 +482,7 @@ impl Schema {
                 "fixed" => Schema::parse_fixed(complex),
                 "bytes" => Schema::parse_bytes(complex),
                 "int" => Schema::parse_int(complex),
+                "long" => Schema::parse_long(complex),
                 other => Schema::parse_primitive(other),
             },
             Some(&Value::Object(ref data)) => match data.get("type") {
@@ -648,7 +660,7 @@ impl Schema {
         if let Some(name) = complex.get("connect.name") {
             if name == DEBEZIUM_DATE || name == KAFKA_DATE {
                 if name == KAFKA_DATE {
-                    warn!("Using deprecated debezium date format");
+                    warn!("using deprecated debezium date format");
                 }
                 return Ok(Schema::Date);
             }
@@ -665,6 +677,45 @@ impl Schema {
             debug!("parsing complex type as regular int: {:?}", complex);
         }
         Ok(Schema::Int)
+    }
+
+    /// Parse a [`serde_json::Value`] representing an Avro Int64/Long type
+    ///
+    /// The debezium/kafka types are document at [the debezium site][1], and the
+    /// avro ones are documented at [Avro][2].
+    ///
+    /// [1]: https://debezium.io/docs/connectors/mysql/#temporal-values
+    /// [2]: https://avro.apache.org/docs/1.9.0/spec.html
+    fn parse_long(complex: &Map<String, Value>) -> Result<Self, Error> {
+        const AVRO_MILLI_TS: &str = "timestamp-millis";
+        const AVRO_MICRO_TS: &str = "timestamp-micros";
+
+        const CONNECT_MILLI_TS: &[&str] = &[
+            "io.debezium.time.Timestamp",
+            "org.apache.kafka.connect.data.Timestamp",
+        ];
+        const CONNECT_MICRO_TS: &str = "io.debezium.time.MicroTimestamp";
+
+        if let Some(serde_json::Value::String(name)) = complex.get("connect.name") {
+            if CONNECT_MILLI_TS.contains(&&**name) {
+                return Ok(Schema::TimestampMilli);
+            }
+            if name == CONNECT_MICRO_TS {
+                return Ok(Schema::TimestampMicro);
+            }
+        }
+        if let Some(name) = complex.get("logicalType") {
+            if name == AVRO_MILLI_TS {
+                return Ok(Schema::TimestampMilli);
+            }
+            if name == AVRO_MICRO_TS {
+                return Ok(Schema::TimestampMicro);
+            }
+        }
+        if !complex.is_empty() {
+            debug!("parsing complex type as regular long: {:?}", complex);
+        }
+        Ok(Schema::Long)
     }
 
     /// Parse a `serde_json::Value` representing a Avro fixed type into a
@@ -705,6 +756,16 @@ impl Serialize for Schema {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("type", "int")?;
                 map.serialize_entry("logicalType", "date")?;
+                map.end()
+            }
+            Schema::TimestampMilli | Schema::TimestampMicro => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "long")?;
+                if *self == Schema::TimestampMilli {
+                    map.serialize_entry("logicalType", "timestamp-millis")?;
+                } else {
+                    map.serialize_entry("logicalType", "timestamp-micros")?;
+                }
                 map.end()
             }
             Schema::Decimal {

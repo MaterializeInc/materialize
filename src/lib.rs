@@ -686,6 +686,34 @@ mod tests {
             ])
         );
     }
+    #[test]
+    fn test_datetime_value() {
+        let writer_raw_schema = r#"{
+        "type": "record",
+        "name": "dttest",
+        "fields": [
+            {
+                "name": "a",
+                "type": {
+                    "type": "long",
+                    "logicalType": "timestamp-micros"
+                }
+            }
+        ]}"#;
+        let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
+        let mut writer = Writer::with_codec(&writer_schema, Vec::new(), Codec::Null);
+        let mut record = Record::new(writer.schema()).unwrap();
+        let dt = chrono::NaiveDateTime::from_timestamp(1_000, 995_000_000);
+        record.put("a", types::Value::Timestamp(dt));
+        writer.append(record).unwrap();
+        writer.flush().unwrap();
+        let input = writer.into_inner();
+        let mut reader = Reader::new(&input[..]).unwrap();
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            Value::Record(vec![("a".to_string(), Value::Timestamp(dt)),])
+        );
+    }
 
     #[test]
     fn test_illformed_length() {

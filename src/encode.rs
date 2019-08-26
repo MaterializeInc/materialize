@@ -49,6 +49,28 @@ pub fn encode_ref(value: &Value, schema: &Schema, buffer: &mut Vec<u8>) {
                 buffer,
             )
         }
+        Value::Timestamp(d) => {
+            let mult = match *schema {
+                Schema::TimestampMilli => 1_000,
+                Schema::TimestampMicro => 1_000_000,
+                ref other => panic!("Invalid schema for timestamp: {:?}", other),
+            };
+            let ts_seconds = d
+                .timestamp()
+                .checked_mul(mult)
+                .expect("All chrono dates can be converted to timestamps");
+            let sub_part: i64 = if mult == 1_000 {
+                d.timestamp_subsec_millis().into()
+            } else {
+                d.timestamp_subsec_micros().into()
+            };
+            let ts = if ts_seconds >= 0 {
+                ts_seconds + sub_part
+            } else {
+                ts_seconds - sub_part
+            };
+            encode_long(ts, buffer)
+        }
         Value::Double(x) => buffer.extend_from_slice(&unsafe { transmute::<f64, [u8; 8]>(*x) }),
         Value::Decimal { unscaled, .. } => match *schema {
             Schema::Decimal {
