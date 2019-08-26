@@ -8,7 +8,7 @@ pub mod regex;
 
 use std::fmt;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,8 @@ pub enum Datum {
     Float64(OrderedFloat<f64>),
     /// A Date
     Date(NaiveDate),
+    /// A DateTime
+    Timestamp(NaiveDateTime),
     /// An exact decimal number, possibly with a fractional component, with up
     /// to 38 digits of precision.
     Decimal(Significand),
@@ -66,6 +68,36 @@ impl Datum {
         let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
             .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?;
         Ok(Datum::Date(d))
+    }
+
+    /// Create a Datum representing a Timestamp
+    ///
+    /// Errors if the the combination of year/month/day is invalid
+    pub fn from_ymd_hms_nano(
+        year: i32,
+        month: u8,
+        day: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+        nano: u32,
+    ) -> Result<Datum, failure::Error> {
+        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
+            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?
+            .and_hms_nano_opt(hour.into(), minute.into(), second.into(), nano)
+            .ok_or_else(|| {
+                format_err!(
+                    "Invalid time: {:02}:{:02}:{:02}.{} (in date {}-{:02}-{:02})",
+                    hour,
+                    minute,
+                    second,
+                    nano,
+                    year,
+                    month,
+                    day
+                )
+            })?;
+        Ok(Datum::Timestamp(d))
     }
 
     pub fn unwrap_bool(&self) -> bool {
@@ -125,6 +157,13 @@ impl Datum {
         }
     }
 
+    pub fn unwrap_timestamp(&self) -> chrono::NaiveDateTime {
+        match self {
+            Datum::Timestamp(ts) => *ts,
+            _ => panic!("Datum::unwrap_timestamp called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_decimal(&self) -> Significand {
         match self {
             Datum::Decimal(d) => *d,
@@ -163,6 +202,7 @@ impl Datum {
             (Datum::Float32(_), ScalarType::Float32) => true,
             (Datum::Float64(_), ScalarType::Float64) => true,
             (Datum::Date(_), ScalarType::Date) => true,
+            (Datum::Timestamp(_), ScalarType::Timestamp) => true,
             (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
             (Datum::Bytes(_), ScalarType::Bytes) => true,
             (Datum::String(_), ScalarType::String) => true,
@@ -281,7 +321,6 @@ pub enum ScalarType {
     /// This is uncommon. Most [`Datum:Null`]s appear with a different type.
     Null,
     Bool,
-    Date,
     Int32,
     Int64,
     Float32,
@@ -292,6 +331,7 @@ pub enum ScalarType {
     /// maximum precision is [`decimal::MAX_DECIMAL_PRECISION`]. The scale must
     /// be less than or equal to the precision.
     Decimal(u8, u8),
+    Date,
     Time,
     Timestamp,
     Bytes,

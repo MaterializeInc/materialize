@@ -17,3 +17,18 @@ query T
 SELECT a FROM datish
 ----
 2019-12-31
+
+statement ok
+CREATE TABLE ts_ish (
+    b TIMESTAMP
+)
+
+statement ok
+INSERT INTO ts_ish VALUES (TIMESTAMP '1969-06-01 10:10:10.410'), (TIMESTAMP '1997-02-03 11:12:59.9'), (TIMESTAMP '2020-01-01 1:2:3.789')
+
+query T rowsort
+SELECT b FROM ts_ish
+----
+1969-06-01 10:10:10.410
+1997-02-03 11:12:59.900
+2020-01-01 01:02:03.789
