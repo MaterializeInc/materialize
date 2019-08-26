@@ -5,7 +5,7 @@
 
 use avro_rs::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
-use criterion::{black_box, criterion_group, criterion_main, Benchmark, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use interchange::avro::{parse_schema, Decoder};
 
 fn bench_interchange(c: &mut Criterion) {
@@ -281,17 +281,16 @@ fn bench_interchange(c: &mut Criterion) {
     buf.write_u8(0).unwrap();
     buf.write_i32::<NetworkEndian>(0).unwrap();
     buf.extend(avro_rs::to_avro_datum(&schema, record).unwrap());
-    let len = buf.len() as u32;
+    let len = buf.len() as u64;
 
     let mut decoder = Decoder::new(schema_str, None);
 
-    c.bench(
-        "avro",
-        Benchmark::new("decode", move |b| {
-            b.iter(|| black_box(decoder.decode(&buf).unwrap()))
-        })
-        .throughput(Throughput::Bytes(len)),
-    );
+    let mut bg = c.benchmark_group("avro");
+    bg.throughput(Throughput::Bytes(len));
+    bg.bench_function("decode", move |b| {
+        b.iter(|| black_box(decoder.decode(&buf).unwrap()))
+    });
+    bg.finish();
 }
 
 criterion_group!(benches, bench_interchange);
