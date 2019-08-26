@@ -129,6 +129,13 @@ pub enum RelationExpr {
         right: Box<RelationExpr>,
     },
     // TODO Lookup/Arrange
+    Branch {
+        name: String,
+        input: Box<RelationExpr>,
+        key: Vec<usize>,
+        branch: Box<RelationExpr>,
+        default: Option<Vec<Datum>>,
+    },
 }
 
 impl RelationExpr {
@@ -219,6 +226,7 @@ impl RelationExpr {
                         .unwrap(),
                 }
             }
+            RelationExpr::Branch { .. } => unimplemented!(),
         }
     }
 
@@ -484,6 +492,7 @@ impl RelationExpr {
                 f(left);
                 f(right);
             }
+            RelationExpr::Branch { .. } => unimplemented!(),
         }
     }
 
@@ -537,6 +546,7 @@ impl RelationExpr {
                 f(left);
                 f(right);
             }
+            RelationExpr::Branch { .. } => unimplemented!(),
         }
     }
 
