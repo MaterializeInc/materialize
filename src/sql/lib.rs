@@ -1370,7 +1370,7 @@ impl Planner {
         sql_func: &Function,
     ) -> Result<(AggregateExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
-        assert!(AggregateFunc::is_aggregate_func(&ident));
+        assert!(is_aggregate_func(&ident));
 
         if sql_func.over.is_some() {
             bail!("window functions are not yet supported");
@@ -1390,8 +1390,7 @@ impl Planner {
             ),
             _ => {
                 let (expr, typ) = self.plan_expr(ctx, arg)?;
-                let (func, scalar_type) =
-                    AggregateFunc::from_name_and_scalar_type(&ident, &typ.scalar_type)?;
+                let (func, scalar_type) = find_agg_func(&ident, &typ.scalar_type)?;
                 (expr, func, scalar_type)
             }
         };
@@ -1414,7 +1413,7 @@ impl Planner {
         sql_func: &'a Function,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
-        if AggregateFunc::is_aggregate_func(&ident) {
+        if is_aggregate_func(&ident) {
             if let Some(agg_cx) = ctx.aggregate_context {
                 let (i, typ) = agg_cx.get(sql_func).ok_or_else(|| {
                     format_err!(
@@ -2197,7 +2196,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
         let name_str = func.name.to_string().to_lowercase();
         let old_within_aggregate = self.within_aggregate;
-        if AggregateFunc::is_aggregate_func(&name_str) {
+        if is_aggregate_func(&name_str) {
             if self.within_aggregate {
                 self.err = Some(format_err!("nested aggregate functions are not allowed"));
                 return;
@@ -2324,6 +2323,59 @@ impl Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
         }
     }
+}
+
+fn is_aggregate_func(name: &str) -> bool {
+    match name {
+        "avg" | "max" | "min" | "sum" | "count" => true,
+        _ => false,
+    }
+}
+
+fn find_agg_func(
+    name: &str,
+    scalar_type: &ScalarType,
+) -> Result<(AggregateFunc, ScalarType), failure::Error> {
+    let func = match (name, scalar_type) {
+        ("avg", ScalarType::Int32) => AggregateFunc::AvgInt32,
+        ("avg", ScalarType::Int64) => AggregateFunc::AvgInt64,
+        ("avg", ScalarType::Float32) => AggregateFunc::AvgFloat32,
+        ("avg", ScalarType::Float64) => AggregateFunc::AvgFloat64,
+        ("avg", ScalarType::Decimal(_, _)) => AggregateFunc::AvgDecimal,
+        ("avg", ScalarType::Null) => AggregateFunc::AvgNull,
+        ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
+        ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
+        ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
+        ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
+        ("max", ScalarType::Bool) => AggregateFunc::MaxBool,
+        ("max", ScalarType::String) => AggregateFunc::MaxString,
+        ("max", ScalarType::Null) => AggregateFunc::MaxNull,
+        ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
+        ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
+        ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
+        ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
+        ("min", ScalarType::Bool) => AggregateFunc::MinBool,
+        ("min", ScalarType::String) => AggregateFunc::MinString,
+        ("min", ScalarType::Null) => AggregateFunc::MinNull,
+        ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
+        ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
+        ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
+        ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
+        ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
+        ("sum", ScalarType::Null) => AggregateFunc::SumNull,
+        ("count", _) => AggregateFunc::Count,
+        other => bail!("Unimplemented function/type combo: {:?}", other),
+    };
+    let scalar_type = match (name, scalar_type) {
+        ("count", _) => ScalarType::Int64,
+        // TODO(benesch): This should use the same decimal division path as
+        // the planner, rather than hardcoding a 6 digit increase in the
+        // scale (#212).
+        ("avg", ScalarType::Decimal(p, s)) => ScalarType::Decimal(*p, s + 6),
+        ("max", _) | ("min", _) | ("sum", _) | ("avg", _) => scalar_type.clone(),
+        other => bail!("Unknown aggregate function: {:?}", other),
+    };
+    Ok((func, scalar_type))
 }
 
 trait RelationExprExt {
