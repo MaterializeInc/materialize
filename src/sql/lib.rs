@@ -11,9 +11,9 @@ use failure::{bail, ensure, format_err};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
-    ObjectType, ParsedDate, Query, Select, SelectItem, SetExpr, SetOperator, SetVariableValue,
-    ShowStatementFilter, SourceSchema, Stage, Statement, TableAlias, TableFactor, TableWithJoins,
-    UnaryOperator, Value, Values,
+    ObjectType, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
+    SetVariableValue, ShowStatementFilter, SourceSchema, Stage, Statement, TableAlias, TableFactor,
+    TableWithJoins, UnaryOperator, Value, Values,
 };
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
@@ -1871,10 +1871,32 @@ impl Planner {
                 )?,
                 ScalarType::Date,
             ),
+            Value::Timestamp(
+                _,
+                ParsedTimestamp {
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    nano,
+                },
+            ) => (
+                Datum::from_ymd_hms_nano(
+                    (*year)
+                        .try_into()
+                        .map_err(|e| format_err!("Year is too large {}: {}", year, e))?,
+                    *month,
+                    *day,
+                    *hour,
+                    *minute,
+                    *second,
+                    *nano,
+                )?,
+                ScalarType::Timestamp,
+            ),
             Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
-            Value::Timestamp(_, _) => {
-                bail!("TIMESTAMP literals are not supported: {}", l.to_string())
-            }
             Value::Interval(_) => bail!("INTERVAL literals are not supported: {}", l.to_string()),
             Value::Null => (Datum::Null, ScalarType::Null),
         };

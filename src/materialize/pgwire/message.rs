@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use bytes::Bytes;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 
 use super::types::PgType;
 use repr::decimal::Decimal;
@@ -96,6 +96,7 @@ pub enum FieldValue {
     Float4(f32),
     Float8(f64),
     Date(NaiveDate),
+    Timestamp(NaiveDateTime),
     Text(String),
     Numeric(Decimal),
 }
@@ -111,6 +112,7 @@ impl FieldValue {
             Datum::Float32(f) => Some(FieldValue::Float4(*f)),
             Datum::Float64(f) => Some(FieldValue::Float8(*f)),
             Datum::Date(d) => Some(FieldValue::Date(d)),
+            Datum::Timestamp(d) => Some(FieldValue::Timestamp(d)),
             Datum::Decimal(d) => {
                 let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
                 Some(FieldValue::Numeric(d.with_scale(scale)))

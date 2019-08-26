@@ -123,6 +123,7 @@ impl Encoder for Codec {
                             FieldValue::Bool(true) => b"t"[..].into(),
                             FieldValue::Bytea(b) => b.into(),
                             FieldValue::Date(d) => d.to_string().into_bytes().into(),
+                            FieldValue::Timestamp(ts) => ts.to_string().into_bytes().into(),
                             FieldValue::Int4(i) => format!("{}", i).into_bytes().into(),
                             FieldValue::Int8(i) => format!("{}", i).into_bytes().into(),
                             FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),

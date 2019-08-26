@@ -99,6 +99,8 @@ fn validate_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
         Schema::Float => ScalarType::Float32,
         Schema::Double => ScalarType::Float64,
         Schema::Date => ScalarType::Date,
+        Schema::TimestampMilli => ScalarType::Timestamp,
+        Schema::TimestampMicro => ScalarType::Timestamp,
         Schema::Decimal {
             precision, scale, ..
         } => {
@@ -227,6 +229,8 @@ fn first_mismatched_schema_types<'a>(
         (Schema::Double, Schema::Double) => None,
         (Schema::Bytes, Schema::Bytes) => None,
         (Schema::Date, Schema::Date) => None,
+        (Schema::TimestampMilli, Schema::TimestampMilli) => None,
+        (Schema::TimestampMicro, Schema::TimestampMicro) => None,
         (
             Schema::Decimal {
                 precision: p1,
@@ -354,6 +358,7 @@ impl Decoder {
                 Value::Float(f) => Ok(Datum::Float32(f.into())),
                 Value::Double(f) => Ok(Datum::Float64(f.into())),
                 Value::Date(d) => Ok(Datum::Date(d)),
+                Value::Timestamp(d) => Ok(Datum::Timestamp(d)),
                 Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
                     Significand::from_twos_complement_be(&unscaled)?,
                 )),

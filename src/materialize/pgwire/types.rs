@@ -44,6 +44,12 @@ pub const DATE: PgType = PgType {
     typlen: 4,
 };
 
+/// A Date/Time. Internally a 64-bit number of microseconds since the epoch
+pub const TIMESTAMP_TZ: PgType = PgType {
+    oid: 1184,
+    typlen: 8,
+};
+
 /// Variable-length string.
 pub const TEXT: PgType = PgType {
     oid: 25,
@@ -91,8 +97,8 @@ impl From<&ScalarType> for PgType {
             ScalarType::Float64 => FLOAT8,
             ScalarType::Decimal { .. } => NUMERIC,
             ScalarType::Date => DATE,
-            ScalarType::Timestamp => unimplemented!(),
-            ScalarType::Time => unimplemented!(),
+            ScalarType::Timestamp => TIMESTAMP_TZ,
+            ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Bytes => BYTEA,
             ScalarType::String => TEXT,
             ScalarType::Regex => panic!("ScalarType::Regex is not representable over pgwire"),

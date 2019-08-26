@@ -317,6 +317,23 @@ fn json_to_avro(json: &JsonValue, schema: &Schema) -> Result<AvroValue, String> 
             Ok(AvroValue::Float(n.as_f64().unwrap() as f32))
         }
         (JsonValue::Number(ref n), Schema::Double) => Ok(AvroValue::Double(n.as_f64().unwrap())),
+        (JsonValue::Number(ref n), Schema::Date) => Ok(AvroValue::Date(
+            chrono::NaiveDate::from_ymd(1970, 1, 1) + chrono::Duration::days(n.as_i64().unwrap()),
+        )),
+        (JsonValue::Number(ref n), Schema::TimestampMilli) => {
+            let ts = n.as_i64().unwrap();
+            Ok(AvroValue::Timestamp(chrono::NaiveDateTime::from_timestamp(
+                ts / 1_000,
+                ts as u32 % 1_000,
+            )))
+        }
+        (JsonValue::Number(ref n), Schema::TimestampMicro) => {
+            let ts = n.as_i64().unwrap();
+            Ok(AvroValue::Timestamp(chrono::NaiveDateTime::from_timestamp(
+                ts / 1_000_000,
+                ts as u32 % 1_000_000,
+            )))
+        }
         (JsonValue::Array(items), Schema::Array(inner)) => Ok(AvroValue::Array(
             items
                 .iter()

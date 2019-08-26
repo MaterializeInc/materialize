@@ -211,6 +211,11 @@ fn get_column(
                 get_column_inner::<chrono::NaiveDate>(postgres_row, i, nullable)?.unwrap();
             Datum::Date(d)
         }
+        DataType::Timestamp => {
+            let d: chrono::NaiveDateTime =
+                get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?.unwrap();
+            Datum::Timestamp(d)
+        }
         DataType::Decimal(_, _) => {
             let desired_scale = match scalar_type_from_sql(sql_type).unwrap() {
                 ScalarType::Decimal(_precision, desired_scale) => desired_scale,
