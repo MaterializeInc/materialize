@@ -10,6 +10,7 @@ use repr::*;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+/// All variables must be unique within the entire expr
 pub type RelationVariable = String;
 pub type ScalarVariable = String;
 
@@ -47,12 +48,11 @@ pub enum RelationExpr {
         include_left_outer: bool,
         include_right_outer: bool,
     },
+    /// Group input by key
+    /// SPECIAL CASE: when key is empty and input is empty, return a single row of empty groups
     Group {
         input: Box<RelationExpr>,
-        // when key is empty and input is empty, returns a single row of empty vectors
         key: Vec<ScalarVariable>,
-        // these columns now contain Vec<Datum> instead of Datum, and can only be used inside ScalarExpr::Aggregate
-        val: Vec<ScalarVariable>,
     },
     Distinct {
         input: Box<RelationExpr>,
@@ -301,6 +301,26 @@ impl RelationExpr {
                 let on = on.applied_to(&mut product, &mut product_vars)?;
                 let join = product.filter(vec![on]);
                 (join, product_vars)
+            }
+            Union { left, right } => {
+                let outer_name = format!("outer_{}", Uuid::new_v4());
+                let get_outer = DR::Get {
+                    name: outer_name.clone(),
+                    typ: outer.typ(),
+                };
+                let (left, left_vars) = left.applied_to(get_outer.clone(), outer_vars.clone())?;
+                let (right, right_vars) = right.applied_to(get_outer, outer_vars)?;
+                let union = DR::Let {
+                    name: outer_name,
+                    value: Box::new(outer),
+                    body: Box::new(DR::Union {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    }),
+                };
+                // TODO(jamii) this is almost certainly not right
+                assert!(left_vars == right_vars);
+                (union, left_vars)
             }
             // TODO group distinct union
             _ => unimplemented!(),
