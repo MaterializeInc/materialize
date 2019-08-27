@@ -22,12 +22,15 @@ use timely::synchronization::sequence::Sequencer;
 use futures::sync::mpsc::UnboundedReceiver;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::rc::Rc;
 use uuid::Uuid;
 
+use crate::exfiltrate::Exfiltrator;
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::{Dataflow, DataflowCommand, PeekWhen, Timestamp, View};
 use expr::RelationExpr;
+use repr::Datum;
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,17 +64,22 @@ pub struct CommandCoordinator {
     since_updates: Vec<(String, Vec<Timestamp>)>,
     pub logger: Option<logging::materialized::Logger>,
     optimizer: expr::transform::Optimizer,
+    exfiltrator: Rc<Exfiltrator>,
 }
 
 impl CommandCoordinator {
     /// Creates a new command coordinator from input and output command queues.
-    pub fn new(command_receiver: UnboundedReceiver<DataflowCommand>) -> Self {
+    pub fn new(
+        command_receiver: UnboundedReceiver<DataflowCommand>,
+        exfiltrator: Rc<Exfiltrator>,
+    ) -> Self {
         Self {
             views: HashMap::new(),
             command_receiver,
             logger: None,
             since_updates: Vec::new(),
             optimizer: Default::default(),
+            exfiltrator,
         }
     }
 
@@ -152,6 +160,17 @@ impl CommandCoordinator {
                     drop_after_peek: drop,
                 };
                 sequencer.push(peek_command);
+            }
+            DataflowCommand::Explain {
+                mut relation_expr,
+                connection_uuid,
+            } => {
+                let typ = relation_expr.typ();
+                self.optimizer.optimize(&mut relation_expr, &typ);
+                self.exfiltrator.send_peek(
+                    connection_uuid,
+                    vec![vec![Datum::from(relation_expr.pretty())]],
+                );
             }
             DataflowCommand::Shutdown => {
                 sequencer.push(SequencedCommand::Shutdown);

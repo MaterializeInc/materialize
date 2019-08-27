@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use self::func::AggregateFunc;
 use crate::ScalarExpr;
+use pretty::{BoxDoc, Doc};
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -423,6 +424,11 @@ impl RelationExpr {
     {
         f(self);
         self.visit1_mut(|e| e.visit_mut_pre(f));
+    }
+
+    pub fn pretty(&mut self) -> String {
+        let doc = Doc::<BoxDoc<()>>::text("Hello, world!");
+        format!("{}", doc.pretty(120),)
     }
 }
 
