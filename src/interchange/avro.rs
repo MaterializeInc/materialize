@@ -139,7 +139,9 @@ fn validate_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
             }
         }
 
-        _ => bail!("Unsupported scalar type in schema: {:?}", schema),
+        Schema::Array(_) | Schema::Map(_) | Schema::Record { .. } => {
+            bail!("Unsupported scalar type in schema: {:?}", schema)
+        }
     })
 }
 
