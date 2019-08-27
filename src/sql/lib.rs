@@ -10,7 +10,7 @@ use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
     ObjectType, Query, Select, SelectItem, SetExpr, SetOperator, SetVariableValue,
-    ShowStatementFilter, SourceSchema, Statement, TableAlias, TableFactor, TableWithJoins,
+    ShowStatementFilter, SourceSchema, Stage, Statement, TableAlias, TableFactor, TableWithJoins,
     UnaryOperator, Value, Values,
 };
 use sqlparser::dialect::AnsiDialect;
@@ -176,6 +176,9 @@ impl Planner {
                 table_name,
                 filter,
             } => self.handle_show_columns(extended, full, &table_name, filter.as_ref()),
+            Statement::Explain { stage, query } => {
+                self.handle_explain(stage, *query, connection_uuid)
+            }
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
@@ -429,6 +432,42 @@ impl Planner {
                 when: PeekWhen::Immediately,
             }),
         ))
+    }
+
+    pub fn handle_explain(
+        &mut self,
+        stage: Stage,
+        query: Query,
+        connection_uuid: Uuid,
+    ) -> PlannerResult {
+        let mut relation_expr = self.plan_query(&query)?;
+
+        if stage == Stage::Dataflow {
+            Ok((
+                SqlResponse::SendRows {
+                    typ: RelationType {
+                        column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
+                    },
+                    rows: vec![vec![Datum::from(relation_expr.pretty())]],
+                    wait_for: WaitFor::NoOne,
+                },
+                None,
+            ))
+        } else {
+            Ok((
+                SqlResponse::SendRows {
+                    typ: RelationType {
+                        column_types: vec![ColumnType::new(ScalarType::String).name("Plan")],
+                    },
+                    rows: vec![],
+                    wait_for: WaitFor::Optimizer,
+                },
+                Some(DataflowCommand::Explain {
+                    relation_expr,
+                    connection_uuid,
+                }),
+            ))
+        }
     }
 }
 
@@ -1249,13 +1288,13 @@ impl Planner {
         let project_key =
             // coalesced join columns
             (0..map_exprs.len())
-            .map(|i| left_scope.len() + right_scope.len() + i)
-            // other columns that weren't joined
-            .chain(
-                (0..(left_scope.len() + right_scope.len()))
-                    .filter(|i| !dropped_columns.contains(i)),
-            )
-            .collect::<Vec<_>>();
+                .map(|i| left_scope.len() + right_scope.len() + i)
+                // other columns that weren't joined
+                .chain(
+                    (0..(left_scope.len() + right_scope.len()))
+                        .filter(|i| !dropped_columns.contains(i)),
+                )
+                .collect::<Vec<_>>();
         let both = left.product(right).filter(join_exprs);
         let both_scope = left_scope.product(right_scope);
         let (both, mut both_scope) = with_both(both, both_scope)?;

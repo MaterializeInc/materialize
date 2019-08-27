@@ -100,13 +100,14 @@ where
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
-        let command_coordinator =
-            dataflow_command_receiver.map(|dcr| coordinator::CommandCoordinator::new(dcr));
+        let exfiltrator = Rc::new(exfiltrator_config.into());
+        let command_coordinator = dataflow_command_receiver
+            .map(|dcr| coordinator::CommandCoordinator::new(dcr, Rc::clone(&exfiltrator)));
 
         Worker {
             inner: w,
             local_input_mux,
-            exfiltrator: Rc::new(exfiltrator_config.into()),
+            exfiltrator,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             inputs: HashMap::new(),
