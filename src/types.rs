@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::u8;
 
+use chrono::{NaiveDate, NaiveDateTime};
 use failure::{Error, Fail};
 use serde_json::Value as JsonValue;
 
@@ -27,6 +28,7 @@ impl SchemaResolutionError {
 /// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
+    // Fixed-length types
     /// A `null` Avro value.
     Null,
     /// A `boolean` Avro value.
@@ -39,6 +41,12 @@ pub enum Value {
     Float(f32),
     /// A `double` Avro value.
     Double(f64),
+    /// A `Date` coming from an avro Logical `Date`
+    Date(NaiveDate),
+    /// A `DateTime` coming from an avro Logical `Timestamp`
+    Timestamp(NaiveDateTime),
+
+    // Variable-length types
     /// A `decimal` Avro value
     ///
     /// The value of the decimal can be computed as follows:
@@ -272,6 +280,9 @@ impl Value {
             (&Value::Long(_), &Schema::Long) => true,
             (&Value::Float(_), &Schema::Float) => true,
             (&Value::Double(_), &Schema::Double) => true,
+            (&Value::Date(_), &Schema::Date) => true,
+            (&Value::Timestamp(_), &Schema::TimestampMicro) => true,
+            (&Value::Timestamp(_), &Schema::TimestampMilli) => true,
             (
                 &Value::Decimal {
                     precision: vp,
@@ -339,6 +350,10 @@ impl Value {
             Schema::Long => self.resolve_long(),
             Schema::Float => self.resolve_float(),
             Schema::Double => self.resolve_double(),
+            Schema::Date | Schema::TimestampMilli | Schema::TimestampMicro => {
+                // Datelike things only have a single representation
+                self.resolve_datelike()
+            }
             Schema::Decimal {
                 precision, scale, ..
             } => self.resolve_decimal(precision, scale),
@@ -412,6 +427,16 @@ impl Value {
             other => {
                 Err(SchemaResolutionError::new(format!("Double expected, got {:?}", other)).into())
             }
+        }
+    }
+
+    fn resolve_datelike(self) -> Result<Self, Error> {
+        match self {
+            Value::Date(_) => Ok(self),
+            Value::Timestamp(_) => Ok(self),
+            other => Err(
+                SchemaResolutionError::new(format!("Datelike expected, got {:?}", other)).into(),
+            ),
         }
     }
 

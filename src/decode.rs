@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::mem::transmute;
 
+use chrono::{NaiveDate, NaiveDateTime};
 use failure::Error;
 
 use crate::schema::Schema;
@@ -49,6 +50,50 @@ pub fn decode<R: Read>(schema: &Schema, reader: &mut R) -> Result<Value, Error> 
             reader.read_exact(&mut buf[..])?;
             Ok(Value::Double(unsafe { transmute::<[u8; 8], f64>(buf) }))
         }
+        Schema::Date => match decode_int(reader)? {
+            Value::Int(days) => Ok(Value::Date(
+                NaiveDate::from_ymd(1970, 1, 1)
+                    .checked_add_signed(chrono::Duration::days(days.into()))
+                    .ok_or_else(|| {
+                        DecodeError::new(format!("Invalid num days from epoch: {0}", days))
+                    })?,
+            )),
+            other => {
+                Err(DecodeError::new(format!("Not an Int32 input for Date: {:?}", other)).into())
+            }
+        },
+        Schema::TimestampMilli => match decode_long(reader)? {
+            Value::Long(millis) => {
+                let seconds = millis / 1_000;
+                let millis = (millis % 1_000) as u32;
+                Ok(Value::Timestamp(
+                    NaiveDateTime::from_timestamp_opt(seconds, millis * 1_000_000).ok_or_else(
+                        || DecodeError::new(format!("Invalid ms timestamp {}.{}", seconds, millis)),
+                    )?,
+                ))
+            }
+            other => Err(DecodeError::new(format!(
+                "Not an Int64 input for Millisecond DateTime: {:?}",
+                other
+            ))
+            .into()),
+        },
+        Schema::TimestampMicro => match decode_long(reader)? {
+            Value::Long(micros) => {
+                let seconds = micros / 1_000_000;
+                let micros = (micros % 1_000_000) as u32;
+                Ok(Value::Timestamp(
+                    NaiveDateTime::from_timestamp_opt(seconds, micros * 1_000).ok_or_else(
+                        || DecodeError::new(format!("Invalid mu timestamp {}.{}", seconds, micros)),
+                    )?,
+                ))
+            }
+            other => Err(DecodeError::new(format!(
+                "Not an Int64 input for Microsecond DateTime: {:?}",
+                other
+            ))
+            .into()),
+        },
         Schema::Decimal {
             precision,
             scale,
