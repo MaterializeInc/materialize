@@ -298,7 +298,13 @@ pub fn parse_record<'a>(
                                 // spaces to one space. This happens
                                 // unconditionally in Cockroach mode, regardless
                                 // of the sort option.
-                                let cols: Vec<_> = line.split_whitespace().collect();
+                                let cols: Vec<&str> = if types.len() == 1 {
+                                    // TODO: this doesn't have the whitespace-collapsing
+                                    // behavior that cockroach relies on
+                                    vec![&line]
+                                } else {
+                                    line.split_whitespace().collect()
+                                };
                                 if sort != Sort::No && cols.len() != types.len() {
                                     // We can't check this condition for
                                     // Sort::No, because some tests use strings
