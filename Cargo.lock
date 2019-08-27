@@ -102,11 +102,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "avro-rs"
 version = "0.6.5"
-source = "git+ssh://git@github.com/MaterializeInc/avro-rs.git#a930484576678b72f08a5acb3431f756af750c52"
+source = "git+ssh://git@github.com/MaterializeInc/avro-rs.git#dd965e4560ae0c600a52acc2e250ffad891355fc"
 dependencies = [
+ "chrono 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "digest 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "libflate 0.1.25 (registry+https://github.com/rust-lang/crates.io-index)",
+ "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.99 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)",
