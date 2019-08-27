@@ -43,6 +43,7 @@ pub use session::Session;
 
 mod session;
 pub mod store;
+mod transform;
 
 /// Incoming raw SQL from users.
 pub struct SqlCommand {
@@ -150,8 +151,9 @@ impl Planner {
         &mut self,
         session: &mut Session,
         connection_uuid: Uuid,
-        stmt: Statement,
+        mut stmt: Statement,
     ) -> PlannerResult {
+        transform::transform(&mut stmt);
         match stmt {
             Statement::Peek { name, immediate } => {
                 self.handle_peek(connection_uuid, name, immediate)
@@ -2325,7 +2327,8 @@ impl Scope {
 
 fn is_aggregate_func(name: &str) -> bool {
     match name {
-        "avg" | "max" | "min" | "sum" | "count" => true,
+        // avg is handled by transform::AvgFuncRewriter.
+        "max" | "min" | "sum" | "count" => true,
         _ => false,
     }
 }
@@ -2335,12 +2338,6 @@ fn find_agg_func(
     scalar_type: &ScalarType,
 ) -> Result<(AggregateFunc, ScalarType), failure::Error> {
     let func = match (name, scalar_type) {
-        ("avg", ScalarType::Int32) => AggregateFunc::AvgInt32,
-        ("avg", ScalarType::Int64) => AggregateFunc::AvgInt64,
-        ("avg", ScalarType::Float32) => AggregateFunc::AvgFloat32,
-        ("avg", ScalarType::Float64) => AggregateFunc::AvgFloat64,
-        ("avg", ScalarType::Decimal(_, _)) => AggregateFunc::AvgDecimal,
-        ("avg", ScalarType::Null) => AggregateFunc::AvgNull,
         ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
         ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
         ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
@@ -2366,11 +2363,7 @@ fn find_agg_func(
     };
     let scalar_type = match (name, scalar_type) {
         ("count", _) => ScalarType::Int64,
-        // TODO(benesch): This should use the same decimal division path as
-        // the planner, rather than hardcoding a 6 digit increase in the
-        // scale (#212).
-        ("avg", ScalarType::Decimal(p, s)) => ScalarType::Decimal(*p, s + 6),
-        ("max", _) | ("min", _) | ("sum", _) | ("avg", _) => scalar_type.clone(),
+        ("max", _) | ("min", _) | ("sum", _) => scalar_type.clone(),
         other => bail!("Unknown aggregate function: {:?}", other),
     };
     Ok((func, scalar_type))

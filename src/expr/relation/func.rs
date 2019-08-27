@@ -12,111 +12,6 @@ use repr::Datum;
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
-pub fn avg_int32<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: i32 = 0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_int32();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as i32))
-    }
-}
-
-pub fn avg_int64<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: i64 = 0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_int64();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as i64))
-    }
-}
-
-pub fn avg_float32<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: f32 = 0.0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_float32();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as f32))
-    }
-}
-
-pub fn avg_float64<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: f64 = 0.0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_float64();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as f64))
-    }
-}
-
-pub fn avg_decimal<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum = Significand::new(0);
-    let mut len = Significand::new(0);
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_decimal();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        // TODO(benesch): This should use the same decimal division path as the
-        // planner, rather than hardcoding a 6 digit increase in the scale
-        // (#212).
-        Datum::from(sum * 1_000_000 / len)
-    }
-}
-
-pub fn avg_null<I>(_datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    Datum::Null
-}
-
 pub fn max_int32<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -365,12 +260,6 @@ where
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
-    AvgInt32,
-    AvgInt64,
-    AvgFloat32,
-    AvgFloat64,
-    AvgDecimal,
-    AvgNull,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
@@ -401,12 +290,6 @@ impl AggregateFunc {
         I: IntoIterator<Item = Datum>,
     {
         match self {
-            AggregateFunc::AvgInt32 => avg_int32,
-            AggregateFunc::AvgInt64 => avg_int64,
-            AggregateFunc::AvgFloat32 => avg_float32,
-            AggregateFunc::AvgFloat64 => avg_float64,
-            AggregateFunc::AvgDecimal => avg_decimal,
-            AggregateFunc::AvgNull => avg_null,
             AggregateFunc::MaxInt32 => max_int32,
             AggregateFunc::MaxInt64 => max_int64,
             AggregateFunc::MaxFloat32 => max_float32,
@@ -435,7 +318,7 @@ impl AggregateFunc {
     pub fn is_nullable(self) -> bool {
         match self {
             AggregateFunc::Count => false,
-            // avg/max/min/sum return null on empty sets
+            // max/min/sum return null on empty sets
             _ => true,
         }
     }
