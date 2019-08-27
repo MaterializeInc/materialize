@@ -279,7 +279,7 @@ impl Planner {
     }
 
     /// Create an immediate result that describes all the columns for the given table
-    pub fn handle_show_columns(
+    fn handle_show_columns(
         &mut self,
         extended: bool,
         full: bool,
@@ -324,7 +324,7 @@ impl Planner {
     }
 
     fn handle_create_dataflow(&mut self, stmt: Statement) -> PlannerResult {
-        let dataflows = self.plan_statement(&stmt)?;
+        let dataflows = self.plan_create_statement(&stmt)?;
         let sql_response = match stmt {
             Statement::CreateSource { .. } => SqlResponse::CreatedSource,
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
@@ -418,7 +418,7 @@ impl Planner {
         ))
     }
 
-    pub fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
+    fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
         let relation_expr = self.plan_query(&query)?;
         Ok((
             SqlResponse::SendRows {
@@ -469,74 +469,8 @@ impl Planner {
             ))
         }
     }
-}
 
-pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
-    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
-    Ok(match data_type {
-        DataType::Boolean => ScalarType::Bool,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
-        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
-        DataType::SmallInt => ScalarType::Int32,
-        DataType::Int | DataType::BigInt => ScalarType::Int64,
-        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
-        DataType::Decimal(precision, scale) => {
-            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
-            let scale = scale.unwrap_or(0);
-            if precision > MAX_DECIMAL_PRECISION.into() {
-                bail!(
-                    "decimal precision {} exceeds maximum precision {}",
-                    precision,
-                    MAX_DECIMAL_PRECISION
-                );
-            }
-            if scale > precision {
-                bail!("decimal scale {} exceeds precision {}", scale, precision);
-            }
-            ScalarType::Decimal(precision as u8, scale as u8)
-        }
-        DataType::Date => ScalarType::Date,
-        DataType::Timestamp => ScalarType::Timestamp,
-        DataType::Time => ScalarType::Time,
-        DataType::Bytea => ScalarType::Bytes,
-        other => bail!("Unexpected SQL type: {:?}", other),
-    })
-}
-
-fn build_source(
-    schema: &SourceSchema,
-    kafka_addr: SocketAddr,
-    name: String,
-    topic: String,
-) -> Result<Source, failure::Error> {
-    let (raw_schema, schema_registry_url) = match schema {
-        SourceSchema::Raw(schema) => (schema.to_owned(), None),
-        SourceSchema::Registry(url) => {
-            // TODO(benesch): we need to fetch this schema
-            // asynchronously to avoid blocking the command
-            // processing thread.
-            let url: Url = url.parse()?;
-            let ccsr_client = ccsr::Client::new(url.clone());
-            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-            (res.raw, Some(url))
-        }
-    };
-    let typ = avro::validate_schema(&raw_schema)?;
-    Ok(Source {
-        name,
-        connector: SourceConnector::Kafka(KafkaSourceConnector {
-            addr: kafka_addr,
-            topic,
-            raw_schema,
-            schema_registry_url,
-        }),
-        typ,
-    })
-}
-
-impl Planner {
-    fn plan_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
+    fn plan_create_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
         match stmt {
             Statement::CreateView {
                 name,
@@ -663,7 +597,7 @@ impl Planner {
         }
     }
 
-    pub fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
+    fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -2111,6 +2045,70 @@ fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     } else {
         expr
     }
+}
+
+pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
+    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
+    Ok(match data_type {
+        DataType::Boolean => ScalarType::Bool,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
+        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
+        DataType::SmallInt => ScalarType::Int32,
+        DataType::Int | DataType::BigInt => ScalarType::Int64,
+        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+        DataType::Decimal(precision, scale) => {
+            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
+            let scale = scale.unwrap_or(0);
+            if precision > MAX_DECIMAL_PRECISION.into() {
+                bail!(
+                    "decimal precision {} exceeds maximum precision {}",
+                    precision,
+                    MAX_DECIMAL_PRECISION
+                );
+            }
+            if scale > precision {
+                bail!("decimal scale {} exceeds precision {}", scale, precision);
+            }
+            ScalarType::Decimal(precision as u8, scale as u8)
+        }
+        DataType::Date => ScalarType::Date,
+        DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Time => ScalarType::Time,
+        DataType::Bytea => ScalarType::Bytes,
+        other => bail!("Unexpected SQL type: {:?}", other),
+    })
+}
+
+fn build_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    name: String,
+    topic: String,
+) -> Result<Source, failure::Error> {
+    let (raw_schema, schema_registry_url) = match schema {
+        SourceSchema::Raw(schema) => (schema.to_owned(), None),
+        SourceSchema::Registry(url) => {
+            // TODO(benesch): we need to fetch this schema
+            // asynchronously to avoid blocking the command
+            // processing thread.
+            let url: Url = url.parse()?;
+            let ccsr_client = ccsr::Client::new(url.clone());
+            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
+            (res.raw, Some(url))
+        }
+    };
+    let typ = avro::validate_schema(&raw_schema)?;
+    Ok(Source {
+        name,
+        connector: SourceConnector::Kafka(KafkaSourceConnector {
+            addr: kafka_addr,
+            topic,
+            raw_schema,
+            schema_registry_url,
+        }),
+        typ,
+    })
 }
 
 fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::Error> {
