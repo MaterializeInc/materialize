@@ -49,10 +49,11 @@ pub enum RelationExpr {
         include_right_outer: bool,
     },
     /// Group input by key
-    /// SPECIAL CASE: when key is empty and input is empty, return a single row of empty groups
-    Group {
+    /// SPECIAL CASE: when key is empty and input is empty, return a single row with aggregates over empty groups
+    Reduce {
         input: Box<RelationExpr>,
         key: Vec<ScalarVariable>,
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
     },
     Distinct {
         input: Box<RelationExpr>,
@@ -85,24 +86,28 @@ pub enum ScalarExpr {
     //     then: Box<ScalarExpr>,
     //     els: Box<ScalarExpr>,
     // },
-    Aggregate {
-        func: AggregateFunc,
-        distinct: bool,
-        arg: Box<ScalarExpr>,
-    },
     Exists(Box<RelationExpr>),
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregateExpr {
+    func: AggregateFunc,
+    distinct: bool,
+    arg: Box<ScalarExpr>,
 }
 
 #[derive(Debug)]
 pub enum ExprRef<'a> {
     RelationExpr(&'a RelationExpr),
     ScalarExpr(&'a ScalarExpr),
+    AggregateExpr(&'a AggregateExpr),
 }
 
 #[derive(Debug)]
 pub enum ExprRefMut<'a> {
     RelationExpr(&'a mut RelationExpr),
     ScalarExpr(&'a mut ScalarExpr),
+    AggregateExpr(&'a mut AggregateExpr),
 }
 
 impl RelationExpr {
@@ -132,8 +137,13 @@ impl RelationExpr {
                 f(RelationExpr(right))?;
                 f(ScalarExpr(on))?;
             }
-            Group { input, .. } => {
+            Reduce {
+                input, aggregates, ..
+            } => {
                 f(RelationExpr(input))?;
+                for (aggregate, _) in aggregates {
+                    f(AggregateExpr(aggregate))?;
+                }
             }
             Distinct { input, .. } => {
                 f(RelationExpr(input))?;
@@ -143,18 +153,6 @@ impl RelationExpr {
                 f(RelationExpr(right))?;
             }
         }
-        Ok(())
-    }
-
-    fn visit<'a, F>(&'a self, f: &mut F) -> Result<(), failure::Error>
-    where
-        F: FnMut(ExprRef<'a>) -> Result<(), failure::Error>,
-    {
-        f(ExprRef::RelationExpr(self))?;
-        self.visit1(&mut |expr| match expr {
-            ExprRef::RelationExpr(rel) => rel.visit(f),
-            ExprRef::ScalarExpr(scalar) => scalar.visit(f),
-        })?;
         Ok(())
     }
 }
@@ -179,25 +177,36 @@ impl ScalarExpr {
                     f(ScalarExpr(expr))?;
                 }
             }
-            Aggregate { arg, .. } => {
-                f(ScalarExpr(arg))?;
-            }
             Exists(rel) => {
                 f(RelationExpr(rel))?;
             }
         }
         Ok(())
     }
+}
 
-    fn visit<'a, F>(&'a self, f: &mut F) -> Result<(), failure::Error>
+impl AggregateExpr {
+    fn visit1<'a, F>(&'a self, f: &mut F) -> Result<(), failure::Error>
     where
         F: FnMut(ExprRef<'a>) -> Result<(), failure::Error>,
     {
-        f(ExprRef::ScalarExpr(self))?;
-        self.visit1(&mut |expr| match expr {
-            ExprRef::RelationExpr(rel) => rel.visit(f),
-            ExprRef::ScalarExpr(scalar) => scalar.visit(f),
-        })?;
+        use ExprRef::*;
+        f(ScalarExpr(&*self.arg))?;
+        Ok(())
+    }
+}
+
+impl<'a> ExprRef<'a> {
+    fn visit<F>(self, f: &mut F) -> Result<(), failure::Error>
+    where
+        F: FnMut(Self) -> Result<(), failure::Error>,
+    {
+        f(self)?;
+        match self {
+            ExprRef::RelationExpr(relation) => relation.visit1(&mut |expr| expr.visit(f)),
+            ExprRef::ScalarExpr(scalar) => scalar.visit1(&mut |expr| expr.visit(f)),
+            ExprRef::AggregateExpr(aggregate) => aggregate.visit1(&mut |expr| expr.visit(f)),
+        }?;
         Ok(())
     }
 }
@@ -205,13 +214,14 @@ impl ScalarExpr {
 impl RelationExpr {
     fn used_variables(&self) -> HashSet<&ScalarVariable> {
         let mut vars = HashSet::new();
-        self.visit(&mut |expr| {
-            if let ExprRef::ScalarExpr(ScalarExpr::Get(var)) = expr {
-                vars.insert(var);
-            }
-            Ok(())
-        })
-        .unwrap();
+        ExprRef::RelationExpr(self)
+            .visit(&mut |expr| {
+                if let ExprRef::ScalarExpr(ScalarExpr::Get(var)) = expr {
+                    vars.insert(var);
+                }
+                Ok(())
+            })
+            .unwrap();
         vars
     }
 }
@@ -322,7 +332,7 @@ impl RelationExpr {
                 assert!(left_vars == right_vars);
                 (union, left_vars)
             }
-            // TODO group distinct union
+            // TODO reduce distinct
             _ => unimplemented!(),
         })
     }
@@ -358,7 +368,6 @@ impl ScalarExpr {
                     .map(|expr| expr.applied_to(outer, outer_vars))
                     .collect::<Result<Vec<_>, failure::Error>>()?,
             },
-            Aggregate { .. } => unimplemented!(),
             Exists(rel) => {
                 let name = format!("branch_{}", Uuid::new_v4());
                 let used_vars = rel.used_variables();
