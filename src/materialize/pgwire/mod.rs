@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use dataflow::Exfiltration;
 use ore::mpmc::Mux;
-use sql::{SqlCommand, SqlResult};
+use crate::queue;
 
 mod codec;
 mod message;
@@ -36,18 +36,12 @@ pub use protocol::match_handshake;
 
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
-    sql_command_sender: UnboundedSender<SqlCommand>,
-    sql_result_mux: Mux<SqlResult>,
+    cmdq_tx: UnboundedSender<queue::Command>,
     dataflow_results_mux: Mux<Exfiltration>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let uuid = Uuid::new_v4();
     let stream = Framed::new(a, codec::Codec::new());
-    let sql_result_receiver = {
-        let mut mux = sql_result_mux.write().unwrap();
-        mux.channel(uuid).unwrap();
-        mux.receiver(&uuid).unwrap()
-    };
     let dataflow_results_receiver = {
         let mut mux = dataflow_results_mux.write().unwrap();
         mux.channel(uuid).unwrap();
@@ -58,8 +52,7 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
         sql::Session::default(),
         protocol::Context {
             uuid,
-            sql_command_sender,
-            sql_result_receiver,
+            cmdq_tx,
             dataflow_results_receiver,
             num_timely_workers,
         },

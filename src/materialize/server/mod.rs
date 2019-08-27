@@ -24,7 +24,6 @@ use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use ore::netio;
 use ore::netio::SniffingStream;
-use sql::{SqlCommand, SqlResult};
 
 mod http;
 
@@ -48,8 +47,7 @@ impl Config {
 
 fn handle_connection(
     tcp_stream: TcpStream,
-    sql_command_sender: UnboundedSender<SqlCommand>,
-    sql_result_mux: Mux<SqlResult>,
+    cmdq_tx: UnboundedSender<queue::Command>,
     dataflow_results_mux: Mux<Exfiltration>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
@@ -67,8 +65,7 @@ fn handle_connection(
             if pgwire::match_handshake(buf) {
                 pgwire::serve(
                     ss.into_sniffed(),
-                    sql_command_sender,
-                    sql_result_mux,
+                    cmdq_tx,
                     dataflow_results_mux,
                     num_timely_workers,
                 )
@@ -88,9 +85,9 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 
 /// Start the materialized server.
 pub fn serve(config: Config) -> Result<(), failure::Error> {
-    // Construct shared channels for SQL command and result exchange, and dataflow command and result exchange.
-    let (sql_command_sender, sql_command_receiver) = mpsc::unbounded::<SqlCommand>();
-    let sql_result_mux = Mux::default();
+    // Construct shared channels for SQL command and result exchange, and
+    // dataflow command and result exchange.
+    let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<queue::Command>();
     let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded::<DataflowCommand>();
     let dataflow_results_mux = Mux::default();
 
@@ -143,8 +140,7 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     let worker0_thread = dd_workers.guards().into_first().thread();
     queue::transient::serve(
         logging_config.as_ref(),
-        sql_command_receiver,
-        sql_result_mux.clone(),
+        cmdq_rx,
         dataflow_command_sender,
         worker0_thread.clone(),
     );
@@ -169,8 +165,7 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
                     stream.set_nodelay(true).expect("set_nodelay failed");
                     tokio::spawn(handle_connection(
                         stream,
-                        sql_command_sender.clone(),
-                        sql_result_mux.clone(),
+                        cmdq_tx.clone(),
                         dataflow_results_mux.clone(),
                         num_timely_workers,
                     ));

@@ -9,19 +9,18 @@ use futures::Stream;
 
 use dataflow::DataflowCommand;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use ore::mpmc::Mux;
-use sql::{self, SqlCommand, SqlResult};
+
+use super::{Command, Response};
 
 pub fn serve(
     logging_config: Option<&dataflow::logging::LoggingConfiguration>,
-    sql_command_receiver: UnboundedReceiver<SqlCommand>,
-    sql_result_mux: Mux<SqlResult>,
+    cmd_rx: UnboundedReceiver<Command>,
     dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,
 ) {
     let mut planner = sql::Planner::new(logging_config);
     std::thread::spawn(move || {
-        for msg in sql_command_receiver.wait() {
+        for msg in cmd_rx.wait() {
             let mut cmd = msg.unwrap();
 
             let (sql_result, dataflow_command) =
@@ -39,13 +38,12 @@ pub fn serve(
                 worker0_thread.unpark();
             }
 
-            // the response sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-            if let Ok(sender) = sql_result_mux.read().unwrap().sender(&cmd.connection_uuid) {
-                drop(sender.unbounded_send(SqlResult {
-                    result: sql_result,
-                    session: cmd.session,
-                }));
-            }
+            // The client connection may disappear at any time, so the error
+            // handling here is deliberately relaxed.
+            let _ = cmd.tx.send(Response {
+                sql_result,
+                session: cmd.session,
+            });
         }
     });
 }

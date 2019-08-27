@@ -45,19 +45,6 @@ mod session;
 pub mod store;
 mod transform;
 
-/// Incoming raw SQL from users.
-pub struct SqlCommand {
-    pub connection_uuid: Uuid,
-    pub sql: String,
-    pub session: crate::Session,
-}
-
-/// Responses from the queue to SQL commands.
-pub struct SqlResult {
-    pub result: Result<SqlResponse, failure::Error>,
-    pub session: crate::Session,
-}
-
 /// Flag for whether optimizer or workers will chime in as well.
 #[derive(Debug)]
 pub enum WaitFor {
