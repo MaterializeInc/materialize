@@ -483,9 +483,9 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error } => write!(f, "Unsupported: {0} ({0:?})", error),
-            ParseFailure { error } => write!(f, "ParseFailure: {:?}", error),
-            PlanFailure { error } => write!(f, "PlanFailure: {0} ({0:?})", error),
+            Unsupported { error } => write_err("Unsupported", error, f),
+            ParseFailure { error } => write_err("ParseFailure", error, f),
+            PlanFailure { error } => write_err("PlanFailure", error, f),
             UnexpectedPlanSuccess { expected_error } => write!(
                 f,
                 "UnexpectedPlanSuccess! expected error: {}",
@@ -551,7 +551,7 @@ impl fmt::Display for Outcome<'_> {
                 "OutputFailure!{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
                 INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
-            Bail { cause } => write!(f, "Bail! caused by: {}", cause),
+            Bail { cause } => write!(f, "Bail! {}", cause),
             Success => f.write_str("Success"),
         }
     }
@@ -640,6 +640,16 @@ impl Outcomes {
             "success": self.0[9],
         })
     }
+}
+
+/// Write an error and its causes in a common format
+fn write_err(kind: &str, error: &impl failure::AsFail, f: &mut fmt::Formatter) -> fmt::Result {
+    let error = error.as_fail();
+    write!(f, "{0}: {1} ({1:?})", kind, error)?;
+    for cause in error.iter_causes() {
+        write!(f, "\n    caused by: {}", cause)?;
+    }
+    Ok(())
 }
 
 trait RecordRunner {
