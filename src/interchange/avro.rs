@@ -16,8 +16,31 @@ use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 
+pub fn validate_key_schema_get_pkey_indices(key_schema: &str, validated_value_schema: &RelationType) -> Result<Vec<usize>, Error> {
+    let key_schema = parse_schema(key_schema)?;
+
+    let mut value_indices = HashMap::new();
+    for (i, columns) in validated_value_schema.column_types.iter().enumerate() {
+        if let Some(name) = &columns.name {
+            value_indices.insert(name, i);
+        }
+    }
+
+    let mut indices = Vec::new();
+    if let Schema::Record {fields, ..} = key_schema {
+        for field in fields {
+            match value_indices.get(&field.name) {
+                Some(index) => indices.push(index.clone()),
+                None => bail!("Value schema missing primary key: {}", &field.name),
+            }
+        }
+    }
+
+    Ok(indices)
+}
+
 /// Converts an Apache Avro schema into a [`repr::RelationType`].
-pub fn validate_schema(schema: &str) -> Result<RelationType, Error> {
+pub fn validate_value_schema(schema: &str) -> Result<RelationType, Error> {
     let schema = parse_schema(schema)?;
 
     // The top-level record needs to be a diff "envelope" that contains
@@ -461,7 +484,7 @@ mod tests {
             // avoids embedding JSON strings inside of JSON, which is hard on
             // the eyes.
             let schema = serde_json::to_string(&tc.input)?;
-            let output = super::validate_schema(&schema)?;
+            let output = super::validate_value_schema(&schema)?;
             assert_eq!(output, tc.expected, "failed test case name: {}", tc.name)
         }
 

@@ -451,28 +451,34 @@ fn build_source(
     name: String,
     topic: String,
 ) -> Result<Source, failure::Error> {
-    let (raw_schema, schema_registry_url) = match schema {
-        SourceSchema::Raw(schema) => (schema.to_owned(), None),
+    let (key_schema, value_schema, schema_registry_url) = match schema {
+        SourceSchema::Raw(schema) => (schema.to_owned(), schema.to_owned(), None), // What should we actually do here?
         SourceSchema::Registry(url) => {
             // TODO(benesch): we need to fetch this schema
             // asynchronously to avoid blocking the command
             // processing thread.
             let url: Url = url.parse()?;
             let ccsr_client = ccsr::Client::new(url.clone());
-            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-            (res.raw, Some(url))
+            let key_schema = ccsr_client.get_schema_by_subject(&format!("{}-key", topic))?;
+            let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
+
+            (key_schema.raw, value_schema.raw, Some(url))
         }
     };
-    let typ = avro::validate_schema(&raw_schema)?;
+
+    let typ = avro::validate_value_schema(&value_schema)?;
+    let pkey_indices = avro::validate_key_schema_get_pkey_indices(&key_schema, &typ)?;
+
     Ok(Source {
         name,
         connector: SourceConnector::Kafka(KafkaSourceConnector {
             addr: kafka_addr,
             topic,
-            raw_schema,
+            raw_schema: value_schema,
             schema_registry_url,
         }),
         typ,
+        pkey_indices
     })
 }
 

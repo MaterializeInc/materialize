@@ -816,6 +816,7 @@ impl RecordRunner for FullState {
                                         uuid,
                                     }),
                                     typ,
+                                    Vec::new()), // What should we actually do here?
                                 });
                                 self.planner.dataflows.insert(dataflow.clone())?;
                                 let _receiver = self.send_dataflow_command(
