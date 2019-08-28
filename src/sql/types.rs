@@ -52,8 +52,8 @@ pub enum RelationExpr {
     /// SPECIAL CASE: when key is empty and input is empty, return a single row with aggregates over empty groups
     Reduce {
         input: Box<RelationExpr>,
-        key: Vec<ScalarVariable>,
-        aggregates: Vec<(AggregateExpr, ColumnType)>,
+        group_key: Vec<ScalarVariable>,
+        aggregates: Vec<(ScalarVariable, AggregateExpr, ColumnType)>,
     },
     Distinct {
         input: Box<RelationExpr>,
@@ -92,8 +92,8 @@ pub enum ScalarExpr {
 #[derive(Debug, Clone)]
 pub struct AggregateExpr {
     func: AggregateFunc,
+    expr: Box<ScalarExpr>,
     distinct: bool,
-    arg: Box<ScalarExpr>,
 }
 
 #[derive(Debug)]
@@ -191,7 +191,7 @@ impl AggregateExpr {
         F: FnMut(ExprRef<'a>) -> Result<(), failure::Error>,
     {
         use ExprRef::*;
-        f(ScalarExpr(&*self.arg))?;
+        f(ScalarExpr(&*self.expr))?;
         Ok(())
     }
 }
@@ -245,6 +245,8 @@ impl RelationExpr {
         )
     }
 
+    // TODO(jamii) do we actually need to track vars?
+    // TODO(jamii) ensure outer is always distinct? or make distinct during reduce etc?
     fn applied_to(
         self,
         outer: expr::RelationExpr,
@@ -318,22 +320,101 @@ impl RelationExpr {
                     name: outer_name.clone(),
                     typ: outer.typ(),
                 };
+                let outer_arity = outer.arity();
                 let (left, left_vars) = left.applied_to(get_outer.clone(), outer_vars.clone())?;
                 let (right, right_vars) = right.applied_to(get_outer, outer_vars)?;
-                let union = DR::Let {
+                let union = DR::Branch {
                     name: outer_name,
-                    value: Box::new(outer),
-                    body: Box::new(DR::Union {
+                    input: Box::new(outer),
+                    key: (0..outer_arity).collect(),
+                    branch: Box::new(DR::Union {
                         left: Box::new(left),
                         right: Box::new(right),
                     }),
+                    default: None,
                 };
                 // TODO(jamii) this is almost certainly not right
                 assert!(left_vars == right_vars);
                 (union, left_vars)
             }
-            // TODO reduce distinct
-            _ => unimplemented!(),
+            Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => {
+                let outer_name = format!("outer_{}", Uuid::new_v4());
+                let get_outer = DR::Get {
+                    name: outer_name.clone(),
+                    typ: outer.typ(),
+                };
+                let outer_arity = outer.arity();
+                let (mut input, mut input_vars) =
+                    input.applied_to(get_outer, outer_vars.clone())?;
+                let dr_group_key = (0..outer_arity)
+                    .chain(group_key.iter().map(|group_key_var| {
+                        input_vars
+                            .iter()
+                            .position(|input_var| group_key_var == input_var)
+                            .expect("Lost a variable somewhere")
+                    }))
+                    .collect();
+                let default = if group_key.is_empty() {
+                    Some(
+                        aggregates
+                            .iter()
+                            .map(|(_, aggregate, _)| aggregate.func.default())
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
+                let reduce_vars = outer_vars
+                    .into_iter()
+                    .chain(group_key.into_iter())
+                    .chain(
+                        aggregates
+                            .iter()
+                            .map(|(aggregate_var, _, _)| aggregate_var.clone()),
+                    )
+                    .collect();
+                let dr_aggregates = aggregates
+                    .into_iter()
+                    .map(|(_, aggregate, typ)| {
+                        Ok((aggregate.applied_to(&mut input, &mut input_vars)?, typ))
+                    })
+                    .collect::<Result<Vec<_>, failure::Error>>()?;
+                let reduce = DR::Branch {
+                    name: outer_name,
+                    input: Box::new(outer),
+                    key: (0..outer_arity).collect(),
+                    branch: Box::new(DR::Reduce {
+                        input: Box::new(input),
+                        group_key: dr_group_key,
+                        aggregates: dr_aggregates,
+                    }),
+                    default,
+                };
+                (reduce, reduce_vars)
+            }
+            Distinct { input } => {
+                let outer_name = format!("outer_{}", Uuid::new_v4());
+                let get_outer = DR::Get {
+                    name: outer_name.clone(),
+                    typ: outer.typ(),
+                };
+                let outer_arity = outer.arity();
+                let (input, input_vars) = input.applied_to(get_outer, outer_vars)?;
+                let distinct = DR::Branch {
+                    name: outer_name,
+                    input: Box::new(outer),
+                    key: (0..outer_arity).collect(),
+                    branch: Box::new(DR::Distinct {
+                        input: Box::new(input),
+                    }),
+                    default: None,
+                };
+                (distinct, input_vars)
+            }
         })
     }
 }
@@ -343,7 +424,6 @@ impl ScalarExpr {
         self,
         outer: &mut expr::RelationExpr,
         outer_vars: &mut Vec<ScalarVariable>,
-        // group_key: Option<&[usize]>,
     ) -> Result<expr::ScalarExpr, failure::Error> {
         use self::ScalarExpr::*;
         use expr::RelationExpr as DR;
@@ -409,6 +489,26 @@ impl ScalarExpr {
                 outer_vars.push(branch_vars[branch_vars.len() - 1].clone());
                 DS::Column(outer_vars.len() - 1)
             }
+        })
+    }
+}
+
+impl AggregateExpr {
+    fn applied_to(
+        self,
+        outer: &mut expr::RelationExpr,
+        outer_vars: &mut Vec<ScalarVariable>,
+    ) -> Result<expr::AggregateExpr, failure::Error> {
+        let AggregateExpr {
+            func,
+            expr,
+            distinct,
+        } = self;
+
+        Ok(expr::AggregateExpr {
+            func,
+            expr: expr.applied_to(outer, outer_vars)?,
+            distinct,
         })
     }
 }

@@ -128,7 +128,6 @@ pub enum RelationExpr {
         /// A source collection.
         right: Box<RelationExpr>,
     },
-    // TODO Lookup/Arrange
     Branch {
         name: String,
         input: Box<RelationExpr>,
