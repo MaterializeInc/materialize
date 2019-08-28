@@ -2088,7 +2088,8 @@ fn build_source(
     topic: String,
 ) -> Result<Source, failure::Error> {
     let (key_schema, value_schema, schema_registry_url) = match schema {
-        SourceSchema::Raw(schema) => (schema.to_owned(), schema.to_owned(), None), // What should we actually do here?
+        // TODO(jldlaughlin): we need a way to pass in primary key information when building a source from a string
+        SourceSchema::Raw(schema) => (None, schema.to_owned(), None),
         SourceSchema::Registry(url) => {
             // TODO(benesch): we need to fetch this schema
             // asynchronously to avoid blocking the command
@@ -2098,12 +2099,15 @@ fn build_source(
             let key_schema = ccsr_client.get_schema_by_subject(&format!("{}-key", topic))?;
             let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
 
-            (key_schema.raw, value_schema.raw, Some(url))
+            (Some(key_schema.raw), value_schema.raw, Some(url))
         }
     };
 
     let typ = avro::validate_value_schema(&value_schema)?;
-    let pkey_indices = avro::validate_key_schema_get_pkey_indices(&key_schema, &typ)?;
+    let pkey_indices = match key_schema {
+        Some(key_schema) => avro::validate_key_schema_get_pkey_indices(&key_schema, &typ)?,
+        None => Vec::new() // Right now, this will only happen for SourceSchema::Raw input. See above TODO.
+    };
 
     Ok(Source {
         name,

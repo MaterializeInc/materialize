@@ -35,7 +35,7 @@ impl DataflowStore {
                             uuid: uuid::Uuid::new_v4(),
                         }),
                         typ: log.schema(),
-                        Vec::new(), // What should we actually do here?
+                        pkey_indices: Vec::new(), 
                     })
                 }))
             }
