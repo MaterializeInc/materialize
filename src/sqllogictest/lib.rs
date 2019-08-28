@@ -28,9 +28,10 @@ use dataflow::{
 };
 use ore::collections::CollectionExt;
 use ore::mpmc::Mux;
+use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
-use sql::{Planner, Session, SqlResponse};
+use sql::{Planner, Session, SqlResponse, WaitFor};
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -483,7 +484,10 @@ impl fmt::Display for Outcome<'_> {
                 inferred_types,
             } => write!(
                 f,
-                "Inference Failure!{}expected types: {}{}inferred types: {}",
+                "Inference Failure!{}\
+                 expected types: {}{}\
+                 inferred types: {}{}\
+                 column names:   {}",
                 INDENT,
                 expected_types
                     .iter()
@@ -493,9 +497,15 @@ impl fmt::Display for Outcome<'_> {
                 INDENT,
                 inferred_types
                     .iter()
-                    .map(|s| format!("{:?}", s))
+                    .map(|s| format!("{}", s.scalar_type))
                     .collect::<Vec<_>>()
-                    .join(" ")
+                    .join(" "),
+                INDENT,
+                inferred_types
+                    .iter()
+                    .map(|s| s.name.as_deref().unwrap_or("?").to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
             ),
             WrongColumnNames {
                 expected_column_names,
@@ -566,9 +576,16 @@ impl FromStr for Outcomes {
 
 impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let total: usize = self.0.iter().sum();
+        let status = if self.0[9] == total {
+            "SUCCESS!"
+        } else {
+            "FAIL!"
+        };
         write!(
             f,
-            "unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
+            "{} unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
+            status,
             self.0[0],
             self.0[1],
             self.0[2],
@@ -579,7 +596,7 @@ impl fmt::Display for Outcomes {
             self.0[7],
             self.0[8],
             self.0[9],
-            self.0.iter().sum::<usize>(),
+            total,
         )
     }
 }
@@ -685,7 +702,8 @@ fn format_row(
 impl FullState {
     fn start() -> Result<Self, failure::Error> {
         let postgres = Postgres::open_and_erase()?;
-        let planner = Planner::default();
+        let logging_config = None;
+        let planner = Planner::new(logging_config);
         let session = Session::default();
         let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
         let local_input_mux = Mux::default();
@@ -966,15 +984,27 @@ impl RecordRunner for FullState {
                     self.connection_uuid,
                     sql.to_string(),
                 ) {
-                    Ok((SqlResponse::Peeking { typ }, dataflow_command)) => {
-                        (typ, dataflow_command, None)
-                    }
+                    Ok((
+                        SqlResponse::SendRows {
+                            typ,
+                            rows: _,
+                            wait_for: WaitFor::Workers,
+                        },
+                        dataflow_command,
+                    )) => (typ, dataflow_command, None),
                     // impossible for there to be a dataflow command
-                    Ok((SqlResponse::SendRows { typ, rows }, None)) => (typ, None, Some(rows)),
+                    Ok((
+                        SqlResponse::SendRows {
+                            typ,
+                            rows,
+                            wait_for: WaitFor::NoOne,
+                        },
+                        None,
+                    )) => (typ, None, Some(rows)),
                     Ok(other) => {
                         return Ok(Outcome::PlanFailure {
                             error: failure::format_err!(
-                                "Query did not result in Peeking, instead got {:?}",
+                                "Query did not result in SendRows modulo WaitFor::Optimizer, instead got {:?}",
                                 other
                             ),
                         });
@@ -1300,7 +1330,13 @@ pub fn fuzz(sqls: &str) {
         {
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);
-                if let SqlResponse::Peeking { typ } = sql_response {
+                if let SqlResponse::SendRows {
+                    typ,
+                    rows,
+                    wait_for: WaitFor::Workers,
+                } = sql_response
+                {
+                    assert!(rows.is_empty());
                     for row in state.receive_peek_results(receiver) {
                         for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
                             assert!(datum.is_instance_of(typ));

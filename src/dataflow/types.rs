@@ -26,6 +26,10 @@ pub enum DataflowCommand {
         source: RelationExpr,
         when: PeekWhen,
     },
+    Explain {
+        relation_expr: RelationExpr,
+        connection_uuid: Uuid,
+    },
     Shutdown,
 }
 

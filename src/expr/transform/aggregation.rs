@@ -122,7 +122,7 @@ mod tests {
         let data = RelationExpr::constant(vec![], typ1);
 
         let agg0 = AggregateExpr {
-            func: AggregateFunc::AvgInt64,
+            func: AggregateFunc::MaxInt64,
             expr: ScalarExpr::Column(0),
             distinct: false,
         };

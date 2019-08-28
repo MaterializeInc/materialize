@@ -450,7 +450,14 @@ pub fn build_like_regex(a: Datum) -> Datum {
         return Datum::Null;
     }
 
-    Datum::from(build_like_regex_from_string(&a.unwrap_string()).unwrap())
+    match build_like_regex_from_string(&a.unwrap_string()) {
+        Ok(regex) => Datum::from(regex),
+        Err(_) => {
+            // TODO(benesch): this should cause a runtime error, but we don't
+            // support those yet, so just return NULL for now.
+            Datum::Null
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

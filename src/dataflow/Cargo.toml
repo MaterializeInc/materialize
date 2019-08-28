@@ -18,7 +18,7 @@ log = "0.4"
 ore = { path = "../ore" }
 rdkafka = "0.21"
 repr = { path = "../repr" }
-reqwest = { version = "0.9.19", features = ["trust-dns"] }
+reqwest = { version = "0.9.20", features = ["trust-dns"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.40"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", features = ["bincode"] }

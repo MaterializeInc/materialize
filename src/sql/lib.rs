@@ -10,7 +10,7 @@ use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
     ObjectType, Query, Select, SelectItem, SetExpr, SetOperator, SetVariableValue,
-    ShowStatementFilter, SourceSchema, Statement, TableAlias, TableFactor, TableWithJoins,
+    ShowStatementFilter, SourceSchema, Stage, Statement, TableAlias, TableFactor, TableWithJoins,
     UnaryOperator, Value, Values,
 };
 use sqlparser::dialect::AnsiDialect;
@@ -43,6 +43,7 @@ pub use session::Session;
 
 mod session;
 pub mod store;
+mod transform;
 
 /// Incoming raw SQL from users.
 pub struct SqlCommand {
@@ -57,6 +58,14 @@ pub struct SqlResult {
     pub session: crate::Session,
 }
 
+/// Flag for whether optimizer or workers will chime in as well.
+#[derive(Debug)]
+pub enum WaitFor {
+    NoOne,
+    Optimizer,
+    Workers,
+}
+
 #[derive(Debug)]
 /// Responses from the planner to SQL commands.
 pub enum SqlResponse {
@@ -66,19 +75,17 @@ pub enum SqlResponse {
     DroppedSource,
     DroppedView,
     EmptyQuery,
-    Peeking {
-        typ: RelationType,
-    },
     SendRows {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
+        wait_for: WaitFor,
     },
     SetVariable,
     Tailing,
 }
 
 /// Converts raw SQL queries into dataflow commands.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Planner {
     pub dataflows: DataflowStore,
 }
@@ -88,9 +95,8 @@ pub struct Planner {
 /// The `Ok` variant bundles a [`SQLResponse`] and an optional
 /// [`DataflowCommand`]. The `SQLResponse` is meant for the end user, while the
 /// `DataflowCommand` is meant to drive a running dataflow server. Typically the
-/// `SQLResponse` can be sent directly to the client, though
-/// [`SQLResponse::Peeking`] requires special handling in order to route results
-/// from the dataflow server to the client.
+/// `SQLResponse` can be sent directly to the client, though some commands require
+/// special handling as indicated by [`WaitFor`].
 pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure::Error>;
 
 /// Whether a SQL object type can be interpreted as matching the type of the given Dataflow.
@@ -119,6 +125,12 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 }
 
 impl Planner {
+    pub fn new(logging_config: Option<&dataflow::logging::LoggingConfiguration>) -> Planner {
+        Planner {
+            dataflows: DataflowStore::new(logging_config),
+        }
+    }
+
     /// Parses and plans a raw SQL query. See the documentation for
     /// [`PlannerResult`] for details about the meaning of the return type.
     pub fn handle_command(
@@ -139,8 +151,9 @@ impl Planner {
         &mut self,
         session: &mut Session,
         connection_uuid: Uuid,
-        stmt: Statement,
+        mut stmt: Statement,
     ) -> PlannerResult {
+        transform::transform(&mut stmt);
         match stmt {
             Statement::Peek { name, immediate } => {
                 self.handle_peek(connection_uuid, name, immediate)
@@ -165,6 +178,9 @@ impl Planner {
                 table_name,
                 filter,
             } => self.handle_show_columns(extended, full, &table_name, filter.as_ref()),
+            Statement::Explain { stage, query } => {
+                self.handle_explain(stage, *query, connection_uuid)
+            }
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
@@ -207,6 +223,7 @@ impl Planner {
                         .iter()
                         .map(|v| vec![v.name().into(), v.value().into(), v.description().into()])
                         .collect(),
+                    wait_for: WaitFor::NoOne,
                 },
                 None,
             ))
@@ -220,6 +237,7 @@ impl Planner {
                         ],
                     },
                     rows: vec![vec![variable.value().into()]],
+                    wait_for: WaitFor::NoOne,
                 },
                 None,
             ))
@@ -256,13 +274,14 @@ impl Planner {
                         .name(object_type_as_plural_str(object_type).to_owned())],
                 },
                 rows,
+                wait_for: WaitFor::NoOne,
             },
             None,
         ))
     }
 
     /// Create an immediate result that describes all the columns for the given table
-    pub fn handle_show_columns(
+    fn handle_show_columns(
         &mut self,
         extended: bool,
         full: bool,
@@ -300,13 +319,14 @@ impl Planner {
                     column_types: vec![col_name("Field"), col_name("Nullable"), col_name("Type")],
                 },
                 rows: column_descriptions,
+                wait_for: WaitFor::NoOne,
             },
             None,
         ))
     }
 
     fn handle_create_dataflow(&mut self, stmt: Statement) -> PlannerResult {
-        let dataflows = self.plan_statement(&stmt)?;
+        let dataflows = self.plan_create_statement(&stmt)?;
         let sql_response = match stmt {
             Statement::CreateSource { .. } => SqlResponse::CreatedSource,
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
@@ -319,6 +339,7 @@ impl Planner {
                     .iter()
                     .map(|df| vec![Datum::from(df.name().to_owned())])
                     .collect(),
+                wait_for: WaitFor::NoOne,
             },
             _ => unreachable!(),
         };
@@ -379,8 +400,10 @@ impl Planner {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
         Ok((
-            SqlResponse::Peeking {
+            SqlResponse::SendRows {
                 typ: dataflow.typ().clone(),
+                rows: Vec::new(),
+                wait_for: WaitFor::Workers,
             },
             Some(DataflowCommand::Peek {
                 connection_uuid,
@@ -397,11 +420,13 @@ impl Planner {
         ))
     }
 
-    pub fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
+    fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
         let relation_expr = self.plan_query(&query)?;
         Ok((
-            SqlResponse::Peeking {
+            SqlResponse::SendRows {
                 typ: relation_expr.typ(),
+                rows: Vec::new(),
+                wait_for: WaitFor::Workers,
             },
             Some(DataflowCommand::Peek {
                 connection_uuid,
@@ -410,80 +435,43 @@ impl Planner {
             }),
         ))
     }
-}
 
-pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
-    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
-    Ok(match data_type {
-        DataType::Boolean => ScalarType::Bool,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
-        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
-        DataType::SmallInt => ScalarType::Int32,
-        DataType::Int | DataType::BigInt => ScalarType::Int64,
-        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
-        DataType::Decimal(precision, scale) => {
-            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
-            let scale = scale.unwrap_or(0);
-            if precision > MAX_DECIMAL_PRECISION.into() {
-                bail!(
-                    "decimal precision {} exceeds maximum precision {}",
-                    precision,
-                    MAX_DECIMAL_PRECISION
-                );
-            }
-            if scale > precision {
-                bail!("decimal scale {} exceeds precision {}", scale, precision);
-            }
-            ScalarType::Decimal(precision as u8, scale as u8)
+    pub fn handle_explain(
+        &mut self,
+        stage: Stage,
+        query: Query,
+        connection_uuid: Uuid,
+    ) -> PlannerResult {
+        let mut relation_expr = self.plan_query(&query)?;
+        if stage == Stage::Dataflow {
+            Ok((
+                SqlResponse::SendRows {
+                    typ: RelationType {
+                        column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
+                    },
+                    rows: vec![vec![Datum::from(relation_expr.pretty())]],
+                    wait_for: WaitFor::NoOne,
+                },
+                None,
+            ))
+        } else {
+            Ok((
+                SqlResponse::SendRows {
+                    typ: RelationType {
+                        column_types: vec![ColumnType::new(ScalarType::String).name("Plan")],
+                    },
+                    rows: vec![],
+                    wait_for: WaitFor::Optimizer,
+                },
+                Some(DataflowCommand::Explain {
+                    relation_expr,
+                    connection_uuid,
+                }),
+            ))
         }
-        DataType::Date => ScalarType::Date,
-        DataType::Timestamp => ScalarType::Timestamp,
-        DataType::Time => ScalarType::Time,
-        DataType::Bytea => ScalarType::Bytes,
-        other => bail!("Unexpected SQL type: {:?}", other),
-    })
-}
+    }
 
-fn build_source(
-    schema: &SourceSchema,
-    kafka_addr: SocketAddr,
-    name: String,
-    topic: String,
-) -> Result<Source, failure::Error> {
-    let (key_schema, value_schema, schema_registry_url) = match schema {
-        SourceSchema::Raw(schema) => (schema.to_owned(), schema.to_owned(), None), // What should we actually do here?
-        SourceSchema::Registry(url) => {
-            // TODO(benesch): we need to fetch this schema
-            // asynchronously to avoid blocking the command
-            // processing thread.
-            let url: Url = url.parse()?;
-            let ccsr_client = ccsr::Client::new(url.clone());
-            let key_schema = ccsr_client.get_schema_by_subject(&format!("{}-key", topic))?;
-            let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-
-            (key_schema.raw, value_schema.raw, Some(url))
-        }
-    };
-
-    let typ = avro::validate_value_schema(&value_schema)?;
-    let pkey_indices = avro::validate_key_schema_get_pkey_indices(&key_schema, &typ)?;
-
-    Ok(Source {
-        name,
-        connector: SourceConnector::Kafka(KafkaSourceConnector {
-            addr: kafka_addr,
-            topic,
-            raw_schema: value_schema,
-            schema_registry_url,
-        }),
-        typ,
-        pkey_indices
-    })
-}
-
-impl Planner {
-    fn plan_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
+    fn plan_create_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
         match stmt {
             Statement::CreateView {
                 name,
@@ -550,17 +538,19 @@ impl Planner {
                     subjects.retain(|a| like_regex.is_match(a))
                 }
 
-                let topic_names = subjects
+                let names = subjects
                     .iter()
                     .filter_map(|s| {
                         let parts: Vec<&str> = s.rsplitn(2, '-').collect();
                         if parts.len() == 2 && parts[0] == "value" {
-                            Some(parts[1])
+                            let topic_name = parts[1];
+                            let sql_name = sanitize_kafka_topic_name(parts[1]);
+                            Some((topic_name, sql_name))
                         } else {
                             None
                         }
                     })
-                    .filter(|topic| self.dataflows.try_get(topic).is_none());
+                    .filter(|(_tn, sn)| self.dataflows.try_get(sn).is_none());
                 let (addr, topic) = parse_kafka_url(url)?;
                 if let Some(s) = topic {
                     bail!(
@@ -568,13 +558,13 @@ impl Planner {
                         s
                     );
                 }
-                let results: Result<Vec<_>, failure::Error> = topic_names
-                    .map(|name| {
+                let results: Result<Vec<_>, failure::Error> = names
+                    .map(|(topic_name, sql_name)| {
                         Ok(Dataflow::Source(build_source(
                             &SourceSchema::Registry(schema_registry.to_owned()),
                             addr,
-                            name.to_owned(),
-                            name.to_owned(),
+                            sql_name,
+                            topic_name.to_owned(),
                         )?))
                     })
                     .collect();
@@ -608,7 +598,7 @@ impl Planner {
         }
     }
 
-    pub fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
+    fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -761,7 +751,7 @@ impl Planner {
                 )
             })
             .unwrap_or_else(|| {
-                let typ = RelationType::new(vec![ColumnType::new(ScalarType::String)]);
+                let typ = RelationType::new(vec![ColumnType::new(ScalarType::String).name("x")]);
                 Ok((
                     RelationExpr::Constant {
                         rows: vec![vec![Datum::String("X".into())]],
@@ -814,11 +804,7 @@ impl Planner {
                     _ => {
                         group_key.push(from_scope.len() + group_exprs.len());
                         group_exprs.push((expr, typ.clone()));
-                        group_scope.items.push(ScopeItem {
-                            table_name: None,
-                            column_name: None,
-                            typ,
-                        });
+                        group_scope.items.push(ScopeItem { names: vec![], typ });
                     }
                 }
             }
@@ -844,11 +830,7 @@ impl Planner {
                     (group_key.len() + aggregates.len(), typ.clone()),
                 );
                 aggregates.push((expr, typ.clone()));
-                group_scope.items.push(ScopeItem {
-                    table_name: None,
-                    column_name: None,
-                    typ,
-                });
+                group_scope.items.push(ScopeItem { names: vec![], typ });
             }
             if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
                 // apply GROUP BY / aggregates
@@ -974,14 +956,7 @@ impl Planner {
                 .enumerate()
                 .map(|(i, item)| {
                     let j = select_all_mapping.get(&i).ok_or_else(|| {
-                        format_err!(
-                            "no column named {}{} in scope",
-                            item.table_name
-                                .as_deref()
-                                .map(|s| format!("{}.", s))
-                                .unwrap_or_else(|| "".to_owned()),
-                            item.column_name.as_deref().unwrap_or("")
-                        )
+                        format_err!("internal error: unable to resolve scope item {:?}", item)
                     })?;
                     Ok((ScalarExpr::Column(*j), item.typ.clone()))
                 })
@@ -992,17 +967,15 @@ impl Planner {
                     .items
                     .iter()
                     .enumerate()
-                    .filter(|(_, item)| item.table_name.as_ref() == Some(&table_name))
+                    .filter_map(|(i, item)| {
+                        item.names
+                            .iter()
+                            .find(|name| name.table_name == table_name)
+                            .map(|_name| (i, item))
+                    })
                     .map(|(i, item)| {
                         let j = select_all_mapping.get(&i).ok_or_else(|| {
-                            format_err!(
-                                "no column named {}{} in scope",
-                                item.table_name
-                                    .as_deref()
-                                    .map(|s| format!("{}.", s))
-                                    .unwrap_or_else(|| "".to_owned()),
-                                item.column_name.as_deref().unwrap_or("")
-                            )
+                            format_err!("internal error: unable to resolve scope item {:?}", item)
                         })?;
                         Ok((ScalarExpr::Column(*j), item.typ.clone()))
                     })
@@ -1034,13 +1007,15 @@ impl Planner {
                     name: name.clone(),
                     typ: typ.clone(),
                 };
-                let mut scope = Scope::from_source(&name, typ.clone());
-                if let Some(TableAlias { name, columns }) = alias {
+                let alias = if let Some(TableAlias { name, columns }) = alias {
                     if !columns.is_empty() {
                         bail!("aliasing columns is not yet supported");
                     }
-                    scope = scope.alias_table(&name);
-                }
+                    name.to_owned()
+                } else {
+                    name
+                };
+                let scope = Scope::from_source(&alias, typ.clone());
                 Ok((expr, scope))
             }
             TableFactor::Derived { .. } => {
@@ -1142,13 +1117,31 @@ impl Planner {
         match constraint {
             JoinConstraint::On(expr) => {
                 let product = left.product(right);
-                let product_scope = left_scope.product(right_scope);
+                let mut product_scope = left_scope.product(right_scope);
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
                     aggregate_context: None,
                 };
                 let (predicate, _) = self.plan_expr(ctx, expr)?;
+                for (l, r) in find_trivial_column_equivalences(&predicate) {
+                    // When we can statically prove that two columns are
+                    // equivalent after a join, the right column becomes
+                    // unnamable and the left column assumes both names. This
+                    // permits queries like
+                    //
+                    //     SELECT rhs.a FROM lhs JOIN rhs ON lhs.a = rhs.a
+                    //     GROUP BY lhs.a
+                    //
+                    // which otherwise would fail because rhs.a appears to be
+                    // a column that does not appear in the GROUP BY.
+                    //
+                    // Note that this is a MySQL-ism; PostgreSQL does not do
+                    // this sort of equivalence detection for ON constraints.
+                    let right_names =
+                        std::mem::replace(&mut product_scope.items[r].names, Vec::new());
+                    product_scope.items[l].names.extend(right_names);
+                }
                 with_both(product.filter(vec![predicate]), product_scope)
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
@@ -1162,11 +1155,14 @@ impl Planner {
             JoinConstraint::Natural => {
                 let mut column_names = vec![];
                 for item in left_scope.items.iter() {
-                    if let Some(column_name) = &item.column_name {
-                        if left_scope.resolve_column(column_name).is_ok()
-                            && right_scope.resolve_column(column_name).is_ok()
-                        {
-                            column_names.push(column_name.clone());
+                    for name in &item.names {
+                        if let Some(column_name) = &name.column_name {
+                            if left_scope.resolve_column(column_name).is_ok()
+                                && right_scope.resolve_column(column_name).is_ok()
+                            {
+                                column_names.push(column_name.clone());
+                                break;
+                            }
                         }
                     }
                 }
@@ -1218,24 +1214,22 @@ impl Planner {
                 },
                 typ.clone(),
             ));
-            new_items.push(ScopeItem {
-                table_name: None,
-                column_name: typ.name.clone(),
-                typ,
-            });
+            let mut names = l_item.names.clone();
+            names.extend(r_item.names.clone());
+            new_items.push(ScopeItem { names, typ });
             dropped_columns.insert(l);
             dropped_columns.insert(left_scope.len() + r);
         }
         let project_key =
             // coalesced join columns
             (0..map_exprs.len())
-            .map(|i| left_scope.len() + right_scope.len() + i)
-            // other columns that weren't joined
-            .chain(
-                (0..(left_scope.len() + right_scope.len()))
-                    .filter(|i| !dropped_columns.contains(i)),
-            )
-            .collect::<Vec<_>>();
+                .map(|i| left_scope.len() + right_scope.len() + i)
+                // other columns that weren't joined
+                .chain(
+                    (0..(left_scope.len() + right_scope.len()))
+                        .filter(|i| !dropped_columns.contains(i)),
+                )
+                .collect::<Vec<_>>();
         let both = left.product(right).filter(join_exprs);
         let both_scope = left_scope.product(right_scope);
         let (both, mut both_scope) = with_both(both, both_scope)?;
@@ -1311,7 +1305,7 @@ impl Planner {
         sql_func: &Function,
     ) -> Result<(AggregateExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
-        assert!(AggregateFunc::is_aggregate_func(&ident));
+        assert!(is_aggregate_func(&ident));
 
         if sql_func.over.is_some() {
             bail!("window functions are not yet supported");
@@ -1331,8 +1325,7 @@ impl Planner {
             ),
             _ => {
                 let (expr, typ) = self.plan_expr(ctx, arg)?;
-                let (func, scalar_type) =
-                    AggregateFunc::from_name_and_scalar_type(&ident, &typ.scalar_type)?;
+                let (func, scalar_type) = find_agg_func(&ident, &typ.scalar_type)?;
                 (expr, func, scalar_type)
             }
         };
@@ -1355,7 +1348,7 @@ impl Planner {
         sql_func: &'a Function,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
-        if AggregateFunc::is_aggregate_func(&ident) {
+        if is_aggregate_func(&ident) {
             if let Some(agg_cx) = ctx.aggregate_context {
                 let (i, typ) = agg_cx.get(sql_func).ok_or_else(|| {
                     format_err!(
@@ -1914,6 +1907,36 @@ fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
     Ok(n.to_string())
 }
 
+fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
+    use BinaryFunc::*;
+    use ScalarExpr::*;
+    let mut exprs = vec![expr];
+    let mut equivalences = vec![];
+    while let Some(expr) = exprs.pop() {
+        match expr {
+            CallBinary {
+                func: Eq,
+                expr1,
+                expr2,
+            } => {
+                if let (Column(l), Column(r)) = (&**expr1, &**expr2) {
+                    equivalences.push((*l, *r));
+                }
+            }
+            CallBinary {
+                func: And,
+                expr1,
+                expr2,
+            } => {
+                exprs.push(expr1);
+                exprs.push(expr2);
+            }
+            _ => (),
+        }
+    }
+    equivalences
+}
+
 // When types don't match exactly, SQL has some poorly-documented type promotion
 // rules. For now, just promote integers into decimals or floats, decimals into
 // floats, and small Xs into bigger Xs.
@@ -2025,6 +2048,76 @@ fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     }
 }
 
+pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
+    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
+    Ok(match data_type {
+        DataType::Boolean => ScalarType::Bool,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
+        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
+        DataType::SmallInt => ScalarType::Int32,
+        DataType::Int | DataType::BigInt => ScalarType::Int64,
+        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+        DataType::Decimal(precision, scale) => {
+            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
+            let scale = scale.unwrap_or(0);
+            if precision > MAX_DECIMAL_PRECISION.into() {
+                bail!(
+                    "decimal precision {} exceeds maximum precision {}",
+                    precision,
+                    MAX_DECIMAL_PRECISION
+                );
+            }
+            if scale > precision {
+                bail!("decimal scale {} exceeds precision {}", scale, precision);
+            }
+            ScalarType::Decimal(precision as u8, scale as u8)
+        }
+        DataType::Date => ScalarType::Date,
+        DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Time => ScalarType::Time,
+        DataType::Bytea => ScalarType::Bytes,
+        other => bail!("Unexpected SQL type: {:?}", other),
+    })
+}
+
+fn build_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    name: String,
+    topic: String,
+) -> Result<Source, failure::Error> {
+    let (key_schema, value_schema, schema_registry_url) = match schema {
+        SourceSchema::Raw(schema) => (schema.to_owned(), schema.to_owned(), None), // What should we actually do here?
+        SourceSchema::Registry(url) => {
+            // TODO(benesch): we need to fetch this schema
+            // asynchronously to avoid blocking the command
+            // processing thread.
+            let url: Url = url.parse()?;
+            let ccsr_client = ccsr::Client::new(url.clone());
+            let key_schema = ccsr_client.get_schema_by_subject(&format!("{}-key", topic))?;
+            let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
+
+            (key_schema.raw, value_schema.raw, Some(url))
+        }
+    };
+
+    let typ = avro::validate_value_schema(&value_schema)?;
+    let pkey_indices = avro::validate_key_schema_get_pkey_indices(&key_schema, &typ)?;
+
+    Ok(Source {
+        name,
+        connector: SourceConnector::Kafka(KafkaSourceConnector {
+            addr: kafka_addr,
+            topic,
+            raw_schema: value_schema,
+            schema_registry_url,
+        }),
+        typ,
+        pkey_indices
+    })
+}
+
 fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::Error> {
     let url: Url = url.parse()?;
     if url.scheme() != "kafka" {
@@ -2066,6 +2159,21 @@ fn parse_kafka_topic_url(url: &str) -> Result<(SocketAddr, String), failure::Err
     }
 }
 
+fn sanitize_kafka_topic_name(topic_name: &str) -> String {
+    // Kafka topics can contain alphanumerics, dots (.), underscores (_), and
+    // hyphens (-), and most Kafka topics contain at least one of these special
+    // characters for namespacing, as in "mysql.tbl". Since non-quoted SQL
+    // identifiers cannot contain dots or hyphens, if we were to use the topic
+    // name directly as the name of the source, it would be impossible to refer
+    // to in SQL without quoting. So we replace hyphens and dots with
+    // underscores to make a valid SQL identifier.
+    //
+    // This scheme has the potential for collisions, but if you're creating
+    // Kafka topics like "a.b", "a_b", and "a-b", well... that's why we let you
+    // manually create sources with custom names using CREATE SOURCE.
+    topic_name.replace("-", "_").replace(".", "_")
+}
+
 struct AggregateFuncVisitor<'ast> {
     aggs: Vec<&'ast Function>,
     within_aggregate: bool,
@@ -2093,7 +2201,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
         let name_str = func.name.to_string().to_lowercase();
         let old_within_aggregate = self.within_aggregate;
-        if AggregateFunc::is_aggregate_func(&name_str) {
+        if is_aggregate_func(&name_str) {
             if self.within_aggregate {
                 self.err = Some(format_err!("nested aggregate functions are not allowed"));
                 return;
@@ -2119,9 +2227,14 @@ struct ExprContext<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ScopeItem {
-    table_name: Option<String>,
+struct ScopeItemName {
+    table_name: String,
     column_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ScopeItem {
+    names: Vec<ScopeItemName>,
     typ: ColumnType,
 }
 
@@ -2141,8 +2254,10 @@ impl Scope {
                 .column_types
                 .into_iter()
                 .map(|typ| ScopeItem {
-                    table_name: Some(table_name.to_owned()),
-                    column_name: typ.name.clone(),
+                    names: vec![ScopeItemName {
+                        table_name: table_name.to_owned(),
+                        column_name: typ.name.clone(),
+                    }],
                     typ,
                 })
                 .collect(),
@@ -2153,11 +2268,12 @@ impl Scope {
         self.items.len()
     }
 
-    fn alias_table(mut self, table_name: &str) -> Self {
-        for item in &mut self.items {
-            item.table_name = Some(table_name.to_owned());
-        }
-        self
+    fn iter_names(&self) -> impl Iterator<Item = (usize, &ScopeItem, &ScopeItemName)> {
+        self.items
+            .iter()
+            .enumerate()
+            .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
+            .flatten()
     }
 
     fn resolve_column<'a>(
@@ -2165,15 +2281,16 @@ impl Scope {
         column_name: &str,
     ) -> Result<(usize, &'a ScopeItem), failure::Error> {
         let mut results = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.column_name.as_deref() == Some(column_name));
-        match (results.next(), results.next()) {
-            (None, None) => bail!("no column named {} in scope", column_name),
-            (Some((i, item)), None) => Ok((i, item)),
-            (Some(_), Some(_)) => bail!("column name {} is ambiguous", column_name),
-            _ => unreachable!(),
+            .iter_names()
+            .filter(|(_pos, _item, name)| name.column_name.as_deref() == Some(column_name));
+        if let Some((pos, item, _name)) = results.next() {
+            if results.find(|(i, _item, _name)| pos != *i).is_none() {
+                Ok((pos, item))
+            } else {
+                bail!("column name {} is ambiguous", column_name)
+            }
+        } else {
+            bail!("no column named {} in scope", column_name)
         }
     }
 
@@ -2182,15 +2299,17 @@ impl Scope {
         table_name: &str,
         column_name: &str,
     ) -> Result<(usize, &'a ScopeItem), failure::Error> {
-        let mut results = self.items.iter().enumerate().filter(|(_, item)| {
-            item.table_name.as_deref() == Some(table_name)
-                && item.column_name.as_deref() == Some(column_name)
+        let mut results = self.iter_names().filter(|(_pos, _item, name)| {
+            name.table_name == table_name && name.column_name.as_deref() == Some(column_name)
         });
-        match (results.next(), results.next()) {
-            (None, None) => bail!("no column named {}.{} in scope", table_name, column_name),
-            (Some((i, item)), None) => Ok((i, item)),
-            (Some(_), Some(_)) => bail!("column name {}.{} is ambiguous", table_name, column_name),
-            _ => unreachable!(),
+        if let Some((pos, item, _name)) = results.next() {
+            if results.find(|(i, _item, _name)| pos != *i).is_none() {
+                Ok((pos, item))
+            } else {
+                bail!("column name {}.{} is ambiguous", table_name, column_name)
+            }
+        } else {
+            bail!("no column named {}.{} in scope", table_name, column_name)
         }
     }
 
@@ -2209,6 +2328,50 @@ impl Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
         }
     }
+}
+
+fn is_aggregate_func(name: &str) -> bool {
+    match name {
+        // avg is handled by transform::AvgFuncRewriter.
+        "max" | "min" | "sum" | "count" => true,
+        _ => false,
+    }
+}
+
+fn find_agg_func(
+    name: &str,
+    scalar_type: &ScalarType,
+) -> Result<(AggregateFunc, ScalarType), failure::Error> {
+    let func = match (name, scalar_type) {
+        ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
+        ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
+        ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
+        ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
+        ("max", ScalarType::Bool) => AggregateFunc::MaxBool,
+        ("max", ScalarType::String) => AggregateFunc::MaxString,
+        ("max", ScalarType::Null) => AggregateFunc::MaxNull,
+        ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
+        ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
+        ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
+        ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
+        ("min", ScalarType::Bool) => AggregateFunc::MinBool,
+        ("min", ScalarType::String) => AggregateFunc::MinString,
+        ("min", ScalarType::Null) => AggregateFunc::MinNull,
+        ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
+        ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
+        ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
+        ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
+        ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
+        ("sum", ScalarType::Null) => AggregateFunc::SumNull,
+        ("count", _) => AggregateFunc::Count,
+        other => bail!("Unimplemented function/type combo: {:?}", other),
+    };
+    let scalar_type = match (name, scalar_type) {
+        ("count", _) => ScalarType::Int64,
+        ("max", _) | ("min", _) | ("sum", _) => scalar_type.clone(),
+        other => bail!("Unknown aggregate function: {:?}", other),
+    };
+    Ok((func, scalar_type))
 }
 
 trait RelationExprExt {

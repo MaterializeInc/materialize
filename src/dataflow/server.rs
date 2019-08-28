@@ -100,13 +100,14 @@ where
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
-        let command_coordinator =
-            dataflow_command_receiver.map(|dcr| coordinator::CommandCoordinator::new(dcr));
+        let exfiltrator = Rc::new(exfiltrator_config.into());
+        let command_coordinator = dataflow_command_receiver
+            .map(|dcr| coordinator::CommandCoordinator::new(dcr, Rc::clone(&exfiltrator)));
 
         Worker {
             inner: w,
             local_input_mux,
-            exfiltrator: Rc::new(exfiltrator_config.into()),
+            exfiltrator,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             inputs: HashMap::new(),
@@ -207,10 +208,11 @@ where
             // Enable trace compaction.
             self.traces.maintenance();
 
-            // Ask Timely to execute a unit of work.
-            // Can either yield tastefully, or busy-wait.
-            // self.inner.step_or_park(None);
-            self.inner.step();
+            // Ask Timely to execute a unit of work. If Timely decides there's
+            // nothing to do, it will park the thread. We rely on another thread
+            // unparking us when there's new work to be done, e.g., when sending
+            // a command or when new Kafka messages have arrived.
+            self.inner.step_or_park(None);
 
             if let Some(coordinator) = &mut self.command_coordinator {
                 // Sequence any pending commands.

@@ -23,7 +23,7 @@ use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use dataflow::{Exfiltration, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
-use sql::{Session, SqlCommand, SqlResponse, SqlResult};
+use sql::{Session, SqlCommand, SqlResponse, SqlResult, WaitFor};
 
 pub struct Context {
     pub uuid: Uuid,
@@ -138,7 +138,8 @@ pub enum StateMachine<A: Conn + 'static> {
         session: Session,
         row_type: RelationType,
         /// To be sent immediately
-        rows: Option<Vec<Vec<Datum>>>,
+        rows: Vec<Vec<Datum>>,
+        wait_for: usize,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
@@ -364,21 +365,22 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
                         session,
                     }),
-                    SqlResponse::Peeking { typ } => transition!(SendRowDescription {
+                    SqlResponse::SendRows {
+                        typ,
+                        rows,
+                        wait_for,
+                    } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
                         )),
                         session,
                         row_type: typ,
-                        rows: None,
-                    }),
-                    SqlResponse::SendRows { typ, rows } => transition!(SendRowDescription {
-                        send: state.conn.send(BackendMessage::RowDescription(
-                            super::message::row_description_from_type(&typ)
-                        )),
-                        session,
-                        row_type: typ,
-                        rows: Some(rows),
+                        rows,
+                        wait_for: match wait_for {
+                            WaitFor::NoOne => 0,
+                            WaitFor::Optimizer => 1,
+                            WaitFor::Workers => context.num_timely_workers,
+                        }
                     }),
                     SqlResponse::SetVariable => command_complete!("SET"),
                     SqlResponse::Tailing => transition!(StartCopyOut {
@@ -411,22 +413,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_row_description<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
-        context: &'c mut RentToOwn<'c, Context>,
+        _context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        let row_type = state.row_type;
-        if let Some(rows) = state.rows {
-            transition!(send_rows(conn, state.session, rows, row_type))
-        } else {
-            transition!(WaitForRows {
-                conn,
-                session: state.session,
-                row_type,
-                peek_results: vec![],
-                remaining_results: context.num_timely_workers,
-            })
-        }
+        transition!(WaitForRows {
+            conn,
+            session: state.session,
+            row_type: state.row_type,
+            peek_results: state.rows,
+            remaining_results: state.wait_for,
+        })
     }
 
     fn poll_wait_for_updates<'s, 'c>(
@@ -470,39 +467,45 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, WaitForRows<A>>,
         context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterWaitForRows<A>, failure::Error> {
-        match context.dataflow_results_receiver.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(Some(results))) => {
-                let mut state = state.take();
-                if let Exfiltration::Peek(results) = results {
-                    state.peek_results.extend(results)
-                } else {
-                    transition!(SendError {
-                        send: state.conn.send(BackendMessage::ErrorResponse {
-                            severity: Severity::Fatal,
-                            code: "99999",
-                            message: "internal error: did not receive results of the right type"
-                                .into(),
-                            detail: None,
-                        }),
-                        session: state.session,
-                        fatal: true,
-                    })
+        let state = if state.remaining_results > 0 {
+            match context.dataflow_results_receiver.poll() {
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Ok(Async::Ready(Some(results))) => {
+                    let mut state = state.take();
+                    if let Exfiltration::Peek(results) = results {
+                        state.peek_results.extend(results)
+                    } else {
+                        transition!(SendError {
+                            send: state.conn.send(BackendMessage::ErrorResponse {
+                                severity: Severity::Fatal,
+                                code: "99999",
+                                message:
+                                    "internal error: did not receive results of the right type"
+                                        .into(),
+                                detail: None,
+                            }),
+                            session: state.session,
+                            fatal: true,
+                        })
+                    }
+                    state.remaining_results -= 1;
+                    if state.remaining_results > 0 {
+                        transition!(state)
+                    }
+                    state
                 }
-                state.remaining_results -= 1;
-                if state.remaining_results == 0 {
-                    let mut peek_results = state.peek_results;
-                    peek_results.sort();
-                    let row_type = state.row_type;
-                    transition!(send_rows(state.conn, state.session, peek_results, row_type))
-                } else {
-                    transition!(state)
+                Ok(Async::Ready(None)) | Err(()) => {
+                    panic!("Connection to dataflow server closed unexpectedly")
                 }
             }
-            Ok(Async::Ready(None)) | Err(()) => {
-                panic!("Connection to dataflow server closed unexpectedly")
-            }
-        }
+        } else {
+            state.take()
+        };
+
+        let mut peek_results = state.peek_results;
+        peek_results.sort();
+        let row_type = state.row_type;
+        transition!(send_rows(state.conn, state.session, peek_results, row_type))
     }
 
     fn poll_send_updates<'s, 'c>(

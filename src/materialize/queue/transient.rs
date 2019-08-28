@@ -13,13 +13,14 @@ use ore::mpmc::Mux;
 use sql::{self, SqlCommand, SqlResult};
 
 pub fn serve(
+    logging_config: Option<&dataflow::logging::LoggingConfiguration>,
     sql_command_receiver: UnboundedReceiver<SqlCommand>,
     sql_result_mux: Mux<SqlResult>,
     dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,
 ) {
+    let mut planner = sql::Planner::new(logging_config);
     std::thread::spawn(move || {
-        let mut planner = sql::Planner::default();
         for msg in sql_command_receiver.wait() {
             let mut cmd = msg.unwrap();
 

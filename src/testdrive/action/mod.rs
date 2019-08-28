@@ -177,7 +177,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
                 hints: vec![format!("connection string: {}", addr)],
             })?;
 
-        let admin_opts = AdminOptions::new().operation_timeout(Duration::from_secs(5));
+        let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
 
         let consumer: StreamConsumer = config.create().map_err(|e| Error::General {
             ctx: "opening Kafka consumer connection".into(),

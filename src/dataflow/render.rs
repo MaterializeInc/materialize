@@ -337,7 +337,7 @@ where
                 // Reduce has the ability to lift any Abelian, non-distinct aggregations
                 // into the diff field. We also need to maintain the count as well, as we
                 // need to distinguish "things that accumulate to zero" from "the absence
-                // of things". It also gives us a quick and easy story about `Avg`.
+                // of things".
 
                 // We have an additional opportunity to discard any parts of the record
                 // that do not contribute to the non-Abelian or distinct aggregations.
@@ -353,11 +353,6 @@ where
                         AggregateFunc::SumFloat32 => !aggregate.distinct,
                         AggregateFunc::SumFloat64 => !aggregate.distinct,
                         AggregateFunc::SumDecimal => !aggregate.distinct,
-                        AggregateFunc::AvgInt32 => !aggregate.distinct,
-                        AggregateFunc::AvgInt64 => !aggregate.distinct,
-                        AggregateFunc::AvgFloat32 => !aggregate.distinct,
-                        AggregateFunc::AvgFloat64 => !aggregate.distinct,
-                        AggregateFunc::AvgDecimal => !aggregate.distinct,
                         AggregateFunc::Count => !aggregate.distinct,
                         AggregateFunc::CountAll => !aggregate.distinct,
                         _ => false,
@@ -454,6 +449,7 @@ where
 
                 // We now reduce by `keys`, performing both Abelian and non-Abelian aggregations.
                 let arrangement = exploded.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                    "Reduce",
                     move |key, source, target| {
                         sums.clear();
                         sums.extend(&source[0].1[..]);
@@ -521,68 +517,6 @@ where
                                         abelian_pos += 2;
                                         if non_nulls > 0 {
                                             Datum::from(total)
-                                        } else {
-                                            Datum::Null
-                                        }
-                                    }
-                                    AggregateFunc::AvgInt32 => {
-                                        let total = sums[abelian_pos] as i32;
-                                        let non_nulls = sums[abelian_pos + 1] as i32;
-                                        abelian_pos += 2;
-                                        if non_nulls > 0 {
-                                            Datum::Int32(total / non_nulls)
-                                        } else {
-                                            Datum::Null
-                                        }
-                                    }
-                                    AggregateFunc::AvgInt64 => {
-                                        let total = sums[abelian_pos] as i64;
-                                        let non_nulls = sums[abelian_pos + 1] as i64;
-                                        abelian_pos += 2;
-                                        if non_nulls > 0 {
-                                            Datum::Int64(total / non_nulls)
-                                        } else {
-                                            Datum::Null
-                                        }
-                                    }
-                                    AggregateFunc::AvgFloat32 => {
-                                        let total = sums[abelian_pos];
-                                        let non_nulls = sums[abelian_pos + 1];
-                                        abelian_pos += 2;
-                                        if non_nulls > 0 {
-                                            Datum::Float32(
-                                                ((((total as f64) / float_scale)
-                                                    / (non_nulls as f64))
-                                                    as f32)
-                                                    .into(),
-                                            )
-                                        } else {
-                                            Datum::Null
-                                        }
-                                    }
-                                    AggregateFunc::AvgFloat64 => {
-                                        let total = sums[abelian_pos];
-                                        let non_nulls = sums[abelian_pos + 1];
-                                        abelian_pos += 2;
-                                        if non_nulls > 0 {
-                                            Datum::Float64(
-                                                (((total as f64) / float_scale)
-                                                    / (non_nulls as f64))
-                                                    .into(),
-                                            )
-                                        } else {
-                                            Datum::Null
-                                        }
-                                    }
-                                    AggregateFunc::AvgDecimal => {
-                                        let total = sums[abelian_pos];
-                                        let non_nulls = sums[abelian_pos + 1];
-                                        abelian_pos += 2;
-                                        if non_nulls > 0 {
-                                            // TODO(benesch): This should use the same decimal
-                                            // division path as the planner, rather than
-                                            // hardcoding a 6 digit increase in the scale (#212).
-                                            Datum::from(1_000_000 * total / non_nulls)
                                         } else {
                                             Datum::Null
                                         }
@@ -663,22 +597,26 @@ where
                             ),
                         )
                     })
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_key, source, target| {
-                        let mut output = 0;
-                        let mut cursor = 0;
-                        while output < limit {
-                            if cursor < source.len() {
-                                let current = &(source[cursor].0).0;
-                                while cursor < source.len() && &(source[cursor].0).0 == current {
-                                    if source[0].1 > 0 {
-                                        target.push(((source[0].0).1.clone(), source[0].1));
-                                        output += source[0].1 as usize;
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                        "TopK",
+                        move |_key, source, target| {
+                            let mut output = 0;
+                            let mut cursor = 0;
+                            while output < limit {
+                                if cursor < source.len() {
+                                    let current = &(source[cursor].0).0;
+                                    while cursor < source.len() && &(source[cursor].0).0 == current
+                                    {
+                                        if source[0].1 > 0 {
+                                            target.push(((source[0].0).1.clone(), source[0].1));
+                                            output += source[0].1 as usize;
+                                        }
                                     }
+                                    cursor += 1;
                                 }
-                                cursor += 1;
                             }
-                        }
-                    });
+                        },
+                    );
 
                 context.set_local(self_clone, &group_key[..], arrangement.clone());
                 arrangement.as_collection(|_key, tuple| tuple.clone())
@@ -733,13 +671,15 @@ where
 
                 let arranged = match context.arrangement(&input, &keys[..]) {
                     Some(ArrangementFlavor::Local(local)) => local
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |k, _s, t| {
-                            t.push((k.to_vec(), 1))
-                        }),
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Distinct",
+                            move |k, _s, t| t.push((k.to_vec(), 1)),
+                        ),
                     Some(ArrangementFlavor::Trace(trace)) => trace
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |k, _s, t| {
-                            t.push((k.to_vec(), 1))
-                        }),
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Distinct",
+                            move |k, _s, t| t.push((k.to_vec(), 1)),
+                        ),
                     None => {
                         panic!("Arrangement alarmingly absent!");
                     }
@@ -773,21 +713,27 @@ where
 
                 let arranged = match context.arrangement(&input, &keys[..]) {
                     Some(ArrangementFlavor::Local(local)) => local
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_k, s, t| {
-                            for (record, count) in s.iter() {
-                                if *count > 0 {
-                                    t.push(((*record).clone(), *count));
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Threshold",
+                            move |_k, s, t| {
+                                for (record, count) in s.iter() {
+                                    if *count > 0 {
+                                        t.push(((*record).clone(), *count));
+                                    }
                                 }
-                            }
-                        }),
+                            },
+                        ),
                     Some(ArrangementFlavor::Trace(trace)) => trace
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_k, s, t| {
-                            for (record, count) in s.iter() {
-                                if *count > 0 {
-                                    t.push(((*record).clone(), *count));
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Threshold",
+                            move |_k, s, t| {
+                                for (record, count) in s.iter() {
+                                    if *count > 0 {
+                                        t.push(((*record).clone(), *count));
+                                    }
                                 }
-                            }
-                        }),
+                            },
+                        ),
                     None => {
                         panic!("Arrangement alarmingly absent!");
                     }

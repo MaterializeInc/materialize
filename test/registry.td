@@ -106,23 +106,32 @@ a b
 1 42
 2 -1
 
-$ kafka-ingest format=avro topic=my_topic schema=${schema_v2} publish=true timestamp=5
-{"before": null, "after": {"a": 2, "b": -1}}
-
-$ kafka-ingest format=avro topic=my_topic schema=${schema_v2} publish=true timestamp=6
+$ kafka-ingest format=avro topic=db.my_topic schema=${schema_v2} publish=true timestamp=1
 {"before": null, "after": null}
 
-> CREATE SOURCES LIKE '%testdrive-my_topic%' FROM 'kafka://${testdrive.kafka-addr}/'
+# Hyphens and underscores in this topic should automatically be converted to
+# underscores so that the topic is easier to name from SQL.
+$ kafka-ingest format=avro topic=db.sp_ec-ia.lc-ch._ars schema=${schema_v2} publish=true timestamp=1
+{"before": null, "after": null}
+
+> CREATE SOURCES LIKE 'testdrive-db.%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
-testdrive-my_topic-${testdrive.seed}
+testdrive_db_my_topic_${testdrive.seed}
+testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
+
+# Verify that the sources created by CREATE SOURCES are usable from SQL without
+# quoting their names.
+> SELECT * FROM testdrive_db_my_topic_${testdrive.seed}
+  UNION
+  SELECT * FROM testdrive_db_sp_ec_ia_lc_ch__ars_${testdrive.seed}
 
 > CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Topic
 ---
-testdrive-data-${testdrive.seed}
+testdrive_data_${testdrive.seed}
 
 > CREATE SOURCES LIKE 'testdrive%' FROM 'kafka://${testdrive.kafka-addr}/'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'

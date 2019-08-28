@@ -44,10 +44,7 @@ pub fn build_like_regex_from_string(like_string: &str) -> Result<Regex, failure:
     }
     regex.push('$');
     if escape {
-        // Unterminated escape sequence. TODO(benesch): PostgreSQL returns "LIKE
-        // pattern must not end with escape sequence" here, but we don't support
-        // runtime errors yet, so just return NULL for now.
-        failure::bail!("Unterminated escape sequence for LIKE!")
+        failure::bail!("unterminated escape sequence in LIKE")
     } else {
         Ok(Regex::new(&regex)?)
     }

@@ -20,6 +20,7 @@ services:
     depends_on: [kafka, zookeeper, schema-registry, materialized]
   materialized:
     image: materialize/ci-materialized:${BUILDKITE_BUILD_NUMBER}
+    command: --logging-granularity=10ms
   zookeeper:
     image: zookeeper:3.4.13
   kafka:

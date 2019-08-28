@@ -6,7 +6,7 @@
 use failure::bail;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::iter::FromIterator;
+use std::iter::{self, FromIterator};
 
 use dataflow::SourceConnector;
 
@@ -25,6 +25,24 @@ struct DataflowAndMetadata {
 }
 
 impl DataflowStore {
+    pub fn new(logging_config: Option<&dataflow::logging::LoggingConfiguration>) -> DataflowStore {
+        match logging_config {
+            Some(logging_config) => {
+                DataflowStore::from_iter(logging_config.active_logs.iter().map(|log| {
+                    Dataflow::Source(Source {
+                        name: log.name().to_string(),
+                        connector: SourceConnector::Local(LocalSourceConnector {
+                            uuid: uuid::Uuid::new_v4(),
+                        }),
+                        typ: log.schema(),
+                        Vec::new(), // What should we actually do here?
+                    })
+                }))
+            }
+            None => DataflowStore::from_iter(iter::empty()),
+        }
+    }
+
     pub fn try_get(&self, name: &str) -> Option<&Dataflow> {
         self.inner.get(name).map(|dm| &dm.inner)
     }
@@ -119,25 +137,6 @@ impl DataflowStore {
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Dataflow)> {
         self.inner.iter().map(|(k, v)| (k.as_str(), &v.inner))
-    }
-}
-
-impl Default for DataflowStore {
-    fn default() -> DataflowStore {
-        // TODO: This should be more closely coupled to the actual logging configuration.
-        dataflow::logging::LogVariant::default_logs()
-            .into_iter()
-            .map(|log| {
-                Dataflow::Source(Source {
-                    name: log.name().to_string(),
-                    connector: SourceConnector::Local(LocalSourceConnector {
-                        uuid: uuid::Uuid::new_v4(),
-                    }),
-                    typ: log.schema(),
-                    pkey_indices: Vec::new(), // What should we actually do here?
-                })
-            })
-            .collect()
     }
 }
 
