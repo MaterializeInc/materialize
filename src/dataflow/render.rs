@@ -454,6 +454,7 @@ where
 
                 // We now reduce by `keys`, performing both Abelian and non-Abelian aggregations.
                 let arrangement = exploded.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                    "Reduce",
                     move |key, source, target| {
                         sums.clear();
                         sums.extend(&source[0].1[..]);
@@ -663,22 +664,26 @@ where
                             ),
                         )
                     })
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_key, source, target| {
-                        let mut output = 0;
-                        let mut cursor = 0;
-                        while output < limit {
-                            if cursor < source.len() {
-                                let current = &(source[cursor].0).0;
-                                while cursor < source.len() && &(source[cursor].0).0 == current {
-                                    if source[0].1 > 0 {
-                                        target.push(((source[0].0).1.clone(), source[0].1));
-                                        output += source[0].1 as usize;
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                        "TopK",
+                        move |_key, source, target| {
+                            let mut output = 0;
+                            let mut cursor = 0;
+                            while output < limit {
+                                if cursor < source.len() {
+                                    let current = &(source[cursor].0).0;
+                                    while cursor < source.len() && &(source[cursor].0).0 == current
+                                    {
+                                        if source[0].1 > 0 {
+                                            target.push(((source[0].0).1.clone(), source[0].1));
+                                            output += source[0].1 as usize;
+                                        }
                                     }
+                                    cursor += 1;
                                 }
-                                cursor += 1;
                             }
-                        }
-                    });
+                        },
+                    );
 
                 context.set_local(self_clone, &group_key[..], arrangement.clone());
                 arrangement.as_collection(|_key, tuple| tuple.clone())
@@ -733,13 +738,15 @@ where
 
                 let arranged = match context.arrangement(&input, &keys[..]) {
                     Some(ArrangementFlavor::Local(local)) => local
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |k, _s, t| {
-                            t.push((k.to_vec(), 1))
-                        }),
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Distinct",
+                            move |k, _s, t| t.push((k.to_vec(), 1)),
+                        ),
                     Some(ArrangementFlavor::Trace(trace)) => trace
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |k, _s, t| {
-                            t.push((k.to_vec(), 1))
-                        }),
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Distinct",
+                            move |k, _s, t| t.push((k.to_vec(), 1)),
+                        ),
                     None => {
                         panic!("Arrangement alarmingly absent!");
                     }
@@ -773,21 +780,27 @@ where
 
                 let arranged = match context.arrangement(&input, &keys[..]) {
                     Some(ArrangementFlavor::Local(local)) => local
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_k, s, t| {
-                            for (record, count) in s.iter() {
-                                if *count > 0 {
-                                    t.push(((*record).clone(), *count));
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Threshold",
+                            move |_k, s, t| {
+                                for (record, count) in s.iter() {
+                                    if *count > 0 {
+                                        t.push(((*record).clone(), *count));
+                                    }
                                 }
-                            }
-                        }),
+                            },
+                        ),
                     Some(ArrangementFlavor::Trace(trace)) => trace
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(move |_k, s, t| {
-                            for (record, count) in s.iter() {
-                                if *count > 0 {
-                                    t.push(((*record).clone(), *count));
+                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                            "Threshold",
+                            move |_k, s, t| {
+                                for (record, count) in s.iter() {
+                                    if *count > 0 {
+                                        t.push(((*record).clone(), *count));
+                                    }
                                 }
-                            }
-                        }),
+                            },
+                        ),
                     None => {
                         panic!("Arrangement alarmingly absent!");
                     }
