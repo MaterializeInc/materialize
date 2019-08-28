@@ -1410,6 +1410,7 @@ impl Planner {
         Ok((expr, typ))
     }
 
+    /// Figure out what the Expression should be, and the value of the result
     fn plan_binary_op<'a>(
         &self,
         ctx: &ExprContext,
@@ -1920,7 +1921,33 @@ where
     C: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
+    let out_typ = find_output_type(&exprs);
+    let mut out = Vec::new();
+    for (expr, typ) in exprs {
+        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
+            Ok((expr, _)) => out.push(expr),
+            Err(_) => bail!(
+                "{} does not have uniform type: {:?} vs {:?}",
+                context,
+                typ,
+                out_typ,
+            ),
+        }
+    }
+    Ok((out, out_typ))
+}
 
+/// Find a type that we can expect the output of a sequence of expressions to be
+///
+/// There aren't any real guarantees about what we output, except that it's
+/// possible that we'll be able to build this result.
+///
+/// # Examples
+///
+/// - `1i32 + 2i64` -> `i64`
+/// - `1i64 + Decimal(2)` -> `Decimal`
+fn find_output_type(exprs: &[(ScalarExpr, ColumnType)]) -> ColumnType {
+    assert!(!exprs.is_empty());
     let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
         ScalarType::Null => 0,
         ScalarType::Int32 => 1,
@@ -1937,22 +1964,10 @@ where
         .unwrap()
         .clone();
     let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
-    let mut out = Vec::new();
-    let out_typ = ColumnType::new(max_scalar_type).nullable(nullable);
-    for (expr, typ) in exprs {
-        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
-            Ok((expr, _)) => out.push(expr),
-            Err(_) => bail!(
-                "{} does not have uniform type: {:?} vs {:?}",
-                context,
-                typ,
-                out_typ
-            ),
-        }
-    }
-    Ok((out, out_typ))
+    ColumnType::new(max_scalar_type).nullable(nullable)
 }
 
+/// Figure out whether we need to cast a value in order for an operation to succeed
 fn plan_cast_internal<C>(
     context: C,
     expr: ScalarExpr,
