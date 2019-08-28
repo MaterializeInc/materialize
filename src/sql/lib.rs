@@ -43,6 +43,7 @@ pub use session::Session;
 
 mod session;
 pub mod store;
+mod transform;
 
 /// Incoming raw SQL from users.
 pub struct SqlCommand {
@@ -150,8 +151,9 @@ impl Planner {
         &mut self,
         session: &mut Session,
         connection_uuid: Uuid,
-        stmt: Statement,
+        mut stmt: Statement,
     ) -> PlannerResult {
+        transform::transform(&mut stmt);
         match stmt {
             Statement::Peek { name, immediate } => {
                 self.handle_peek(connection_uuid, name, immediate)
@@ -279,7 +281,7 @@ impl Planner {
     }
 
     /// Create an immediate result that describes all the columns for the given table
-    pub fn handle_show_columns(
+    fn handle_show_columns(
         &mut self,
         extended: bool,
         full: bool,
@@ -324,7 +326,7 @@ impl Planner {
     }
 
     fn handle_create_dataflow(&mut self, stmt: Statement) -> PlannerResult {
-        let dataflows = self.plan_statement(&stmt)?;
+        let dataflows = self.plan_create_statement(&stmt)?;
         let sql_response = match stmt {
             Statement::CreateSource { .. } => SqlResponse::CreatedSource,
             Statement::CreateSink { .. } => SqlResponse::CreatedSink,
@@ -418,7 +420,7 @@ impl Planner {
         ))
     }
 
-    pub fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
+    fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
         let relation_expr = self.plan_query(&query)?;
         Ok((
             SqlResponse::SendRows {
@@ -469,74 +471,8 @@ impl Planner {
             ))
         }
     }
-}
 
-pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
-    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
-    Ok(match data_type {
-        DataType::Boolean => ScalarType::Bool,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
-        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
-        DataType::SmallInt => ScalarType::Int32,
-        DataType::Int | DataType::BigInt => ScalarType::Int64,
-        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
-        DataType::Decimal(precision, scale) => {
-            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
-            let scale = scale.unwrap_or(0);
-            if precision > MAX_DECIMAL_PRECISION.into() {
-                bail!(
-                    "decimal precision {} exceeds maximum precision {}",
-                    precision,
-                    MAX_DECIMAL_PRECISION
-                );
-            }
-            if scale > precision {
-                bail!("decimal scale {} exceeds precision {}", scale, precision);
-            }
-            ScalarType::Decimal(precision as u8, scale as u8)
-        }
-        DataType::Date => ScalarType::Date,
-        DataType::Timestamp => ScalarType::Timestamp,
-        DataType::Time => ScalarType::Time,
-        DataType::Bytea => ScalarType::Bytes,
-        other => bail!("Unexpected SQL type: {:?}", other),
-    })
-}
-
-fn build_source(
-    schema: &SourceSchema,
-    kafka_addr: SocketAddr,
-    name: String,
-    topic: String,
-) -> Result<Source, failure::Error> {
-    let (raw_schema, schema_registry_url) = match schema {
-        SourceSchema::Raw(schema) => (schema.to_owned(), None),
-        SourceSchema::Registry(url) => {
-            // TODO(benesch): we need to fetch this schema
-            // asynchronously to avoid blocking the command
-            // processing thread.
-            let url: Url = url.parse()?;
-            let ccsr_client = ccsr::Client::new(url.clone());
-            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-            (res.raw, Some(url))
-        }
-    };
-    let typ = avro::validate_schema(&raw_schema)?;
-    Ok(Source {
-        name,
-        connector: SourceConnector::Kafka(KafkaSourceConnector {
-            addr: kafka_addr,
-            topic,
-            raw_schema,
-            schema_registry_url,
-        }),
-        typ,
-    })
-}
-
-impl Planner {
-    fn plan_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
+    fn plan_create_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
         match stmt {
             Statement::CreateView {
                 name,
@@ -663,7 +599,7 @@ impl Planner {
         }
     }
 
-    pub fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
+    fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -1370,7 +1306,7 @@ impl Planner {
         sql_func: &Function,
     ) -> Result<(AggregateExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
-        assert!(AggregateFunc::is_aggregate_func(&ident));
+        assert!(is_aggregate_func(&ident));
 
         if sql_func.over.is_some() {
             bail!("window functions are not yet supported");
@@ -1390,8 +1326,7 @@ impl Planner {
             ),
             _ => {
                 let (expr, typ) = self.plan_expr(ctx, arg)?;
-                let (func, scalar_type) =
-                    AggregateFunc::from_name_and_scalar_type(&ident, &typ.scalar_type)?;
+                let (func, scalar_type) = find_agg_func(&ident, &typ.scalar_type)?;
                 (expr, func, scalar_type)
             }
         };
@@ -1414,7 +1349,7 @@ impl Planner {
         sql_func: &'a Function,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
-        if AggregateFunc::is_aggregate_func(&ident) {
+        if is_aggregate_func(&ident) {
             if let Some(agg_cx) = ctx.aggregate_context {
                 let (i, typ) = agg_cx.get(sql_func).ok_or_else(|| {
                     format_err!(
@@ -2114,6 +2049,70 @@ fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     }
 }
 
+pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
+    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
+    Ok(match data_type {
+        DataType::Boolean => ScalarType::Bool,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
+        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
+        DataType::SmallInt => ScalarType::Int32,
+        DataType::Int | DataType::BigInt => ScalarType::Int64,
+        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+        DataType::Decimal(precision, scale) => {
+            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
+            let scale = scale.unwrap_or(0);
+            if precision > MAX_DECIMAL_PRECISION.into() {
+                bail!(
+                    "decimal precision {} exceeds maximum precision {}",
+                    precision,
+                    MAX_DECIMAL_PRECISION
+                );
+            }
+            if scale > precision {
+                bail!("decimal scale {} exceeds precision {}", scale, precision);
+            }
+            ScalarType::Decimal(precision as u8, scale as u8)
+        }
+        DataType::Date => ScalarType::Date,
+        DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Time => ScalarType::Time,
+        DataType::Bytea => ScalarType::Bytes,
+        other => bail!("Unexpected SQL type: {:?}", other),
+    })
+}
+
+fn build_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    name: String,
+    topic: String,
+) -> Result<Source, failure::Error> {
+    let (raw_schema, schema_registry_url) = match schema {
+        SourceSchema::Raw(schema) => (schema.to_owned(), None),
+        SourceSchema::Registry(url) => {
+            // TODO(benesch): we need to fetch this schema
+            // asynchronously to avoid blocking the command
+            // processing thread.
+            let url: Url = url.parse()?;
+            let ccsr_client = ccsr::Client::new(url.clone());
+            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
+            (res.raw, Some(url))
+        }
+    };
+    let typ = avro::validate_schema(&raw_schema)?;
+    Ok(Source {
+        name,
+        connector: SourceConnector::Kafka(KafkaSourceConnector {
+            addr: kafka_addr,
+            topic,
+            raw_schema,
+            schema_registry_url,
+        }),
+        typ,
+    })
+}
+
 fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::Error> {
     let url: Url = url.parse()?;
     if url.scheme() != "kafka" {
@@ -2197,7 +2196,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
         let name_str = func.name.to_string().to_lowercase();
         let old_within_aggregate = self.within_aggregate;
-        if AggregateFunc::is_aggregate_func(&name_str) {
+        if is_aggregate_func(&name_str) {
             if self.within_aggregate {
                 self.err = Some(format_err!("nested aggregate functions are not allowed"));
                 return;
@@ -2324,6 +2323,50 @@ impl Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
         }
     }
+}
+
+fn is_aggregate_func(name: &str) -> bool {
+    match name {
+        // avg is handled by transform::AvgFuncRewriter.
+        "max" | "min" | "sum" | "count" => true,
+        _ => false,
+    }
+}
+
+fn find_agg_func(
+    name: &str,
+    scalar_type: &ScalarType,
+) -> Result<(AggregateFunc, ScalarType), failure::Error> {
+    let func = match (name, scalar_type) {
+        ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
+        ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
+        ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
+        ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
+        ("max", ScalarType::Bool) => AggregateFunc::MaxBool,
+        ("max", ScalarType::String) => AggregateFunc::MaxString,
+        ("max", ScalarType::Null) => AggregateFunc::MaxNull,
+        ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
+        ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
+        ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
+        ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
+        ("min", ScalarType::Bool) => AggregateFunc::MinBool,
+        ("min", ScalarType::String) => AggregateFunc::MinString,
+        ("min", ScalarType::Null) => AggregateFunc::MinNull,
+        ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
+        ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
+        ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
+        ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
+        ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
+        ("sum", ScalarType::Null) => AggregateFunc::SumNull,
+        ("count", _) => AggregateFunc::Count,
+        other => bail!("Unimplemented function/type combo: {:?}", other),
+    };
+    let scalar_type = match (name, scalar_type) {
+        ("count", _) => ScalarType::Int64,
+        ("max", _) | ("min", _) | ("sum", _) => scalar_type.clone(),
+        other => bail!("Unknown aggregate function: {:?}", other),
+    };
+    Ok((func, scalar_type))
 }
 
 trait RelationExprExt {

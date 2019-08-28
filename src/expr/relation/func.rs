@@ -3,120 +3,14 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
-use repr::{Datum, ScalarType};
+use repr::Datum;
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
-
-pub fn avg_int32<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: i32 = 0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_int32();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as i32))
-    }
-}
-
-pub fn avg_int64<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: i64 = 0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_int64();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as i64))
-    }
-}
-
-pub fn avg_float32<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: f32 = 0.0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_float32();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as f32))
-    }
-}
-
-pub fn avg_float64<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum: f64 = 0.0;
-    let mut len: usize = 0;
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_float64();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        Datum::from(sum / (len as f64))
-    }
-}
-
-pub fn avg_decimal<I>(datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    let mut sum = Significand::new(0);
-    let mut len = Significand::new(0);
-    for d in datums.into_iter() {
-        if !d.is_null() {
-            sum += d.unwrap_decimal();
-            len += 1;
-        }
-    }
-    if len == 0 {
-        Datum::Null
-    } else {
-        // TODO(benesch): This should use the same decimal division path as the
-        // planner, rather than hardcoding a 6 digit increase in the scale
-        // (#212).
-        Datum::from(sum * 1_000_000 / len)
-    }
-}
-
-pub fn avg_null<I>(_datums: I) -> Datum
-where
-    I: IntoIterator<Item = Datum>,
-{
-    Datum::Null
-}
 
 pub fn max_int32<I>(datums: I) -> Datum
 where
@@ -366,12 +260,6 @@ where
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
-    AvgInt32,
-    AvgInt64,
-    AvgFloat32,
-    AvgFloat64,
-    AvgDecimal,
-    AvgNull,
     MaxInt32,
     MaxInt64,
     MaxFloat32,
@@ -397,70 +285,11 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    pub fn is_aggregate_func(name: &str) -> bool {
-        match name {
-            "avg" | "max" | "min" | "sum" | "count" => true,
-            _ => false,
-        }
-    }
-
-    pub fn from_name_and_scalar_type(
-        name: &str,
-        scalar_type: &ScalarType,
-    ) -> Result<(Self, ScalarType), failure::Error> {
-        let func = match (name, scalar_type) {
-            ("avg", ScalarType::Int32) => AggregateFunc::AvgInt32,
-            ("avg", ScalarType::Int64) => AggregateFunc::AvgInt64,
-            ("avg", ScalarType::Float32) => AggregateFunc::AvgFloat32,
-            ("avg", ScalarType::Float64) => AggregateFunc::AvgFloat64,
-            ("avg", ScalarType::Decimal(_, _)) => AggregateFunc::AvgDecimal,
-            ("avg", ScalarType::Null) => AggregateFunc::AvgNull,
-            ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
-            ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
-            ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
-            ("max", ScalarType::Float64) => AggregateFunc::MaxFloat64,
-            ("max", ScalarType::Bool) => AggregateFunc::MaxBool,
-            ("max", ScalarType::String) => AggregateFunc::MaxString,
-            ("max", ScalarType::Null) => AggregateFunc::MaxNull,
-            ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
-            ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
-            ("min", ScalarType::Float32) => AggregateFunc::MinFloat32,
-            ("min", ScalarType::Float64) => AggregateFunc::MinFloat64,
-            ("min", ScalarType::Bool) => AggregateFunc::MinBool,
-            ("min", ScalarType::String) => AggregateFunc::MinString,
-            ("min", ScalarType::Null) => AggregateFunc::MinNull,
-            ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
-            ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,
-            ("sum", ScalarType::Float32) => AggregateFunc::SumFloat32,
-            ("sum", ScalarType::Float64) => AggregateFunc::SumFloat64,
-            ("sum", ScalarType::Decimal(_, _)) => AggregateFunc::SumDecimal,
-            ("sum", ScalarType::Null) => AggregateFunc::SumNull,
-            ("count", _) => AggregateFunc::Count,
-            other => bail!("Unimplemented function/type combo: {:?}", other),
-        };
-        let scalar_type = match (name, scalar_type) {
-            ("count", _) => ScalarType::Int64,
-            // TODO(benesch): This should use the same decimal division path as
-            // the planner, rather than hardcoding a 6 digit increase in the
-            // scale (#212).
-            ("avg", ScalarType::Decimal(p, s)) => ScalarType::Decimal(*p, s + 6),
-            ("max", _) | ("min", _) | ("sum", _) | ("avg", _) => scalar_type.clone(),
-            other => bail!("Unknown aggregate function: {:?}", other),
-        };
-        Ok((func, scalar_type))
-    }
-
     pub fn func<I>(self) -> fn(I) -> Datum
     where
         I: IntoIterator<Item = Datum>,
     {
         match self {
-            AggregateFunc::AvgInt32 => avg_int32,
-            AggregateFunc::AvgInt64 => avg_int64,
-            AggregateFunc::AvgFloat32 => avg_float32,
-            AggregateFunc::AvgFloat64 => avg_float64,
-            AggregateFunc::AvgDecimal => avg_decimal,
-            AggregateFunc::AvgNull => avg_null,
             AggregateFunc::MaxInt32 => max_int32,
             AggregateFunc::MaxInt64 => max_int64,
             AggregateFunc::MaxFloat32 => max_float32,
@@ -489,7 +318,7 @@ impl AggregateFunc {
     pub fn is_nullable(self) -> bool {
         match self {
             AggregateFunc::Count => false,
-            // avg/max/min/sum return null on empty sets
+            // max/min/sum return null on empty sets
             _ => true,
         }
     }
