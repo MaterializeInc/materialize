@@ -43,7 +43,7 @@ pub enum SequencedCommand {
     Peek {
         name: String,
         timestamp: Timestamp,
-        connection_uuid: Uuid,
+        conn_id: u32,
         drop_after_peek: bool,
     },
     /// Enable compaction in views.
@@ -116,7 +116,7 @@ impl CommandCoordinator {
             }
             DataflowCommand::Peek {
                 mut source,
-                connection_uuid,
+                conn_id,
                 when,
             } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
@@ -156,21 +156,19 @@ impl CommandCoordinator {
                 let peek_command = SequencedCommand::Peek {
                     name,
                     timestamp,
-                    connection_uuid,
+                    conn_id,
                     drop_after_peek: drop,
                 };
                 sequencer.push(peek_command);
             }
             DataflowCommand::Explain {
+                conn_id,
                 mut relation_expr,
-                connection_uuid,
             } => {
                 let typ = relation_expr.typ();
                 self.optimizer.optimize(&mut relation_expr, &typ);
-                self.exfiltrator.send_peek(
-                    connection_uuid,
-                    vec![vec![Datum::from(relation_expr.pretty())]],
-                );
+                self.exfiltrator
+                    .send_peek(conn_id, vec![vec![Datum::from(relation_expr.pretty())]]);
             }
             DataflowCommand::Shutdown => {
                 sequencer.push(SequencedCommand::Shutdown);

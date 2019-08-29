@@ -15,20 +15,19 @@ use std::iter;
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
-use uuid::Uuid;
 
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
+use crate::queue;
 use dataflow::{Exfiltration, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
-use sql::{Session, SqlCommand, SqlResponse, SqlResult, WaitFor};
+use sql::{Session, SqlResponse, WaitFor};
 
 pub struct Context {
-    pub uuid: Uuid,
-    pub sql_command_sender: UnboundedSender<SqlCommand>,
-    pub sql_result_receiver: UnboundedReceiver<SqlResult>,
+    pub conn_id: u32,
+    pub cmdq_tx: UnboundedSender<queue::Command>,
     pub dataflow_results_receiver: UnboundedReceiver<Exfiltration>,
     pub num_timely_workers: usize,
 }
@@ -130,7 +129,10 @@ pub enum StateMachine<A: Conn + 'static> {
         SendError,
         Error
     ))]
-    HandleQuery { conn: A },
+    HandleQuery {
+        conn: A,
+        rx: futures::sync::oneshot::Receiver<queue::Response>,
+    },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
     SendRowDescription {
@@ -311,12 +313,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         match msg {
             FrontendMessage::Query { query } => {
                 let sql = String::from(String::from_utf8_lossy(&query));
-                context.sql_command_sender.unbounded_send(SqlCommand {
+                let (tx, rx) = futures::sync::oneshot::channel();
+                context.cmdq_tx.unbounded_send(queue::Command {
                     sql,
                     session: state.session,
-                    connection_uuid: context.uuid,
+                    conn_id: context.conn_id,
+                    tx,
                 })?;
-                transition!(HandleQuery { conn })
+                transition!(HandleQuery { conn, rx })
             }
             FrontendMessage::Terminate => transition!(Done(())),
             _ => transition!(SendError {
@@ -336,12 +340,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, HandleQuery<A>>,
         context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleQuery<A>, failure::Error> {
-        match context.sql_result_receiver.poll() {
+        match state.rx.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(Some(SqlResult {
-                result: Ok(response),
+            Ok(Async::Ready(queue::Response {
+                sql_result: Ok(response),
                 session,
-            }))) => {
+            })) => {
                 let state = state.take();
 
                 macro_rules! command_complete {
@@ -389,10 +393,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     }),
                 }
             }
-            Ok(Async::Ready(Some(SqlResult {
-                result: Err(err),
+            Ok(Async::Ready(queue::Response {
+                sql_result: Err(err),
                 session,
-            }))) => {
+            })) => {
                 let state = state.take();
                 transition!(SendError {
                     send: state.conn.send(BackendMessage::ErrorResponse {
@@ -405,7 +409,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     fatal: false,
                 });
             }
-            Ok(Async::Ready(None)) | Err(()) => {
+            Err(futures::sync::oneshot::Canceled) => {
                 panic!("Connection to sql planner closed unexpectedly")
             }
         }

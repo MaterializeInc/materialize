@@ -50,7 +50,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 
 pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
     a: A,
-    dataflow_results_mux: Mux<Exfiltration>,
+    dataflow_results_mux: Mux<u32, Exfiltration>,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let svc =
         service::service_fn(
@@ -80,22 +80,23 @@ fn handle_unknown(_: Request<Body>) -> FutureResponse {
 
 fn handle_dataflow_results(
     req: Request<Body>,
-    dataflow_results_mux: Mux<Exfiltration>,
+    dataflow_results_mux: Mux<u32, Exfiltration>,
 ) -> Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send> {
     Box::new(
         future::lazy(move || {
-            let uuid = req
+            let conn_id: u32 = req
                 .headers()
-                .get("X-Materialize-Query-UUID")
-                .ok_or_else(|| format_err!("missing uuid header"))?;
-            let uuid = uuid::Uuid::parse_str(uuid.to_str()?)?;
-            Ok((uuid, req))
+                .get("X-Materialize-Connection-Id")
+                .ok_or_else(|| format_err!("missing X-Materialize-Connection-Id header"))?
+                .to_str()?
+                .parse()?;
+            Ok((conn_id, req))
         })
-        .and_then(move |(uuid, req)| {
+        .and_then(move |(conn_id, req)| {
             req.into_body().concat2().from_err().and_then(move |body| {
                 let rows: Exfiltration = bincode::deserialize(&body).unwrap();
                 // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-                if let Ok(sender) = dataflow_results_mux.read().unwrap().sender(&uuid) {
+                if let Ok(sender) = dataflow_results_mux.read().unwrap().sender(&conn_id) {
                     drop(sender.unbounded_send(rows))
                 }
                 Ok(Response::new(Body::from("ok")))

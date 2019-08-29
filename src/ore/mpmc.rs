@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 
 /// A multiple-producer, multiple-consumer (mpmc) channel where receivers are
 /// keyed by K.
-pub type Mux<T> = Arc<RwLock<MuxInner<uuid::Uuid, T>>>;
+pub type Mux<K, T> = Arc<RwLock<MuxInner<K, T>>>;
 
 /// The implementation of a [`Mux`].
 #[derive(Debug)]

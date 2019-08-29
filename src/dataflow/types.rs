@@ -22,13 +22,13 @@ pub enum DataflowCommand {
     CreateDataflows(Vec<Dataflow>),
     DropDataflows(Vec<String>),
     Peek {
-        connection_uuid: Uuid,
+        conn_id: u32,
         source: RelationExpr,
         when: PeekWhen,
     },
     Explain {
+        conn_id: u32,
         relation_expr: RelationExpr,
-        connection_uuid: Uuid,
     },
     Shutdown,
 }
@@ -158,7 +158,7 @@ pub struct KafkaSinkConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
-    pub connection_uuid: uuid::Uuid,
+    pub conn_id: u32,
 }
 
 /// A view transforms one dataflow into another.

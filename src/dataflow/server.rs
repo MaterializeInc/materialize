@@ -36,7 +36,7 @@ use crate::{DataflowCommand, LocalInput, Timestamp};
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
-    local_input_mux: Mux<LocalInput>,
+    local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
     timely_configuration: timely::Configuration,
     logging_config: Option<logging::LoggingConfiguration>,
@@ -65,7 +65,7 @@ struct PendingPeek {
     /// The name of the dataflow to peek.
     name: String,
     /// Identifies intended recipient of the peek.
-    connection_uuid: Uuid,
+    conn_id: u32,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Whether to drop the dataflow when the peek completes.
@@ -77,7 +77,7 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    local_input_mux: Mux<LocalInput>,
+    local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
@@ -95,7 +95,7 @@ where
     fn new(
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
-        local_input_mux: Mux<LocalInput>,
+        local_input_mux: Mux<Uuid, LocalInput>,
         exfiltrator_config: ExfiltratorConfig,
         logging_config: Option<logging::LoggingConfiguration>,
     ) -> Worker<'w, A> {
@@ -277,7 +277,7 @@ where
             coordinator::SequencedCommand::Peek {
                 name,
                 timestamp,
-                connection_uuid,
+                conn_id,
                 drop_after_peek,
             } => {
                 let mut trace = self
@@ -289,7 +289,7 @@ where
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
                     name,
-                    connection_uuid,
+                    conn_id,
                     timestamp,
                     drop_after_peek,
                 };
@@ -298,7 +298,7 @@ where
                         crate::logging::materialized::Peek::new(
                             &pending_peek.name,
                             pending_peek.timestamp,
-                            &pending_peek.connection_uuid,
+                            pending_peek.conn_id,
                         ),
                         true,
                     ));
@@ -373,13 +373,13 @@ where
 
                 cur.step_key(&storage)
             }
-            self.exfiltrator.send_peek(peek.connection_uuid, results);
+            self.exfiltrator.send_peek(peek.conn_id, results);
             if let Some(logger) = self.materialized_logger.as_mut() {
                 logger.log(MaterializedEvent::Peek(
                     crate::logging::materialized::Peek::new(
                         &peek.name,
                         peek.timestamp,
-                        &peek.connection_uuid,
+                        peek.conn_id,
                     ),
                     false,
                 ));

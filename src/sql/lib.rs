@@ -45,19 +45,6 @@ mod session;
 pub mod store;
 mod transform;
 
-/// Incoming raw SQL from users.
-pub struct SqlCommand {
-    pub connection_uuid: Uuid,
-    pub sql: String,
-    pub session: crate::Session,
-}
-
-/// Responses from the queue to SQL commands.
-pub struct SqlResult {
-    pub result: Result<SqlResponse, failure::Error>,
-    pub session: crate::Session,
-}
-
 /// Flag for whether optimizer or workers will chime in as well.
 #[derive(Debug)]
 pub enum WaitFor {
@@ -136,13 +123,13 @@ impl Planner {
     pub fn handle_command(
         &mut self,
         session: &mut Session,
-        connection_uuid: Uuid,
+        conn_id: u32,
         sql: String,
     ) -> PlannerResult {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
         match stmts.len() {
             0 => Ok((SqlResponse::EmptyQuery, None)),
-            1 => self.handle_statement(session, connection_uuid, stmts.into_element()),
+            1 => self.handle_statement(session, conn_id, stmts.into_element()),
             _ => bail!("expected one statement, but got {}", stmts.len()),
         }
     }
@@ -150,21 +137,19 @@ impl Planner {
     fn handle_statement(
         &mut self,
         session: &mut Session,
-        connection_uuid: Uuid,
+        conn_id: u32,
         mut stmt: Statement,
     ) -> PlannerResult {
         transform::transform(&mut stmt);
         match stmt {
-            Statement::Peek { name, immediate } => {
-                self.handle_peek(connection_uuid, name, immediate)
-            }
-            Statement::Tail { name } => self.handle_tail(connection_uuid, name),
+            Statement::Peek { name, immediate } => self.handle_peek(conn_id, name, immediate),
+            Statement::Tail { name } => self.handle_tail(conn_id, name),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
             | Statement::CreateView { .. }
             | Statement::CreateSources { .. } => self.handle_create_dataflow(stmt),
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
-            Statement::Query(query) => self.handle_select(connection_uuid, *query),
+            Statement::Query(query) => self.handle_select(conn_id, *query),
             Statement::SetVariable {
                 local,
                 variable,
@@ -178,9 +163,7 @@ impl Planner {
                 table_name,
                 filter,
             } => self.handle_show_columns(extended, full, &table_name, filter.as_ref()),
-            Statement::Explain { stage, query } => {
-                self.handle_explain(stage, *query, connection_uuid)
-            }
+            Statement::Explain { stage, query } => self.handle_explain(conn_id, stage, *query),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
@@ -244,7 +227,7 @@ impl Planner {
         }
     }
 
-    fn handle_tail(&mut self, connection_uuid: Uuid, from: ObjectName) -> PlannerResult {
+    fn handle_tail(&mut self, conn_id: u32, from: ObjectName) -> PlannerResult {
         let name = format!("<temp_{}>", Uuid::new_v4());
         let from = extract_sql_object_name(&from)?;
         let dataflow = self.dataflows.get(&from)?;
@@ -254,7 +237,7 @@ impl Planner {
                 Sink {
                     name,
                     from: (from, dataflow.typ().clone()),
-                    connector: SinkConnector::Tail(TailSinkConnector { connection_uuid }),
+                    connector: SinkConnector::Tail(TailSinkConnector { conn_id }),
                 },
             )])),
         ))
@@ -391,12 +374,7 @@ impl Planner {
         Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
     }
 
-    fn handle_peek(
-        &mut self,
-        connection_uuid: Uuid,
-        name: ObjectName,
-        immediate: bool,
-    ) -> PlannerResult {
+    fn handle_peek(&mut self, conn_id: u32, name: ObjectName, immediate: bool) -> PlannerResult {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
         Ok((
@@ -406,7 +384,7 @@ impl Planner {
                 wait_for: WaitFor::Workers,
             },
             Some(DataflowCommand::Peek {
-                connection_uuid,
+                conn_id,
                 source: RelationExpr::Get {
                     name: dataflow.name().to_owned(),
                     typ: dataflow.typ().clone(),
@@ -420,7 +398,7 @@ impl Planner {
         ))
     }
 
-    fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
+    pub fn handle_select(&mut self, conn_id: u32, query: Query) -> PlannerResult {
         let relation_expr = self.plan_query(&query)?;
         Ok((
             SqlResponse::SendRows {
@@ -429,19 +407,14 @@ impl Planner {
                 wait_for: WaitFor::Workers,
             },
             Some(DataflowCommand::Peek {
-                connection_uuid,
+                conn_id,
                 source: relation_expr,
                 when: PeekWhen::Immediately,
             }),
         ))
     }
 
-    pub fn handle_explain(
-        &mut self,
-        stage: Stage,
-        query: Query,
-        connection_uuid: Uuid,
-    ) -> PlannerResult {
+    pub fn handle_explain(&mut self, conn_id: u32, stage: Stage, query: Query) -> PlannerResult {
         let mut relation_expr = self.plan_query(&query)?;
 
         if stage == Stage::Dataflow {
@@ -465,8 +438,8 @@ impl Planner {
                     wait_for: WaitFor::Optimizer,
                 },
                 Some(DataflowCommand::Explain {
+                    conn_id,
                     relation_expr,
-                    connection_uuid,
                 }),
             ))
         }

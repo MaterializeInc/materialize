@@ -10,13 +10,14 @@ use super::SharedCapability;
 use crate::types::{Diff, LocalInput, LocalSourceConnector, Timestamp};
 use ore::mpmc::Mux;
 use repr::Datum;
+use uuid::Uuid;
 
 pub fn local<G>(
     scope: &G,
     name: &str,
     connector: LocalSourceConnector,
     read_input: bool,
-    local_input_mux: &mut Mux<LocalInput>,
+    local_input_mux: &mut Mux<Uuid, LocalInput>,
 ) -> (
     Stream<G, (Vec<Datum>, Timestamp, Diff)>,
     Option<SharedCapability>,
