@@ -28,4 +28,4 @@ mod scalar;
 pub use relation::{ColumnType, RelationType};
 pub use scalar::decimal;
 pub use scalar::regex;
-pub use scalar::{Datum, ScalarType};
+pub use scalar::{Datum, Interval, ScalarType};

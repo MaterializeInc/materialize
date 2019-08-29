@@ -10,8 +10,8 @@ use chrono::{NaiveDate, NaiveDateTime};
 use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::fmt::Write;
+use sqlparser::ast::Interval as SqlInterval;
+use std::fmt::{self, Write};
 
 use self::decimal::Significand;
 use self::regex::Regex;
@@ -42,6 +42,10 @@ pub enum Datum {
     Date(NaiveDate),
     /// A DateTime
     Timestamp(NaiveDateTime),
+    /// A span of time
+    ///
+    /// Either a concrete number of seconds, or an abstract number of Months
+    Interval(Interval),
     /// An exact decimal number, possibly with a fractional component, with up
     /// to 38 digits of precision.
     Decimal(Significand),
@@ -164,6 +168,24 @@ impl Datum {
         }
     }
 
+    pub fn unwrap_interval_months(&self) -> i64 {
+        match self {
+            Datum::Interval(Interval::Months(count)) => *count,
+            _ => panic!("Datum::unwrap_interval_months called on {:?}", self),
+        }
+    }
+
+    /// Returns `(is_positive, duration)`
+    pub fn unwrap_interval_duration(&self) -> (bool, std::time::Duration) {
+        match self {
+            Datum::Interval(Interval::Duration {
+                is_positive,
+                duration,
+            }) => (*is_positive, *duration),
+            _ => panic!("Datum::unwrap_interval_months called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_decimal(&self) -> Significand {
         match self {
             Datum::Decimal(d) => *d,
@@ -212,6 +234,9 @@ impl Datum {
             (Datum::Date(_), _) => false,
             (Datum::Timestamp(_), ScalarType::Timestamp) => true,
             (Datum::Timestamp(_), _) => false,
+            (Datum::Interval(Interval::Months(_)), ScalarType::IntervalMonths) => true,
+            (Datum::Interval(Interval::Duration { .. }), ScalarType::IntervalDuration) => true,
+            (Datum::Interval(_), _) => false,
             (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
             (Datum::Decimal(_), _) => false,
             (Datum::Bytes(_), ScalarType::Bytes) => true,
@@ -282,6 +307,12 @@ impl From<Significand> for Datum {
     }
 }
 
+impl From<SqlInterval> for Datum {
+    fn from(other: SqlInterval) -> Datum {
+        Datum::Interval(other.into())
+    }
+}
+
 impl From<String> for Datum {
     fn from(s: String) -> Datum {
         Datum::String(s)
@@ -331,6 +362,7 @@ impl fmt::Display for Datum {
             Datum::Float64(num) => write!(f, "{}", num),
             Datum::Date(d) => write!(f, "{}", d),
             Datum::Timestamp(t) => write!(f, "{}", t),
+            Datum::Interval(iv) => write!(f, "{:?}", iv),
             Datum::Decimal(num) => write!(f, "{:?}", num),
             Datum::Bytes(dat) => {
                 f.write_str("0x")?;
@@ -383,6 +415,10 @@ pub enum ScalarType {
     Date,
     Time,
     Timestamp,
+    /// A possibly-negative time span months
+    IntervalMonths,
+    /// A possibly-negative time span of seconds
+    IntervalDuration,
     Bytes,
     String,
     Regex,
@@ -416,9 +452,40 @@ impl fmt::Display for ScalarType {
             Date => f.write_str("date"),
             Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
+            IntervalMonths => f.write_str("interval(months)"),
+            IntervalDuration => f.write_str("interval(duration)"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
             Regex => f.write_str("regex"),
+        }
+    }
+}
+
+/// Either a number of months, or a number of seconds
+///
+/// Inlined from [`sqlparser::ast::Interval`] so that we can impl deserialize, ord
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+pub enum Interval {
+    /// A possibly negative number of months for field types like `YEAR`
+    Months(i64),
+    /// An actual timespan, possibly negative, because why not
+    Duration {
+        is_positive: bool,
+        duration: std::time::Duration,
+    },
+}
+
+impl From<SqlInterval> for Interval {
+    fn from(other: SqlInterval) -> Interval {
+        match other {
+            SqlInterval::Months(count) => Interval::Months(count),
+            SqlInterval::Duration {
+                is_positive,
+                duration,
+            } => Interval::Duration {
+                is_positive,
+                duration,
+            },
         }
     }
 }

@@ -8,7 +8,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 use super::types::PgType;
 use repr::decimal::Decimal;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnType, Datum, Interval, RelationType, ScalarType};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -97,6 +97,7 @@ pub enum FieldValue {
     Float8(f64),
     Date(NaiveDate),
     Timestamp(NaiveDateTime),
+    Interval(Interval),
     Text(String),
     Numeric(Decimal),
 }
@@ -113,6 +114,7 @@ impl FieldValue {
             Datum::Float64(f) => Some(FieldValue::Float8(*f)),
             Datum::Date(d) => Some(FieldValue::Date(d)),
             Datum::Timestamp(d) => Some(FieldValue::Timestamp(d)),
+            Datum::Interval(i) => Some(FieldValue::Interval(i)),
             Datum::Decimal(d) => {
                 let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
                 Some(FieldValue::Numeric(d.with_scale(scale)))

@@ -50,6 +50,11 @@ pub const TIMESTAMP_TZ: PgType = PgType {
     typlen: 8,
 };
 
+pub const INTERVAL: PgType = PgType {
+    oid: 1186,
+    typlen: 16,
+};
+
 /// Variable-length string.
 pub const TEXT: PgType = PgType {
     oid: 25,
@@ -98,6 +103,8 @@ impl From<&ScalarType> for PgType {
             ScalarType::Decimal { .. } => NUMERIC,
             ScalarType::Date => DATE,
             ScalarType::Timestamp => TIMESTAMP_TZ,
+            ScalarType::IntervalMonths => INTERVAL,
+            ScalarType::IntervalDuration => INTERVAL,
             ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Bytes => BYTEA,
             ScalarType::String => TEXT,

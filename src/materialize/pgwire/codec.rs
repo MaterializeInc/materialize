@@ -124,6 +124,13 @@ impl Encoder for Codec {
                             FieldValue::Bytea(b) => b.into(),
                             FieldValue::Date(d) => d.to_string().into_bytes().into(),
                             FieldValue::Timestamp(ts) => ts.to_string().into_bytes().into(),
+                            FieldValue::Interval(i) => match i {
+                                repr::Interval::Months(count) => format!("{} months", count).into_bytes().into(),
+                                repr::Interval::Duration { is_positive, duration } => format!(
+                                    "{}{:?}",
+                                    if is_positive { "" } else {"-"},
+                                    duration) .into_bytes().into(),
+                            },
                             FieldValue::Int4(i) => format!("{}", i).into_bytes().into(),
                             FieldValue::Int8(i) => format!("{}", i).into_bytes().into(),
                             FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),

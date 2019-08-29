@@ -1863,7 +1863,15 @@ impl Planner {
                 ScalarType::Timestamp,
             ),
             Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
-            Value::Interval(_) => bail!("INTERVAL literals are not supported: {}", l.to_string()),
+            Value::Interval(iv) => {
+                iv.fields_match_precision()?;
+                let i = iv.computed_permissive()?;
+                let st = match &i {
+                    sqlparser::ast::Interval::Months(_) => ScalarType::IntervalMonths,
+                    sqlparser::ast::Interval::Duration { .. } => ScalarType::IntervalDuration,
+                };
+                (Datum::Interval(i.into()), st)
+            }
             Value::Null => (Datum::Null, ScalarType::Null),
         };
         let nullable = datum == Datum::Null;
