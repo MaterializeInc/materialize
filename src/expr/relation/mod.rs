@@ -225,7 +225,19 @@ impl RelationExpr {
                         .unwrap(),
                 }
             }
-            RelationExpr::Branch { .. } => unimplemented!(),
+            RelationExpr::Branch {
+                input, key, branch, ..
+            } => {
+                RelationType {
+                    column_types: input
+                        .typ()
+                        .column_types
+                        .into_iter()
+                        .chain(branch.typ().column_types.drain(key.len()..))
+                        .collect(),
+                }
+                // TODO(jamii) check type of default too
+            }
         }
     }
 
