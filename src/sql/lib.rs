@@ -2096,10 +2096,14 @@ fn build_source(
             // processing thread.
             let url: Url = url.parse()?;
             let ccsr_client = ccsr::Client::new(url.clone());
-            let key_schema = ccsr_client.get_schema_by_subject(&format!("{}-key", topic))?;
-            let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
 
-            (Some(key_schema.raw), value_schema.raw, Some(url))
+            let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
+            let key_schema_value =
+                match ccsr_client.get_schema_by_subject(&format!("{}-key", topic)) {
+                    Result::Ok(schema) => Some(schema.raw),
+                    Result::Err(_err) => None,
+                };
+            (key_schema_value, value_schema.raw, Some(url))
         }
     };
 
