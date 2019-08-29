@@ -3,8 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use expr::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
-use failure::{bail, format_err};
+use super::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use repr::*;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -205,8 +204,9 @@ impl RelationExpr {
 }
 
 impl RelationExpr {
-    pub fn lower(self) -> Result<expr::RelationExpr, failure::Error> {
-        self.applied_to(expr::RelationExpr::Constant {
+    // TODO(jamii) this can't actually return an error atm - do we still need Result?
+    pub fn lower(self) -> Result<super::RelationExpr, failure::Error> {
+        self.applied_to(super::RelationExpr::Constant {
             rows: vec![vec![]],
             typ: RelationType {
                 column_types: vec![],
@@ -215,18 +215,18 @@ impl RelationExpr {
     }
 
     // TODO(jamii) ensure outer is always distinct? or make distinct during reduce etc?
-    fn applied_to(self, outer: expr::RelationExpr) -> Result<expr::RelationExpr, failure::Error> {
+    fn applied_to(self, outer: super::RelationExpr) -> Result<super::RelationExpr, failure::Error> {
         use self::RelationExpr::*;
-        use expr::RelationExpr as DR;
+        use super::RelationExpr as SR;
         Ok(match self {
-            Get { name, typ } => outer.product(DR::Get { name, typ }),
+            Get { name, typ } => outer.product(SR::Get { name, typ }),
             Project { input, outputs } => {
                 let outer_arity = outer.arity();
                 let input = input.applied_to(outer)?;
                 let outputs = (0..outer_arity)
                     .chain(outputs.into_iter().map(|i| outer_arity + i))
                     .collect::<Vec<_>>();
-                DR::Project {
+                SR::Project {
                     input: Box::new(input),
                     outputs,
                 }
@@ -286,18 +286,18 @@ impl RelationExpr {
             }
             Union { left, right } => {
                 let outer_name = format!("outer_{}", Uuid::new_v4());
-                let get_outer = DR::Get {
+                let get_outer = SR::Get {
                     name: outer_name.clone(),
                     typ: outer.typ(),
                 };
                 let outer_arity = outer.arity();
                 let left = left.applied_to(get_outer.clone())?;
                 let right = right.applied_to(get_outer)?;
-                DR::Branch {
+                SR::Branch {
                     name: outer_name,
                     input: Box::new(outer),
                     key: (0..outer_arity).collect(),
-                    branch: Box::new(DR::Union {
+                    branch: Box::new(SR::Union {
                         left: Box::new(left),
                         right: Box::new(right),
                     }),
@@ -310,7 +310,7 @@ impl RelationExpr {
                 aggregates,
             } => {
                 let outer_name = format!("outer_{}", Uuid::new_v4());
-                let get_outer = DR::Get {
+                let get_outer = SR::Get {
                     name: outer_name.clone(),
                     typ: outer.typ(),
                 };
@@ -336,11 +336,11 @@ impl RelationExpr {
                         Ok((aggregate.applied_to(outer_arity, &mut input)?, typ))
                     })
                     .collect::<Result<Vec<_>, failure::Error>>()?;
-                DR::Branch {
+                SR::Branch {
                     name: outer_name,
                     input: Box::new(outer),
                     key: (0..outer_arity).collect(),
-                    branch: Box::new(DR::Reduce {
+                    branch: Box::new(SR::Reduce {
                         input: Box::new(input),
                         group_key,
                         aggregates,
@@ -350,17 +350,17 @@ impl RelationExpr {
             }
             Distinct { input } => {
                 let outer_name = format!("outer_{}", Uuid::new_v4());
-                let get_outer = DR::Get {
+                let get_outer = SR::Get {
                     name: outer_name.clone(),
                     typ: outer.typ(),
                 };
                 let outer_arity = outer.arity();
                 let input = input.applied_to(get_outer)?;
-                DR::Branch {
+                SR::Branch {
                     name: outer_name,
                     input: Box::new(outer),
                     key: (0..outer_arity).collect(),
-                    branch: Box::new(DR::Distinct {
+                    branch: Box::new(SR::Distinct {
                         input: Box::new(input),
                     }),
                     default: None,
@@ -374,29 +374,29 @@ impl ScalarExpr {
     fn applied_to(
         self,
         outer_arity: usize,
-        inner: &mut expr::RelationExpr,
-    ) -> Result<expr::ScalarExpr, failure::Error> {
+        inner: &mut super::RelationExpr,
+    ) -> Result<super::ScalarExpr, failure::Error> {
         use self::ScalarExpr::*;
-        use expr::RelationExpr as DR;
-        use expr::ScalarExpr as DS;
+        use super::RelationExpr as SR;
+        use super::ScalarExpr as SS;
 
         Ok(match self {
             Column(column) => {
                 let column = (outer_arity as isize) + column;
                 assert!(column >= 0);
-                DS::Column(column as usize)
+                SS::Column(column as usize)
             }
-            Literal(datum) => DS::Literal(datum),
-            CallUnary { func, expr } => DS::CallUnary {
+            Literal(datum) => SS::Literal(datum),
+            CallUnary { func, expr } => SS::CallUnary {
                 func,
                 expr: Box::new(expr.applied_to(outer_arity, inner)?),
             },
-            CallBinary { func, expr1, expr2 } => DS::CallBinary {
+            CallBinary { func, expr1, expr2 } => SS::CallBinary {
                 func,
                 expr1: Box::new(expr1.applied_to(outer_arity, inner)?),
                 expr2: Box::new(expr2.applied_to(outer_arity, inner)?),
             },
-            CallVariadic { func, exprs } => DS::CallVariadic {
+            CallVariadic { func, exprs } => SS::CallVariadic {
                 func,
                 exprs: exprs
                     .into_iter()
@@ -406,7 +406,7 @@ impl ScalarExpr {
             If { cond, then, els } => {
                 // TODO(jamii) would be nice to only run subqueries in `then` when `cond` is true
                 // (if subqueries can throw errors, this impacts correctness too)
-                DS::If {
+                SS::If {
                     cond: Box::new(cond.applied_to(outer_arity, inner)?),
                     then: Box::new(then.applied_to(outer_arity, inner)?),
                     els: Box::new(els.applied_to(outer_arity, inner)?),
@@ -415,7 +415,7 @@ impl ScalarExpr {
             Exists(expr) => {
                 // TODO(jamii) can optimize this using expr.used_inner_columns as key
                 let inner_name = format!("inner_{}", Uuid::new_v4());
-                let get_inner = DR::Get {
+                let get_inner = SR::Get {
                     name: inner_name.clone(),
                     typ: inner.typ(),
                 };
@@ -424,14 +424,14 @@ impl ScalarExpr {
                     .applied_to(get_inner)?
                     .project((0..inner_arity).collect())
                     .map(vec![(
-                        DS::Literal(Datum::True),
+                        SS::Literal(Datum::True),
                         ColumnType {
                             name: None,
                             scalar_type: ScalarType::Bool,
                             nullable: false,
                         },
                     )]);
-                *inner = DR::Branch {
+                *inner = SR::Branch {
                     name: inner_name,
                     // TODO(jamii) kind of dumb that we have to clone inner
                     input: Box::new(inner.clone()),
@@ -439,7 +439,7 @@ impl ScalarExpr {
                     branch: Box::new(branch),
                     default: Some(vec![Datum::False]),
                 };
-                DS::Column(inner_arity)
+                SS::Column(inner_arity)
             }
         })
     }
@@ -449,15 +449,15 @@ impl AggregateExpr {
     fn applied_to(
         self,
         outer_arity: usize,
-        inner: &mut expr::RelationExpr,
-    ) -> Result<expr::AggregateExpr, failure::Error> {
+        inner: &mut super::RelationExpr,
+    ) -> Result<super::AggregateExpr, failure::Error> {
         let AggregateExpr {
             func,
             expr,
             distinct,
         } = self;
 
-        Ok(expr::AggregateExpr {
+        Ok(super::AggregateExpr {
             func,
             expr: expr.applied_to(outer_arity, inner)?,
             distinct,
@@ -471,8 +471,8 @@ mod test {
 
     #[test]
     fn will_it_blend() {
-        use expr::RelationExpr as DR;
-        use expr::ScalarExpr as DS;
+        use super::RelationExpr as SR;
+        use super::ScalarExpr as SS;
         use RelationExpr as R;
         use ScalarExpr as S;
         let expr = R::Map {
@@ -513,7 +513,7 @@ mod test {
         };
         assert_eq!(
             expr.lower().unwrap(),
-            DR::Get {
+            SR::Get {
                 name: "foo".to_owned(),
                 typ: RelationType {
                     column_types: vec![ColumnType {

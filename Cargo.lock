@@ -779,6 +779,7 @@ dependencies = [
  "regex-syntax 0.6.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "repr 0.1.0",
  "serde 1.0.99 (registry+https://github.com/rust-lang/crates.io-index)",
+ "uuid 0.7.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
