@@ -74,11 +74,11 @@ pub enum ScalarExpr {
         func: VariadicFunc,
         exprs: Vec<ScalarExpr>,
     },
-    // If {
-    //     cond: Box<ScalarExpr>,
-    //     then: Box<ScalarExpr>,
-    //     els: Box<ScalarExpr>,
-    // },
+    If {
+        cond: Box<ScalarExpr>,
+        then: Box<ScalarExpr>,
+        els: Box<ScalarExpr>,
+    },
     Exists(Box<RelationExpr>),
 }
 
@@ -108,7 +108,7 @@ impl RelationExpr {
         }
     }
 
-    // TODO(jamii) check that visit_scalar is using correct column offset
+    // TODO(jamii) use offset fix from ScalarExpr::applied_to
     fn used_outer_columns(&self) -> HashSet<isize> {
         let mut used_outer_columns = HashSet::new();
         fn visit_relation(
@@ -189,6 +189,11 @@ impl RelationExpr {
                         visit_scalar(expr, num_outer_columns, used_outer_columns);
                     }
                 }
+                If { cond, then, els } => {
+                    visit_scalar(&*cond, num_outer_columns, used_outer_columns);
+                    visit_scalar(&*then, num_outer_columns, used_outer_columns);
+                    visit_scalar(&*els, num_outer_columns, used_outer_columns);
+                }
                 Exists(expr) => {
                     visit_relation(expr, num_outer_columns, used_outer_columns);
                 }
@@ -209,7 +214,6 @@ impl RelationExpr {
         })
     }
 
-    // TODO(jamii) do we actually need to track vars? currently we need them for resolving variables, but we have to have already done that in the sql layer to get the unique variable names
     // TODO(jamii) ensure outer is always distinct? or make distinct during reduce etc?
     fn applied_to(self, outer: expr::RelationExpr) -> Result<expr::RelationExpr, failure::Error> {
         use self::RelationExpr::*;
@@ -399,6 +403,15 @@ impl ScalarExpr {
                     .map(|expr| expr.applied_to(outer_arity, inner))
                     .collect::<Result<Vec<_>, failure::Error>>()?,
             },
+            If { cond, then, els } => {
+                // TODO(jamii) would be nice to only run subqueries in `then` when `cond` is true
+                // (if subqueries can throw errors, this impacts correctness too)
+                DS::If {
+                    cond: Box::new(cond.applied_to(outer_arity, inner)?),
+                    then: Box::new(then.applied_to(outer_arity, inner)?),
+                    els: Box::new(els.applied_to(outer_arity, inner)?),
+                }
+            }
             Exists(expr) => {
                 // TODO(jamii) can optimize this using expr.used_inner_columns as key
                 let inner_name = format!("inner_{}", Uuid::new_v4());
