@@ -113,6 +113,7 @@ pub struct Source {
     pub name: String,
     pub connector: SourceConnector,
     pub typ: RelationType,
+    pub pkey_indices: Vec<usize>,
 }
 
 #[serde(rename_all = "snake_case")]

@@ -35,6 +35,7 @@ impl DataflowStore {
                             uuid: uuid::Uuid::new_v4(),
                         }),
                         typ: log.schema(),
+                        pkey_indices: Vec::new(),
                     })
                 }))
             }
