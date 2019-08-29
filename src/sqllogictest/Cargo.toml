@@ -13,6 +13,7 @@ path = "lib.rs"
 
 [dependencies]
 byteorder = "*"
+chrono = "0.4"
 dataflow = { path = "../dataflow" }
 failure = "0.1.5"
 futures = "0.1"
@@ -23,7 +24,7 @@ materialize = { path = "../materialize" }
 md5 = "*"
 ordered-float = "*"
 ore = { path = "../ore" }
-postgres = "0.16.0-rc.2"
+postgres = { version = "0.16.0-rc.2", features = ["with-chrono-0_4"] }
 regex = "1"
 repr = { path = "../repr" }
 rusqlite = { version = "0.20", features = ["bundled"] }

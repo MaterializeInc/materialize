@@ -6,9 +6,12 @@
 pub mod decimal;
 pub mod regex;
 
+use std::fmt;
+
+use chrono::{NaiveDate, NaiveDateTime};
+use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 use self::decimal::Significand;
 use self::regex::Regex;
@@ -35,6 +38,10 @@ pub enum Datum {
     Float32(OrderedFloat<f32>),
     /// A 64-bit floating point number.
     Float64(OrderedFloat<f64>),
+    /// A Date
+    Date(NaiveDate),
+    /// A DateTime
+    Timestamp(NaiveDateTime),
     /// An exact decimal number, possibly with a fractional component, with up
     /// to 38 digits of precision.
     Decimal(Significand),
@@ -52,6 +59,45 @@ impl Datum {
             Datum::Null => true,
             _ => false,
         }
+    }
+
+    /// Create a Datum representing a Date
+    ///
+    /// Errors if the the combination of year/month/day is invalid
+    pub fn from_ymd(year: i32, month: u8, day: u8) -> Result<Datum, failure::Error> {
+        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
+            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?;
+        Ok(Datum::Date(d))
+    }
+
+    /// Create a Datum representing a Timestamp
+    ///
+    /// Errors if the the combination of year/month/day is invalid
+    pub fn from_ymd_hms_nano(
+        year: i32,
+        month: u8,
+        day: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+        nano: u32,
+    ) -> Result<Datum, failure::Error> {
+        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
+            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?
+            .and_hms_nano_opt(hour.into(), minute.into(), second.into(), nano)
+            .ok_or_else(|| {
+                format_err!(
+                    "Invalid time: {:02}:{:02}:{:02}.{} (in date {}-{:02}-{:02})",
+                    hour,
+                    minute,
+                    second,
+                    nano,
+                    year,
+                    month,
+                    day
+                )
+            })?;
+        Ok(Datum::Timestamp(d))
     }
 
     pub fn unwrap_bool(&self) -> bool {
@@ -104,6 +150,20 @@ impl Datum {
         }
     }
 
+    pub fn unwrap_date(&self) -> chrono::NaiveDate {
+        match self {
+            Datum::Date(d) => *d,
+            _ => panic!("Datum::unwrap_date called on {:?}", self),
+        }
+    }
+
+    pub fn unwrap_timestamp(&self) -> chrono::NaiveDateTime {
+        match self {
+            Datum::Timestamp(ts) => *ts,
+            _ => panic!("Datum::unwrap_timestamp called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_decimal(&self) -> Significand {
         match self {
             Datum::Decimal(d) => *d,
@@ -135,17 +195,31 @@ impl Datum {
     pub fn is_instance_of(&self, column_type: &ColumnType) -> bool {
         match (self, &column_type.scalar_type) {
             (Datum::Null, _) if column_type.nullable => true,
+            (Datum::Null, _) => false,
             (Datum::False, ScalarType::Bool) => true,
+            (Datum::False, _) => false,
             (Datum::True, ScalarType::Bool) => true,
+            (Datum::True, _) => false,
             (Datum::Int32(_), ScalarType::Int32) => true,
+            (Datum::Int32(_), _) => false,
             (Datum::Int64(_), ScalarType::Int64) => true,
+            (Datum::Int64(_), _) => false,
             (Datum::Float32(_), ScalarType::Float32) => true,
+            (Datum::Float32(_), _) => false,
             (Datum::Float64(_), ScalarType::Float64) => true,
+            (Datum::Float64(_), _) => false,
+            (Datum::Date(_), ScalarType::Date) => true,
+            (Datum::Date(_), _) => false,
+            (Datum::Timestamp(_), ScalarType::Timestamp) => true,
+            (Datum::Timestamp(_), _) => false,
             (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
+            (Datum::Decimal(_), _) => false,
             (Datum::Bytes(_), ScalarType::Bytes) => true,
+            (Datum::Bytes(_), _) => false,
             (Datum::String(_), ScalarType::String) => true,
+            (Datum::String(_), _) => false,
             (Datum::Regex(_), ScalarType::Regex) => true,
-            _ => false,
+            (Datum::Regex(_), _) => false,
         }
     }
 }

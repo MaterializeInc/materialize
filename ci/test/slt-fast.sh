@@ -11,6 +11,7 @@ set -euo pipefail
 
 
 tests=(
+    test/*.slt
     # test/sqlite/test/evidence/in1.test
     # test/sqlite/test/evidence/in2.test
     test/sqlite/test/evidence/slt_lang_aggfunc.test
@@ -40,7 +41,6 @@ tests=(
     # test/sqlite/test/select3.test
     # test/sqlite/test/select4.test
     test/sqlite/test/select5.test
-    test/*.slt
     # test/cockroach/aggregate.slt
     test/cockroach/alias_types.slt
     test/cockroach/alter_column_type.slt
@@ -125,7 +125,7 @@ tests=(
     test/cockroach/table.slt
     # test/cockroach/target_names.slt
     # test/cockroach/time.slt
-    # test/cockroach/timestamp.slt
+    test/cockroach/timestamp.slt
     test/cockroach/truncate.slt
     test/cockroach/tuple.slt
     # test/cockroach/typing.slt

@@ -75,8 +75,14 @@ pub fn validate_value_schema(schema: &str) -> Result<RelationType, Error> {
             let after = fields.iter().find(|f| f.name == "after");
             match (before, after) {
                 (Some(before), Some(after)) => {
-                    if !eq_ignoring_names(&before.schema, &after.schema) {
-                        bail!("source schema has mismatched 'before' and 'after' schemas")
+                    if let Some((left, right)) =
+                        first_mismatched_schema_types(&before.schema, &after.schema)
+                    {
+                        bail!(
+                            "source schema has mismatched 'before' and 'after' schemas: before={:?} after={:?}",
+                            left,
+                            right
+                        )
                     }
                     &before.schema
                 }
@@ -142,6 +148,9 @@ fn validate_schema_2(schema: &Schema) -> Result<ScalarType, Error> {
         Schema::Long => ScalarType::Int64,
         Schema::Float => ScalarType::Float32,
         Schema::Double => ScalarType::Float64,
+        Schema::Date => ScalarType::Date,
+        Schema::TimestampMilli => ScalarType::Timestamp,
+        Schema::TimestampMicro => ScalarType::Timestamp,
         Schema::Decimal {
             precision, scale, ..
         } => {
@@ -180,7 +189,9 @@ fn validate_schema_2(schema: &Schema) -> Result<ScalarType, Error> {
             }
         }
 
-        _ => bail!("Unsupported scalar type in schema: {:?}", schema),
+        Schema::Array(_) | Schema::Map(_) | Schema::Record { .. } => {
+            bail!("Unsupported scalar type in schema: {:?}", schema)
+        }
     })
 }
 
@@ -256,15 +267,22 @@ fn is_null(schema: &Schema) -> bool {
     }
 }
 
-fn eq_ignoring_names(a: &Schema, b: &Schema) -> bool {
+/// Return None if they are equal, otherwise return the first mismatched schema
+fn first_mismatched_schema_types<'a>(
+    a: &'a Schema,
+    b: &'a Schema,
+) -> Option<(&'a Schema, &'a Schema)> {
     match (a, b) {
-        (Schema::Null, Schema::Null) => true,
-        (Schema::Boolean, Schema::Boolean) => true,
-        (Schema::Int, Schema::Int) => true,
-        (Schema::Long, Schema::Long) => true,
-        (Schema::Float, Schema::Float) => true,
-        (Schema::Double, Schema::Double) => true,
-        (Schema::Bytes, Schema::Bytes) => true,
+        (Schema::Null, Schema::Null) => None,
+        (Schema::Boolean, Schema::Boolean) => None,
+        (Schema::Int, Schema::Int) => None,
+        (Schema::Long, Schema::Long) => None,
+        (Schema::Float, Schema::Float) => None,
+        (Schema::Double, Schema::Double) => None,
+        (Schema::Bytes, Schema::Bytes) => None,
+        (Schema::Date, Schema::Date) => None,
+        (Schema::TimestampMilli, Schema::TimestampMilli) => None,
+        (Schema::TimestampMicro, Schema::TimestampMicro) => None,
         (
             Schema::Decimal {
                 precision: p1,
@@ -276,22 +294,24 @@ fn eq_ignoring_names(a: &Schema, b: &Schema) -> bool {
                 scale: s2,
                 fixed_size: fs2,
             },
-        ) => p1 == p2 && s1 == s2 && fs1 == fs2,
-        (Schema::String, Schema::String) => true,
-        (Schema::Array(a), Schema::Array(b)) => eq_ignoring_names(&*a, &*b),
-        (Schema::Map(a), Schema::Map(b)) => eq_ignoring_names(&*a, &*b),
+        ) if p1 == p2 && s1 == s2 && fs1 == fs2 => None,
+        (Schema::String, Schema::String) => None,
+        (Schema::Array(a), Schema::Array(b)) => first_mismatched_schema_types(&*a, &*b),
+        (Schema::Map(a), Schema::Map(b)) => first_mismatched_schema_types(&*a, &*b),
         (Schema::Union(a), Schema::Union(b)) => a
             .variants()
             .iter()
             .zip(b.variants())
-            .all(|(a, b)| eq_ignoring_names(a, b)),
+            .flat_map(|(a, b)| first_mismatched_schema_types(a, b))
+            .nth(0),
         (Schema::Record { fields: a, .. }, Schema::Record { fields: b, .. }) => a
             .iter()
             .zip(b.iter())
-            .all(|(a, b)| eq_ignoring_names(&a.schema, &b.schema)),
-        (Schema::Enum { symbols: a, .. }, Schema::Enum { symbols: b, .. }) => a == b,
-        (Schema::Fixed { size: a, .. }, Schema::Fixed { size: b, .. }) => a == b,
-        _ => false,
+            .flat_map(|(a, b)| first_mismatched_schema_types(&a.schema, &b.schema))
+            .nth(0),
+        (Schema::Enum { symbols: a, .. }, Schema::Enum { symbols: b, .. }) if a == b => None,
+        (Schema::Fixed { size: a, .. }, Schema::Fixed { size: b, .. }) if a == b => None,
+        (left, right) => Some((left, right)),
     }
 }
 
@@ -389,13 +409,19 @@ impl Decoder {
                 Value::Long(i) => Ok(Datum::Int64(i)),
                 Value::Float(f) => Ok(Datum::Float32(f.into())),
                 Value::Double(f) => Ok(Datum::Float64(f.into())),
+                Value::Date(d) => Ok(Datum::Date(d)),
+                Value::Timestamp(d) => Ok(Datum::Timestamp(d)),
                 Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
                     Significand::from_twos_complement_be(&unscaled)?,
                 )),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
                 Value::String(s) => Ok(Datum::String(s)),
                 Value::Union(v) => value_to_datum(*v),
-                other => bail!("unsupported avro value: {:?}", other),
+                other @ Value::Fixed(..)
+                | other @ Value::Enum(..)
+                | other @ Value::Array(_)
+                | other @ Value::Map(_)
+                | other @ Value::Record(_) => bail!("unsupported avro value: {:?}", other),
             }
         };
 

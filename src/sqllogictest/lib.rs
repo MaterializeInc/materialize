@@ -43,15 +43,25 @@ use crate::postgres::Postgres;
 pub enum Type {
     Text,
     Integer,
+    Timestamp,
     Real,
     Bool,
     Oid,
 }
 
+/// How to sort some row outputs
+///
+/// See sqlite/about.wiki
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sort {
+    /// Do not sort. Default. signifier `nosort`
     No,
+    /// Sort each column in each row lexicographically. signifier: `rowsort`
     Row,
+    /// Sert each value as though they're in one big list. signifier: `valuesort`
+    ///
+    /// Every value in every column will end up being sorted with no respect
+    /// for columns or rows.
     Value,
 }
 
@@ -154,6 +164,7 @@ fn split_at<'a>(input: &mut &'a str, sep: &Regex) -> Result<&'a str, failure::Er
     }
 }
 
+/// Parse a query result type string into a vec of expected types
 fn parse_types(input: &str) -> Result<Vec<Type>, failure::Error> {
     input
         .chars()
@@ -293,11 +304,7 @@ pub fn parse_record<'a>(
                         if *mode == Mode::Cockroach {
                             let mut rows = vec![];
                             for line in vals {
-                                // Split on whitespace to normalize multiple
-                                // spaces to one space. This happens
-                                // unconditionally in Cockroach mode, regardless
-                                // of the sort option.
-                                let cols: Vec<_> = line.split_whitespace().collect();
+                                let cols = split_cols(&line, types.len());
                                 if sort != Sort::No && cols.len() != types.len() {
                                     // We can't check this condition for
                                     // Sort::No, because some tests use strings
@@ -386,6 +393,19 @@ pub fn parse_record<'a>(
     }
 }
 
+/// Split on whitespace to normalize multiple spaces to one space. This happens
+/// unconditionally in Cockroach mode, regardless of the sort option.
+///
+/// TODO: this doesn't have the whitespace-collapsing behavior for
+/// single-column values that cockroach relies on
+fn split_cols(line: &str, expected_columns: usize) -> Vec<&str> {
+    if expected_columns == 1 {
+        vec![line]
+    } else {
+        line.split_whitespace().collect()
+    }
+}
+
 pub fn parse_records(input: &str) -> impl Iterator<Item = Result<Record, failure::Error>> {
     lazy_static! {
         static ref DOUBLE_LINE_REGEX: Regex = Regex::new("(\n|\r\n)(\n|\r\n)").unwrap();
@@ -463,9 +483,9 @@ impl fmt::Display for Outcome<'_> {
         use Outcome::*;
         const INDENT: &str = "\n        ";
         match self {
-            Unsupported { error } => write!(f, "Unsupported: {0} ({0:?})", error),
-            ParseFailure { error } => write!(f, "ParseFailure: {:?}", error),
-            PlanFailure { error } => write!(f, "PlanFailure: {0} ({0:?})", error),
+            Unsupported { error } => write_err("Unsupported", error, f),
+            ParseFailure { error } => write_err("ParseFailure", error, f),
+            PlanFailure { error } => write_err("PlanFailure", error, f),
             UnexpectedPlanSuccess { expected_error } => write!(
                 f,
                 "UnexpectedPlanSuccess! expected error: {}",
@@ -531,7 +551,7 @@ impl fmt::Display for Outcome<'_> {
                 "OutputFailure!{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
                 INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
-            Bail { cause } => write!(f, "Bail! caused by: {}", cause),
+            Bail { cause } => write!(f, "Bail! {}", cause),
             Success => f.write_str("Success"),
         }
     }
@@ -622,6 +642,16 @@ impl Outcomes {
     }
 }
 
+/// Write an error and its causes in a common format
+fn write_err(kind: &str, error: &impl failure::AsFail, f: &mut fmt::Formatter) -> fmt::Result {
+    let error = error.as_fail();
+    write!(f, "{0}: {1} ({1:?})", kind, error)?;
+    for cause in error.iter_causes() {
+        write!(f, "\n    caused by: {}", cause)?;
+    }
+    Ok(())
+}
+
 trait RecordRunner {
     fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error>;
 }
@@ -685,11 +715,14 @@ fn format_row(
             (Type::Real, Datum::Int64(i)) => format!("{:.3}", i),
             (Type::Text, Datum::Int64(i)) => format!("{}", i),
             (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
+            (Type::Text, Datum::Date(d)) => d.to_string(),
+            (Type::Text, Datum::Timestamp(d)) => d.to_string(),
             other => panic!("Don't know how to format {:?}", other),
         });
     if mode == Mode::Cockroach && sort.yes() {
         row.flat_map(|s| {
-            s.split_whitespace()
+            split_cols(&s, slt_types.len())
+                .into_iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         })

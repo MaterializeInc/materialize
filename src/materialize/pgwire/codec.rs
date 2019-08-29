@@ -3,6 +3,13 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+//! Encoding/decoding of messages in pgwire. See "[Frontend/Backend Protocol:
+//! Message Formats][1]" in the PostgreSQL reference for the specification.
+//!
+//! See the parent [`pgwire`] module docs for higher level concerns.
+//!
+//! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
+
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
 use std::borrow::Cow;
@@ -115,6 +122,8 @@ impl Encoder for Codec {
                             FieldValue::Bool(false) => b"f"[..].into(),
                             FieldValue::Bool(true) => b"t"[..].into(),
                             FieldValue::Bytea(b) => b.into(),
+                            FieldValue::Date(d) => d.to_string().into_bytes().into(),
+                            FieldValue::Timestamp(ts) => ts.to_string().into_bytes().into(),
                             FieldValue::Int4(i) => format!("{}", i).into_bytes().into(),
                             FieldValue::Int8(i) => format!("{}", i).into_bytes().into(),
                             FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),
