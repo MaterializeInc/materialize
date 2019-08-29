@@ -116,7 +116,11 @@ impl JoinOrder {
 
 fn order_join(relations: usize, constraints: &[Vec<(usize, usize)>]) -> Vec<usize> {
     for i in 0..relations {
-        if let Some(order) = order_on_primary(relations, i, constraints) {
+        // TODO: Replace with primary key information.
+        // TODO: Determine how to encode "no primary key"; perhaps avoid this logic if so, or only invoke if a
+        // single relation lacks a primary key and use it as the start.
+        let primaries = vec![vec![0]; relations];
+        if let Some(order) = order_on_primary(relations, i, constraints, &primaries[..]) {
             return order;
         }
     }
@@ -147,24 +151,33 @@ fn order_join(relations: usize, constraints: &[Vec<(usize, usize)>]) -> Vec<usiz
     relation_expr_order
 }
 
+/// Attempt to order relations to join on primary keys.
+///
+/// This method attempts to produce an order on relations so that each join will involve at least a
+/// primary key, which would ensure that the number of records does not increase along the join. The
+/// attempt starts from a specified `start` relation, and greedily adds relations as long as any have
+/// primary keys that must be equal to some bound column.
 fn order_on_primary(
     relations: usize,
     start: usize,
     constraints: &[Vec<(usize, usize)>],
+    primary_keys: &[Vec<usize>],
 ) -> Option<Vec<usize>> {
     let mut order = vec![start];
     while order.len() < relations {
+        // Attempt to find a next relation, not yet in `order` and whose primary keys are all bound
+        // by columns of relations that are present in `order`.
         let candidate = (0..relations).filter(|i| !order.contains(i)).find(|i| {
-            constraints.iter().any(|variables| {
-                variables.contains(&(*i, 0)) && variables.iter().any(|(idx, _)| order.contains(idx))
+            primary_keys[*i].iter().all(|key| {
+                constraints.iter().any(|variables| {
+                    let contains_key = variables.contains(&(*i, *key));
+                    let contains_bound = variables.iter().any(|(idx, _)| order.contains(idx));
+                    contains_key && contains_bound
+                })
             })
         });
 
-        if let Some(next) = candidate {
-            order.push(next);
-        } else {
-            return None;
-        }
+        order.push(candidate?);
     }
     Some(order)
 }
