@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+mod decode;
+
 use avro_rs::schema::{Schema, SchemaFingerprint};
 use avro_rs::types::Value;
 use byteorder::{BigEndian, ByteOrder};
@@ -398,8 +400,8 @@ impl Decoder {
         if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
             // The record is laid out such that we can extract the `before` and
             // `after` fields without decoding the entire record.
-            before = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
-            after = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
+            before = decode::decode(&schema, &mut bytes)?;
+            after = decode::decode(&schema, &mut bytes)?;
         } else {
             let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
             match val {

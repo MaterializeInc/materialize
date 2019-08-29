@@ -17,6 +17,7 @@ harness = false
 avro-rs = "0.6.5"
 byteorder = "1.3"
 ccsr = { path = "../ccsr" }
+chrono = { version = "0.4" }
 failure = "0.1.5"
 sha2 = "0.8"
 ore = { path = "../ore" }
@@ -28,3 +29,4 @@ url = "1.7.2"
 [dev-dependencies]
 pretty_assertions = "0.6.1"
 criterion = "0.3"
+jemallocator = "0.3.0"

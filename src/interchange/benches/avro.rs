@@ -3,6 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
+
 use avro_rs::types::Value as AvroValue;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
