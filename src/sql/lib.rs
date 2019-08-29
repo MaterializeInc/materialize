@@ -32,10 +32,10 @@ use dataflow_types::{
     Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink, SinkConnector, Source,
     SourceConnector, View,
 };
-use expr::like::build_like_regex_from_string;
-use expr::{
+use expr::correlated::{
     AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
 };
+use expr::like::build_like_regex_from_string;
 use interchange::avro;
 use ore::collections::CollectionExt;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
@@ -278,8 +278,163 @@ impl Planner {
         })
     }
 
+<<<<<<< HEAD
     fn handle_create_dataflow(&mut self, stmt: Statement) -> Result<Plan, failure::Error> {
         match &stmt {
+=======
+    fn handle_drop_dataflow(&mut self, stmt: Statement) -> PlannerResult {
+        let (object_type, if_exists, names, cascade) = match stmt {
+            Statement::Drop {
+                object_type,
+                if_exists,
+                names,
+                cascade,
+            } => (object_type, if_exists, names, cascade),
+            _ => unreachable!(),
+        };
+        let names: Vec<String> = Result::from_iter(names.iter().map(extract_sql_object_name))?;
+        for name in &names {
+            match self.dataflows.get(name) {
+                Ok(dataflow) => {
+                    if !object_type_matches(object_type, dataflow) {
+                        bail!("{} is not of type {}", name, object_type);
+                    }
+                }
+                Err(e) => {
+                    if !if_exists {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        let mode = RemoveMode::from_cascade(cascade);
+        let mut removed = vec![];
+        for name in &names {
+            self.dataflows.remove(name, mode, &mut removed)?;
+        }
+        let sql_response = match object_type {
+            ObjectType::Source => SqlResponse::DroppedSource,
+            ObjectType::View => SqlResponse::DroppedView,
+            _ => bail!("unsupported SQL statement: DROP {}", object_type),
+        };
+        let removed = removed.iter().map(|d| d.name().to_owned()).collect();
+        Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
+    }
+
+    fn handle_peek(
+        &mut self,
+        connection_uuid: Uuid,
+        name: ObjectName,
+        immediate: bool,
+    ) -> PlannerResult {
+        let name = name.to_string();
+        let dataflow = self.dataflows.get(&name)?.clone();
+        Ok((
+            SqlResponse::SendRows {
+                typ: dataflow.typ().clone(),
+                rows: Vec::new(),
+                wait_for: WaitFor::Workers,
+            },
+            Some(DataflowCommand::Peek {
+                connection_uuid,
+                source: expr::RelationExpr::Get {
+                    name: dataflow.name().to_owned(),
+                    typ: dataflow.typ().clone(),
+                },
+                when: if immediate {
+                    PeekWhen::Immediately
+                } else {
+                    PeekWhen::EarliestSource
+                },
+            }),
+        ))
+    }
+
+    pub fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
+        let relation_expr = self.plan_query(&query)?.decorrelate()?;
+        Ok((
+            SqlResponse::SendRows {
+                typ: relation_expr.typ(),
+                rows: Vec::new(),
+                wait_for: WaitFor::Workers,
+            },
+            Some(DataflowCommand::Peek {
+                connection_uuid,
+                source: relation_expr,
+                when: PeekWhen::Immediately,
+            }),
+        ))
+    }
+}
+
+pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
+    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
+    Ok(match data_type {
+        DataType::Boolean => ScalarType::Bool,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
+        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
+        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
+        DataType::SmallInt => ScalarType::Int32,
+        DataType::Int | DataType::BigInt => ScalarType::Int64,
+        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
+        DataType::Decimal(precision, scale) => {
+            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
+            let scale = scale.unwrap_or(0);
+            if precision > MAX_DECIMAL_PRECISION.into() {
+                bail!(
+                    "decimal precision {} exceeds maximum precision {}",
+                    precision,
+                    MAX_DECIMAL_PRECISION
+                );
+            }
+            if scale > precision {
+                bail!("decimal scale {} exceeds precision {}", scale, precision);
+            }
+            ScalarType::Decimal(precision as u8, scale as u8)
+        }
+        DataType::Date => ScalarType::Date,
+        DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Time => ScalarType::Time,
+        DataType::Bytea => ScalarType::Bytes,
+        other => bail!("Unexpected SQL type: {:?}", other),
+    })
+}
+
+fn build_source(
+    schema: &SourceSchema,
+    kafka_addr: SocketAddr,
+    name: String,
+    topic: String,
+) -> Result<Source, failure::Error> {
+    let (raw_schema, schema_registry_url) = match schema {
+        SourceSchema::Raw(schema) => (schema.to_owned(), None),
+        SourceSchema::Registry(url) => {
+            // TODO(benesch): we need to fetch this schema
+            // asynchronously to avoid blocking the command
+            // processing thread.
+            let url: Url = url.parse()?;
+            let ccsr_client = ccsr::Client::new(url.clone());
+            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
+            (res.raw, Some(url))
+        }
+    };
+    let typ = avro::validate_schema(&raw_schema)?;
+    Ok(Source {
+        name,
+        connector: SourceConnector::Kafka(KafkaSourceConnector {
+            addr: kafka_addr,
+            topic,
+            raw_schema,
+            schema_registry_url,
+        }),
+        typ,
+    })
+}
+
+impl Planner {
+    fn plan_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
+        match stmt {
+>>>>>>> Hook up sql to correlated
             Statement::CreateView {
                 name,
                 columns,
@@ -290,7 +445,7 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let relation_expr = self.plan_query(query)?;
+                let relation_expr = self.plan_query(query)?.decorrelate()?;
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -687,12 +842,13 @@ impl Planner {
             for expr in &s.group_by {
                 let (expr, typ) = self.plan_expr(ctx, &expr)?;
                 match &expr {
-                    ScalarExpr::Column(i) => {
+                    ScalarExpr::Column(i) if *i >= 0 => {
                         // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
-                        if !group_key.contains(i) {
-                            group_key.push(*i);
-                            select_all_mapping.insert(*i, group_scope.len());
-                            group_scope.items.push(from_scope.items[*i].clone());
+                        let i = *i as usize;
+                        if !group_key.contains(&i) {
+                            group_key.push(i);
+                            select_all_mapping.insert(i, group_scope.len());
+                            group_scope.items.push(from_scope.items[i].clone());
                         }
                     }
                     _ => {
@@ -731,15 +887,6 @@ impl Planner {
                 relation_expr = relation_expr
                     .map(group_exprs)
                     .reduce(group_key.clone(), aggregates.clone());
-                if group_key.is_empty() {
-                    relation_expr = RelationExpr::OrDefault {
-                        input: Box::new(relation_expr),
-                        default: aggregates
-                            .iter()
-                            .map(|(agg, _)| agg.func.default())
-                            .collect(),
-                    }
-                }
                 (group_scope, aggregate_context, select_all_mapping)
             } else {
                 // if no GROUP BY, aggregates or having then all columns remain in scope
@@ -784,7 +931,8 @@ impl Planner {
                 {
                     match &expr {
                         ScalarExpr::Column(i)
-                            if typ.name == relation_type.column_types[*i].name =>
+                            if *i >= 0
+                                && typ.name == relation_type.column_types[*i as usize].name =>
                         {
                             // Note that if the column name changed (i.e.,
                             // because the select item was aliased), then we
@@ -793,9 +941,9 @@ impl Planner {
                             //
                             // TODO(benesch): this is a dumb restriction. If
                             // this optimization is actually important, perhaps
-                            // it should be come a proper query transformation
+                            // it should become a proper query transformation
                             // and we shouldn't bother trying to do it here.
-                            project_key.push(*i);
+                            project_key.push(*i as usize);
                         }
                         _ => {
                             project_key.push(group_scope.len() + project_exprs.len());
@@ -852,7 +1000,7 @@ impl Planner {
                     let j = select_all_mapping.get(&i).ok_or_else(|| {
                         format_err!("internal error: unable to resolve scope item {:?}", item)
                     })?;
-                    Ok((ScalarExpr::Column(*j), item.typ.clone()))
+                    Ok((ScalarExpr::Column(*j as isize), item.typ.clone()))
                 })
                 .collect::<Result<Vec<_>, _>>(),
             SelectItem::QualifiedWildcard(table_name) => {
@@ -871,7 +1019,7 @@ impl Planner {
                         let j = select_all_mapping.get(&i).ok_or_else(|| {
                             format_err!("internal error: unable to resolve scope item {:?}", item)
                         })?;
-                        Ok((ScalarExpr::Column(*j), item.typ.clone()))
+                        Ok((ScalarExpr::Column(*j as isize), item.typ.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>()
             }
@@ -936,57 +1084,36 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                |both, both_scope| Ok((both, both_scope)),
+                false,
+                false,
             ),
-            JoinOperator::LeftOuter(constraint) => left.let_(|left| {
-                self.plan_join_constraint(
-                    &constraint,
-                    left.clone(),
-                    left_scope,
-                    right,
-                    right_scope,
-                    |both, both_scope| {
-                        both.let_(|both| {
-                            Ok((both.clone().union(both.left_outer(left)), both_scope))
-                        })
-                    },
-                )
-            }),
-            JoinOperator::RightOuter(constraint) => right.let_(|right| {
-                self.plan_join_constraint(
-                    &constraint,
-                    left,
-                    left_scope,
-                    right.clone(),
-                    right_scope,
-                    |both, both_scope| {
-                        both.let_(|both| {
-                            Ok((both.clone().union(both.right_outer(right)), both_scope))
-                        })
-                    },
-                )
-            }),
-            JoinOperator::FullOuter(constraint) => left.let_(|left| {
-                right.let_(|right| {
-                    self.plan_join_constraint(
-                        &constraint,
-                        left.clone(),
-                        left_scope,
-                        right.clone(),
-                        right_scope,
-                        |both, both_scope| {
-                            both.let_(|both| {
-                                Ok((
-                                    both.clone()
-                                        .union(both.clone().left_outer(left))
-                                        .union(both.clone().right_outer(right)),
-                                    both_scope,
-                                ))
-                            })
-                        },
-                    )
-                })
-            }),
+            JoinOperator::LeftOuter(constraint) => self.plan_join_constraint(
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                true,
+                false,
+            ),
+            JoinOperator::RightOuter(constraint) => self.plan_join_constraint(
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                false,
+                true,
+            ),
+            JoinOperator::FullOuter(constraint) => self.plan_join_constraint(
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                true,
+                true,
+            ),
             JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
             // The remaining join types are MSSQL-specific. We are unlikely to
             // ever support them. The standard SQL equivalent is LATERAL, which
@@ -996,27 +1123,30 @@ impl Planner {
         }
     }
 
-    fn plan_join_constraint<'a, F>(
+    fn plan_join_constraint<'a>(
         &self,
         constraint: &'a JoinConstraint,
         left: RelationExpr,
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-        with_both: F,
-    ) -> Result<(RelationExpr, Scope), failure::Error>
-    where
-        F: FnOnce(RelationExpr, Scope) -> Result<(RelationExpr, Scope), failure::Error>,
-    {
+        include_left_outer: bool,
+        include_right_outer: bool,
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
+<<<<<<< HEAD
                 let product = left.product(right);
                 let mut product_scope = left_scope.product(right_scope);
+=======
+                let product_scope = left_scope.product(right_scope);
+>>>>>>> Hook up sql to correlated
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
                     aggregate_context: None,
                 };
+<<<<<<< HEAD
                 let (predicate, _) = self.plan_expr(ctx, expr)?;
                 for (l, r) in find_trivial_column_equivalences(&predicate) {
                     // When we can statically prove that two columns are
@@ -1037,6 +1167,17 @@ impl Planner {
                     product_scope.items[l].names.extend(right_names);
                 }
                 with_both(product.filter(vec![predicate]), product_scope)
+=======
+                let (on, _) = self.plan_expr(ctx, expr)?;
+                let joined = RelationExpr::Join {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    on,
+                    include_left_outer,
+                    include_right_outer,
+                };
+                Ok((joined, product_scope))
+>>>>>>> Hook up sql to correlated
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
                 &column_names,
@@ -1044,7 +1185,8 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                with_both,
+                include_left_outer,
+                include_right_outer,
             ),
             JoinConstraint::Natural => {
                 let mut column_names = vec![];
@@ -1066,25 +1208,24 @@ impl Planner {
                     left_scope,
                     right,
                     right_scope,
-                    with_both,
+                    include_left_outer,
+                    include_right_outer,
                 )
             }
         }
     }
 
     // See page 440 of ANSI SQL 2016 spec for details on scoping of using/natural joins
-    fn plan_using_constraint<F>(
+    fn plan_using_constraint(
         &self,
         column_names: &[String],
         left: RelationExpr,
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-        with_both: F,
-    ) -> Result<(RelationExpr, Scope), failure::Error>
-    where
-        F: FnOnce(RelationExpr, Scope) -> Result<(RelationExpr, Scope), failure::Error>,
-    {
+        include_left_outer: bool,
+        include_right_outer: bool,
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
         let mut join_exprs = vec![];
         let mut map_exprs = vec![];
         let mut new_items = vec![];
@@ -1096,14 +1237,14 @@ impl Planner {
             join_exprs.push(ScalarExpr::CallBinary {
                 func: BinaryFunc::Eq,
                 expr1: Box::new(ScalarExpr::Column(l)),
-                expr2: Box::new(ScalarExpr::Column(left_scope.len() + r)),
+                expr2: Box::new(ScalarExpr::Column((left_scope.len() as isize) + r)),
             });
             map_exprs.push((
                 ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![
                         ScalarExpr::Column(l),
-                        ScalarExpr::Column(left_scope.len() + r),
+                        ScalarExpr::Column((left_scope.len() as isize) + r),
                     ],
                 },
                 typ.clone(),
@@ -1112,11 +1253,12 @@ impl Planner {
             names.extend(r_item.names.clone());
             new_items.push(ScopeItem { names, typ });
             dropped_columns.insert(l);
-            dropped_columns.insert(left_scope.len() + r);
+            dropped_columns.insert((left_scope.len() as isize) + r);
         }
         let project_key =
             // coalesced join columns
             (0..map_exprs.len())
+<<<<<<< HEAD
                 .map(|i| left_scope.len() + right_scope.len() + i)
                 // other columns that weren't joined
                 .chain(
@@ -1127,9 +1269,27 @@ impl Planner {
         let both = left.product(right).filter(join_exprs);
         let both_scope = left_scope.product(right_scope);
         let (both, mut both_scope) = with_both(both, both_scope)?;
+=======
+            .map(|i| left_scope.len() + right_scope.len() + i)
+            // other columns that weren't joined
+            .chain(
+                (0..(left_scope.len() + right_scope.len()))
+                    .filter(|i| !dropped_columns.contains(&(*i as isize))),
+            )
+            .collect::<Vec<_>>();
+        let mut both_scope = left_scope.product(right_scope);
+>>>>>>> Hook up sql to correlated
         both_scope.items.extend(new_items);
         let both_scope = both_scope.project(&project_key);
-        let both = both.map(map_exprs).project(project_key);
+        let both = RelationExpr::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+            on: ScalarExpr::Literal(Datum::True),
+            include_left_outer,
+            include_right_outer,
+        }
+        .map(map_exprs)
+        .project(project_key);
         Ok((both, both_scope))
     }
 
@@ -1229,7 +1389,7 @@ impl Planner {
         Ok((
             AggregateExpr {
                 func,
-                expr,
+                expr: Box::new(expr),
                 distinct: sql_func.distinct,
             },
             typ,
@@ -1250,7 +1410,7 @@ impl Planner {
                         sql_func,
                     )
                 })?;
-                Ok((ScalarExpr::Column(*i), typ.clone()))
+                Ok((ScalarExpr::Column(*i as isize), typ.clone()))
             } else {
                 bail!("aggregate functions are not allowed in {}", ctx.name);
             }
@@ -2212,13 +2372,13 @@ impl Scope {
     fn resolve_column<'a>(
         &'a self,
         column_name: &str,
-    ) -> Result<(usize, &'a ScopeItem), failure::Error> {
+    ) -> Result<(isize, &'a ScopeItem), failure::Error> {
         let mut results = self
             .iter_names()
             .filter(|(_pos, _item, name)| name.column_name.as_deref() == Some(column_name));
         if let Some((pos, item, _name)) = results.next() {
             if results.find(|(i, _item, _name)| pos != *i).is_none() {
-                Ok((pos, item))
+                Ok((pos as isize, item))
             } else {
                 bail!("column name {} is ambiguous", column_name)
             }
@@ -2231,13 +2391,13 @@ impl Scope {
         &'a self,
         table_name: &str,
         column_name: &str,
-    ) -> Result<(usize, &'a ScopeItem), failure::Error> {
+    ) -> Result<(isize, &'a ScopeItem), failure::Error> {
         let mut results = self.iter_names().filter(|(_pos, _item, name)| {
             name.table_name == table_name && name.column_name.as_deref() == Some(column_name)
         });
         if let Some((pos, item, _name)) = results.next() {
             if results.find(|(i, _item, _name)| pos != *i).is_none() {
-                Ok((pos, item))
+               Ok((pos as isize, item))
             } else {
                 bail!("column name {}.{} is ambiguous", table_name, column_name)
             }

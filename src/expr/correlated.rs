@@ -3,13 +3,19 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 use repr::*;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+// these happen to be unchanged at the moment, but there might be additions later
+pub use super::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
+
 #[derive(Debug, Clone)]
 pub enum RelationExpr {
+    Constant {
+        rows: Vec<Vec<Datum>>,
+        typ: RelationType,
+    },
     Get {
         name: String,
         typ: RelationType,
@@ -83,30 +89,12 @@ pub enum ScalarExpr {
 
 #[derive(Debug, Clone)]
 pub struct AggregateExpr {
-    func: AggregateFunc,
-    expr: Box<ScalarExpr>,
-    distinct: bool,
+    pub func: AggregateFunc,
+    pub expr: Box<ScalarExpr>,
+    pub distinct: bool,
 }
 
 impl RelationExpr {
-    fn arity(&self) -> usize {
-        use RelationExpr::*;
-        match self {
-            Get { typ, .. } => typ.column_types.len(),
-            Project { outputs, .. } => outputs.len(),
-            Map { input, .. } => input.arity() + 1,
-            Filter { input, .. } => input.arity(),
-            Join { left, right, .. } => left.arity() + right.arity(),
-            Reduce {
-                group_key,
-                aggregates,
-                ..
-            } => group_key.len() + aggregates.len(),
-            Distinct { input } => input.arity(),
-            Union { left, .. } => left.arity(),
-        }
-    }
-
     // TODO(jamii) use offset fix from ScalarExpr::applied_to
     fn used_outer_columns(&self) -> HashSet<isize> {
         let mut used_outer_columns = HashSet::new();
@@ -117,6 +105,7 @@ impl RelationExpr {
         ) {
             use RelationExpr::*;
             match expr {
+                Constant { .. } => (),
                 Get { .. } => (),
                 Project { input, .. } => {
                     visit_relation(&*input, num_outer_columns, used_outer_columns);
@@ -205,7 +194,7 @@ impl RelationExpr {
 
 impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
-    pub fn lower(self) -> Result<super::RelationExpr, failure::Error> {
+    pub fn decorrelate(self) -> Result<super::RelationExpr, failure::Error> {
         self.applied_to(super::RelationExpr::Constant {
             rows: vec![vec![]],
             typ: RelationType {
@@ -219,6 +208,7 @@ impl RelationExpr {
         use self::RelationExpr::*;
         use super::RelationExpr as SR;
         Ok(match self {
+            Constant { rows, typ } => outer.product(SR::Constant { rows, typ }),
             Get { name, typ } => outer.product(SR::Get { name, typ }),
             Project { input, outputs } => {
                 let outer_arity = outer.arity();
@@ -269,6 +259,7 @@ impl RelationExpr {
                 include_right_outer,
             } => {
                 if include_left_outer || include_right_outer {
+                    // TODO(jamii) handle these with Branch
                     unimplemented!();
                 }
                 let outer_arity = outer.arity();
@@ -413,7 +404,7 @@ impl ScalarExpr {
                 }
             }
             Exists(expr) => {
-                // TODO(jamii) can optimize this using expr.used_inner_columns as key
+                // TODO(jamii) can optimize this using expr.used_outer_columns as key
                 let inner_name = format!("inner_{}", Uuid::new_v4());
                 let get_inner = SR::Get {
                     name: inner_name.clone(),
@@ -512,7 +503,7 @@ mod test {
             )],
         };
         assert_eq!(
-            expr.lower().unwrap(),
+            expr.decorrelate().unwrap(),
             SR::Get {
                 name: "foo".to_owned(),
                 typ: RelationType {
@@ -524,5 +515,183 @@ mod test {
                 },
             }
         );
+    }
+}
+
+impl RelationExpr {
+    pub fn typ(&self) -> RelationType {
+        match self {
+            RelationExpr::Constant { typ, .. } => typ.clone(),
+            RelationExpr::Get { typ, .. } => typ.clone(),
+            RelationExpr::Project { input, outputs } => {
+                let input_typ = input.typ();
+                RelationType {
+                    column_types: outputs
+                        .iter()
+                        .map(|&i| input_typ.column_types[i].clone())
+                        .collect(),
+                }
+            }
+            RelationExpr::Map { input, scalars } => {
+                let mut typ = input.typ();
+                for (_, column_typ) in scalars {
+                    typ.column_types.push(column_typ.clone());
+                }
+                typ
+            }
+            RelationExpr::Filter { input, .. } => input.typ(),
+            RelationExpr::Join { left, right, .. } => RelationType {
+                column_types: left
+                    .typ()
+                    .column_types
+                    .into_iter()
+                    .chain(right.typ().column_types)
+                    .collect(),
+            },
+            RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => {
+                let input_typ = input.typ();
+                let mut column_types = group_key
+                    .iter()
+                    .map(|&i| input_typ.column_types[i].clone())
+                    .collect::<Vec<_>>();
+                for (_, column_typ) in aggregates {
+                    column_types.push(column_typ.clone());
+                }
+                RelationType { column_types }
+            }
+            RelationExpr::Distinct { input } => input.typ(),
+            RelationExpr::Union { left, right } => {
+                let left_typ = left.typ();
+                let right_typ = right.typ();
+                assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
+                RelationType {
+                    column_types: left_typ
+                        .column_types
+                        .iter()
+                        .zip(right_typ.column_types.iter())
+                        .map(|(l, r)| l.union(r))
+                        .collect::<Result<Vec<_>, _>>()
+                        .unwrap(),
+                }
+            }
+        }
+    }
+
+    pub fn arity(&self) -> usize {
+        self.typ().column_types.len()
+    }
+
+    pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
+        unimplemented!()
+        // RelationExpr::Constant { rows, typ }
+    }
+
+    pub fn project(self, outputs: Vec<usize>) -> Self {
+        RelationExpr::Project {
+            input: Box::new(self),
+            outputs,
+        }
+    }
+
+    pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
+        RelationExpr::Map {
+            input: Box::new(self),
+            scalars,
+        }
+    }
+
+    pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
+        RelationExpr::Filter {
+            input: Box::new(self),
+            predicates,
+        }
+    }
+
+    pub fn product(self, right: Self) -> Self {
+        RelationExpr::Join {
+            left: Box::new(self),
+            right: Box::new(right),
+            on: ScalarExpr::Literal(Datum::True),
+            include_left_outer: false,
+            include_right_outer: false,
+        }
+    }
+
+    pub fn reduce(
+        self,
+        group_key: Vec<usize>,
+        aggregates: Vec<(AggregateExpr, ColumnType)>,
+    ) -> Self {
+        RelationExpr::Reduce {
+            input: Box::new(self),
+            group_key,
+            aggregates,
+        }
+    }
+
+    pub fn or_default(self, default: Vec<Datum>) -> Self {
+        unimplemented!()
+    }
+
+    pub fn negate(self) -> Self {
+        unimplemented!()
+    }
+
+    pub fn distinct(self) -> Self {
+        RelationExpr::Distinct {
+            input: Box::new(self),
+        }
+    }
+
+    pub fn threshold(self) -> Self {
+        unimplemented!()
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        RelationExpr::Union {
+            left: Box::new(self),
+            right: Box::new(other),
+        }
+    }
+}
+
+impl ScalarExpr {
+    pub fn columns(is: &[isize]) -> Vec<ScalarExpr> {
+        is.iter().map(|i| ScalarExpr::Column(*i)).collect()
+    }
+
+    pub fn column(column: isize) -> Self {
+        ScalarExpr::Column(column)
+    }
+
+    pub fn literal(datum: Datum) -> Self {
+        ScalarExpr::Literal(datum)
+    }
+
+    pub fn call_unary(self, func: UnaryFunc) -> Self {
+        ScalarExpr::CallUnary {
+            func,
+            expr: Box::new(self),
+        }
+    }
+
+    pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
+        ScalarExpr::CallBinary {
+            func,
+            expr1: Box::new(self),
+            expr2: Box::new(other),
+        }
+    }
+
+    pub fn if_then_else(self, t: Self, f: Self) -> Self {
+        ScalarExpr::If {
+            cond: Box::new(self),
+            then: Box::new(t),
+            els: Box::new(f),
+        }
     }
 }
