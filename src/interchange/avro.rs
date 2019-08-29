@@ -47,14 +47,14 @@ pub fn validate_key_schema(
                     {
                         indices.push(index);
                     } else {
-                        bail!(
-                            "Key and value do not have same type! Key: {}, value: {}",
-                            key_column.scalar_type,
-                            value_column.scalar_type
-                        );
+                        bail(
+                            "key and value column types do not match: key {:?} vs. value {:?}",
+                            key_column,
+                            value_column,
+                        )
                     }
                 }
-                None => bail!("Value schema missing primary key: {}", name),
+                None => bail!("Value schema missing primary key column: {}", name),
             }
         }
     }
