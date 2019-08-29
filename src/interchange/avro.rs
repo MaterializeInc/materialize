@@ -16,27 +16,50 @@ use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 
-pub fn validate_key_schema_get_pkey_indices(key_schema: &str, validated_value_schema: &RelationType) -> Result<Vec<usize>, Error> {
-    let key_schema = parse_schema(key_schema)?;
-
-    let mut value_indices = HashMap::new();
-    for (i, columns) in validated_value_schema.column_types.iter().enumerate() {
-        if let Some(name) = &columns.name {
-            value_indices.insert(name, i);
+/// Validates an Avro key schema for use as a source.
+///
+/// An Avro key schema is valid for our purposes iff every field
+/// mentioned in the key schema exists in the specified relation
+/// type with the same type. If the schema is valid, returns a
+/// vector describing the order and position of the primary key
+/// columns.
+pub fn validate_key_schema(
+    key_schema: &str,
+    validated_value_schema: &RelationType,
+) -> Result<Vec<usize>, Error> {
+    let mut vname_to_value_column = HashMap::new();
+    for (i, column) in validated_value_schema.column_types.iter().enumerate() {
+        if let Some(name) = &column.name {
+            vname_to_value_column.insert(name, (i, column));
         }
     }
 
+    let key_schema = parse_schema(key_schema)?;
     let mut indices = Vec::new();
-    if let Schema::Record {fields, ..} = key_schema {
-        for field in fields {
-            match value_indices.get(&field.name) {
-                Some(index) => indices.push(index.clone()),
-                None => bail!("Value schema missing primary key: {}", &field.name),
+    for key_column in validate_schema_1(&key_schema)?.column_types.iter() {
+        if let Some(name) = &key_column.name {
+            // The code around ColumnTypes
+            let value = vname_to_value_column.get(name);
+            match value {
+                Some((index, value_column)) => {
+                    if key_column.scalar_type == value_column.scalar_type
+                        && key_column.nullable == value_column.nullable
+                    {
+                        indices.push(index);
+                    } else {
+                        bail!(
+                            "Key and value do not have same type! Key: {}, value: {}",
+                            key_column.scalar_type,
+                            value_column.scalar_type
+                        );
+                    }
+                }
+                None => bail!("Value schema missing primary key: {}", name),
             }
         }
     }
 
-    Ok(indices)
+    Ok(Vec::new())
 }
 
 /// Converts an Apache Avro schema into a [`repr::RelationType`].
@@ -88,7 +111,11 @@ pub fn validate_value_schema(schema: &str) -> Result<RelationType, Error> {
     };
 
     // The diff envelope is sane. Convert the actual record schema for the row.
-    match row_schema {
+    validate_schema_1(row_schema)
+}
+
+fn validate_schema_1(schema: &Schema) -> Result<RelationType, Error> {
+    match schema {
         Schema::Record { fields, .. } => {
             let column_types = fields
                 .iter()
@@ -96,18 +123,18 @@ pub fn validate_value_schema(schema: &str) -> Result<RelationType, Error> {
                     Ok(ColumnType {
                         name: Some(f.name.clone()),
                         nullable: is_nullable(&f.schema),
-                        scalar_type: validate_schema_1(&f.schema)?,
+                        scalar_type: validate_schema_2(&f.schema)?,
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
 
             Ok(RelationType { column_types })
         }
-        _ => bail!("row schemas must be records, got: {:?}", row_schema),
+        _ => bail!("row schemas must be records, got: {:?}", schema),
     }
 }
 
-fn validate_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
+fn validate_schema_2(schema: &Schema) -> Result<ScalarType, Error> {
     Ok(match schema {
         Schema::Null => ScalarType::Null,
         Schema::Boolean => ScalarType::Bool,
@@ -141,7 +168,7 @@ fn validate_schema_1(schema: &Schema) -> Result<ScalarType, Error> {
                     Ok(ColumnType {
                         name: None,
                         nullable: is_nullable(s),
-                        scalar_type: validate_schema_1(s)?,
+                        scalar_type: validate_schema_2(s)?,
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?;

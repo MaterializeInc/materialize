@@ -2105,8 +2105,8 @@ fn build_source(
 
     let typ = avro::validate_value_schema(&value_schema)?;
     let pkey_indices = match key_schema {
-        Some(key_schema) => avro::validate_key_schema_get_pkey_indices(&key_schema, &typ)?,
-        None => Vec::new() // Right now, this will only happen for SourceSchema::Raw input. See above TODO.
+        Some(key_schema) => avro::validate_key_schema(&key_schema, &typ)?,
+        None => Vec::new(), // Right now, this will only happen for SourceSchema::Raw input. See above TODO.
     };
 
     Ok(Source {
@@ -2118,7 +2118,7 @@ fn build_source(
             schema_registry_url,
         }),
         typ,
-        pkey_indices
+        pkey_indices,
     })
 }
 
