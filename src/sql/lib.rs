@@ -1921,7 +1921,7 @@ where
     C: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
-    let out_typ = find_output_type(&exprs);
+    let out_typ = find_output_type(&exprs.iter().map(|(_, typ)| typ).collect::<Vec<_>>())?;
     let mut out = Vec::new();
     for (expr, typ) in exprs {
         match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
@@ -1946,8 +1946,8 @@ where
 ///
 /// - `1i32 + 2i64` -> `i64`
 /// - `1i64 + Decimal(2)` -> `Decimal`
-fn find_output_type(exprs: &[(ScalarExpr, ColumnType)]) -> ColumnType {
-    assert!(!exprs.is_empty());
+fn find_output_type(col_typs: &[&ColumnType]) -> Result<ColumnType, failure::Error> {
+    assert!(!col_typs.is_empty());
     let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
         ScalarType::Null => 0,
         ScalarType::Int32 => 1,
@@ -1955,16 +1955,57 @@ fn find_output_type(exprs: &[(ScalarExpr, ColumnType)]) -> ColumnType {
         ScalarType::Decimal(_, _) => 3,
         ScalarType::Float32 => 4,
         ScalarType::Float64 => 5,
-        _ => 6,
+        // Timelike, really kind of a different category
+        ScalarType::IntervalDuration => 6,
+        ScalarType::IntervalMonths => 7,
+        ScalarType::Date => 8,
+        ScalarType::Timestamp => 9,
+        _ => 10,
     };
-    let max_scalar_type = exprs
-        .iter()
-        .map(|(_expr, typ)| &typ.scalar_type)
-        .max_by_key(|scalar_type| scalar_type_prec(scalar_type))
-        .unwrap()
-        .clone();
-    let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
-    ColumnType::new(max_scalar_type).nullable(nullable)
+    let nullable = col_typs.iter().any(|typ| typ.nullable);
+    let exprs_ = col_typs.iter().map(|typ| &typ.scalar_type);
+
+    //  All the things we need to track to make sure a promotion makes sense
+    let mut saw_time = false;
+    let mut saw_date = false;
+    let mut saw_months = false;
+    let mut saw_dur = false;
+    let mut saw_other = false;
+    let mut max: Option<&ScalarType> = None;
+    for scalar_type in exprs_ {
+        match scalar_type {
+            ScalarType::Date => saw_date = true,
+            ScalarType::Timestamp => saw_time = true,
+            ScalarType::IntervalMonths => saw_months = true,
+            ScalarType::IntervalDuration => saw_dur = true,
+            _ => saw_other = true,
+        }
+        if let Some(m_scalar) = max {
+            if scalar_type_prec(&scalar_type) > scalar_type_prec(&m_scalar) {
+                max = Some(scalar_type);
+            }
+        } else {
+            max = Some(scalar_type);
+        }
+    }
+    if saw_other && (saw_months || saw_dur || saw_time || saw_date) {
+        let msg: Vec<_> = col_typs
+            .iter()
+            .map(|typ| &typ.scalar_type)
+            .map(|s| s.to_string())
+            .collect();
+        bail!(
+            "Can't combine numeric and timelike fields: {}",
+            msg.join(" ")
+        );
+    }
+    if saw_months && saw_dur {
+        bail!("Can't combine monthlike and durationlike intervals");
+    }
+    if saw_time && saw_date {
+        bail!("can't combine dates and timestamps");
+    }
+    Ok(ColumnType::new(max.unwrap().clone()).nullable(nullable))
 }
 
 /// Figure out whether we need to cast a value in order for an operation to succeed
@@ -2393,5 +2434,52 @@ impl RelationExprExt for RelationExpr {
             body: Box::new(body),
         };
         Ok((expr, scope))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn ct(s: ScalarType) -> ColumnType {
+        ColumnType::new(s)
+    }
+
+    #[test]
+    fn find_output_type_chooses_higher_precision() {
+        use ScalarType::*;
+        let col_expected = &[
+            ([&ct(Int32), &ct(Int64)], ct(Int64)),
+            ([&ct(Int64), &ct(Int32)], ct(Int64)),
+            ([&ct(Int64), &ct(Decimal(10, 10))], ct(Decimal(10, 10))),
+            ([&ct(Int64), &ct(Float32)], ct(Float32)),
+            ([&ct(Float32), &ct(Float64)], ct(Float64)),
+            // timelikes
+            ([&ct(Date), &ct(IntervalMonths)], ct(Date)),
+            ([&ct(IntervalMonths), &ct(Date)], ct(Date)),
+            ([&ct(Timestamp), &ct(IntervalMonths)], ct(Timestamp)),
+            ([&ct(Timestamp), &ct(IntervalDuration)], ct(Timestamp)),
+        ];
+
+        for (cols, expected) in col_expected {
+            assert_eq!(find_output_type(cols).unwrap(), *expected);
+        }
+    }
+
+    #[test]
+    fn find_output_type_rejects_inconsistent_expressions() {
+        use ScalarType::*;
+        let invalids = &[
+            [&ct(IntervalMonths), &ct(IntervalDuration)],
+            [&ct(Int32), &ct(IntervalDuration)],
+            [&ct(Int32), &ct(Date)],
+            [&ct(Int32), &ct(Timestamp)],
+            [&ct(Date), &ct(Timestamp)],
+        ];
+
+        for cols in invalids {
+            eprintln!("{:?}", cols);
+            assert!(find_output_type(cols).is_err());
+        }
     }
 }
