@@ -47,7 +47,7 @@ pub fn validate_key_schema(
                     {
                         indices.push(index);
                     } else {
-                        bail(
+                        bail!(
                             "key and value column types do not match: key {:?} vs. value {:?}",
                             key_column,
                             value_column,
