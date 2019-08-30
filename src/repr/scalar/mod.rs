@@ -6,12 +6,12 @@
 pub mod decimal;
 pub mod regex;
 
-use std::fmt;
-
 use chrono::{NaiveDate, NaiveDateTime};
 use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::fmt::Write;
 
 use self::decimal::Significand;
 use self::regex::Regex;
@@ -315,6 +315,43 @@ where
             d.into()
         } else {
             Datum::Null
+        }
+    }
+}
+
+impl fmt::Display for Datum {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Datum::Null => f.write_str("null"),
+            Datum::True => f.write_str("true"),
+            Datum::False => f.write_str("false"),
+            Datum::Int32(num) => write!(f, "{}", num),
+            Datum::Int64(num) => write!(f, "{}", num),
+            Datum::Float32(num) => write!(f, "{}", num),
+            Datum::Float64(num) => write!(f, "{}", num),
+            Datum::Date(d) => write!(f, "{}", d),
+            Datum::Timestamp(t) => write!(f, "{}", t),
+            Datum::Decimal(num) => write!(f, "{:?}", num),
+            Datum::Bytes(dat) => {
+                f.write_str("0x")?;
+                for b in dat.iter() {
+                    write!(f, "{:02x}", b)?;
+                }
+                Ok(())
+            }
+            Datum::String(s) => {
+                f.write_str("\"")?;
+                for c in s.chars() {
+                    if c == '"' {
+                        f.write_str("\\\"")?;
+                    } else {
+                        f.write_char(c)?;
+                    }
+                }
+                f.write_str("\"")
+            }
+            // A Regex<Regex<Regex>>? Oh my!
+            Datum::Regex(Regex(rex)) => write!(f, "/{}/", rex),
         }
     }
 }
