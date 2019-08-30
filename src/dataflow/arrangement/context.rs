@@ -14,6 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
+use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
 
@@ -25,8 +26,13 @@ type Diff = isize;
 // Local type definition to avoid the horror in signatures.
 type Arrangement<S, V> =
     Arranged<S, TraceValHandle<Vec<V>, Vec<V>, <S as ScopeParent>::Timestamp, Diff>>;
-type ArrangementImport<S, V, T> =
-    Arranged<S, TraceEnter<TraceValHandle<Vec<V>, Vec<V>, T, Diff>, <S as ScopeParent>::Timestamp>>;
+type ArrangementImport<S, V, T> = Arranged<
+    S,
+    TraceEnter<
+        TraceFrontier<TraceValHandle<Vec<V>, Vec<V>, T, Diff>>,
+        <S as ScopeParent>::Timestamp,
+    >,
+>;
 
 /// Dataflow-local collections and arrangements.
 ///

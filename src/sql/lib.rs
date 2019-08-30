@@ -502,6 +502,7 @@ impl Planner {
                     name: extract_sql_object_name(name)?,
                     relation_expr,
                     typ,
+                    as_of: None,
                 })])
             }
             Statement::CreateSource {

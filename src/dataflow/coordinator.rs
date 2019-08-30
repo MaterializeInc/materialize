@@ -148,6 +148,7 @@ impl CommandCoordinator {
                             name: name.clone(),
                             relation_expr: source,
                             typ,
+                            as_of: Some(vec![timestamp.clone()]),
                         })]);
                     sequencer.push(create_command);
                     (name, true)
