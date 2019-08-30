@@ -14,7 +14,7 @@ use timely::scheduling::activate::SyncActivator;
 
 use super::util::source;
 use super::SharedCapability;
-use crate::types::{Diff, KafkaSourceConnector, Timestamp};
+use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
 use interchange::avro;
 use repr::Datum;
 

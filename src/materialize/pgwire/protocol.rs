@@ -20,7 +20,7 @@ use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::queue;
-use dataflow::{Exfiltration, Update};
+use dataflow_types::{Exfiltration, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
 use sql::{Session, SqlResponse, WaitFor};

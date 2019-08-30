@@ -6,13 +6,14 @@
 //! A trivial single-node command queue that doesn't store state at all.
 
 use dataflow::DataflowCommand;
+use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::Stream;
 
 use super::{Command, Response};
 
 pub fn serve(
-    logging_config: Option<&dataflow::logging::LoggingConfiguration>,
+    logging_config: Option<&LoggingConfig>,
     cmd_rx: UnboundedReceiver<Command>,
     dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,

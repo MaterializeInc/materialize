@@ -10,7 +10,7 @@ use differential_dataflow::trace::implementations::ord::OrdKeySpine;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use std::collections::HashMap;
 
-use crate::types::{Diff, Timestamp};
+use dataflow_types::{Diff, Timestamp};
 use repr::Datum;
 
 pub type KeysOnlySpine = OrdKeySpine<Vec<Datum>, Timestamp, Diff>;

@@ -4,6 +4,7 @@ members = [
     "src/ccsr",
     "src/dataflow",
     "src/dataflow-bin",
+    "src/dataflow-types",
     "src/expr",
     "src/interchange",
     "src/metastore",

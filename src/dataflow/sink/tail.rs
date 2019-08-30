@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::exfiltrate::Exfiltrator;
-use crate::{Diff, TailSinkConnector, Timestamp, Update};
+use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use repr::Datum;

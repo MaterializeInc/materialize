@@ -16,16 +16,17 @@ use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
 
-use super::sink;
-use super::source;
-use super::source::SharedCapability;
-use super::types::*;
-use crate::arrangement::TraceManager;
-use crate::arrangement::{context::ArrangementFlavor, Context};
-use crate::exfiltrate::Exfiltrator;
+use dataflow_types::*;
 use expr::RelationExpr;
 use ore::mpmc::Mux;
 use repr::Datum;
+
+use super::sink;
+use super::source;
+use super::source::SharedCapability;
+use crate::arrangement::TraceManager;
+use crate::arrangement::{context::ArrangementFlavor, Context};
+use crate::exfiltrate::Exfiltrator;
 
 pub enum InputCapability {
     External(SharedCapability),

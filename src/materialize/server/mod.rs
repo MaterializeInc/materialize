@@ -17,8 +17,9 @@ use tokio::prelude::*;
 
 use crate::pgwire;
 use crate::queue;
-use dataflow::logging::LoggingConfiguration;
-use dataflow::{self, DataflowCommand, Exfiltration, ExfiltratorConfig};
+use dataflow::{self, DataflowCommand, ExfiltratorConfig};
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::Exfiltration;
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
@@ -121,9 +122,7 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         None
     };
 
-    let logging_config = config
-        .logging_granularity
-        .map(|d| LoggingConfiguration::new(d));
+    let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
 
     // Construct timely dataflow instance.
     let local_input_mux = Mux::default();

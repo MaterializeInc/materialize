@@ -22,9 +22,10 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
-use dataflow::{
-    self, Dataflow, DataflowCommand, Exfiltration, LocalInput, LocalSourceConnector, PeekWhen,
-    Source, SourceConnector, Update,
+use dataflow::{self, DataflowCommand};
+use dataflow_types::{
+    self, Dataflow, Exfiltration, LocalInput, LocalSourceConnector, PeekWhen, Source,
+    SourceConnector, Update,
 };
 use ore::collections::CollectionExt;
 use ore::mpmc::Mux;

@@ -10,12 +10,10 @@ mod exfiltrate;
 mod render;
 mod sink;
 mod source;
-mod types;
 
 pub mod coordinator;
 pub mod logging;
 pub mod server;
 
-pub use exfiltrate::{Exfiltration, ExfiltratorConfig};
-pub use server::serve;
-pub use types::*;
+pub use exfiltrate::ExfiltratorConfig;
+pub use server::{serve, DataflowCommand};

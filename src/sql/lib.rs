@@ -25,9 +25,11 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
 use uuid::Uuid;
 
-use dataflow::{
-    Dataflow, DataflowCommand, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink,
-    SinkConnector, Source, SourceConnector, TailSinkConnector, View,
+use dataflow::DataflowCommand;
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{
+    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink, SinkConnector, Source,
+    SourceConnector, TailSinkConnector, View,
 };
 use expr::like::build_like_regex_from_string;
 use expr::{
@@ -114,7 +116,7 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 }
 
 impl Planner {
-    pub fn new(logging_config: Option<&dataflow::logging::LoggingConfiguration>) -> Planner {
+    pub fn new(logging_config: Option<&LoggingConfig>) -> Planner {
         Planner {
             dataflows: DataflowStore::new(logging_config),
         }

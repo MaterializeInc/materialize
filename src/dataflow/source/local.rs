@@ -7,7 +7,7 @@ use timely::dataflow::{Scope, Stream};
 
 use super::util::source;
 use super::SharedCapability;
-use crate::types::{Diff, LocalInput, LocalSourceConnector, Timestamp};
+use dataflow_types::{Diff, LocalInput, LocalSourceConnector, Timestamp};
 use ore::mpmc::Mux;
 use repr::Datum;
 use uuid::Uuid;

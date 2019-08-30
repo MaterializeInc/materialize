@@ -8,9 +8,8 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::{self, FromIterator};
 
-use dataflow::SourceConnector;
-
-use dataflow::{Dataflow, LocalSourceConnector, Source};
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{Dataflow, LocalSourceConnector, Source, SourceConnector};
 use repr::RelationType;
 
 #[derive(Debug)]
@@ -25,10 +24,10 @@ struct DataflowAndMetadata {
 }
 
 impl DataflowStore {
-    pub fn new(logging_config: Option<&dataflow::logging::LoggingConfiguration>) -> DataflowStore {
+    pub fn new(logging_config: Option<&LoggingConfig>) -> DataflowStore {
         match logging_config {
             Some(logging_config) => {
-                DataflowStore::from_iter(logging_config.active_logs.iter().map(|log| {
+                DataflowStore::from_iter(logging_config.active_logs().iter().map(|log| {
                     Dataflow::Source(Source {
                         name: log.name().to_string(),
                         connector: SourceConnector::Local(LocalSourceConnector {

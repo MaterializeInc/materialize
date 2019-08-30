@@ -1,0 +1,21 @@
+[package]
+name = "dataflow-types"
+description = "Types for the dataflow crate."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+expr = { path = "../expr" }
+repr = { path = "../repr" }
+serde = { version = "1.0", features = ["derive"] }
+url = "1.7.2"
+url_serde = "0.2.0"
+uuid = { version = "0.7.4", features = ["serde", "v4"] }
+
+[dev-dependencies]
+pretty_assertions = "0.6.1"
+serde_json = "1.0.40"

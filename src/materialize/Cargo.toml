@@ -22,6 +22,7 @@ ccsr = { path = "../ccsr" }
 csv = "1.1"
 chrono = "0.4"
 dataflow = { path = "../dataflow" }
+dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.1"

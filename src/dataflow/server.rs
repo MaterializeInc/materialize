@@ -31,7 +31,26 @@ use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
-use crate::{DataflowCommand, LocalInput, Timestamp};
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{Dataflow, LocalInput, PeekWhen, Timestamp};
+use expr::RelationExpr;
+
+/// The commands that a running dataflow server can accept.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DataflowCommand {
+    CreateDataflows(Vec<Dataflow>),
+    DropDataflows(Vec<String>),
+    Peek {
+        conn_id: u32,
+        source: RelationExpr,
+        when: PeekWhen,
+    },
+    Explain {
+        conn_id: u32,
+        relation_expr: RelationExpr,
+    },
+    Shutdown,
+}
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
@@ -39,7 +58,7 @@ pub fn serve(
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
     timely_configuration: timely::Configuration,
-    logging_config: Option<logging::LoggingConfiguration>,
+    logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String> {
     let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
 
@@ -83,7 +102,7 @@ where
     traces: TraceManager,
     inputs: HashMap<String, InputCapability>,
     sequencer: Sequencer<coordinator::SequencedCommand>,
-    logging_config: Option<logging::LoggingConfiguration>,
+    logging_config: Option<LoggingConfig>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
     materialized_logger: Option<logging::materialized::Logger>,
 }
@@ -97,7 +116,7 @@ where
         dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
         local_input_mux: Mux<Uuid, LocalInput>,
         exfiltrator_config: ExfiltratorConfig,
-        logging_config: Option<logging::LoggingConfiguration>,
+        logging_config: Option<LoggingConfig>,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
         let exfiltrator = Rc::new(exfiltrator_config.into());
@@ -177,7 +196,7 @@ where
 
             if let Some(coordinator) = &mut self.command_coordinator {
                 coordinator.logger = self.inner.log_register().get("materialized");
-                for log in logging.active_logs.iter() {
+                for log in logging.active_logs().iter() {
                     // Insert with 1 second compaction latency.
                     coordinator.insert_source(log.name(), 1_000);
                 }
