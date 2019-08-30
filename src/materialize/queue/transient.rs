@@ -10,7 +10,7 @@ use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::Stream;
 
-use super::{Command, Response};
+use super::{translate_plan, Command, Response};
 
 pub fn serve(
     logging_config: Option<&LoggingConfig>,
@@ -24,8 +24,11 @@ pub fn serve(
             let mut cmd = msg.unwrap();
 
             let (sql_result, dataflow_command) =
-                match planner.handle_command(&mut cmd.session, cmd.conn_id, cmd.sql) {
-                    Ok((resp, cmd)) => (Ok(resp), cmd),
+                match planner.handle_command(&mut cmd.session, cmd.sql) {
+                    Ok(plan) => {
+                        let (sql_response, dataflow_command) = translate_plan(plan, cmd.conn_id);
+                        (Ok(sql_response), dataflow_command)
+                    }
                     Err(err) => (Err(err), None),
                 };
 

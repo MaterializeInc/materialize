@@ -27,12 +27,13 @@ use dataflow_types::{
     self, Dataflow, Exfiltration, LocalInput, LocalSourceConnector, PeekWhen, Source,
     SourceConnector, Update,
 };
+use materialize::queue::{translate_plan, SqlResponse, WaitFor};
 use ore::collections::CollectionExt;
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
-use sql::{Planner, Session, SqlResponse, WaitFor};
+use sql::{Planner, Session};
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -959,12 +960,11 @@ impl RecordRunner for FullState {
                     | Statement::CreateSource { .. }
                     | Statement::CreateSink { .. }
                     | Statement::Drop { .. } => {
-                        let (_response, dataflow_command) = match self.planner.handle_command(
-                            &mut self.session,
-                            self.conn_id,
-                            sql.to_owned(),
-                        ) {
-                            Ok((response, dataflow_command)) => (response, dataflow_command),
+                        let dataflow_command = match self
+                            .planner
+                            .handle_command(&mut self.session, sql.to_owned())
+                        {
+                            Ok(plan) => translate_plan(plan, self.conn_id).1,
                             Err(error) => return Ok(Outcome::PlanFailure { error }),
                         };
                         // make sure we peek at the correct time
@@ -1011,36 +1011,37 @@ impl RecordRunner for FullState {
                     }
                 }
 
-                let (typ, dataflow_command, immediate_rows) = match self.planner.handle_command(
-                    &mut self.session,
-                    self.conn_id,
-                    sql.to_string(),
-                ) {
-                    Ok((
-                        SqlResponse::SendRows {
-                            typ,
-                            rows: _,
-                            wait_for: WaitFor::Workers,
-                        },
-                        dataflow_command,
-                    )) => (typ, dataflow_command, None),
-                    // impossible for there to be a dataflow command
-                    Ok((
-                        SqlResponse::SendRows {
-                            typ,
-                            rows,
-                            wait_for: WaitFor::NoOne,
-                        },
-                        None,
-                    )) => (typ, None, Some(rows)),
-                    Ok(other) => {
-                        return Ok(Outcome::PlanFailure {
-                            error: failure::format_err!(
-                                "Query did not result in SendRows modulo WaitFor::Optimizer, instead got {:?}",
-                                other
-                            ),
-                        });
-                    }
+                let (typ, dataflow_command, immediate_rows) = match self
+                    .planner
+                    .handle_command(&mut self.session, sql.to_string())
+                {
+                    Ok(plan) => match translate_plan(plan, self.conn_id) {
+                        (
+                            SqlResponse::SendRows {
+                                typ,
+                                rows: _,
+                                wait_for: WaitFor::Workers,
+                            },
+                            dataflow_command,
+                        ) => (typ, dataflow_command, None),
+                        // impossible for there to be a dataflow command
+                        (
+                            SqlResponse::SendRows {
+                                typ,
+                                rows,
+                                wait_for: WaitFor::NoOne,
+                            },
+                            None,
+                        ) => (typ, None, Some(rows)),
+                        other => {
+                            return Ok(Outcome::PlanFailure {
+                                error: failure::format_err!(
+                                    "Query did not result in SendRows modulo WaitFor::Optimizer, instead got {:?}",
+                                    other
+                                ),
+                            });
+                        }
+                    },
                     Err(error) => {
                         // TODO(jamii) check error messages, once ours stabilize
                         if output.is_err() {
@@ -1353,11 +1354,11 @@ pub fn run_stdin(verbosity: usize, only_parse: bool) -> Outcomes {
 pub fn fuzz(sqls: &str) {
     let mut state = FullState::start().unwrap();
     for sql in sqls.split(';') {
-        if let Ok((sql_response, dataflow_command)) =
-            state
-                .planner
-                .handle_command(&mut state.session, state.conn_id, sql.to_owned())
+        if let Ok(plan) = state
+            .planner
+            .handle_command(&mut state.session, sql.to_owned())
         {
+            let (sql_response, dataflow_command) = translate_plan(plan, state.conn_id);
             if let Some(dataflow_command) = dataflow_command {
                 let receiver = state.send_dataflow_command(dataflow_command);
                 if let SqlResponse::SendRows {

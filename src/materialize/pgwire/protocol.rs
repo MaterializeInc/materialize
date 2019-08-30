@@ -19,11 +19,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
-use crate::queue;
+use crate::queue::{self, SqlResponse, WaitFor};
 use dataflow_types::{Exfiltration, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
-use sql::{Session, SqlResponse, WaitFor};
+use sql::Session;
 
 pub struct Context {
     pub conn_id: u32,
