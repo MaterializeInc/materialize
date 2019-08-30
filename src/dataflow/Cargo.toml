@@ -11,6 +11,7 @@ path = "lib.rs"
 [dependencies]
 bincode = "1.1.4"
 dataflow-types = { path = "../dataflow-types" }
+comm = { path = "../comm" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 futures = "0.1"

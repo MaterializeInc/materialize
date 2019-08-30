@@ -3,15 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use failure::format_err;
-use futures::{future, Future, Poll, Stream};
+use futures::{future, Future, Poll};
 use hyper::service;
 use hyper::{Body, Method, Request, Response};
 use tokio::io::{AsyncRead, AsyncWrite};
-
-use dataflow_types::Exfiltration;
-use ore::future::FutureExt;
-use ore::mpmc::Mux;
 
 struct FutureResponse(Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send>);
 
@@ -50,16 +45,12 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 
 pub fn handle_connection<A: 'static + AsyncRead + AsyncWrite>(
     a: A,
-    dataflow_results_mux: Mux<u32, Exfiltration>,
 ) -> impl Future<Item = (), Error = failure::Error> {
     let svc =
         service::service_fn(
             move |req: Request<Body>| match (req.method(), req.uri().path()) {
-                (&Method::GET, "/") => handle_home(req).left(),
-                (&Method::POST, "/api/dataflow-results") => {
-                    handle_dataflow_results(req, dataflow_results_mux.clone()).right()
-                }
-                _ => handle_unknown(req).left(),
+                (&Method::GET, "/") => handle_home(req),
+                _ => handle_unknown(req),
             },
         );
     let http = hyper::server::conn::Http::new();
@@ -76,31 +67,4 @@ fn handle_unknown(_: Request<Body>) -> FutureResponse {
         .body(Body::from("bad request"))
         .unwrap()
         .into()
-}
-
-fn handle_dataflow_results(
-    req: Request<Body>,
-    dataflow_results_mux: Mux<u32, Exfiltration>,
-) -> Box<dyn Future<Item = Response<Body>, Error = failure::Error> + Send> {
-    Box::new(
-        future::lazy(move || {
-            let conn_id: u32 = req
-                .headers()
-                .get("X-Materialize-Connection-Id")
-                .ok_or_else(|| format_err!("missing X-Materialize-Connection-Id header"))?
-                .to_str()?
-                .parse()?;
-            Ok((conn_id, req))
-        })
-        .and_then(move |(conn_id, req)| {
-            req.into_body().concat2().from_err().and_then(move |body| {
-                let rows: Exfiltration = bincode::deserialize(&body).unwrap();
-                // the sender is allowed disappear at any time, so the error handling here is deliberately relaxed
-                if let Ok(sender) = dataflow_results_mux.read().unwrap().sender(&conn_id) {
-                    drop(sender.unbounded_send(rows))
-                }
-                Ok(Response::new(Body::from("ok")))
-            })
-        }),
-    )
 }

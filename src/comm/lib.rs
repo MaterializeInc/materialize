@@ -3,15 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Driver for timely/differential dataflow.
+//! Communication fabric that abstracts over thread/process boundaries.
 
-mod arrangement;
-mod render;
-mod sink;
-mod source;
+pub mod mpsc;
+pub mod protocol;
+pub mod switchboard;
 
-pub mod coordinator;
-pub mod logging;
-pub mod server;
-
-pub use server::{serve, DataflowCommand};
+pub use switchboard::Switchboard;

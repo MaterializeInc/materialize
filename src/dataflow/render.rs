@@ -26,7 +26,6 @@ use super::source;
 use super::source::SharedCapability;
 use crate::arrangement::TraceManager;
 use crate::arrangement::{context::ArrangementFlavor, Context};
-use crate::exfiltrate::Exfiltrator;
 
 pub enum InputCapability {
     External(SharedCapability),
@@ -38,7 +37,6 @@ pub fn build_dataflow<A: Allocate>(
     worker: &mut TimelyWorker<A>,
     inputs: &mut HashMap<String, InputCapability>,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
-    exfiltrator: Rc<Exfiltrator>,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
@@ -91,9 +89,7 @@ pub fn build_dataflow<A: Allocate>(
                 SinkConnector::Kafka(c) => {
                     sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
                 }
-                SinkConnector::Tail(c) => {
-                    sink::tail(&arrangement.stream, &sink.name, c, exfiltrator)
-                }
+                SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
             }
         }
         Dataflow::View(view) => {

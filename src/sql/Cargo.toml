@@ -10,6 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 ccsr = { path = "../ccsr" }
+comm = { path = "../comm" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }

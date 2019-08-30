@@ -19,7 +19,6 @@ use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::mem;
-use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 use uuid::Uuid;
@@ -28,11 +27,10 @@ use super::render;
 use super::render::InputCapability;
 use crate::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use crate::coordinator;
-use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Dataflow, LocalInput, PeekWhen, Timestamp};
+use dataflow_types::{Dataflow, Exfiltration, LocalInput, PeekWhen, Timestamp};
 use expr::RelationExpr;
 
 /// The commands that a running dataflow server can accept.
@@ -41,12 +39,12 @@ pub enum DataflowCommand {
     CreateDataflows(Vec<Dataflow>),
     DropDataflows(Vec<String>),
     Peek {
-        conn_id: u32,
+        tx: comm::mpsc::Sender<Exfiltration>,
         source: RelationExpr,
         when: PeekWhen,
     },
     Explain {
-        conn_id: u32,
+        tx: comm::mpsc::Sender<Exfiltration>,
         relation_expr: RelationExpr,
     },
     Shutdown,
@@ -56,7 +54,6 @@ pub enum DataflowCommand {
 pub fn serve(
     dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    exfiltrator_config: ExfiltratorConfig,
     timely_configuration: timely::Configuration,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String> {
@@ -72,7 +69,6 @@ pub fn serve(
             worker,
             dataflow_command_receiver,
             local_input_mux.clone(),
-            exfiltrator_config.clone(),
             logging_config.clone(),
         )
         .run()
@@ -83,8 +79,8 @@ pub fn serve(
 struct PendingPeek {
     /// The name of the dataflow to peek.
     name: String,
-    /// Identifies intended recipient of the peek.
-    conn_id: u32,
+    /// Channel to recipient of the peek.
+    tx: comm::mpsc::Sender<Exfiltration>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Whether to drop the dataflow when the peek completes.
@@ -97,7 +93,6 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
     inputs: HashMap<String, InputCapability>,
@@ -115,18 +110,15 @@ where
         w: &'w mut TimelyWorker<A>,
         dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
         local_input_mux: Mux<Uuid, LocalInput>,
-        exfiltrator_config: ExfiltratorConfig,
         logging_config: Option<LoggingConfig>,
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
-        let exfiltrator = Rc::new(exfiltrator_config.into());
-        let command_coordinator = dataflow_command_receiver
-            .map(|dcr| coordinator::CommandCoordinator::new(dcr, Rc::clone(&exfiltrator)));
+        let command_coordinator =
+            dataflow_command_receiver.map(|dcr| coordinator::CommandCoordinator::new(dcr));
 
         Worker {
             inner: w,
             local_input_mux,
-            exfiltrator,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             inputs: HashMap::new(),
@@ -278,7 +270,6 @@ where
                         self.inner,
                         &mut self.inputs,
                         &mut self.local_input_mux,
-                        self.exfiltrator.clone(),
                     );
                 }
             }
@@ -296,7 +287,7 @@ where
             coordinator::SequencedCommand::Peek {
                 name,
                 timestamp,
-                conn_id,
+                tx,
                 drop_after_peek,
             } => {
                 let mut trace = self
@@ -308,7 +299,7 @@ where
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
                     name,
-                    conn_id,
+                    tx,
                     timestamp,
                     drop_after_peek,
                 };
@@ -317,7 +308,7 @@ where
                         crate::logging::materialized::Peek::new(
                             &pending_peek.name,
                             pending_peek.timestamp,
-                            pending_peek.conn_id,
+                            42,
                         ),
                         true,
                     ));
@@ -392,14 +383,17 @@ where
 
                 cur.step_key(&storage)
             }
-            self.exfiltrator.send_peek(peek.conn_id, results);
+            use futures::{Future, Sink};
+            peek.tx
+                .connect()
+                .wait()
+                .unwrap()
+                .send(Exfiltration::Peek(results))
+                .wait()
+                .unwrap();
             if let Some(logger) = self.materialized_logger.as_mut() {
                 logger.log(MaterializedEvent::Peek(
-                    crate::logging::materialized::Peek::new(
-                        &peek.name,
-                        peek.timestamp,
-                        peek.conn_id,
-                    ),
+                    crate::logging::materialized::Peek::new(&peek.name, peek.timestamp, 42),
                     false,
                 ));
             }

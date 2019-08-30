@@ -15,6 +15,11 @@ use std::io;
 
 /// Extension methods for futures.
 pub trait FutureExt {
+    /// Boxes this future.
+    fn boxed(self) -> Box<dyn Future<Item = Self::Item, Error = Self::Error> + Send>
+    where
+        Self: Future + Send + 'static;
+
     /// Wraps this future an [`Either`] future, with this future becoming the
     /// left variant.
     fn left<U>(self) -> Either<Self, U>
@@ -64,6 +69,13 @@ impl<T> FutureExt for T
 where
     T: Future,
 {
+    fn boxed(self) -> Box<dyn Future<Item = T::Item, Error = T::Error> + Send>
+    where
+        T: Send + 'static,
+    {
+        Box::new(self)
+    }
+
     fn left<U>(self) -> Either<T, U> {
         Either::A(self)
     }

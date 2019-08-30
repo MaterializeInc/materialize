@@ -9,10 +9,13 @@
 //! provide distribution, replication, and durability. At the moment,
 //! only a simple, transient, single-node queue is provided.
 
+use comm::Switchboard;
 use dataflow::DataflowCommand;
-use dataflow_types::{Dataflow, Sink, SinkConnector, TailSinkConnector};
+use dataflow_types::{Dataflow, Exfiltration, Sink, SinkConnector, TailSinkConnector};
+use futures::Stream;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sql::{Plan, Session};
+use tokio::io::{AsyncRead, AsyncWrite};
 use uuid::Uuid;
 
 pub mod transient;
@@ -21,17 +24,24 @@ pub mod transient;
 pub struct Command {
     pub conn_id: u32,
     pub sql: String,
-    pub session: sql::Session,
+    pub session: Session,
     pub tx: futures::sync::oneshot::Sender<Response>,
 }
 
 /// Responses from the queue to SQL commands.
 pub struct Response {
     pub sql_result: Result<SqlResponse, failure::Error>,
-    pub session: Session,
+    pub session: sql::Session,
 }
 
-pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<DataflowCommand>) {
+pub fn translate_plan<C>(
+    plan: Plan,
+    switchboard: &mut Switchboard<C>,
+    num_timely_workers: usize,
+) -> (SqlResponse, Option<DataflowCommand>)
+where
+    C: AsyncRead + AsyncWrite + Send + 'static,
+{
     match plan {
         Plan::CreateSource(source) => (
             SqlResponse::CreatedSource,
@@ -46,7 +56,7 @@ pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<Dataflow
                     .iter()
                     .map(|s| vec![Datum::from(s.name.to_owned())])
                     .collect(),
-                wait_for: WaitFor::NoOne,
+                rx: Box::new(futures::stream::empty()),
             },
             Some(DataflowCommand::CreateDataflows(
                 sources.into_iter().map(|s| Dataflow::Source(s)).collect(),
@@ -75,59 +85,56 @@ pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<Dataflow
         ),
         Plan::EmptyQuery => (SqlResponse::EmptyQuery, None),
         Plan::DidSetVariable => (SqlResponse::SetVariable, None),
-        Plan::Peek { source, when } => (
-            SqlResponse::SendRows {
-                typ: source.typ(),
-                rows: vec![],
-                wait_for: WaitFor::Workers,
-            },
-            Some(DataflowCommand::Peek {
-                conn_id,
-                source,
-                when,
-            }),
-        ),
-        Plan::Tail(source) => (
-            SqlResponse::Tailing,
-            Some(DataflowCommand::CreateDataflows(vec![Dataflow::Sink(
-                Sink {
-                    name: format!("<temp_{}>", Uuid::new_v4()),
-                    from: (source.name().to_owned(), source.typ().clone()),
-                    connector: SinkConnector::Tail(TailSinkConnector { conn_id }),
+        Plan::Peek { source, when } => {
+            let (tx, rx) = switchboard.mpsc();
+            (
+                SqlResponse::SendRows {
+                    typ: source.typ(),
+                    rows: vec![],
+                    rx: Box::new(rx.take(num_timely_workers as u64)),
                 },
-            )])),
-        ),
+                Some(DataflowCommand::Peek { tx, source, when }),
+            )
+        }
+        Plan::Tail(source) => {
+            let (tx, rx) = switchboard.mpsc();
+            (
+                SqlResponse::Tailing { rx: Box::new(rx) },
+                Some(DataflowCommand::CreateDataflows(vec![Dataflow::Sink(
+                    Sink {
+                        name: format!("<temp_{}>", Uuid::new_v4()),
+                        from: (source.name().to_owned(), source.typ().clone()),
+                        connector: SinkConnector::Tail(TailSinkConnector { tx }),
+                    },
+                )])),
+            )
+        }
         Plan::SendRows { typ, rows } => (
             SqlResponse::SendRows {
                 typ,
                 rows,
-                wait_for: WaitFor::NoOne,
+                rx: Box::new(futures::stream::empty()),
             },
             None,
         ),
-        Plan::ExplainPlan { typ, relation_expr } => (
-            SqlResponse::SendRows {
-                typ,
-                rows: vec![],
-                wait_for: WaitFor::Optimizer,
-            },
-            Some(DataflowCommand::Explain {
-                conn_id,
-                relation_expr,
-            }),
-        ),
+        Plan::ExplainPlan { typ, relation_expr } => {
+            let (tx, rx) = switchboard.mpsc();
+            (
+                SqlResponse::SendRows {
+                    typ,
+                    rows: vec![],
+                    // Only the coordinator responds to this.
+                    //
+                    // TODO(benesch): this module should be responsible for
+                    // generating the explain output.
+                    rx: Box::new(rx.take(1)),
+                },
+                Some(DataflowCommand::Explain { tx, relation_expr }),
+            )
+        }
     }
 }
 
-/// Flag for whether optimizer or workers will chime in as well.
-#[derive(Debug)]
-pub enum WaitFor {
-    NoOne,
-    Optimizer,
-    Workers,
-}
-
-#[derive(Debug)]
 /// Responses from the planner to SQL commands.
 pub enum SqlResponse {
     CreatedSink,
@@ -139,8 +146,10 @@ pub enum SqlResponse {
     SendRows {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
-        wait_for: WaitFor,
+        rx: Box<dyn Stream<Item = Exfiltration, Error = bincode::Error> + Send>,
     },
     SetVariable,
-    Tailing,
+    Tailing {
+        rx: Box<dyn Stream<Item = Exfiltration, Error = bincode::Error> + Send>,
+    },
 }

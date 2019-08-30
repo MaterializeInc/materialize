@@ -5,19 +5,25 @@
 
 //! A trivial single-node command queue that doesn't store state at all.
 
+use comm::Switchboard;
 use dataflow::DataflowCommand;
 use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::Stream;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{translate_plan, Command, Response};
 
-pub fn serve(
+pub fn serve<C>(
     logging_config: Option<&LoggingConfig>,
+    mut switchboard: Switchboard<C>,
     cmd_rx: UnboundedReceiver<Command>,
     dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,
-) {
+    num_timely_workers: usize,
+) where
+    C: AsyncRead + AsyncWrite + Send + 'static,
+{
     let mut planner = sql::Planner::new(logging_config);
     std::thread::spawn(move || {
         for msg in cmd_rx.wait() {
@@ -26,7 +32,8 @@ pub fn serve(
             let (sql_result, dataflow_command) =
                 match planner.handle_command(&mut cmd.session, cmd.sql) {
                     Ok(plan) => {
-                        let (sql_response, dataflow_command) = translate_plan(plan, cmd.conn_id);
+                        let (sql_response, dataflow_command) =
+                            translate_plan(plan, &mut switchboard, num_timely_workers);
                         (Ok(sql_response), dataflow_command)
                     }
                     Err(err) => (Err(err), None),

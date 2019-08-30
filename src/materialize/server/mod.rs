@@ -17,14 +17,14 @@ use tokio::prelude::*;
 
 use crate::pgwire;
 use crate::queue;
-use dataflow::{self, DataflowCommand, ExfiltratorConfig};
+use comm::Switchboard;
+use dataflow::{self, DataflowCommand};
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::Exfiltration;
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use ore::netio;
-use ore::netio::SniffingStream;
+use ore::netio::{SniffedStream, SniffingStream};
 
 mod http;
 
@@ -48,8 +48,8 @@ impl Config {
 
 fn handle_connection(
     tcp_stream: TcpStream,
+    switchboard: Switchboard<SniffedStream<TcpStream>>,
     cmdq_tx: UnboundedSender<queue::Command>,
-    dataflow_results_mux: Mux<u32, Exfiltration>,
     num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
@@ -64,17 +64,16 @@ fn handle_connection(
         .and_then(move |(ss, buf, nread)| {
             let buf = &buf[..nread];
             if pgwire::match_handshake(buf) {
-                pgwire::serve(
-                    ss.into_sniffed(),
-                    cmdq_tx,
-                    dataflow_results_mux,
-                    num_timely_workers,
-                )
-                .either_a()
+                pgwire::serve(ss.into_sniffed(), cmdq_tx, num_timely_workers).boxed()
             } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed(), dataflow_results_mux).either_b()
+                http::handle_connection(ss.into_sniffed()).boxed()
+            } else if comm::protocol::match_handshake(buf) {
+                switchboard
+                    .handle_connection(ss.into_sniffed())
+                    .from_err()
+                    .boxed()
             } else {
-                reject_connection(ss.into_sniffed()).from_err().either_c()
+                reject_connection(ss.into_sniffed()).from_err().boxed()
             }
         })
         .map_err(|err| error!("error handling request: {}", err))
@@ -90,7 +89,6 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     // dataflow command and result exchange.
     let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<queue::Command>();
     let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded::<DataflowCommand>();
-    let dataflow_results_mux = Mux::default();
 
     // Extract timely dataflow parameters.
     let num_timely_workers = config.num_timely_workers();
@@ -99,22 +97,22 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         timely::Configuration::Process(_) => true,
         timely::Configuration::Cluster { process, .. } => process == &0,
     };
-    let post_address = match &config.timely {
-        timely::Configuration::Thread | timely::Configuration::Process(_) => {
-            "http://localhost:6875/api/dataflow-results".to_owned()
-        }
-        timely::Configuration::Cluster { addresses, .. } => {
-            let address = addresses[0]
-                .split(':')
-                .next()
-                .expect("Failed to find port in timely address");
-            format!("http://{}:6875/api/dataflow-results", address)
-        }
+
+    let switchboard = {
+        let (nodes, id) = match &config.timely {
+            timely::Configuration::Thread | timely::Configuration::Process(_) => {
+                (vec!["localhost:6875".into()], 0)
+            }
+            timely::Configuration::Cluster {
+                addresses, process, ..
+            } => (addresses.clone(), *process),
+        };
+        Switchboard::new(nodes, id)
     };
 
     // Initialize pgwire / http listener.
     let listener = if is_primary {
-        let listen_addr: SocketAddr = "0.0.0.0:6875".parse()?;
+        let listen_addr: SocketAddr = "[::]:6875".parse()?;
         let listener = TcpListener::bind(&listen_addr)?;
         println!("materialized listening on {}...", listen_addr);
         Some(listener)
@@ -129,7 +127,6 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     let dd_workers = dataflow::serve(
         dataflow_command_receiver,
         local_input_mux.clone(),
-        ExfiltratorConfig::Remote(post_address),
         config.timely,
         logging_config.clone(),
     )
@@ -139,9 +136,11 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     let worker0_thread = dd_workers.guards().into_first().thread();
     queue::transient::serve(
         logging_config.as_ref(),
+        switchboard.clone(),
         cmdq_rx,
         dataflow_command_sender,
         worker0_thread.clone(),
+        num_timely_workers,
     );
 
     // Draw connections off of the listener.
@@ -164,8 +163,8 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
                     stream.set_nodelay(true).expect("set_nodelay failed");
                     tokio::spawn(handle_connection(
                         stream,
+                        switchboard.clone(),
                         cmdq_tx.clone(),
-                        dataflow_results_mux.clone(),
                         num_timely_workers,
                     ));
                     Ok(())

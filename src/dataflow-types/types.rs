@@ -34,21 +34,21 @@ pub enum PeekWhen {
     AtTimestamp(Timestamp),
 }
 
+/// A batch of data exfiltrated from the dataflow layer.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum Exfiltration {
+    /// The complete result of a `DataflowCommand::Peek` from one worker.
+    Peek(Vec<Vec<Datum>>),
+    /// A chunk of updates from a tail sink.
+    Tail(Vec<Update>),
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {
     pub row: Vec<Datum>,
     pub timestamp: u64,
     pub diff: isize,
-}
-
-/// A batch of data exfiltrated from the dataflow layer.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Exfiltration {
-    /// The complete result of a `DataflowCommand::Peek` from one worker.
-    Peek(Vec<Vec<Datum>>),
-    /// A chunk of updates from a tail sink.
-    Tail(Vec<Update>),
 }
 
 #[derive(Debug, Clone)]
@@ -156,7 +156,7 @@ pub struct KafkaSinkConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
-    pub conn_id: u32,
+    pub tx: comm::mpsc::Sender<Exfiltration>,
 }
 
 /// A view transforms one dataflow into another.

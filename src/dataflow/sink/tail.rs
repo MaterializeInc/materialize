@@ -3,23 +3,17 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::exfiltrate::Exfiltrator;
-use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
+use dataflow_types::{Diff, Exfiltration, TailSinkConnector, Timestamp, Update};
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use repr::Datum;
-use std::rc::Rc;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
-pub fn tail<G, B>(
-    stream: &Stream<G, B>,
-    name: &str,
-    connector: TailSinkConnector,
-    exfiltrator: Rc<Exfiltrator>,
-) where
+pub fn tail<G, B>(stream: &Stream<G, B>, name: &str, connector: TailSinkConnector)
+where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<Vec<Datum>, (), Timestamp, Diff>,
 {
@@ -39,7 +33,9 @@ pub fn tail<G, B>(
                     cur.step_key(&batch);
                 }
             }
-            exfiltrator.send_tail(connector.conn_id, result);
+            use futures::{Future, Sink};
+            let sink = connector.tx.connect().wait().unwrap();
+            sink.send(Exfiltration::Tail(result)).wait().unwrap();
         });
     })
 }

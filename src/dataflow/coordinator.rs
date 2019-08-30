@@ -22,14 +22,12 @@ use timely::synchronization::sequence::Sequencer;
 use futures::sync::mpsc::UnboundedReceiver;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::rc::Rc;
 use uuid::Uuid;
 
-use crate::exfiltrate::Exfiltrator;
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::DataflowCommand;
-use dataflow_types::{Dataflow, PeekWhen, Timestamp, View};
+use dataflow_types::{Dataflow, Exfiltration, PeekWhen, Timestamp, View};
 use expr::RelationExpr;
 use repr::Datum;
 
@@ -44,7 +42,7 @@ pub enum SequencedCommand {
     Peek {
         name: String,
         timestamp: Timestamp,
-        conn_id: u32,
+        tx: comm::mpsc::Sender<Exfiltration>,
         drop_after_peek: bool,
     },
     /// Enable compaction in views.
@@ -65,22 +63,17 @@ pub struct CommandCoordinator {
     since_updates: Vec<(String, Vec<Timestamp>)>,
     pub logger: Option<logging::materialized::Logger>,
     optimizer: expr::transform::Optimizer,
-    exfiltrator: Rc<Exfiltrator>,
 }
 
 impl CommandCoordinator {
     /// Creates a new command coordinator from input and output command queues.
-    pub fn new(
-        command_receiver: UnboundedReceiver<DataflowCommand>,
-        exfiltrator: Rc<Exfiltrator>,
-    ) -> Self {
+    pub fn new(command_receiver: UnboundedReceiver<DataflowCommand>) -> Self {
         Self {
             views: HashMap::new(),
             command_receiver,
             logger: None,
             since_updates: Vec::new(),
             optimizer: Default::default(),
-            exfiltrator,
         }
     }
 
@@ -117,7 +110,7 @@ impl CommandCoordinator {
             }
             DataflowCommand::Peek {
                 mut source,
-                conn_id,
+                tx,
                 when,
             } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
@@ -158,19 +151,26 @@ impl CommandCoordinator {
                 let peek_command = SequencedCommand::Peek {
                     name,
                     timestamp,
-                    conn_id,
+                    tx,
                     drop_after_peek: drop,
                 };
                 sequencer.push(peek_command);
             }
             DataflowCommand::Explain {
-                conn_id,
+                tx,
                 mut relation_expr,
             } => {
                 let typ = relation_expr.typ();
                 self.optimizer.optimize(&mut relation_expr, &typ);
-                self.exfiltrator
-                    .send_peek(conn_id, vec![vec![Datum::from(relation_expr.pretty())]]);
+                use futures::{Future, Sink};
+                tx.connect()
+                    .wait()
+                    .unwrap()
+                    .send(Exfiltration::Peek(vec![vec![Datum::from(
+                        relation_expr.pretty(),
+                    )]]))
+                    .wait()
+                    .unwrap();
             }
             DataflowCommand::Shutdown => {
                 sequencer.push(SequencedCommand::Shutdown);
