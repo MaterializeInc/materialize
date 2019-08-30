@@ -5,12 +5,12 @@
 
 pub mod func;
 
-use repr::{ColumnType, Datum, RelationType, ScalarType};
-use serde::{Deserialize, Serialize};
-
 use self::func::AggregateFunc;
 use crate::ScalarExpr;
+use pretty::Doc::{Newline, Space};
 use pretty::{BoxDoc, Doc};
+use repr::{ColumnType, Datum, RelationType, ScalarType};
+use serde::{Deserialize, Serialize};
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -426,9 +426,170 @@ impl RelationExpr {
         self.visit1_mut(|e| e.visit_mut_pre(f));
     }
 
-    pub fn pretty(&mut self) -> String {
-        let doc = Doc::<BoxDoc<()>>::text("Hello, world!");
-        format!("{}", doc.pretty(120),)
+    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
+        // Woefully incomplete helper to format only column numbers and literals for now.
+        fn fmt_scalar(scalar_expr: &ScalarExpr) -> String {
+            match scalar_expr {
+                ScalarExpr::Column(n) => format!("#{}", n),
+                ScalarExpr::Literal(d) => format!("{}", d),
+                _ => String::from("..."),
+            }
+        }
+
+        match self {
+            RelationExpr::Constant { rows, typ: _ } => {
+                fn row_to_doc(row: &Vec<Datum>) -> Doc<BoxDoc<()>> {
+                    let row = Doc::intersperse(row.iter().map(Doc::as_string), to_doc!(",", Space));
+                    to_doc!("(", row.nest(1), ")")
+                }
+
+                if rows.len() == 1 && rows[0].len() == 1 {
+                    Doc::as_string(&rows[0][0])
+                } else if rows.len() == 1 {
+                    row_to_doc(&rows[0])
+                } else {
+                    let rows = Doc::intersperse(rows.iter().map(row_to_doc), to_doc!(",", Space));
+                    to_doc!("(", rows.nest(1), ")").group()
+                }
+            }
+            RelationExpr::Get { name, typ: _ } => Doc::text(name),
+            RelationExpr::Let { name, value, body } => Doc::nil()
+                .append(to_doc!("let", Space, name, Space, "=", Space).group())
+                .append(to_doc!(value).nest(1).group())
+                .append(to_doc!(Space, "in", Space))
+                .append(to_doc!(body).nest(1).group()),
+            RelationExpr::Project { input, outputs } => Doc::nil()
+                .append(to_doc!("Project { ", Newline))
+                .append(to_doc!(input, ",", Newline).nest(1).group())
+                .append({
+                    let outputs =
+                        Doc::intersperse(outputs.iter().map(Doc::as_string), to_doc!(",", Space));
+                    to_doc!("outputs: [", outputs.nest(1), "]", Newline)
+                        .nest(1)
+                        .group()
+                })
+                .append(to_doc!(" }")),
+            RelationExpr::Map { input, scalars } => Doc::nil()
+                .append(to_doc!("Map { ", Newline))
+                .append(to_doc!(input, ",", Newline).nest(1).group())
+                .append({
+                    let scalars = Doc::intersperse(
+                        scalars.iter().map(|(s, _)| fmt_scalar(s)),
+                        to_doc!(",", Space),
+                    );
+                    to_doc!("scalars: [", scalars.nest(1), "]", Newline)
+                        .nest(1)
+                        .group()
+                })
+                .append(to_doc!(" }")),
+            RelationExpr::Filter { input, predicates } => Doc::nil()
+                .append(to_doc!("Filter { ", Newline))
+                .append(to_doc!(input, ",", Newline).nest(1).group())
+                .append({
+                    let predicates = Doc::intersperse(
+                        predicates.iter().map(fmt_scalar),
+                        to_doc!(",", Space).nest(1).group(),
+                    );
+                    to_doc!("predicates: [", predicates, "]", Newline)
+                        .nest(1)
+                        .group()
+                })
+                .append(to_doc!(" }")),
+            RelationExpr::Join { inputs, variables } => Doc::nil()
+                .append(to_doc!("Join { ", Newline))
+                .append({
+                    let inputs = Doc::intersperse(
+                        inputs.iter().map(RelationExpr::to_doc),
+                        to_doc!(",", Space).group(),
+                    );
+                    to_doc!(inputs, ",", Newline).nest(1).group()
+                })
+                .append({
+                    fn pair_to_doc(p: &(usize, usize)) -> Doc<BoxDoc<()>, ()> {
+                        to_doc!("(", p.0.to_string(), ",", Space, p.1.to_string(), ")").group()
+                    }
+                    let variables = Doc::intersperse(
+                        variables.iter().map(|ps| {
+                            let ps = Doc::intersperse(
+                                ps.iter().map(pair_to_doc),
+                                to_doc!(",", Space).nest(1).group(),
+                            );
+                            to_doc!("[", ps.nest(1), "]").group()
+                        }),
+                        to_doc!(",", Space).nest(1).group(),
+                    );
+                    to_doc!("variables: [", variables, "]", Newline)
+                        .nest(1)
+                        .group()
+                })
+                .append(to_doc!(" }")),
+            RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => Doc::nil()
+                .append(to_doc!("Reduce { ", Newline))
+                .append(to_doc!(input, ",", Newline).nest(1).group())
+                .append({
+                    let keys = Doc::intersperse(
+                        group_key.iter().map(|k| format!("{}", k)),
+                        to_doc!(",", Space),
+                    );
+                    to_doc!("group_key: [", keys.nest(1), "]", Newline)
+                        .nest(1)
+                        .group()
+                })
+                .append({
+                    let sums = Doc::intersperse(
+                        aggregates.iter().map(|(a, _)| format!("{:?}", a.func)),
+                        to_doc!(",", Space),
+                    );
+                    to_doc!("aggregates: [", sums.nest(1), "]", Newline)
+                        .nest(1)
+                        .group()
+                })
+                .append(to_doc!(" }")),
+            RelationExpr::TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+            } => to_doc!("TopK { ", "<Oops, TopK is not yet implemented>", " }").group(),
+            RelationExpr::OrDefault { input, default } => Doc::nil()
+                .append(to_doc!("OrDefault { ", Newline))
+                .append(to_doc!(input, ",", Newline).nest(1).group())
+                .append({
+                    let default = Doc::intersperse(
+                        default.iter().map(Doc::as_string),
+                        to_doc!(",", Space).group(),
+                    );
+                    to_doc!("default: [", default.nest(1), "]", Newline)
+                        .nest(1)
+                        .group()
+                })
+                .append(to_doc!(" }")),
+            RelationExpr::Negate { input } => Doc::nil()
+                .append(to_doc!("Negate { ", Newline))
+                .append(to_doc!(input, Newline).nest(1).group())
+                .append(to_doc!(" }")),
+            RelationExpr::Distinct { input } => Doc::nil()
+                .append(to_doc!("Distinct { ", Newline))
+                .append(to_doc!(input, Newline).nest(1).group())
+                .append(to_doc!(" }")),
+            RelationExpr::Threshold { input } => Doc::nil()
+                .append(to_doc!("Threshold { ", Newline))
+                .append(to_doc!(input, Newline).nest(1).group())
+                .append(to_doc!(" }")),
+            RelationExpr::Union { left, right } => Doc::nil()
+                .append(to_doc!("Union { ", Newline))
+                .append(to_doc!(left, ",", Newline).nest(1).group())
+                .append(to_doc!(right, Newline).nest(1).group())
+                .append(to_doc!(" }")),
+        }
+    }
+
+    pub fn pretty(&self) -> String {
+        format!("{}", self.to_doc().pretty(70))
     }
 }
 

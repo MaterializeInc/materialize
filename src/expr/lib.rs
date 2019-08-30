@@ -8,9 +8,12 @@
 #![deny(missing_debug_implementations)]
 
 pub mod like;
+
+#[macro_use]
+mod pretty_pretty;
+
 mod relation;
 mod scalar;
-
 pub mod transform;
 
 pub use relation::func::AggregateFunc;

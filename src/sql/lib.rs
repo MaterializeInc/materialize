@@ -474,7 +474,7 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let mut relation_expr = self.plan_query(&query)?;
+        let relation_expr = self.plan_query(&query)?;
         if stage == Stage::Dataflow {
             Ok(Plan::SendRows {
                 typ: RelationType {
