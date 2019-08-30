@@ -7,8 +7,8 @@ FROM ubuntu:bionic
 
 RUN apt-get update && apt-get -qy install wait-for-it
 
-COPY tests/* /tests/
+COPY tests /tests/
 COPY run-tests /usr/local/bin
-COPY shlib/* /usr/local/share/shlib/
+COPY shlib /usr/local/share/shlib/
 
 WORKDIR /workdir
