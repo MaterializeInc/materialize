@@ -96,6 +96,12 @@ pub fn build_dataflow<A: Allocate>(
             }
         }
         Dataflow::View(view) => {
+            let as_of = view
+                .as_of
+                .as_ref()
+                .map(|x| x.to_vec())
+                .unwrap_or_else(|| vec![0]);
+
             // The scope.clone() occurs to allow import in the region.
             // We build a region here to establish a pattern of a scope inside the dataflow,
             // so that other similar uses (e.g. with iterative scopes) do not require weird
@@ -107,7 +113,8 @@ pub fn build_dataflow<A: Allocate>(
                     if let RelationExpr::Get { name, typ: _ } = e {
                         // Import the believed-to-exist base arrangement.
                         if let Some(mut trace) = manager.get_by_self(&name).cloned() {
-                            let (arranged, button) = trace.import_core(scope, name);
+                            let (arranged, button) =
+                                trace.import_frontier_core(scope, name, as_of.clone());
                             let arranged = arranged.enter(region);
                             context
                                 .collections

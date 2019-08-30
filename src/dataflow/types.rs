@@ -169,6 +169,9 @@ pub struct View {
     pub name: String,
     pub relation_expr: RelationExpr,
     pub typ: RelationType,
+    /// Indicates if sources can be advanced to a supplied frontier.
+    /// Outputs will only be correct from this frontier onward.
+    pub as_of: Option<Vec<Timestamp>>,
 }
 
 #[cfg(test)]
@@ -224,6 +227,7 @@ mod tests {
                     ColumnType::new(ScalarType::Int32).name("quantity"),
                 ],
             },
+            as_of: None,
         });
 
         let decoded: Dataflow = serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
