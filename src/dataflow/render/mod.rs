@@ -21,11 +21,13 @@ use super::source;
 use super::source::SharedCapability;
 use super::types::*;
 use crate::arrangement::TraceManager;
-use crate::arrangement::{context::ArrangementFlavor, Context};
 use crate::exfiltrate::Exfiltrator;
 use expr::RelationExpr;
 use ore::mpmc::Mux;
 use repr::Datum;
+
+mod context;
+use context::{ArrangementFlavor, Context};
 
 pub enum InputCapability {
     External(SharedCapability),
