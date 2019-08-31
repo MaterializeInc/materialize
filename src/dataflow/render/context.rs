@@ -39,6 +39,11 @@ type ArrangementImport<S, V, T> = Arranged<
 /// A context means to wrap available data assets and present them in an easy-to-use manner.
 /// These assets include dataflow-local collections and arrangements, as well as imported
 /// arrangements from outside the dataflow.
+///
+/// Context has two timestamp types, one from `S::Timestamp` and one from `T`, where the
+/// former must refine the latter. The former is the timestamp used by the scope in question,
+/// and the latter is the timestamp of imported traces. The two may be different in the case
+/// of regions or iteration.
 pub struct Context<S: Scope, P, V: Data, T>
 where
     P: Eq + std::hash::Hash + Clone,
@@ -135,7 +140,7 @@ where
     /// Binds a relation_expr and keys to a local arrangement.
     pub fn set_local(&mut self, relation_expr: &P, keys: &[usize], arranged: Arrangement<S, V>) {
         self.local
-            .entry((*relation_expr).clone())
+            .entry(relation_expr.clone())
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
     }

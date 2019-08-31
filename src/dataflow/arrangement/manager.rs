@@ -21,8 +21,6 @@ pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 pub type KeysOnlyHandle = TraceKeyHandle<Vec<Datum>, Timestamp, Diff>;
 pub type KeysValsHandle = TraceValHandle<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
 
-pub type DeleteCallback = Box<dyn FnOnce()>;
-
 /// A map from collection names to cached arrangements.
 ///
 /// A `TraceManager` stores maps from string names to various arranged representations
@@ -105,7 +103,7 @@ impl TraceManager {
         &mut self,
         name: String,
         trace: KeysOnlyHandle,
-        delete_callback: Option<DeleteCallback>,
+        delete_callback: Option<Box<dyn Drop>>,
     ) {
         self.traces
             .entry(name)
@@ -150,7 +148,7 @@ impl TraceManager {
         name: String,
         keys: &[usize],
         trace: KeysValsHandle,
-        delete_callback: Option<DeleteCallback>,
+        delete_callback: Option<Box<dyn Drop>>,
     ) {
         self.traces
             .entry(name)
@@ -173,9 +171,9 @@ impl TraceManager {
 /// Maintained traces for a collection.
 pub struct CollectionTraces {
     /// The collection arranged "by self", where the key is the record.
-    by_self: Option<(KeysOnlyHandle, Option<DeleteCallback>)>,
+    by_self: Option<(KeysOnlyHandle, Option<Box<dyn Drop>>)>,
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    by_keys: HashMap<Vec<usize>, (KeysValsHandle, Option<DeleteCallback>)>,
+    by_keys: HashMap<Vec<usize>, (KeysValsHandle, Option<Box<dyn Drop>>)>,
 }
 
 impl CollectionTraces {
@@ -216,21 +214,6 @@ impl Default for CollectionTraces {
         Self {
             by_self: None,
             by_keys: HashMap::new(),
-        }
-    }
-}
-
-impl Drop for CollectionTraces {
-    fn drop(&mut self) {
-        for (_keys, (_handle, mut on_delete)) in self.by_keys.drain() {
-            if let Some(func) = on_delete.take() {
-                func()
-            }
-        }
-        if let Some((_handle, mut on_delete)) = self.by_self.take() {
-            if let Some(func) = on_delete.take() {
-                func()
-            }
         }
     }
 }
