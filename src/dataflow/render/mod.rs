@@ -227,6 +227,7 @@ where
                         panic!("Inappropriate to re-bind name: {:?}", bind);
                     } else {
                         self.ensure_rendered(value, scope, worker_index);
+                        self.clone_from_to(value, &bind);
                         self.ensure_rendered(body, scope, worker_index);
                         self.clone_from_to(body, relation_expr);
                     }
