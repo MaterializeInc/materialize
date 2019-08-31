@@ -76,7 +76,7 @@ pub fn build_dataflow<A: Allocate>(
 
             let arrangement = relation_expr
                 .as_collection()
-                // The following two lines implement `arrange_by_self` with a name.
+                // TODO: We might choose to arrange by a more effective key.
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
@@ -125,11 +125,13 @@ pub fn build_dataflow<A: Allocate>(
                             buttons.push(button);
                         }
                         // // Experimental: add all indexed collections.
+                        // // TODO: view could name arrangements of value for each get.
                         // if let Some(traces) = manager.get_all_keyed(&name) {
                         //     for (key, trace) in traces {
-                        //         let (arranged, button) = trace.import_core(scope, name);
+                        //         let (arranged, button) =
+                        //             trace.import_frontier_core(scope, name, as_of.clone());
                         //         let arranged = arranged.enter(region);
-                        //         context.set_trace(e.clone(), key, arranged);
+                        //         context.set_trace(e, key, arranged);
                         //         buttons.push(button);
                         //     }
                         // }
@@ -157,6 +159,9 @@ pub fn build_dataflow<A: Allocate>(
                         }
                     })),
                 );
+
+                // TODO: We could export a variety of arrangements if we were instructed
+                // to do so. We don't have a language for that at the moment.
             });
         }
     })
