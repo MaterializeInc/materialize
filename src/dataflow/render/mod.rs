@@ -111,7 +111,7 @@ pub fn build_dataflow<A: Allocate>(
             // alternate type signatures.
             scope.clone().region(|region| {
                 let mut buttons = Vec::new();
-                let mut context = Context::new();
+                let mut context = Context::<_, _, _, Timestamp>::new();
                 view.relation_expr.visit(&mut |e| {
                     if let RelationExpr::Get { name, typ: _ } = e {
                         // Import the believed-to-exist base arrangement.
@@ -122,7 +122,8 @@ pub fn build_dataflow<A: Allocate>(
                             context
                                 .collections
                                 .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
-                            buttons.push(button);
+
+                            buttons.push(button.press_on_drop());
                         }
                         // // Experimental: add all indexed collections.
                         // // TODO: view could name arrangements of value for each get.
@@ -150,15 +151,7 @@ pub fn build_dataflow<A: Allocate>(
                     .map(|x| (x, ()))
                     .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", view.name));
 
-                manager.set_by_self(
-                    view.name,
-                    arrangement.trace,
-                    Some(Box::new(move || {
-                        for mut button in buttons.drain(..) {
-                            button.press();
-                        }
-                    })),
-                );
+                manager.set_by_self(view.name, arrangement.trace, Some(Box::new(buttons)));
 
                 // TODO: We could export a variety of arrangements if we were instructed
                 // to do so. We don't have a language for that at the moment.
@@ -167,10 +160,11 @@ pub fn build_dataflow<A: Allocate>(
     })
 }
 
-impl<G> Context<G, RelationExpr, Datum, Timestamp>
+impl<G, T> Context<G, RelationExpr, Datum, T>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<Timestamp>,
+    G::Timestamp: Lattice + Refines<T>,
+    T: timely::progress::Timestamp + Lattice,
 {
     /// Ensures the context contains an entry for `relation_expr`.
     ///
@@ -359,7 +353,7 @@ where
             let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
             // The relation_expr is to implement join as a `fold` over `inputs`.
-            let mut input_iter = inputs.into_iter().enumerate();
+            let mut input_iter = inputs.iter().enumerate();
             if let Some((index, input)) = input_iter.next() {
                 // This collection will evolve as we join in more inputs.
                 let mut joined = self.collection(input).unwrap();
@@ -773,7 +767,7 @@ where
             let keys = (0..arity).collect::<Vec<_>>();
 
             // TODO: easier idioms for detecting, re-using, and stashing.
-            if !self.arrangement(&input, &keys[..]).is_some() {
+            if self.arrangement(&input, &keys[..]).is_none() {
                 self.ensure_rendered(input, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
@@ -821,7 +815,7 @@ where
             let keys = (0..arity).collect::<Vec<_>>();
 
             // TODO: easier idioms for detecting, re-using, and stashing.
-            if !self.arrangement(&input, &keys[..]).is_some() {
+            if self.arrangement(&input, &keys[..]).is_none() {
                 self.ensure_rendered(input, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
