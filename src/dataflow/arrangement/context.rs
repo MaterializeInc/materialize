@@ -71,9 +71,9 @@ where
 
     /// Indicates if a collection is available.
     pub fn has_collection(&self, relation_expr: &P) -> bool {
-        self.collections.get(relation_expr).is_some() ||
-        self.local.get(relation_expr).is_some() ||
-        self.trace.get(relation_expr).is_some()
+        self.collections.get(relation_expr).is_some()
+            || self.local.get(relation_expr).is_some()
+            || self.trace.get(relation_expr).is_some()
     }
 
     /// Assembles a collection if available.
@@ -161,6 +161,19 @@ where
             .entry(relation_expr.clone())
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
+    }
+
+    /// Clones from one key to another, as needed in let binding.
+    pub fn clone_from_to(&mut self, key1: &P, key2: &P) {
+        if let Some(collection) = self.collections.get(key1).cloned() {
+            self.collections.insert(key2.clone(), collection);
+        }
+        if let Some(handles) = self.local.get(key1).cloned() {
+            self.local.insert(key2.clone(), handles);
+        }
+        if let Some(handles) = self.trace.get(key1).cloned() {
+            self.trace.insert(key2.clone(), handles);
+        }
     }
 }
 
