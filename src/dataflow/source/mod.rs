@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::types::Timestamp;
+use dataflow_types::Timestamp;
 use std::cell::RefCell;
 use std::rc::Rc;
 use timely::dataflow::operators::Capability;

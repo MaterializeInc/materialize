@@ -28,7 +28,8 @@ use uuid::Uuid;
 use crate::exfiltrate::Exfiltrator;
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
-use crate::{Dataflow, DataflowCommand, PeekWhen, Timestamp, View};
+use crate::DataflowCommand;
+use dataflow_types::{Dataflow, PeekWhen, Timestamp, View};
 use expr::RelationExpr;
 use repr::Datum;
 

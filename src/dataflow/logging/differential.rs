@@ -5,7 +5,7 @@
 
 use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysOnlyHandle;
-use crate::types::Timestamp;
+use dataflow_types::Timestamp;
 use differential_dataflow::logging::DifferentialEvent;
 use repr::Datum;
 use std::time::Duration;
@@ -15,10 +15,10 @@ use timely::logging::WorkerIdentifier;
 
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    config: &super::LoggingConfiguration,
+    config: &dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
 ) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
-    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
+    let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
@@ -83,7 +83,7 @@ pub fn construct<A: Allocate>(
             arrangements.trace,
         )]
         .into_iter()
-        .filter(|(name, _trace)| config.active_logs.contains(name))
+        .filter(|(name, _trace)| config.active_logs().contains(name))
         .collect()
     });
 

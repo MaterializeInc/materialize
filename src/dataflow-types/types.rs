@@ -3,35 +3,23 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use serde::{Deserialize, Serialize};
-use url::Url;
-use uuid::Uuid;
+//! The types for the dataflow crate.
+//!
+//! These are extracted into their own crate so that crates that only depend
+//! on the interface of the dataflow crate, and not its implementation, can
+//! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use expr::RelationExpr;
 use repr::{Datum, RelationType};
+use serde::{Deserialize, Serialize};
+use url::Url;
+use uuid::Uuid;
 
 /// System-wide update type.
 pub type Diff = isize;
 
 /// System-wide timestamp type.
 pub type Timestamp = u64;
-
-/// The commands that a running dataflow server can accept.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DataflowCommand {
-    CreateDataflows(Vec<Dataflow>),
-    DropDataflows(Vec<String>),
-    Peek {
-        conn_id: u32,
-        source: RelationExpr,
-        when: PeekWhen,
-    },
-    Explain {
-        conn_id: u32,
-        relation_expr: RelationExpr,
-    },
-    Shutdown,
-}
 
 /// Specifies when a `Peek` should occur.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,6 +40,15 @@ pub struct Update {
     pub row: Vec<Datum>,
     pub timestamp: u64,
     pub diff: isize,
+}
+
+/// A batch of data exfiltrated from the dataflow layer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Exfiltration {
+    /// The complete result of a `DataflowCommand::Peek` from one worker.
+    Peek(Vec<Vec<Datum>>),
+    /// A chunk of updates from a tail sink.
+    Tail(Vec<Update>),
 }
 
 #[derive(Debug, Clone)]

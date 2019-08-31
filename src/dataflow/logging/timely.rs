@@ -5,7 +5,8 @@
 
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysOnlyHandle;
-use crate::types::Timestamp;
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::Timestamp;
 use repr::Datum;
 use std::time::Duration;
 use timely::communication::Allocate;
@@ -15,10 +16,10 @@ use timely::logging::{TimelyEvent, WorkerIdentifier};
 // Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
-    config: &super::LoggingConfiguration,
+    config: &LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
 ) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
-    let granularity_ms = std::cmp::max(1, config.granularity_ns / 1_000_000) as Timestamp;
+    let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow(move |scope| {
@@ -212,7 +213,7 @@ pub fn construct<A: Allocate>(
             (LogVariant::Timely(TimelyLog::Histogram), histogram.trace),
         ]
         .into_iter()
-        .filter(|(name, _trace)| config.active_logs.contains(name))
+        .filter(|(name, _trace)| config.active_logs().contains(name))
         .collect()
     });
 

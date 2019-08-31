@@ -25,9 +25,10 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
 use uuid::Uuid;
 
-use dataflow::{
-    Dataflow, DataflowCommand, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink,
-    SinkConnector, Source, SourceConnector, TailSinkConnector, View,
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{
+    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink, SinkConnector, Source,
+    SourceConnector, View,
 };
 use expr::like::build_like_regex_from_string;
 use expr::{
@@ -47,46 +48,37 @@ mod session;
 pub mod store;
 mod transform;
 
-/// Flag for whether optimizer or workers will chime in as well.
+/// Instructions for executing a SQL query.
 #[derive(Debug)]
-pub enum WaitFor {
-    NoOne,
-    Optimizer,
-    Workers,
-}
-
-#[derive(Debug)]
-/// Responses from the planner to SQL commands.
-pub enum SqlResponse {
-    CreatedSink,
-    CreatedSource,
-    CreatedView,
-    DroppedSource,
-    DroppedView,
+pub enum Plan {
+    CreateSource(Source),
+    CreateSources(Vec<Source>),
+    CreateSink(Sink),
+    CreateView(View),
+    DropSources(Vec<String>),
+    DropViews(Vec<String>),
     EmptyQuery,
+    DidSetVariable,
+    Peek {
+        source: RelationExpr,
+        when: PeekWhen,
+    },
+    Tail(Dataflow),
     SendRows {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
-        wait_for: WaitFor,
     },
-    SetVariable,
-    Tailing,
+    ExplainPlan {
+        typ: RelationType,
+        relation_expr: RelationExpr,
+    },
 }
 
-/// Converts raw SQL queries into dataflow commands.
+/// Converts raw SQL queries into [`Plan`]s.
 #[derive(Debug)]
 pub struct Planner {
     pub dataflows: DataflowStore,
 }
-
-/// The result of planning a SQL query.
-///
-/// The `Ok` variant bundles a [`SQLResponse`] and an optional
-/// [`DataflowCommand`]. The `SQLResponse` is meant for the end user, while the
-/// `DataflowCommand` is meant to drive a running dataflow server. Typically the
-/// `SQLResponse` can be sent directly to the client, though some commands require
-/// special handling as indicated by [`WaitFor`].
-pub type PlannerResult = Result<(SqlResponse, Option<DataflowCommand>), failure::Error>;
 
 /// Whether a SQL object type can be interpreted as matching the type of the given Dataflow.
 /// For example, if `v` is a view, `DROP SOURCE v` should not work, since Source and View
@@ -114,24 +106,23 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
 }
 
 impl Planner {
-    pub fn new(logging_config: Option<&dataflow::logging::LoggingConfiguration>) -> Planner {
+    pub fn new(logging_config: Option<&LoggingConfig>) -> Planner {
         Planner {
             dataflows: DataflowStore::new(logging_config),
         }
     }
 
     /// Parses and plans a raw SQL query. See the documentation for
-    /// [`PlannerResult`] for details about the meaning of the return type.
+    /// [`Result<Plan, failure::Error>`] for details about the meaning of the return type.
     pub fn handle_command(
         &mut self,
         session: &mut Session,
-        conn_id: u32,
         sql: String,
-    ) -> PlannerResult {
+    ) -> Result<Plan, failure::Error> {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
         match stmts.len() {
-            0 => Ok((SqlResponse::EmptyQuery, None)),
-            1 => self.handle_statement(session, conn_id, stmts.into_element()),
+            0 => Ok(Plan::EmptyQuery),
+            1 => self.handle_statement(session, stmts.into_element()),
             _ => bail!("expected one statement, but got {}", stmts.len()),
         }
     }
@@ -139,19 +130,18 @@ impl Planner {
     fn handle_statement(
         &mut self,
         session: &mut Session,
-        conn_id: u32,
         mut stmt: Statement,
-    ) -> PlannerResult {
+    ) -> Result<Plan, failure::Error> {
         transform::transform(&mut stmt);
         match stmt {
-            Statement::Peek { name, immediate } => self.handle_peek(conn_id, name, immediate),
-            Statement::Tail { name } => self.handle_tail(conn_id, name),
+            Statement::Peek { name, immediate } => self.handle_peek(name, immediate),
+            Statement::Tail { name } => self.handle_tail(name),
             Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
             | Statement::CreateView { .. }
             | Statement::CreateSources { .. } => self.handle_create_dataflow(stmt),
             Statement::Drop { .. } => self.handle_drop_dataflow(stmt),
-            Statement::Query(query) => self.handle_select(conn_id, *query),
+            Statement::Query(query) => self.handle_select(*query),
             Statement::SetVariable {
                 local,
                 variable,
@@ -165,7 +155,7 @@ impl Planner {
                 table_name,
                 filter,
             } => self.handle_show_columns(extended, full, &table_name, filter.as_ref()),
-            Statement::Explain { stage, query } => self.handle_explain(conn_id, stage, *query),
+            Statement::Explain { stage, query } => self.handle_explain(stage, *query),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
         }
@@ -177,7 +167,7 @@ impl Planner {
         local: bool,
         variable: Ident,
         value: SetVariableValue,
-    ) -> PlannerResult {
+    ) -> Result<Plan, failure::Error> {
         if local {
             bail!("SET LOCAL ... is not supported");
         }
@@ -189,80 +179,60 @@ impl Planner {
                 SetVariableValue::Ident(ident) => ident,
             },
         )?;
-        Ok((SqlResponse::SetVariable, None))
+        Ok(Plan::DidSetVariable)
     }
 
-    fn handle_show_variable(&mut self, session: &Session, variable: Ident) -> PlannerResult {
+    fn handle_show_variable(
+        &mut self,
+        session: &Session,
+        variable: Ident,
+    ) -> Result<Plan, failure::Error> {
         if variable == unicase::Ascii::new("ALL") {
-            Ok((
-                SqlResponse::SendRows {
-                    typ: RelationType {
-                        column_types: vec![
-                            ColumnType::new(ScalarType::String).name("name"),
-                            ColumnType::new(ScalarType::String).name("setting"),
-                            ColumnType::new(ScalarType::String).name("description"),
-                        ],
-                    },
-                    rows: session
-                        .vars()
-                        .iter()
-                        .map(|v| vec![v.name().into(), v.value().into(), v.description().into()])
-                        .collect(),
-                    wait_for: WaitFor::NoOne,
+            Ok(Plan::SendRows {
+                typ: RelationType {
+                    column_types: vec![
+                        ColumnType::new(ScalarType::String).name("name"),
+                        ColumnType::new(ScalarType::String).name("setting"),
+                        ColumnType::new(ScalarType::String).name("description"),
+                    ],
                 },
-                None,
-            ))
+                rows: session
+                    .vars()
+                    .iter()
+                    .map(|v| vec![v.name().into(), v.value().into(), v.description().into()])
+                    .collect(),
+            })
         } else {
             let variable = session.get(&variable)?;
-            Ok((
-                SqlResponse::SendRows {
-                    typ: RelationType {
-                        column_types: vec![
-                            ColumnType::new(ScalarType::String).name(variable.name())
-                        ],
-                    },
-                    rows: vec![vec![variable.value().into()]],
-                    wait_for: WaitFor::NoOne,
+            Ok(Plan::SendRows {
+                typ: RelationType {
+                    column_types: vec![ColumnType::new(ScalarType::String).name(variable.name())],
                 },
-                None,
-            ))
+                rows: vec![vec![variable.value().into()]],
+            })
         }
     }
 
-    fn handle_tail(&mut self, conn_id: u32, from: ObjectName) -> PlannerResult {
-        let name = format!("<temp_{}>", Uuid::new_v4());
+    fn handle_tail(&mut self, from: ObjectName) -> Result<Plan, failure::Error> {
         let from = extract_sql_object_name(&from)?;
         let dataflow = self.dataflows.get(&from)?;
-        Ok((
-            SqlResponse::Tailing,
-            Some(DataflowCommand::CreateDataflows(vec![Dataflow::Sink(
-                Sink {
-                    name,
-                    from: (from, dataflow.typ().clone()),
-                    connector: SinkConnector::Tail(TailSinkConnector { conn_id }),
-                },
-            )])),
-        ))
+        Ok(Plan::Tail(dataflow.clone()))
     }
 
-    fn handle_show_objects(&mut self, object_type: ObjectType) -> PlannerResult {
+    fn handle_show_objects(&mut self, object_type: ObjectType) -> Result<Plan, failure::Error> {
         let rows: Vec<Vec<Datum>> = self
             .dataflows
             .iter()
             .filter(|(_k, v)| object_type_matches(object_type, &v))
             .map(|(k, _v)| vec![Datum::from(k.to_owned())])
             .collect();
-        Ok((
-            SqlResponse::SendRows {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String)
-                        .name(object_type_as_plural_str(object_type).to_owned())],
-                },
-                rows,
-                wait_for: WaitFor::NoOne,
+        Ok(Plan::SendRows {
+            typ: RelationType {
+                column_types: vec![ColumnType::new(ScalarType::String)
+                    .name(object_type_as_plural_str(object_type).to_owned())],
             },
-            None,
-        ))
+            rows,
+        })
     }
 
     /// Create an immediate result that describes all the columns for the given table
@@ -272,7 +242,7 @@ impl Planner {
         full: bool,
         table_name: &ObjectName,
         filter: Option<&ShowStatementFilter>,
-    ) -> PlannerResult {
+    ) -> Result<Plan, failure::Error> {
         if extended {
             bail!("SHOW EXTENDED COLUMNS is not supported");
         }
@@ -298,156 +268,16 @@ impl Planner {
             .collect();
 
         let col_name = |s: &str| ColumnType::new(ScalarType::String).name(s.to_string());
-        Ok((
-            SqlResponse::SendRows {
-                typ: RelationType {
-                    column_types: vec![col_name("Field"), col_name("Nullable"), col_name("Type")],
-                },
-                rows: column_descriptions,
-                wait_for: WaitFor::NoOne,
+        Ok(Plan::SendRows {
+            typ: RelationType {
+                column_types: vec![col_name("Field"), col_name("Nullable"), col_name("Type")],
             },
-            None,
-        ))
+            rows: column_descriptions,
+        })
     }
 
-    fn handle_create_dataflow(&mut self, stmt: Statement) -> PlannerResult {
-        let dataflows = self.plan_create_statement(&stmt)?;
-        let sql_response = match stmt {
-            Statement::CreateSource { .. } => SqlResponse::CreatedSource,
-            Statement::CreateSink { .. } => SqlResponse::CreatedSink,
-            Statement::CreateView { .. } => SqlResponse::CreatedView,
-            Statement::CreateSources { .. } => SqlResponse::SendRows {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String).name("Topic")],
-                },
-                rows: dataflows
-                    .iter()
-                    .map(|df| vec![Datum::from(df.name().to_owned())])
-                    .collect(),
-                wait_for: WaitFor::NoOne,
-            },
-            _ => unreachable!(),
-        };
-        for dataflow in &dataflows {
-            self.dataflows.insert(dataflow.clone())?;
-        }
-        Ok((
-            sql_response,
-            Some(DataflowCommand::CreateDataflows(dataflows)),
-        ))
-    }
-
-    fn handle_drop_dataflow(&mut self, stmt: Statement) -> PlannerResult {
-        let (object_type, if_exists, names, cascade) = match stmt {
-            Statement::Drop {
-                object_type,
-                if_exists,
-                names,
-                cascade,
-            } => (object_type, if_exists, names, cascade),
-            _ => unreachable!(),
-        };
-        let names: Vec<String> = Result::from_iter(names.iter().map(extract_sql_object_name))?;
-        for name in &names {
-            match self.dataflows.get(name) {
-                Ok(dataflow) => {
-                    if !object_type_matches(object_type, dataflow) {
-                        bail!("{} is not of type {}", name, object_type);
-                    }
-                }
-                Err(e) => {
-                    if !if_exists {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        let mode = RemoveMode::from_cascade(cascade);
-        let mut removed = vec![];
-        for name in &names {
-            self.dataflows.remove(name, mode, &mut removed)?;
-        }
-        let sql_response = match object_type {
-            ObjectType::Source => SqlResponse::DroppedSource,
-            ObjectType::View => SqlResponse::DroppedView,
-            _ => bail!("unsupported SQL statement: DROP {}", object_type),
-        };
-        let removed = removed.iter().map(|d| d.name().to_owned()).collect();
-        Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
-    }
-
-    fn handle_peek(&mut self, conn_id: u32, name: ObjectName, immediate: bool) -> PlannerResult {
-        let name = name.to_string();
-        let dataflow = self.dataflows.get(&name)?.clone();
-        Ok((
-            SqlResponse::SendRows {
-                typ: dataflow.typ().clone(),
-                rows: Vec::new(),
-                wait_for: WaitFor::Workers,
-            },
-            Some(DataflowCommand::Peek {
-                conn_id,
-                source: RelationExpr::Get {
-                    name: dataflow.name().to_owned(),
-                    typ: dataflow.typ().clone(),
-                },
-                when: if immediate {
-                    PeekWhen::Immediately
-                } else {
-                    PeekWhen::EarliestSource
-                },
-            }),
-        ))
-    }
-
-    pub fn handle_select(&mut self, conn_id: u32, query: Query) -> PlannerResult {
-        let relation_expr = self.plan_query(&query)?;
-        Ok((
-            SqlResponse::SendRows {
-                typ: relation_expr.typ(),
-                rows: Vec::new(),
-                wait_for: WaitFor::Workers,
-            },
-            Some(DataflowCommand::Peek {
-                conn_id,
-                source: relation_expr,
-                when: PeekWhen::Immediately,
-            }),
-        ))
-    }
-
-    pub fn handle_explain(&mut self, conn_id: u32, stage: Stage, query: Query) -> PlannerResult {
-        let mut relation_expr = self.plan_query(&query)?;
-        if stage == Stage::Dataflow {
-            Ok((
-                SqlResponse::SendRows {
-                    typ: RelationType {
-                        column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
-                    },
-                    rows: vec![vec![Datum::from(relation_expr.pretty())]],
-                    wait_for: WaitFor::NoOne,
-                },
-                None,
-            ))
-        } else {
-            Ok((
-                SqlResponse::SendRows {
-                    typ: RelationType {
-                        column_types: vec![ColumnType::new(ScalarType::String).name("Plan")],
-                    },
-                    rows: vec![],
-                    wait_for: WaitFor::Optimizer,
-                },
-                Some(DataflowCommand::Explain {
-                    conn_id,
-                    relation_expr,
-                }),
-            ))
-        }
-    }
-
-    fn plan_create_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
-        match stmt {
+    fn handle_create_dataflow(&mut self, stmt: Statement) -> Result<Plan, failure::Error> {
+        match &stmt {
             Statement::CreateView {
                 name,
                 columns,
@@ -472,12 +302,14 @@ impl Planner {
                         typ.name = Some(name.clone());
                     }
                 }
-                Ok(vec![Dataflow::View(View {
+                let view = View {
                     name: extract_sql_object_name(name)?,
                     relation_expr,
                     typ,
                     as_of: None,
-                })])
+                };
+                self.dataflows.insert(Dataflow::View(view.clone()))?;
+                Ok(Plan::CreateView(view))
             }
             Statement::CreateSource {
                 name,
@@ -490,10 +322,9 @@ impl Planner {
                 }
                 let name = extract_sql_object_name(name)?;
                 let (addr, topic) = parse_kafka_topic_url(url)?;
-
-                Ok(vec![Dataflow::Source(build_source(
-                    schema, addr, name, topic,
-                )?)])
+                let source = build_source(schema, addr, name, topic)?;
+                self.dataflows.insert(Dataflow::Source(source.clone()))?;
+                Ok(Plan::CreateSource(source))
             }
             Statement::CreateSources {
                 like,
@@ -534,18 +365,20 @@ impl Planner {
                         s
                     );
                 }
-                let results: Result<Vec<_>, failure::Error> = names
+                let sources = names
                     .map(|(topic_name, sql_name)| {
-                        Ok(Dataflow::Source(build_source(
+                        Ok(build_source(
                             &SourceSchema::Registry(schema_registry.to_owned()),
                             addr,
                             sql_name,
                             topic_name.to_owned(),
-                        )?))
+                        )?)
                     })
-                    .collect();
-
-                Ok(results?)
+                    .collect::<Result<Vec<_>, failure::Error>>()?;
+                for source in &sources {
+                    self.dataflows.insert(Dataflow::Source(source.clone()))?;
+                }
+                Ok(Plan::CreateSources(sources))
             }
             Statement::CreateSink {
                 name,
@@ -560,7 +393,7 @@ impl Planner {
                 let from = extract_sql_object_name(from)?;
                 let dataflow = self.dataflows.get(&from)?;
                 let (addr, topic) = parse_kafka_topic_url(url)?;
-                Ok(vec![Dataflow::Sink(Sink {
+                let sink = Sink {
                     name,
                     from: (from, dataflow.typ().clone()),
                     connector: SinkConnector::Kafka(KafkaSinkConnector {
@@ -568,9 +401,92 @@ impl Planner {
                         topic,
                         schema_id: 0,
                     }),
-                })])
+                };
+                self.dataflows.insert(Dataflow::Sink(sink.clone()))?;
+                Ok(Plan::CreateSink(sink))
             }
             other => bail!("Unsupported statement: {:?}", other),
+        }
+    }
+
+    fn handle_drop_dataflow(&mut self, stmt: Statement) -> Result<Plan, failure::Error> {
+        let (object_type, if_exists, names, cascade) = match stmt {
+            Statement::Drop {
+                object_type,
+                if_exists,
+                names,
+                cascade,
+            } => (object_type, if_exists, names, cascade),
+            _ => unreachable!(),
+        };
+        let names: Vec<String> = Result::from_iter(names.iter().map(extract_sql_object_name))?;
+        for name in &names {
+            match self.dataflows.get(name) {
+                Ok(dataflow) => {
+                    if !object_type_matches(object_type, dataflow) {
+                        bail!("{} is not of type {}", name, object_type);
+                    }
+                }
+                Err(e) => {
+                    if !if_exists {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        let mode = RemoveMode::from_cascade(cascade);
+        let mut removed = vec![];
+        for name in &names {
+            self.dataflows.remove(name, mode, &mut removed)?;
+        }
+        let removed = removed.iter().map(|d| d.name().to_owned()).collect();
+        Ok(match object_type {
+            ObjectType::Source => Plan::DropSources(removed),
+            ObjectType::View => Plan::DropViews(removed),
+            _ => bail!("unsupported SQL statement: DROP {}", object_type),
+        })
+    }
+
+    fn handle_peek(&mut self, name: ObjectName, immediate: bool) -> Result<Plan, failure::Error> {
+        let name = name.to_string();
+        let dataflow = self.dataflows.get(&name)?.clone();
+        Ok(Plan::Peek {
+            source: RelationExpr::Get {
+                name: dataflow.name().to_owned(),
+                typ: dataflow.typ().clone(),
+            },
+            when: if immediate {
+                PeekWhen::Immediately
+            } else {
+                PeekWhen::EarliestSource
+            },
+        })
+    }
+
+    pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
+        let relation_expr = self.plan_query(&query)?;
+        Ok(Plan::Peek {
+            source: relation_expr,
+            when: PeekWhen::Immediately,
+        })
+    }
+
+    pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
+        let mut relation_expr = self.plan_query(&query)?;
+        if stage == Stage::Dataflow {
+            Ok(Plan::SendRows {
+                typ: RelationType {
+                    column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
+                },
+                rows: vec![vec![Datum::from(relation_expr.pretty())]],
+            })
+        } else {
+            Ok(Plan::ExplainPlan {
+                typ: RelationType {
+                    column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
+                },
+                relation_expr,
+            })
         }
     }
 

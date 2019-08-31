@@ -3,11 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::Update;
+use dataflow_types::{Exfiltration, Update};
 use ore::mpmc::Mux;
 use repr::Datum;
 
@@ -18,15 +17,6 @@ pub enum ExfiltratorConfig {
     Local(Mux<u32, Exfiltration>),
     /// An address to send results to via the network.
     Remote(String),
-}
-
-/// A batch of data exfiltrated from the dataflow layer.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Exfiltration {
-    /// The complete result of a `DataflowCommand::Peek` from one worker.
-    Peek(Vec<Vec<Datum>>),
-    /// A chunk of updates from a tail sink.
-    Tail(Vec<Update>),
 }
 
 #[derive(Clone, Debug)]

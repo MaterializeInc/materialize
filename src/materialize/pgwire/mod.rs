@@ -25,7 +25,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::queue;
-use dataflow::Exfiltration;
+use dataflow_types::Exfiltration;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 

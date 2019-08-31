@@ -9,7 +9,7 @@ use hyper::service;
 use hyper::{Body, Method, Request, Response};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use dataflow::Exfiltration;
+use dataflow_types::Exfiltration;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 
