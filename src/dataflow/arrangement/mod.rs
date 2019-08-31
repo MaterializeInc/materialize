@@ -5,8 +5,5 @@
 
 //! Types related to the arrangement and management of collections.
 
-pub mod context;
 pub mod manager;
-
-pub use context::Context;
 pub use manager::{KeysOnlyHandle, KeysValsHandle, TraceManager};

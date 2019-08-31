@@ -25,8 +25,10 @@ use super::sink;
 use super::source;
 use super::source::SharedCapability;
 use crate::arrangement::TraceManager;
-use crate::arrangement::{context::ArrangementFlavor, Context};
 use crate::exfiltrate::Exfiltrator;
+
+mod context;
+use context::{ArrangementFlavor, Context};
 
 pub enum InputCapability {
     External(SharedCapability),
