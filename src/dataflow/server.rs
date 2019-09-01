@@ -25,7 +25,6 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::render;
-use super::render::InputCapability;
 use crate::arrangement::{manager::KeysOnlyHandle, TraceManager};
 use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
@@ -100,7 +99,7 @@ where
     exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
     traces: TraceManager,
-    inputs: HashMap<String, InputCapability>,
+    names: HashMap<String, Box<dyn Drop>>,
     sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<LoggingConfig>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
@@ -129,7 +128,7 @@ where
             exfiltrator,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
-            inputs: HashMap::new(),
+            names: HashMap::new(),
             sequencer,
             logging_config,
             command_coordinator,
@@ -183,13 +182,13 @@ where
 
             // Install traces as maintained views.
             for (log, trace) in t_traces {
-                self.traces.set_by_self(log.name().to_string(), trace, None);
+                self.traces.set_by_self(log.name().to_string(), trace);
             }
             for (log, trace) in d_traces {
-                self.traces.set_by_self(log.name().to_string(), trace, None);
+                self.traces.set_by_self(log.name().to_string(), trace);
             }
             for (log, trace) in m_traces {
-                self.traces.set_by_self(log.name().to_string(), trace, None);
+                self.traces.set_by_self(log.name().to_string(), trace);
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -276,7 +275,7 @@ where
                         dataflow,
                         &mut self.traces,
                         self.inner,
-                        &mut self.inputs,
+                        &mut self.names,
                         &mut self.local_input_mux,
                         self.exfiltrator.clone(),
                     );
@@ -288,7 +287,7 @@ where
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                     }
-                    self.inputs.remove(name);
+                    self.names.remove(name);
                     self.traces.del_trace(name);
                 }
             }
@@ -333,7 +332,7 @@ where
 
             coordinator::SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
-                self.inputs.clear();
+                self.names.clear();
                 self.traces.del_all_traces();
                 self.shutdown_logging();
             }

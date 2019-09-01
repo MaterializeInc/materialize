@@ -23,22 +23,17 @@ use repr::Datum;
 
 use super::sink;
 use super::source;
-use super::source::SharedCapability;
 use crate::arrangement::TraceManager;
 use crate::exfiltrate::Exfiltrator;
 
 mod context;
 use context::{ArrangementFlavor, Context};
 
-pub enum InputCapability {
-    External(SharedCapability),
-}
-
 pub fn build_dataflow<A: Allocate>(
     dataflow: Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    inputs: &mut HashMap<String, InputCapability>,
+    names: &mut HashMap<String, Box<dyn Drop>>,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
 ) {
@@ -57,7 +52,7 @@ pub fn build_dataflow<A: Allocate>(
 
                     let (stream, capability) = source::kafka(scope, &src.name, c, read_from_kafka);
                     if let Some(capability) = capability {
-                        inputs.insert(src.name.clone(), InputCapability::External(capability));
+                        names.insert(src.name.clone(), Box::new(capability));
                     }
                     stream
                 }
@@ -65,7 +60,7 @@ pub fn build_dataflow<A: Allocate>(
                     let (stream, capability) =
                         source::local(scope, &src.name, c, worker_index == 0, local_input_mux);
                     if let Some(capability) = capability {
-                        inputs.insert(src.name.clone(), InputCapability::External(capability));
+                        names.insert(src.name.clone(), Box::new(capability));
                     }
                     stream
                 }
@@ -80,7 +75,7 @@ pub fn build_dataflow<A: Allocate>(
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
-            manager.set_by_self(src.name.to_owned(), arrangement.trace, None);
+            manager.set_by_self(src.name.to_owned(), arrangement.trace);
         }
         Dataflow::Sink(sink) => {
             let done = Rc::new(Cell::new(false));
@@ -151,7 +146,8 @@ pub fn build_dataflow<A: Allocate>(
                     .map(|x| (x, ()))
                     .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", view.name));
 
-                manager.set_by_self(view.name, arrangement.trace, Some(Box::new(buttons)));
+                names.insert(view.name.to_string(), Box::new(buttons));
+                manager.set_by_self(view.name, arrangement.trace);
 
                 // TODO: We could export a variety of arrangements if we were instructed
                 // to do so. We don't have a language for that at the moment.
