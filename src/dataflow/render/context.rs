@@ -39,8 +39,14 @@ type ArrangementImport<S, V, T> = Arranged<
 /// A context means to wrap available data assets and present them in an easy-to-use manner.
 /// These assets include dataflow-local collections and arrangements, as well as imported
 /// arrangements from outside the dataflow.
-pub struct Context<S: Scope, P: Eq + std::hash::Hash, V: Data, T>
+///
+/// Context has two timestamp types, one from `S::Timestamp` and one from `T`, where the
+/// former must refine the latter. The former is the timestamp used by the scope in question,
+/// and the latter is the timestamp of imported traces. The two may be different in the case
+/// of regions or iteration.
+pub struct Context<S: Scope, P, V: Data, T>
 where
+    P: Eq + std::hash::Hash + Clone,
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
@@ -53,8 +59,9 @@ where
     pub trace: HashMap<P, HashMap<Vec<usize>, ArrangementImport<S, V, T>>>,
 }
 
-impl<S: Scope, P: Eq + std::hash::Hash, V: Data, T> Context<S, P, V, T>
+impl<S: Scope, P, V: Data, T> Context<S, P, V, T>
 where
+    P: Eq + std::hash::Hash + Clone,
     T: Timestamp + Lattice,
     S::Timestamp: Lattice + Refines<T>,
 {
@@ -65,6 +72,13 @@ where
             local: HashMap::new(),
             trace: HashMap::new(),
         }
+    }
+
+    /// Indicates if a collection is available.
+    pub fn has_collection(&self, relation_expr: &P) -> bool {
+        self.collections.get(relation_expr).is_some()
+            || self.local.get(relation_expr).is_some()
+            || self.trace.get(relation_expr).is_some()
     }
 
     /// Assembles a collection if available.
@@ -124,9 +138,9 @@ where
     }
 
     /// Binds a relation_expr and keys to a local arrangement.
-    pub fn set_local(&mut self, relation_expr: P, keys: &[usize], arranged: Arrangement<S, V>) {
+    pub fn set_local(&mut self, relation_expr: &P, keys: &[usize], arranged: Arrangement<S, V>) {
         self.local
-            .entry(relation_expr)
+            .entry(relation_expr.clone())
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
     }
@@ -144,14 +158,27 @@ where
     #[allow(dead_code)]
     pub fn set_trace(
         &mut self,
-        relation_expr: P,
+        relation_expr: &P,
         keys: &[usize],
         arranged: ArrangementImport<S, V, T>,
     ) {
         self.trace
-            .entry(relation_expr)
+            .entry(relation_expr.clone())
             .or_insert_with(|| HashMap::new())
             .insert(keys.to_vec(), arranged);
+    }
+
+    /// Clones from one key to another, as needed in let binding.
+    pub fn clone_from_to(&mut self, key1: &P, key2: &P) {
+        if let Some(collection) = self.collections.get(key1).cloned() {
+            self.collections.insert(key2.clone(), collection);
+        }
+        if let Some(handles) = self.local.get(key1).cloned() {
+            self.local.insert(key2.clone(), handles);
+        }
+        if let Some(handles) = self.trace.get(key1).cloned() {
+            self.trace.insert(key2.clone(), handles);
+        }
     }
 }
 
