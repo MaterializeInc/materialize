@@ -88,43 +88,34 @@ impl TraceManager {
     /// Returns a copy of the by_self arrangement, should it exist.
     #[allow(dead_code)]
     pub fn get_by_self(&self, name: &str) -> Option<&KeysOnlyHandle> {
-        self.traces.get(name)?.by_self.as_ref().map(|(t, _d)| t)
+        self.traces.get(name)?.by_self.as_ref()
     }
 
     /// Returns a copy of the by_self arrangement, should it exist.
     #[allow(dead_code)]
     pub fn get_by_self_mut(&mut self, name: &str) -> Option<&mut KeysOnlyHandle> {
-        self.traces.get_mut(name)?.by_self.as_mut().map(|(t, _d)| t)
+        self.traces.get_mut(name)?.by_self.as_mut()
     }
 
     /// Binds the by_self arrangement.
     #[allow(dead_code)]
-    pub fn set_by_self(
-        &mut self,
-        name: String,
-        trace: KeysOnlyHandle,
-        delete_callback: Option<Box<dyn Drop>>,
-    ) {
+    pub fn set_by_self(&mut self, name: String, trace: KeysOnlyHandle) {
         self.traces
             .entry(name)
             .or_insert_with(CollectionTraces::default)
-            .by_self = Some((trace, delete_callback));
+            .by_self = Some(trace);
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
     pub fn get_by_keys(&self, name: &str, keys: &[usize]) -> Option<&KeysValsHandle> {
-        self.traces.get(name)?.by_keys.get(keys).map(|(t, _d)| t)
+        self.traces.get(name)?.by_keys.get(keys)
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
     pub fn get_by_keys_mut(&mut self, name: &str, keys: &[usize]) -> Option<&mut KeysValsHandle> {
-        self.traces
-            .get_mut(name)?
-            .by_keys
-            .get_mut(keys)
-            .map(|(t, _d)| t)
+        self.traces.get_mut(name)?.by_keys.get_mut(keys)
     }
 
     #[allow(dead_code)]
@@ -132,29 +123,17 @@ impl TraceManager {
         &mut self,
         name: &str,
     ) -> Option<impl Iterator<Item = (&Vec<usize>, &mut KeysValsHandle)>> {
-        Some(
-            self.traces
-                .get_mut(name)?
-                .by_keys
-                .iter_mut()
-                .map(|(key, (handle, _d))| (key, handle)),
-        )
+        Some(self.traces.get_mut(name)?.by_keys.iter_mut())
     }
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(
-        &mut self,
-        name: String,
-        keys: &[usize],
-        trace: KeysValsHandle,
-        delete_callback: Option<Box<dyn Drop>>,
-    ) {
+    pub fn set_by_keys(&mut self, name: String, keys: &[usize], trace: KeysValsHandle) {
         self.traces
             .entry(name)
             .or_insert_with(CollectionTraces::default)
             .by_keys
-            .insert(keys.to_vec(), (trace, delete_callback));
+            .insert(keys.to_vec(), trace);
     }
 
     /// Removes all remnants of a named trace.
@@ -171,9 +150,9 @@ impl TraceManager {
 /// Maintained traces for a collection.
 pub struct CollectionTraces {
     /// The collection arranged "by self", where the key is the record.
-    by_self: Option<(KeysOnlyHandle, Option<Box<dyn Drop>>)>,
+    by_self: Option<KeysOnlyHandle>,
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    by_keys: HashMap<Vec<usize>, (KeysValsHandle, Option<Box<dyn Drop>>)>,
+    by_keys: HashMap<Vec<usize>, KeysValsHandle>,
 }
 
 impl CollectionTraces {
@@ -183,11 +162,11 @@ impl CollectionTraces {
         antichain: &mut timely::progress::frontier::Antichain<Timestamp>,
     ) {
         use differential_dataflow::trace::TraceReader;
-        if let Some((handle, _d)) = &mut self.by_self {
+        if let Some(handle) = &mut self.by_self {
             handle.read_upper(antichain);
             handle.distinguish_since(antichain.elements());
         }
-        for (handle, _d) in self.by_keys.values_mut() {
+        for handle in self.by_keys.values_mut() {
             handle.read_upper(antichain);
             handle.distinguish_since(antichain.elements());
         }
@@ -200,10 +179,10 @@ impl CollectionTraces {
     /// the times observed in traces may need to be advanced to this frontier.
     pub fn merge_logical(&mut self, frontier: &[Timestamp]) {
         use differential_dataflow::trace::TraceReader;
-        if let Some((handle, _d)) = &mut self.by_self {
+        if let Some(handle) = &mut self.by_self {
             handle.advance_by(frontier);
         }
-        for (handle, _d) in self.by_keys.values_mut() {
+        for handle in self.by_keys.values_mut() {
             handle.advance_by(frontier);
         }
     }
