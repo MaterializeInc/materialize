@@ -81,8 +81,12 @@ fn run() -> Result<(), failure::Error> {
         return Ok(());
     }
 
-    let logging_granularity = match popts.opt_str("logging-granularity").as_ref().map(|x| x.as_str()) {
-        None => Some(std::time::Duration::new(1,0)),
+    let logging_granularity = match popts
+        .opt_str("logging-granularity")
+        .as_ref()
+        .map(|x| x.as_str())
+    {
+        None => Some(std::time::Duration::new(1, 0)),
         Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
