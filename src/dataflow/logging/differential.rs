@@ -28,7 +28,10 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::operators::Map;
 
         // TODO: Rewrite as one operator with multiple outputs.
-        let logs = Some(linked).replay_into(scope);
+        let logs = Some(linked).replay_core(
+            scope,
+            Some(Duration::from_nanos(config.granularity_ns() as u64)),
+        );
 
         // Duration statistics derive from the non-rounded event times.
         let arrangements = logs
