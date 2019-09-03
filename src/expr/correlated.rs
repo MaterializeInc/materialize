@@ -311,7 +311,18 @@ impl RelationExpr {
                     Some(
                         aggregates
                             .iter()
-                            .map(|(aggregate, _)| aggregate.func.default())
+                            .map(|(aggregate, _)| {
+                                let (datum, scalar_type) = aggregate.func.default();
+                                let nullable = &datum == &Datum::Null;
+                                (
+                                    datum,
+                                    ColumnType {
+                                        name: None,
+                                        nullable,
+                                        scalar_type,
+                                    },
+                                )
+                            })
                             .collect(),
                     )
                 } else {
@@ -428,7 +439,14 @@ impl ScalarExpr {
                     input: Box::new(inner.clone()),
                     key: (0..inner_arity).collect(),
                     branch: Box::new(branch),
-                    default: Some(vec![Datum::False]),
+                    default: Some(vec![(
+                        Datum::False,
+                        ColumnType {
+                            name: None,
+                            nullable: false,
+                            scalar_type: ScalarType::Bool,
+                        },
+                    )]),
                 };
                 SS::Column(inner_arity)
             }
@@ -453,68 +471,6 @@ impl AggregateExpr {
             expr: expr.applied_to(outer_arity, inner)?,
             distinct,
         })
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn will_it_blend() {
-        use super::RelationExpr as SR;
-        use super::ScalarExpr as SS;
-        use RelationExpr as R;
-        use ScalarExpr as S;
-        let expr = R::Map {
-            input: Box::new(R::Get {
-                name: "foo".to_owned(),
-                typ: RelationType {
-                    column_types: vec![ColumnType {
-                        name: None,
-                        scalar_type: ScalarType::Bool,
-                        nullable: false,
-                    }],
-                },
-            }),
-            scalars: vec![(
-                S::Exists(Box::new(R::Filter {
-                    input: Box::new(R::Get {
-                        name: "bar".to_owned(),
-                        typ: RelationType {
-                            column_types: vec![ColumnType {
-                                name: None,
-                                scalar_type: ScalarType::Bool,
-                                nullable: false,
-                            }],
-                        },
-                    }),
-                    predicates: vec![S::CallBinary {
-                        func: BinaryFunc::Eq,
-                        expr1: Box::new(S::Column(0)),
-                        expr2: Box::new(S::Column(-1)),
-                    }],
-                })),
-                ColumnType {
-                    name: None,
-                    scalar_type: ScalarType::Bool,
-                    nullable: false,
-                },
-            )],
-        };
-        assert_eq!(
-            expr.decorrelate().unwrap(),
-            SR::Get {
-                name: "foo".to_owned(),
-                typ: RelationType {
-                    column_types: vec![ColumnType {
-                        name: None,
-                        scalar_type: ScalarType::Bool,
-                        nullable: false,
-                    }],
-                },
-            }
-        );
     }
 }
 

@@ -325,10 +325,10 @@ impl AggregateFunc {
         }
     }
 
-    pub fn default(self) -> Datum {
+    pub fn default(self) -> (Datum, ScalarType) {
         match self {
-            AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
-            _ => Datum::Null,
+            AggregateFunc::Count | AggregateFunc::CountAll => (Datum::Int64(0), ScalarType::Int64),
+            _ => (Datum::Null, ScalarType::Null),
         }
     }
 }

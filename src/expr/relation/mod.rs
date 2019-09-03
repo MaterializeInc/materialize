@@ -133,7 +133,7 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
         key: Vec<usize>,
         branch: Box<RelationExpr>,
-        default: Option<Vec<Datum>>,
+        default: Option<Vec<(Datum, ColumnType)>>,
     },
 }
 
