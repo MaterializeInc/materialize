@@ -6,6 +6,7 @@
 use crate::RelationExpr;
 use repr::RelationType;
 
+#[derive(Debug)]
 pub struct FractureReduce;
 
 impl super::Transform for FractureReduce {
@@ -81,6 +82,7 @@ impl FractureReduce {
     }
 }
 
+#[derive(Debug)]
 pub struct AbelianReduce;
 
 impl super::Transform for AbelianReduce {

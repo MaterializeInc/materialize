@@ -60,6 +60,7 @@
 use crate::{RelationExpr, ScalarExpr};
 use repr::RelationType;
 
+#[derive(Debug)]
 pub struct PredicatePushdown;
 
 impl super::Transform for PredicatePushdown {

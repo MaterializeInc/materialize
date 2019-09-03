@@ -39,6 +39,7 @@
 use crate::RelationExpr;
 use repr::RelationType;
 
+#[derive(Debug)]
 pub struct Filter;
 
 impl crate::transform::Transform for Filter {

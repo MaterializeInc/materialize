@@ -3,9 +3,11 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::fmt;
+use std::io;
+
 use futures::Poll;
 use smallvec::{smallvec, SmallVec};
-use std::io;
 use tokio::io::{AsyncRead, AsyncWrite, Read, Write};
 
 const INLINE_BUF_LEN: usize = 8;
@@ -50,6 +52,16 @@ pub struct SniffingStream<S> {
     buf: SmallVec<[u8; INLINE_BUF_LEN]>,
     off: usize,
     len: usize,
+}
+
+impl<S> fmt::Debug for SniffingStream<S> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SniffingStream")
+            .field("buf_size", &self.buf.len())
+            .field("off", &self.off)
+            .field("len", &self.len)
+            .finish()
+    }
 }
 
 impl<S> SniffingStream<S> {
@@ -114,6 +126,15 @@ pub struct SniffedStream<S> {
     inner: S,
     buf: SmallVec<[u8; INLINE_BUF_LEN]>,
     off: usize,
+}
+
+impl<S> fmt::Debug for SniffedStream<S> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SniffedStream")
+            .field("buf_size", &self.buf.len())
+            .field("off", &self.off)
+            .finish()
+    }
 }
 
 impl<R: Read> Read for SniffedStream<R> {

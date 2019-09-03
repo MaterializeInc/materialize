@@ -5,4 +5,6 @@
 
 //! Translations for various data serialization formats.
 
+#![deny(missing_debug_implementations)]
+
 pub mod avro;

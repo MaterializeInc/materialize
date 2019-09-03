@@ -3,6 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+#![deny(missing_debug_implementations)]
+
+use std::fmt;
+
 use crate::RelationExpr;
 use repr::RelationType;
 
@@ -29,6 +33,12 @@ pub trait Transform {
 /// the optimizations.
 pub struct Optimizer {
     transforms: Vec<Box<dyn crate::transform::Transform>>,
+}
+
+impl fmt::Debug for Optimizer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Optimizer({} transforms)", self.transforms.len())
+    }
 }
 
 impl Optimizer {

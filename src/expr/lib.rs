@@ -5,6 +5,8 @@
 
 //! Core expression language.
 
+#![deny(missing_debug_implementations)]
+
 pub mod like;
 mod relation;
 mod scalar;

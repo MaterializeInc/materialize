@@ -7,6 +7,7 @@ use crate::BinaryFunc;
 use crate::{RelationExpr, ScalarExpr};
 use repr::RelationType;
 
+#[derive(Debug)]
 pub struct SplitPredicates;
 
 impl super::Transform for SplitPredicates {

@@ -9,7 +9,7 @@
 //! Modules are included in this crate when they are broadly useful but too
 //! small to warrant their own crate.
 
-#![forbid(missing_docs)]
+#![deny(missing_docs, missing_debug_implementations)]
 
 pub mod collections;
 pub mod future;
