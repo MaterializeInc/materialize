@@ -20,6 +20,8 @@
 //! [`Datum`]: repr::Datum
 //! [`Datum::Tuple`]: repr::Datum::Tuple
 
+#![deny(missing_debug_implementations)]
+
 mod relation;
 mod scalar;
 

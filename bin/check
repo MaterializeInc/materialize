@@ -131,6 +131,9 @@ extra_lints=(
     #
     # Omitting `dyn` on a trait object will become deprecated in the near future
     bare_trait_objects
+
+    # We never want to have to back up and thread Debug through all our types again
+    # missing_debug_implementations
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

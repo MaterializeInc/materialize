@@ -38,6 +38,7 @@ use std::sync::Mutex;
 ///         .for_each(|handle| handle.join().unwrap());
 /// }).unwrap()
 /// ```
+#[derive(Debug)]
 pub struct Lottery<T, F>
 where
     F: Fn() -> T,

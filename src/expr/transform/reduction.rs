@@ -10,6 +10,7 @@ use repr::RelationType;
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
 
+#[derive(Debug)]
 pub struct FoldConstants;
 
 impl super::Transform for FoldConstants {
@@ -62,6 +63,7 @@ pub mod demorgans {
     use crate::{RelationExpr, ScalarExpr};
     use repr::{Datum, RelationType};
 
+    #[derive(Debug)]
     pub struct DeMorgans;
     impl crate::transform::Transform for DeMorgans {
         fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
@@ -153,6 +155,7 @@ pub mod undistribute_and {
     use crate::{RelationExpr, ScalarExpr};
     use repr::{Datum, RelationType};
 
+    #[derive(Debug)]
     pub struct UndistributeAnd;
 
     impl crate::transform::Transform for UndistributeAnd {

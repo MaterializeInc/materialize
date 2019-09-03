@@ -3,21 +3,24 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::iter::FromIterator;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+
 use failure::{bail, format_err};
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::sync::mpsc;
 use futures::sync::mpsc::Sender;
 use futures::{future, stream, Future, Sink, Stream};
+use futures::{Async, Poll};
 use lazy_static::lazy_static;
 use linked_hash_map::LinkedHashMap;
 use log::error;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
-use std::iter::FromIterator;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
 use tokio_zookeeper::error::Create;
 use tokio_zookeeper::error::Multi as MultiError;
 use tokio_zookeeper::{
@@ -45,6 +48,15 @@ pub struct MetaStore<D> {
     // struct, which makes for a convenient cancel signal when the struct is
     // dropped.
     _cancel_tx: Sender<()>,
+}
+
+impl<D> fmt::Debug for MetaStore<D> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Metastore")
+            .field("prefix", &self.prefix)
+            .field("addr", &self.addr)
+            .finish()
+    }
 }
 
 struct Inner<D> {
@@ -461,9 +473,6 @@ lazy_static! {
 }
 
 // TODO(benesch): see if this helper can be moved into ore::future.
-use futures::{Async, Poll};
-use std::fmt;
-
 trait SharedFutureExt<T> {
     fn extract_shared(self) -> ExtractShared<T>
     where

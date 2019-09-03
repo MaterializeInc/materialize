@@ -3,13 +3,15 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::fmt;
+
 use avro_rs::schema::{Schema, SchemaFingerprint};
 use avro_rs::types::Value;
 use byteorder::{BigEndian, ByteOrder};
 use failure::{bail, Error};
 use sha2::Sha256;
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
 use url::Url;
 
 use ore::collections::CollectionExt;
@@ -326,6 +328,23 @@ pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     fast_row_schema: Option<Schema>,
+}
+
+impl fmt::Debug for Decoder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Decoder")
+            .field("reader_schema", &self.reader_schema)
+            .field(
+                "write_schema",
+                if self.writer_schemas.is_some() {
+                    &"some"
+                } else {
+                    &"none"
+                },
+            )
+            .field("fast_row_schema", &self.fast_row_schema)
+            .finish()
+    }
 }
 
 impl Decoder {

@@ -131,6 +131,7 @@ where
 }
 
 /// The future returned by [`FutureExt::watch_for_cancel`].
+#[derive(Debug)]
 pub struct Cancelable<F, S> {
     future: F,
     signal: S,
@@ -193,6 +194,7 @@ pub trait StreamExt: Stream {
 impl<S: Stream> StreamExt for S {}
 
 /// The stream returned by [`StreamExt::drain`].
+#[derive(Debug)]
 pub struct Drain<S>(S);
 
 impl<S> Future for Drain<S>
@@ -209,6 +211,7 @@ where
 }
 
 /// The future returned by [`StreamExt::recv`].
+#[derive(Debug)]
 pub struct Recv<S> {
     inner: Option<S>,
 }
