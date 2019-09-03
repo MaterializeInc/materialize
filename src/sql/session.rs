@@ -65,6 +65,7 @@ const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
 };
 
 /// A `Session` holds SQL state that is attached to a session.
+#[derive(Debug)]
 pub struct Session {
     client_encoding: ServerVar<&'static str>,
     database: ServerVar<&'static str>,
@@ -212,6 +213,7 @@ impl Var for ServerVar<&'static str> {
 }
 
 /// A `ServerVar` is the default value for a configuration parameter.
+#[derive(Debug)]
 struct ServerVar<V> {
     name: unicase::Ascii<&'static str>,
     value: V,
@@ -220,6 +222,7 @@ struct ServerVar<V> {
 
 /// A `SessionVar` is the session value for a configuration parameter. If unset,
 /// the server default is used instead.
+#[derive(Debug)]
 struct SessionVar<V>
 where
     V: 'static,
