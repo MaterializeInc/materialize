@@ -503,7 +503,10 @@ impl RelationExpr {
                 f(left);
                 f(right);
             }
-            RelationExpr::Branch { .. } => unimplemented!(),
+            RelationExpr::Branch { input, branch, .. } => {
+                f(input);
+                f(branch);
+            }
         }
     }
 
@@ -557,7 +560,10 @@ impl RelationExpr {
                 f(left);
                 f(right);
             }
-            RelationExpr::Branch { .. } => unimplemented!(),
+            RelationExpr::Branch { input, branch, .. } => {
+                f(input);
+                f(branch);
+            }
         }
     }
 
