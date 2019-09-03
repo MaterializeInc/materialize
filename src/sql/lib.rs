@@ -2111,9 +2111,17 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         }
         DataType::Date => ScalarType::Date,
         DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Interval => ScalarType::IntervalDuration,
         DataType::Time => ScalarType::Time,
         DataType::Bytea => ScalarType::Bytes,
-        other => bail!("Unexpected SQL type: {:?}", other),
+        other @ DataType::Array(_)
+        | other @ DataType::Binary(..)
+        | other @ DataType::Blob(_)
+        | other @ DataType::Clob(_)
+        | other @ DataType::Custom(_)
+        | other @ DataType::Regclass
+        | other @ DataType::Uuid
+        | other @ DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", other),
     })
 }
 

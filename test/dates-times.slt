@@ -32,3 +32,42 @@ SELECT b FROM ts_ish
 1969-06-01 10:10:10.410
 1997-02-03 11:12:59.900
 2020-01-01 01:02:03.789
+
+
+query T
+SELECT INTERVAL '1' MONTH
+----
+1 month
+
+query T
+SELECT INTERVAL '1' YEAR
+----
+1 year
+
+query T
+SELECT INTERVAL '1-3' YEAR TO MONTH
+----
+1 year 3 months
+
+query T
+SELECT INTERVAL '1' MINUTE
+----
+01:00
+
+statement ok
+CREATE TABLE iv_ish (
+    b INTERVAL
+)
+
+statement ok
+INSERT INTO iv_ish VALUES (INTERVAL '1' YEAR), (INTERVAL '3' HOUR), (INTERVAL '4 2' DAY TO HOUR)
+
+query T rowsort
+SELECT * FROM iv_ish
+----
+4 days 02:00:00
+1 year
+03:00:00
+
+# query T
+# SELECT DATE '2000-01-01' + INTERVAL '1' MONTH
