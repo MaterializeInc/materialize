@@ -16,7 +16,7 @@ use ore::option::OptionExt;
 mod kafka;
 mod sql;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Config {
     pub kafka_addr: Option<String>,
     pub schema_registry_url: Option<String>,

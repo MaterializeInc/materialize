@@ -6,6 +6,7 @@
 use crate::RelationExpr;
 use repr::RelationType;
 
+#[derive(Debug)]
 pub struct Join;
 
 impl crate::transform::Transform for Join {

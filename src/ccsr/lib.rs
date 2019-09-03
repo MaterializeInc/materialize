@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+#![deny(missing_debug_implementations)]
+
 //! Confluent-compatible schema registry API client.
 
 use std::error::Error;
@@ -14,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 /// An API client for a Confluent-compatible schema registry.
+#[derive(Debug)]
 pub struct Client {
     inner: reqwest::Client,
     url: Url,

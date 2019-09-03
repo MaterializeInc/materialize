@@ -6,6 +6,7 @@
 use crate::RelationExpr;
 use repr::RelationType;
 
+#[derive(Debug)]
 pub struct EmptyMap;
 
 impl super::Transform for EmptyMap {

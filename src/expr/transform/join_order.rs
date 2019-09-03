@@ -38,6 +38,7 @@ use repr::RelationType;
 ///     assert_eq!(outputs, vec![0, 2, 1]);
 /// }
 /// ```
+#[derive(Debug)]
 pub struct JoinOrder;
 
 impl super::Transform for JoinOrder {
