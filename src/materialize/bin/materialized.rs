@@ -44,8 +44,8 @@ fn run() -> Result<(), failure::Error> {
     opts.optopt(
         "l",
         "logging-granularity",
-        "dataflow logging granularity (default off)",
-        "DURATION",
+        "dataflow logging granularity (default 1s)",
+        "DURATION/\"off\"",
     );
     opts.optopt(
         "w",
@@ -81,8 +81,9 @@ fn run() -> Result<(), failure::Error> {
         return Ok(());
     }
 
-    let logging_granularity = match popts.opt_str("logging-granularity") {
-        None => None,
+    let logging_granularity = match popts.opt_str("logging-granularity").as_ref().map(|x| x.as_str()) {
+        None => Some(std::time::Duration::new(1,0)),
+        Some("off") => None,
         Some(d) => Some(parse_duration::parse(&d)?),
     };
     let threads = popts.opt_get_default("threads", 1)?;
