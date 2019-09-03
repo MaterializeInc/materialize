@@ -25,7 +25,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::render;
-use crate::arrangement::{manager::KeysOnlyHandle, TraceManager};
+use crate::arrangement::{manager::{KeysOnlyHandle, WithDrop}, TraceManager};
 use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
@@ -86,8 +86,6 @@ struct PendingPeek {
     conn_id: u32,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
-    /// Whether to drop the dataflow when the peek completes.
-    drop_after_peek: bool,
 }
 
 struct Worker<'w, A>
@@ -97,9 +95,9 @@ where
     inner: &'w mut TimelyWorker<A>,
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
-    pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
+    pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
-    names: HashMap<String, Box<dyn Drop>>,
+    // names: HashMap<String, Box<dyn Drop>>,
     sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<LoggingConfig>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
@@ -128,7 +126,7 @@ where
             exfiltrator,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
-            names: HashMap::new(),
+            // names: HashMap::new(),
             sequencer,
             logging_config,
             command_coordinator,
@@ -181,14 +179,15 @@ where
                 );
 
             // Install traces as maintained views.
+            use crate::arrangement::manager::WithDrop;
             for (log, trace) in t_traces {
-                self.traces.set_by_self(log.name().to_string(), trace);
+                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
             for (log, trace) in d_traces {
-                self.traces.set_by_self(log.name().to_string(), trace);
+                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
             for (log, trace) in m_traces {
-                self.traces.set_by_self(log.name().to_string(), trace);
+                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -275,7 +274,7 @@ where
                         dataflow,
                         &mut self.traces,
                         self.inner,
-                        &mut self.names,
+                        // &mut self.names,
                         &mut self.local_input_mux,
                         self.exfiltrator.clone(),
                     );
@@ -287,7 +286,7 @@ where
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                     }
-                    self.names.remove(name);
+                    // self.names.remove(name);
                     self.traces.del_trace(name);
                 }
             }
@@ -296,20 +295,19 @@ where
                 name,
                 timestamp,
                 conn_id,
-                drop_after_peek,
             } => {
                 let mut trace = self
                     .traces
                     .get_by_self(&name)
                     .expect("Failed to find trace for peek")
                     .clone();
+                // let mut token = self.names.get(name).expect("Token missing");
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
                     name,
                     conn_id,
                     timestamp,
-                    drop_after_peek,
                 };
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(
@@ -332,7 +330,6 @@ where
 
             coordinator::SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
-                self.names.clear();
                 self.traces.del_all_traces();
                 self.shutdown_logging();
             }
@@ -343,7 +340,7 @@ where
     fn process_peeks(&mut self) {
         // See if time has advanced enough to handle any of our pending
         // peeks.
-        let mut dataflows_to_be_dropped = vec![];
+        // let mut dataflows_to_be_dropped = vec![];
         let mut pending_peeks = mem::replace(&mut self.pending_peeks, Vec::new());
         pending_peeks.retain(|(peek, trace)| {
             let mut upper = timely::progress::frontier::Antichain::new();
@@ -402,16 +399,16 @@ where
                     false,
                 ));
             }
-            if peek.drop_after_peek {
-                dataflows_to_be_dropped.push(peek.name.clone());
-            }
+            // if peek.drop_after_peek {
+            //     dataflows_to_be_dropped.push(peek.name.clone());
+            // }
             false // don't retain
         });
         mem::replace(&mut self.pending_peeks, pending_peeks);
-        if !dataflows_to_be_dropped.is_empty() {
-            self.handle_command(coordinator::SequencedCommand::DropDataflows(
-                dataflows_to_be_dropped,
-            ));
-        }
+        // if !dataflows_to_be_dropped.is_empty() {
+        //     self.handle_command(coordinator::SequencedCommand::DropDataflows(
+        //         dataflows_to_be_dropped,
+        //     ));
+        // }
     }
 }
