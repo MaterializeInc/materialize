@@ -17,7 +17,6 @@ use timely::worker::Worker as TimelyWorker;
 use futures::sync::mpsc::UnboundedReceiver;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::mem;
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -25,7 +24,10 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::render;
-use crate::arrangement::{manager::{KeysOnlyHandle, WithDrop}, TraceManager};
+use crate::arrangement::{
+    manager::{KeysOnlyHandle, WithDrop},
+    TraceManager,
+};
 use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
@@ -97,7 +99,6 @@ where
     exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
-    // names: HashMap<String, Box<dyn Drop>>,
     sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<LoggingConfig>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
@@ -126,7 +127,6 @@ where
             exfiltrator,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
-            // names: HashMap::new(),
             sequencer,
             logging_config,
             command_coordinator,
@@ -179,15 +179,14 @@ where
                 );
 
             // Install traces as maintained views.
-            use crate::arrangement::manager::WithDrop;
             for (log, trace) in t_traces {
-                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
+                self.traces.set_by_self(log.name().to_string(), trace);
             }
             for (log, trace) in d_traces {
-                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
+                self.traces.set_by_self(log.name().to_string(), trace);
             }
             for (log, trace) in m_traces {
-                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
+                self.traces.set_by_self(log.name().to_string(), trace);
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -274,7 +273,6 @@ where
                         dataflow,
                         &mut self.traces,
                         self.inner,
-                        // &mut self.names,
                         &mut self.local_input_mux,
                         self.exfiltrator.clone(),
                     );
@@ -286,7 +284,6 @@ where
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                     }
-                    // self.names.remove(name);
                     self.traces.del_trace(name);
                 }
             }
@@ -399,16 +396,8 @@ where
                     false,
                 ));
             }
-            // if peek.drop_after_peek {
-            //     dataflows_to_be_dropped.push(peek.name.clone());
-            // }
             false // don't retain
         });
         mem::replace(&mut self.pending_peeks, pending_peeks);
-        // if !dataflows_to_be_dropped.is_empty() {
-        //     self.handle_command(coordinator::SequencedCommand::DropDataflows(
-        //         dataflows_to_be_dropped,
-        //     ));
-        // }
     }
 }

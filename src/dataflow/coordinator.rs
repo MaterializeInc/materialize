@@ -148,12 +148,14 @@ impl CommandCoordinator {
                     self.optimizer.optimize(&mut source, &typ);
 
                     // Create, peek, and then drop a datalflow for `source`.
-                    sequencer.push(SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
+                    sequencer.push(SequencedCommand::CreateDataflows(vec![Dataflow::View(
+                        View {
                             name: name.clone(),
                             relation_expr: source,
                             typ,
                             as_of: Some(vec![timestamp.clone()]),
-                        })]));
+                        },
+                    )]));
                     sequencer.push(SequencedCommand::Peek {
                         name: name.clone(),
                         timestamp,

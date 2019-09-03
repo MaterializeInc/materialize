@@ -99,11 +99,14 @@ impl TraceManager {
 
     /// Binds the by_self arrangement.
     #[allow(dead_code)]
-    pub fn set_by_self(&mut self, name: String, trace: WithDrop<KeysOnlyHandle>) {
+    pub fn set_by_self<T>(&mut self, name: String, trace: T)
+    where
+        T: Into<WithDrop<KeysOnlyHandle>>,
+    {
         self.traces
             .entry(name)
             .or_insert_with(CollectionTraces::default)
-            .by_self = Some(trace);
+            .by_self = Some(trace.into());
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
@@ -114,7 +117,11 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys_mut(&mut self, name: &str, keys: &[usize]) -> Option<&mut WithDrop<KeysValsHandle>> {
+    pub fn get_by_keys_mut(
+        &mut self,
+        name: &str,
+        keys: &[usize],
+    ) -> Option<&mut WithDrop<KeysValsHandle>> {
         self.traces.get_mut(name)?.by_keys.get_mut(keys)
     }
 
@@ -128,12 +135,15 @@ impl TraceManager {
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(&mut self, name: String, keys: &[usize], trace: WithDrop<KeysValsHandle>) {
+    pub fn set_by_keys<T>(&mut self, name: String, keys: &[usize], trace: T)
+    where
+        T: Into<WithDrop<KeysValsHandle>>,
+    {
         self.traces
             .entry(name)
             .or_insert_with(CollectionTraces::default)
             .by_keys
-            .insert(keys.to_vec(), trace);
+            .insert(keys.to_vec(), trace.into());
     }
 
     /// Removes all remnants of a named trace.
@@ -225,7 +235,10 @@ impl<T> WithDrop<T> {
 
 impl<T> From<T> for WithDrop<T> {
     fn from(element: T) -> Self {
-        Self { element, to_drop: None }
+        Self {
+            element,
+            to_drop: None,
+        }
     }
 }
 
