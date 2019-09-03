@@ -455,7 +455,7 @@ impl RelationExpr {
             RelationExpr::Get { name, .. } => {
                 out.push(&name);
             }
-            RelationExpr::Let { name, .. } => {
+            RelationExpr::Let { name, .. } | RelationExpr::Branch { name, .. } => {
                 out.retain(|n| n != name);
             }
             _ => (),
