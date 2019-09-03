@@ -1288,6 +1288,7 @@ impl Planner {
             include_left_outer,
             include_right_outer,
         }
+        .filter(join_exprs)
         .map(map_exprs)
         .project(project_key);
         Ok((both, both_scope))
