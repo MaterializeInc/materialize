@@ -5,6 +5,8 @@
 
 //! SQL-dataflow translation.
 
+#![deny(missing_debug_implementations)]
+
 use std::convert::TryInto;
 
 use failure::{bail, ensure, format_err};
