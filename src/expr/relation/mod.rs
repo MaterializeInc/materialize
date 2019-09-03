@@ -570,6 +570,7 @@ impl RelationExpr {
 
         match self {
             RelationExpr::Constant { rows, typ: _ } => {
+                #[allow(clippy::ptr_arg)] // Complicates signature of local helper beyond recognition!
                 fn row_to_doc(row: &Vec<Datum>) -> Doc<BoxDoc<()>> {
                     let row = Doc::intersperse(row.iter().map(Doc::as_string), to_doc!(",", Space));
                     to_doc!("(", row.nest(1), ")")
