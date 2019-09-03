@@ -298,7 +298,6 @@ where
                     .get_by_self(&name)
                     .expect("Failed to find trace for peek")
                     .clone();
-                // let mut token = self.names.get(name).expect("Token missing");
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
                 let pending_peek = PendingPeek {
@@ -337,7 +336,6 @@ where
     fn process_peeks(&mut self) {
         // See if time has advanced enough to handle any of our pending
         // peeks.
-        // let mut dataflows_to_be_dropped = vec![];
         let mut pending_peeks = mem::replace(&mut self.pending_peeks, Vec::new());
         pending_peeks.retain(|(peek, trace)| {
             let mut upper = timely::progress::frontier::Antichain::new();

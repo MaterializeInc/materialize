@@ -146,7 +146,6 @@ pub fn build_dataflow<A: Allocate>(
                     .map(|x| (x, ()))
                     .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", view.name));
 
-                // names.insert(view.name.to_string(), Box::new(buttons));
                 manager.set_by_self(
                     view.name,
                     WithDrop::new(arrangement.trace, Box::new(tokens)),
