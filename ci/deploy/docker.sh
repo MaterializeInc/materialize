@@ -9,9 +9,9 @@
 
 set -euo pipefail
 
-docker pull "materialize/ci-materialized:$MATERIALIZED_IMAGE_ID"
+docker pull "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID"
 
 for tag in "unstable-$BUILDKITE_COMMIT" latest; do
-    docker tag "materialize/ci-materialized:$MATERIALIZED_IMAGE_ID" "materialize/materialized:$tag"
+    docker tag "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID" "materialize/materialized:$tag"
     docker push "materialize/materialized:$tag"
 done
