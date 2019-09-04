@@ -378,7 +378,7 @@ impl RelationExpr {
             Negate { input } => input.applied_to(outer)?.negate(),
             Threshold { input } => {
                 // assumes outer doesn't have any negative counts, which is probably safe?
-                input.applied_to(outer)?.threshold(),
+                input.applied_to(outer)?.threshold()
             }
         })
     }
