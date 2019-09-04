@@ -10,6 +10,11 @@ die() {
     exit 1
 }
 
+run() {
+    echo "run> ${*}" >&2
+    "$@"
+}
+
 ci_init() {
     export RUST_BACKTRACE=full
 }
