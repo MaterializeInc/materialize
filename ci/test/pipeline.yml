@@ -10,7 +10,7 @@ steps:
     agents:
       queue: builder
   - wait
-  - label: ":bath: hygiene"
+  - label: ":japanese_ogre: demon-visit"
     command: ci/test/hygiene.sh
     timeout_in_minutes: 30
     plugins:
