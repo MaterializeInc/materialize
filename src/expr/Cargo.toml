@@ -15,4 +15,5 @@ regex = "1.2.1"
 regex-syntax = "0.6.8"
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
+# TODO(grimmr): upgrade to 0.5.3 after release, when `space_()` becomes officially available.
 pretty = { git = "https://github.com/Marwes/pretty.rs.git", rev = "7fb895eff160b8bfd6d28efb19bf24f0b9326109" }
