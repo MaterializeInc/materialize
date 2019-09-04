@@ -1418,12 +1418,21 @@ impl Planner {
         left: &'a Expr,
         right: &'a Expr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
-        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
+        let (mut lexpr, lty) = self.plan_expr(ctx, left)?;
+        let (mut rexpr, rty) = self.plan_expr(ctx, right)?;
 
-        let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
+        let both_decimals = match (&lty.scalar_type, &rty.scalar_type) {
             (ScalarType::Decimal(_, _), ScalarType::Decimal(_, _)) => true,
             _ => false,
+        };
+
+        let (mut ltype, mut rtype, timelike) = match (&lty.scalar_type, &rty.scalar_type) {
+            (ScalarType::Date, ScalarType::Interval) => (lty, rty, true),
+            (ScalarType::Timestamp, ScalarType::Interval) => (lty, rty, true),
+            // for intervals on the left, flip them around
+            (ScalarType::Interval, ScalarType::Date) => (rty, lty, true),
+            (ScalarType::Interval, ScalarType::Timestamp) => (rty, lty, true),
+            (_, _) => (lty, rty, false),
         };
 
         let is_cmp = op == &BinaryOperator::Lt
@@ -1438,13 +1447,17 @@ impl Planner {
             || op == &BinaryOperator::Multiply
             || op == &BinaryOperator::Divide;
 
-        // For arithmetic where both inputs are already decimals, we skip
-        // coalescing, which could result in a rescale if the decimals have
-        // different precisions, because we tightly control the rescale when
-        // planning the arithmetic operation (below). E.g., decimal
-        // multiplication does not need to rescale its inputs, even when the
-        // inputs have different scales.
-        if is_cmp || (is_arithmetic && !both_decimals) {
+        // For arithmetic there are two type categories where we skip coalescing:
+        //
+        // * both inputs are already decimals: it could result in a rescale
+        //   if the decimals have different precisions, because we tightly
+        //   control the rescale when planning the arithmetic operation (below).
+        //   E.g., decimal multiplication does not need to rescale its inputs,
+        //   even when the inputs have different scales.
+        // * inputs are timelike: math is non commutative, there are very
+        //   specific rules about what makes sense, defined in the specific
+        //   comparisons below
+        if is_cmp || (is_arithmetic && !(both_decimals || timelike)) {
             let ctx = op.to_string();
             let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
             assert_eq!(exprs.len(), 2);
@@ -1534,6 +1547,12 @@ impl Planner {
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::AddFloat64, ScalarType::Float64)
                 }
+                (ScalarType::Date, ScalarType::Interval) => {
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                }
+                (ScalarType::Timestamp, ScalarType::Interval) => {
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                }
                 _ => bail!(
                     "no overload for {:?} + {:?}",
                     ltype.scalar_type,
@@ -1548,6 +1567,12 @@ impl Planner {
                 }
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::SubFloat64, ScalarType::Float64)
+                }
+                (ScalarType::Date, ScalarType::Interval) => {
+                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
+                }
+                (ScalarType::Timestamp, ScalarType::Interval) => {
+                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
                 }
                 _ => bail!(
                     "no overload for {:?} - {:?}",
@@ -2222,6 +2247,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     }
 }
 
+#[derive(Debug)]
 struct ExprContext<'a> {
     name: &'static str,
     scope: &'a Scope,

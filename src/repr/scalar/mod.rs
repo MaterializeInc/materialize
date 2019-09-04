@@ -168,6 +168,18 @@ impl Datum {
         }
     }
 
+    /// Get a NaiveDateTime, if we are a Date convert that into a DateTime
+    pub fn unwrap_timestamp_with_promotion(&self) -> chrono::NaiveDateTime {
+        match self {
+            Datum::Timestamp(ts) => *ts,
+            Datum::Date(d) => d.and_hms(0, 0, 0),
+            _ => panic!(
+                "Datum::unwrap_timestamp_with_promotion called on {:?}",
+                self
+            ),
+        }
+    }
+
     pub fn unwrap_interval_months(&self) -> i64 {
         match self {
             Datum::Interval(Interval::Months(count)) => *count,
@@ -308,9 +320,13 @@ impl From<Significand> for Datum {
 
 impl From<chrono::Duration> for Datum {
     fn from(duration: chrono::Duration) -> Datum {
+        let n_secs = duration.num_seconds();
         Datum::Interval(Interval::Duration {
-            is_positive: true,
-            duration: duration.to_std().unwrap(),
+            is_positive: n_secs >= 0,
+            duration: std::time::Duration::new(
+                n_secs.abs() as u64,
+                (duration.num_nanoseconds().unwrap_or(0) % 1_000_000_000) as u32,
+            ),
         })
     }
 }
