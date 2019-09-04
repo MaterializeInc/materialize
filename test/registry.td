@@ -145,7 +145,7 @@ $ set key_schema_missing={
     "fields": [
         {"name": "b", "type": "long"}
     ]
-    }
+  }
 
 $ set key_schema_wrong_type={
     "type": "record",
@@ -153,7 +153,7 @@ $ set key_schema_wrong_type={
     "fields": [
         {"name": "a", "type": "int"}
     ]
-    }
+  }
 
 $ set valid_key_schema={
     "type": "record",
