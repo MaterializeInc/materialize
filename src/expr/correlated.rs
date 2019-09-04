@@ -103,13 +103,12 @@ pub struct AggregateExpr {
 impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
     pub fn decorrelate(self) -> Result<super::RelationExpr, failure::Error> {
-        dbg!(&self);
-        dbg!(self.applied_to(super::RelationExpr::Constant {
+        self.applied_to(super::RelationExpr::Constant {
             rows: vec![vec![]],
             typ: RelationType {
                 column_types: vec![],
             },
-        }))
+        })
     }
 
     // TODO(jamii) ensure outer is always distinct? or make distinct during reduce etc?
