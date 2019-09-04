@@ -67,46 +67,7 @@ pub enum RelationExpr {
     },
     /// Join several collections, where some columns must be equal.
     ///
-    /// The sequence `inputs` each describe different input collections, and the sequence `variables` describes
-    /// equality constraints that some of their columns must satisfy. Each element in `variable` describes a set
-    /// of pairs  `(input_index, column_index)` where every value described by that set must be equal.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
-    /// use expr::RelationExpr;
-    ///
-    /// // A common schema for each input.
-    /// let schema = RelationType::new(vec![
-    ///     ColumnType::new(ScalarType::Int32),
-    ///     ColumnType::new(ScalarType::Int32),
-    /// ]);
-    ///
-    /// // the specific data are not important here.
-    /// let data = vec![Datum::Int32(0), Datum::Int32(1)];
-    ///
-    /// // Three collections that could have been different.
-    /// let input1 = RelationExpr::constant(vec![data.clone()], schema.clone());
-    /// let input2 = RelationExpr::constant(vec![data.clone()], schema.clone());
-    /// let input3 = RelationExpr::constant(vec![data.clone()], schema.clone());
-    ///
-    /// // Join the three relations looking for triangles, like so.
-    /// //
-    /// //     Output(A,B,C) := Input1(A,B), Input2(B,C), Input3(A,C)
-    /// let joined = RelationExpr::join(
-    ///     vec![input1, input2, input3],
-    ///     vec![
-    ///         vec![(0,0), (2,0)], // fields A of inputs 1 and 3.
-    ///         vec![(0,1), (1,0)], // fields B of inputs 1 and 2.
-    ///         vec![(1,1), (2,1)], // fields C of inputs 2 and 3.
-    ///     ],
-    /// );
-    ///
-    /// // Technically the above produces `Output(A,B,B,C,A,C)` because the columns are concatenated.
-    /// // A projection resolves this and produces the correct output.
-    /// let result = joined.project(vec![0, 1, 3]);
-    /// ```
+    /// For further details consult the documentation for [`RelationExpr::join`].
     Join {
         /// A sequence of input relations.
         inputs: Vec<RelationExpr>,
@@ -307,8 +268,46 @@ impl RelationExpr {
 
     /// Performs a relational equijoin among the input collections.
     ///
-    /// Each element of `variables` describes an equivalence relation, naming a set of
-    /// relation and column indices, respectively, whose values must be equal.
+    /// The sequence `inputs` each describe different input collections, and the sequence `variables` describes
+    /// equality constraints that some of their columns must satisfy. Each element in `variable` describes a set
+    /// of pairs  `(input_index, column_index)` where every value described by that set must be equal.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use expr::RelationExpr;
+    ///
+    /// // A common schema for each input.
+    /// let schema = RelationType::new(vec![
+    ///     ColumnType::new(ScalarType::Int32),
+    ///     ColumnType::new(ScalarType::Int32),
+    /// ]);
+    ///
+    /// // the specific data are not important here.
+    /// let data = vec![Datum::Int32(0), Datum::Int32(1)];
+    ///
+    /// // Three collections that could have been different.
+    /// let input1 = RelationExpr::constant(vec![data.clone()], schema.clone());
+    /// let input2 = RelationExpr::constant(vec![data.clone()], schema.clone());
+    /// let input3 = RelationExpr::constant(vec![data.clone()], schema.clone());
+    ///
+    /// // Join the three relations looking for triangles, like so.
+    /// //
+    /// //     Output(A,B,C) := Input1(A,B), Input2(B,C), Input3(A,C)
+    /// let joined = RelationExpr::join(
+    ///     vec![input1, input2, input3],
+    ///     vec![
+    ///         vec![(0,0), (2,0)], // fields A of inputs 1 and 3.
+    ///         vec![(0,1), (1,0)], // fields B of inputs 1 and 2.
+    ///         vec![(1,1), (2,1)], // fields C of inputs 2 and 3.
+    ///     ],
+    /// );
+    ///
+    /// // Technically the above produces `Output(A,B,B,C,A,C)` because the columns are concatenated.
+    /// // A projection resolves this and produces the correct output.
+    /// let result = joined.project(vec![0, 1, 3]);
+    /// ```
     pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
         RelationExpr::Join { inputs, variables }
     }
