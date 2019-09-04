@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+#![deny(missing_docs)]
+
 pub mod func;
 
 use repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -12,79 +14,124 @@ use self::func::AggregateFunc;
 use crate::ScalarExpr;
 use pretty::{BoxDoc, Doc};
 
+/// An abstract syntax tree which defines a collection.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum RelationExpr {
     /// Always return the same value
     Constant {
+        /// Rows of the constant collection.
         rows: Vec<Vec<Datum>>,
+        /// Schema of the collection.
         typ: RelationType,
     },
     /// Get an existing dataflow
-    Get { name: String, typ: RelationType },
+    Get {
+        /// The name of the collection to load.
+        name: String,
+        /// Schema of the colleciton.
+        typ: RelationType,
+    },
     /// Introduce a temporary dataflow
     Let {
+        /// The name to be used in `Get` variants to retrieve `value`.
         name: String,
+        /// The collection to be bound to `name`.
         value: Box<RelationExpr>,
+        /// The result of the `Let`, evaluated with `name` bound to `value`.
         body: Box<RelationExpr>,
     },
     /// Project out some columns from a dataflow
     Project {
+        /// The source collection.
         input: Box<RelationExpr>,
+        /// Indices of columns to retain.
         outputs: Vec<usize>,
     },
     /// Append new columns to a dataflow
     Map {
+        /// The source collection.
         input: Box<RelationExpr>,
-        // these are appended to output in addition to all the columns of input
+        /// Expressions which determine values to append to each row.
         scalars: Vec<(ScalarExpr, ColumnType)>,
     },
     /// Keep rows from a dataflow where all the predicates are true
     Filter {
+        /// The source collection.
         input: Box<RelationExpr>,
+        /// Predicates, each of which must be true.
         predicates: Vec<ScalarExpr>,
     },
     /// Join several dataflows together at once
     Join {
+        /// A sequence of input relations.
         inputs: Vec<RelationExpr>,
-        // each Vec<(usize, usize)> is an equivalence class of (input_index, column_index)
+        /// A sequence of equivalence classes of `(input_index, column_index)`.
+        ///
+        /// Each element of the sequence is a set of pairs, where the values described by each pair must
+        /// be equal to all other values in the same set.
         variables: Vec<Vec<(usize, usize)>>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {
+        /// The source collection.
         input: Box<RelationExpr>,
+        /// Column indices used to form groups.
         group_key: Vec<usize>,
-        // these are appended to output in addition to all the columns of input that are in group_key
+        /// Expressions which determine values to append to each row, after the group keys.
         aggregates: Vec<(AggregateExpr, ColumnType)>,
     },
     /// Groups and orders within each group, limiting output.
     TopK {
+        /// The source collection.
         input: Box<RelationExpr>,
+        /// Column indices used to form groups.
         group_key: Vec<usize>,
+        /// Column indices used to order rows within groups.
         order_key: Vec<usize>,
+        /// Number of records to retain, where the limit may be exceeded in the case of ties.
         limit: usize,
     },
     /// If the input is empty, return a default row
     // Used only for some SQL aggregate edge cases
     OrDefault {
+        /// The source collection.
         input: Box<RelationExpr>,
+        /// A row to introduce should `input` be empty.
         default: Vec<Datum>,
     },
     /// Return a dataflow where the row counts are negated
-    Negate { input: Box<RelationExpr> },
+    Negate {
+        /// The source collection.
+        input: Box<RelationExpr>,
+    },
     /// Return a dataflow where the row counts are all set to 1
-    Distinct { input: Box<RelationExpr> },
+    Distinct {
+        /// The source collection.
+        input: Box<RelationExpr>,
+    },
     /// Keep rows from a dataflow where the row counts are positive
-    Threshold { input: Box<RelationExpr> },
-    /// Return the union of two dataflows
+    Threshold {
+        /// The source collection.
+        input: Box<RelationExpr>,
+    },
+    /// Adds the frequencies of elements in both sets.
     Union {
+        /// A source collection.
         left: Box<RelationExpr>,
+        /// A source collection.
         right: Box<RelationExpr>,
     },
     // TODO Lookup/Arrange
 }
 
 impl RelationExpr {
+    /// Reports the schema of the relation.
+    ///
+    /// This method determines the type through recursive traversal of the
+    /// relation expression, drawing from the types of base collections.
+    /// As such, this is not an especially cheap method, and should be used
+    /// judiciously.
     pub fn typ(&self) -> RelationType {
         match self {
             RelationExpr::Constant { rows, typ } => {
@@ -169,14 +216,20 @@ impl RelationExpr {
         }
     }
 
+    /// The number of columns in the relation.
+    ///
+    /// This number is determined from the type, which is determined recursively
+    /// at non-trivial cost.
     pub fn arity(&self) -> usize {
         self.typ().column_types.len()
     }
 
+    /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
         RelationExpr::Constant { rows, typ }
     }
 
+    /// Retains only the columns specified by `output`.
     pub fn project(self, outputs: Vec<usize>) -> Self {
         RelationExpr::Project {
             input: Box::new(self),
@@ -184,6 +237,7 @@ impl RelationExpr {
         }
     }
 
+    /// Append to each row the results of applying elements of `scalar`.
     pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
         RelationExpr::Map {
             input: Box::new(self),
@@ -191,6 +245,7 @@ impl RelationExpr {
         }
     }
 
+    /// Retain only the rows satisifying each of several predicates.
     pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
         RelationExpr::Filter {
             input: Box::new(self),
@@ -198,6 +253,7 @@ impl RelationExpr {
         }
     }
 
+    /// Form the Cartesian outer-product of rows in both inputs.
     pub fn product(self, right: Self) -> Self {
         RelationExpr::Join {
             inputs: vec![self, right],
@@ -205,10 +261,19 @@ impl RelationExpr {
         }
     }
 
+    /// Performs a relational equijoin among the input collections.
+    ///
+    /// Each element of `variables` describes an equivalence relation, naming a set of
+    /// relation and column indices, respectively, whose values must be equal.
     pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
         RelationExpr::Join { inputs, variables }
     }
 
+    /// Perform a key-wise reduction / aggregation.
+    ///
+    /// The `group_key` argument indicates columns in the input collection that should
+    /// be grouped, and `aggregates` lists aggregation functions each of which produces
+    /// one output column in addition to the keys.
     pub fn reduce(
         self,
         group_key: Vec<usize>,
@@ -221,6 +286,7 @@ impl RelationExpr {
         }
     }
 
+    /// Substitutes `default` if `self` is empty.
     pub fn or_default(self, default: Vec<Datum>) -> Self {
         RelationExpr::OrDefault {
             input: Box::new(self),
@@ -228,24 +294,28 @@ impl RelationExpr {
         }
     }
 
+    /// Negates the occurrences of each row.
     pub fn negate(self) -> Self {
         RelationExpr::Negate {
             input: Box::new(self),
         }
     }
 
+    /// Removes all but the first occurrence of each row.
     pub fn distinct(self) -> Self {
         RelationExpr::Distinct {
             input: Box::new(self),
         }
     }
 
+    /// Discards rows with a negative frequency.
     pub fn threshold(self) -> Self {
         RelationExpr::Threshold {
             input: Box::new(self),
         }
     }
 
+    /// Adds the frequencies of each row.
     pub fn union(self, other: Self) -> Self {
         RelationExpr::Union {
             left: Box::new(self),
@@ -253,6 +323,11 @@ impl RelationExpr {
         }
     }
 
+    /// A helper method to finish a left outer join.
+    ///
+    /// This method should be called as `left.join(right).left_outer(left)' in order
+    /// to effect a left outer join. It most likely should not be called in any other
+    /// context without further investigation.
     pub fn left_outer(self, left: Self) -> Self {
         let both = self;
         let both_arity = both.arity();
@@ -276,6 +351,11 @@ impl RelationExpr {
         }
     }
 
+    /// A helper method to finish a right outer join.
+    ///
+    /// This method should be called as `left.join(right).right_outer(right)' in order
+    /// to effect a right outer join. It most likely should not be called in any other
+    /// context without further investigation.
     pub fn right_outer(self, right: Self) -> Self {
         let both = self;
         let both_arity = both.arity();
@@ -316,6 +396,7 @@ impl RelationExpr {
         });
     }
 
+    /// Applies `f` to each child `RelationExpr`.
     pub fn visit1<'a, F>(&'a self, mut f: F)
     where
         F: FnMut(&'a Self),
@@ -359,6 +440,7 @@ impl RelationExpr {
         }
     }
 
+    /// Post-order visitor for each `RelationExpr`.
     pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
@@ -367,6 +449,7 @@ impl RelationExpr {
         f(self);
     }
 
+    /// Applies `f` to each child `RelationExpr`.
     pub fn visit1_mut<'a, F>(&'a mut self, mut f: F)
     where
         F: FnMut(&'a mut Self),
@@ -410,6 +493,7 @@ impl RelationExpr {
         }
     }
 
+    /// Post-order visitor for each `RelationExpr`.
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
@@ -418,6 +502,7 @@ impl RelationExpr {
         f(self);
     }
 
+    /// Pre-order visitor for each `RelationExpr`.
     pub fn visit_mut_pre<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
@@ -426,16 +511,21 @@ impl RelationExpr {
         self.visit1_mut(|e| e.visit_mut_pre(f));
     }
 
+    /// Formats the `RelationExpr`.
     pub fn pretty(&mut self) -> String {
         let doc = Doc::<BoxDoc<()>>::text("Hello, world!");
         format!("{}", doc.pretty(120),)
     }
 }
 
+/// Describes an aggregation expression.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct AggregateExpr {
+    /// Names the aggregation function.
     pub func: AggregateFunc,
+    /// An expression which extracts from each row the input to `func`.
     pub expr: ScalarExpr,
+    /// Should the aggregation be applied only to distinct results in each group.
     pub distinct: bool,
 }
