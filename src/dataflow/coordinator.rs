@@ -29,7 +29,7 @@ use crate::exfiltrate::Exfiltrator;
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::DataflowCommand;
-use dataflow_types::{Dataflow, PeekWhen, Timestamp, View};
+use dataflow_types::{Dataflow, PeekWhen, RowSetTransformation, Timestamp, View};
 use expr::RelationExpr;
 use repr::Datum;
 
@@ -46,6 +46,7 @@ pub enum SequencedCommand {
         timestamp: Timestamp,
         conn_id: u32,
         drop_after_peek: bool,
+        transform: RowSetTransformation,
     },
     /// Enable compaction in views.
     ///
@@ -119,6 +120,7 @@ impl CommandCoordinator {
                 mut source,
                 conn_id,
                 when,
+                transform,
             } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
                 //
@@ -160,6 +162,7 @@ impl CommandCoordinator {
                     timestamp,
                     conn_id,
                     drop_after_peek: drop,
+                    transform,
                 };
                 sequencer.push(peek_command);
             }

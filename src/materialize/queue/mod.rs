@@ -10,7 +10,7 @@
 //! only a simple, transient, single-node queue is provided.
 
 use dataflow::DataflowCommand;
-use dataflow_types::{Dataflow, Sink, SinkConnector, TailSinkConnector};
+use dataflow_types::{Dataflow, RowSetTransformation, Sink, SinkConnector, TailSinkConnector};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sql::{Plan, Session};
 use uuid::Uuid;
@@ -47,6 +47,7 @@ pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<Dataflow
                     .map(|s| vec![Datum::from(s.name.to_owned())])
                     .collect(),
                 wait_for: WaitFor::NoOne,
+                transform: Default::default(),
             },
             Some(DataflowCommand::CreateDataflows(
                 sources.into_iter().map(|s| Dataflow::Source(s)).collect(),
@@ -75,16 +76,22 @@ pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<Dataflow
         ),
         Plan::EmptyQuery => (SqlResponse::EmptyQuery, None),
         Plan::DidSetVariable => (SqlResponse::SetVariable, None),
-        Plan::Peek { source, when } => (
+        Plan::Peek {
+            source,
+            when,
+            transform,
+        } => (
             SqlResponse::SendRows {
                 typ: source.typ(),
                 rows: vec![],
                 wait_for: WaitFor::Workers,
+                transform: transform.clone(),
             },
             Some(DataflowCommand::Peek {
                 conn_id,
                 source,
                 when,
+                transform,
             }),
         ),
         Plan::Tail(source) => (
@@ -102,6 +109,7 @@ pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<Dataflow
                 typ,
                 rows,
                 wait_for: WaitFor::NoOne,
+                transform: Default::default(),
             },
             None,
         ),
@@ -110,6 +118,7 @@ pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<Dataflow
                 typ,
                 rows: vec![],
                 wait_for: WaitFor::Optimizer,
+                transform: Default::default(),
             },
             Some(DataflowCommand::Explain {
                 conn_id,
@@ -140,6 +149,7 @@ pub enum SqlResponse {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
         wait_for: WaitFor,
+        transform: RowSetTransformation,
     },
     SetVariable,
     Tailing,

@@ -17,6 +17,7 @@ futures = "0.1"
 interchange = { path = "../interchange" }
 log = "0.4"
 ore = { path = "../ore" }
+pdqselect = "0.1.0"
 rdkafka = "0.21"
 repr = { path = "../repr" }
 reqwest = { version = "0.9.20", features = ["trust-dns"] }

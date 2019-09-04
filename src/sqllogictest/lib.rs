@@ -970,11 +970,15 @@ impl RecordRunner for FullState {
                         // make sure we peek at the correct time
                         let dataflow_command = match dataflow_command {
                             Some(DataflowCommand::Peek {
-                                source, conn_id, ..
+                                source,
+                                conn_id,
+                                when: _,
+                                transform,
                             }) => Some(DataflowCommand::Peek {
                                 source,
                                 conn_id,
                                 when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
+                                transform,
                             }),
                             other => other,
                         };
@@ -1021,6 +1025,7 @@ impl RecordRunner for FullState {
                                 typ,
                                 rows: _,
                                 wait_for: WaitFor::Workers,
+                                transform: _,
                             },
                             dataflow_command,
                         ) => (typ, dataflow_command, None),
@@ -1030,6 +1035,7 @@ impl RecordRunner for FullState {
                                 typ,
                                 rows,
                                 wait_for: WaitFor::NoOne,
+                                transform: _,
                             },
                             None,
                         ) => (typ, None, Some(rows)),
@@ -1121,11 +1127,15 @@ impl RecordRunner for FullState {
                             None => {
                                 let dataflow_command = match dataflow_command {
                                     Some(DataflowCommand::Peek {
-                                        source, conn_id, ..
+                                        source,
+                                        conn_id,
+                                        when: _,
+                                        transform,
                                     }) => Some(DataflowCommand::Peek {
                                         source,
                                         conn_id,
                                         when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
+                                        transform,
                                     }),
                                     other => other,
                                 };
@@ -1365,6 +1375,7 @@ pub fn fuzz(sqls: &str) {
                     typ,
                     rows,
                     wait_for: WaitFor::Workers,
+                    ..
                 } = sql_response
                 {
                     assert!(rows.is_empty());
