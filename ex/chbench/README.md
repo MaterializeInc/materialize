@@ -106,7 +106,7 @@ CREATE VIEW q01 as SELECT
 FROM
         orderline
 WHERE
-        ol_delivery_d > cast(13515 as smallint)
+        ol_delivery_d > date '1998-12-01'
 GROUP BY
         ol_number;
 
