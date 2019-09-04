@@ -6,7 +6,7 @@
 version: '3.7'
 services:
   materialized:
-    image: materialize/materialized:unstable-4c20e364de7d5572f52507140e43e72b4d0e2f8d
+    image: materialize/materialized:unstable-e990929859ac0586c5e86ed2c762dfd6831925c0
     init: true
     command: -w12
   mysql:
@@ -90,6 +90,8 @@ services:
   cli:
     build: cli
     init: true
+    depends_on:
+      - materialized
   inspect:
     image: ubuntu:bionic
     command: "true"
