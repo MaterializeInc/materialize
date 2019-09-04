@@ -954,6 +954,20 @@ impl RecordRunner for FullState {
                         }
                     }
 
+                    // just run through postgres, no diffs
+                    Statement::SetVariable { .. } => {
+                        match self
+                            .postgres
+                            .run_statement(&sql, statement)
+                            .context("Unsupported by postgres")
+                        {
+                            Ok(_) => Ok(Outcome::Success),
+                            Err(error) => Ok(Outcome::Unsupported {
+                                error: error.into(),
+                            }),
+                        }
+                    }
+
                     // run through materialize directly
                     Statement::Query { .. }
                     | Statement::CreateView { .. }
