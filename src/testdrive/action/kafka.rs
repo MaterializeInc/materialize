@@ -36,6 +36,7 @@ use ore::future::StreamExt;
 pub struct IngestAction {
     topic_prefix: String,
     schema: String,
+    key_schema: Option<String>,
     timestamp: Option<i64>,
     publish: bool,
     rows: Vec<String>,
@@ -45,6 +46,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = cmd.args.string("format")?;
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let schema = cmd.args.string("schema")?;
+    let key_schema = cmd.args.opt_string("key_schema");
     let timestamp = cmd.args.opt_parse("timestamp")?;
     let publish = cmd.args.opt_bool("publish")?;
     cmd.args.done()?;
@@ -54,6 +56,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     Ok(IngestAction {
         topic_prefix,
         schema,
+        key_schema,
         timestamp,
         publish,
         rows: cmd.input,
@@ -183,13 +186,6 @@ impl Action for IngestAction {
         //
         // [0]: https://github.com/confluentinc/confluent-kafka-python/issues/524#issuecomment-456783176
         let topic_name = format!("{}-{}", self.topic_prefix, state.seed);
-
-        let ccsr_subject = if self.publish {
-            Some(format!("{}-value", topic_name))
-        } else {
-            None
-        };
-
         println!("Ingesting data into Kafka topic {:?}", topic_name);
         {
             let num_partitions = 1;
@@ -260,6 +256,13 @@ impl Action for IngestAction {
             .retry(&mut backoff)
             .map_err(|e| e.to_string())?
         }
+
+        let ccsr_subject = if self.publish {
+            Some(format!("{}-value", topic_name))
+        } else {
+            None
+        };
+
         let schema_id = if let Some(subject) = ccsr_subject {
             state
                 .ccsr_client
@@ -268,6 +271,15 @@ impl Action for IngestAction {
         } else {
             1
         };
+
+        if let Some(key_schema) = &self.key_schema {
+            let key_subject = format!("{}-key", topic_name);
+            state
+                .ccsr_client
+                .publish_schema(&key_subject, &key_schema)
+                .map_err(|e| format!("schema registry error: {}", e))?;
+        }
+
         let schema =
             Schema::parse_str(&self.schema).map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut futs = FuturesUnordered::new();
