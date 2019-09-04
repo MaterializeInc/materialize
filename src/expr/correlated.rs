@@ -207,6 +207,7 @@ impl RelationExpr {
     fn applied_to(self, outer: super::RelationExpr) -> Result<super::RelationExpr, failure::Error> {
         use self::RelationExpr::*;
         use super::RelationExpr as SR;
+        use super::ScalarExpr as SS;
         Ok(match self {
             Constant { rows, typ } => outer.product(SR::Constant { rows, typ }),
             Get { name, typ } => outer.product(SR::Get { name, typ }),
@@ -258,22 +259,118 @@ impl RelationExpr {
                 include_left_outer,
                 include_right_outer,
             } => {
-                if include_left_outer || include_right_outer {
-                    // TODO(jamii) handle these with Branch
-                    unimplemented!();
-                }
                 let outer_arity = outer.arity();
-                let left = left.applied_to(outer)?;
-                let mut product = right.applied_to(left)?;
+                let outer_name = format!("outer_{}", Uuid::new_v4());
+                let get_outer = SR::Get {
+                    name: outer_name.clone(),
+                    typ: outer.typ(),
+                };
+
+                let left_arity = left.arity();
+                let left = left.applied_to(get_outer.clone())?;
+                let left_name = format!("left_{}", Uuid::new_v4());
+                let get_left = SR::Get {
+                    name: left_name.clone(),
+                    typ: left.typ(),
+                };
+
+                let right_arity = right.arity();
+                let right = right.applied_to(get_outer.clone())?;
+                let right_name = format!("right_{}", Uuid::new_v4());
+                let get_right = SR::Get {
+                    name: right_name.clone(),
+                    typ: right.typ(),
+                };
+
+                let mut product = SR::Join {
+                    inputs: vec![get_left.clone(), get_right.clone()],
+                    variables: (0..outer_arity).map(|i| vec![(0, i), (1, i)]).collect(),
+                };
                 let old_arity = product.arity();
                 let on = on.applied_to(outer_arity, &mut product)?;
-                let new_arity = product.arity();
                 let mut join = product.filter(vec![on]);
+                let new_arity = join.arity();
                 if old_arity != new_arity {
                     // this means we added some columns to handle subqueries, and now we need to get rid of them
                     join = join.project((0..old_arity).collect());
                 }
-                join
+                let join_name = format!("join_{}", Uuid::new_v4());
+                let get_join = SR::Get {
+                    name: join_name.clone(),
+                    typ: join.typ(),
+                };
+
+                let mut result = get_join.clone();
+                if include_left_outer {
+                    let left_outer = get_left
+                        .union(
+                            get_join
+                                .clone()
+                                .project((0..outer_arity + left_arity).collect())
+                                .distinct()
+                                .negate(),
+                        )
+                        .map(
+                            (0..right_arity)
+                                .map(|_| {
+                                    (SS::Literal(Datum::Null), ColumnType::new(ScalarType::Null))
+                                })
+                                .collect(),
+                        );
+                    result = result.union(left_outer);
+                }
+                if include_right_outer {
+                    let right_outer = get_right
+                        .union(
+                            get_join
+                                .clone()
+                                .project(
+                                    (0..outer_arity)
+                                        .chain(
+                                            outer_arity + left_arity
+                                                ..outer_arity + left_arity + right_arity,
+                                        )
+                                        .collect(),
+                                )
+                                .distinct()
+                                .negate(),
+                        )
+                        .map(
+                            (0..left_arity)
+                                .map(|_| {
+                                    (SS::Literal(Datum::Null), ColumnType::new(ScalarType::Null))
+                                })
+                                .collect(),
+                        )
+                        .project(
+                            (0..outer_arity)
+                                .chain(
+                                    outer_arity + left_arity
+                                        ..outer_arity + left_arity + right_arity,
+                                )
+                                .chain(outer_arity..outer_arity + left_arity)
+                                .collect(),
+                        );
+                    result = result.union(right_outer);
+                }
+
+                SR::Let {
+                    name: outer_name,
+                    value: Box::new(outer),
+                    body: Box::new(SR::Let {
+                        name: left_name,
+                        value: Box::new(left),
+                        body: Box::new(SR::Let {
+                            name: right_name,
+                            value: Box::new(right),
+                            body: Box::new(SR::Let {
+                                name: join_name,
+                                value: Box::new(join),
+                                body: Box::new(result),
+                            }),
+                        }),
+                    }),
+                }
             }
             Union { left, right } => {
                 let outer_name = format!("outer_{}", Uuid::new_v4());
