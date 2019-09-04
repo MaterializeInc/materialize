@@ -429,13 +429,13 @@ impl RelationExpr {
 
     /// Convert this [`RelationExpr`] to a [`Doc`] or document for pretty printing. This
     /// function formats each dataflow operator instance as
-    /// ```
+    /// ```ignore
     /// <operator-name> { <argument-1>, ..., <argument-n> }
     /// ```
     /// Arguments that are *not* dataflow operator instances are listed first and arguments
     /// that are dataflow operator instances, i.e., the input dataflows, are listed second.
     /// The former are prefixed with their names, while the latter are not. For example:
-    /// ```
+    /// ```ignore
     /// Project { outputs: [1], Map { scalars: [665], "X" } }
     /// ```
     /// identifies the outputs for `Project` and the scalars for `Map` by name, whereas the

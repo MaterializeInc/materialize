@@ -88,15 +88,15 @@ where
 ///     by 2 spaces, otherwise.
 ///
 /// For example:
-/// ```
+/// ```ignore
 /// to_tightly_braced_doc("[", "v665", "]")
 /// ```
 /// results in
-/// ```
+/// ```ignore
 /// [v665]
 /// ```
 /// when fitting on a single line and in
-/// ```
+/// ```ignore
 /// [
 ///   v665
 /// ]
