@@ -6,11 +6,7 @@
 version: '3.7'
 services:
   materialized:
-<<<<<<< Updated upstream
-    image: materialize/materialized:unstable-e990929859ac0586c5e86ed2c762dfd6831925c0
-=======
     image: materialize/materialized:unstable-6bed3a5266292a4494c20eecf7d724a38c085373
->>>>>>> Stashed changes
     init: true
     command: -w12
   mysql:
