@@ -234,9 +234,7 @@ impl Datum {
             (Datum::Date(_), _) => false,
             (Datum::Timestamp(_), ScalarType::Timestamp) => true,
             (Datum::Timestamp(_), _) => false,
-            // TODO: decide if we want to have a single scalartype for intervals or two DataType for intervals
-            (Datum::Interval(Interval::Months(_)), ScalarType::IntervalDuration) => true,
-            (Datum::Interval(Interval::Duration { .. }), ScalarType::IntervalDuration) => true,
+            (Datum::Interval(_), ScalarType::Interval) => true,
             (Datum::Interval(_), _) => false,
             (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
             (Datum::Decimal(_), _) => false,
@@ -425,10 +423,10 @@ pub enum ScalarType {
     Date,
     Time,
     Timestamp,
-    /// A possibly-negative time span months
-    IntervalMonths,
-    /// A possibly-negative time span of seconds
-    IntervalDuration,
+    /// A possibly-negative time span
+    ///
+    /// Represented by the [`Interval`] enum
+    Interval,
     Bytes,
     String,
     Regex,
@@ -462,8 +460,7 @@ impl fmt::Display for ScalarType {
             Date => f.write_str("date"),
             Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
-            IntervalMonths => f.write_str("interval(months)"),
-            IntervalDuration => f.write_str("interval(duration)"),
+            Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
             Regex => f.write_str("regex"),

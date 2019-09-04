@@ -1866,11 +1866,7 @@ impl Planner {
             Value::Interval(iv) => {
                 iv.fields_match_precision()?;
                 let i = iv.computed_permissive()?;
-                let st = match &i {
-                    sqlparser::ast::Interval::Months(_) => ScalarType::IntervalMonths,
-                    sqlparser::ast::Interval::Duration { .. } => ScalarType::IntervalDuration,
-                };
-                (Datum::Interval(i.into()), st)
+                (Datum::Interval(i.into()), ScalarType::Interval)
             }
             Value::Null => (Datum::Null, ScalarType::Null),
         };
@@ -1964,8 +1960,8 @@ fn find_output_type(col_typs: &[&ColumnType]) -> Result<ColumnType, failure::Err
         ScalarType::Float32 => 4,
         ScalarType::Float64 => 5,
         // Timelike, really kind of a different category
-        ScalarType::IntervalDuration => 6,
-        ScalarType::IntervalMonths => 7,
+        ScalarType::Interval => 6,
+        ScalarType::Interval => 7,
         ScalarType::Date => 8,
         ScalarType::Timestamp => 9,
         _ => 10,
@@ -1984,8 +1980,8 @@ fn find_output_type(col_typs: &[&ColumnType]) -> Result<ColumnType, failure::Err
         match scalar_type {
             ScalarType::Date => saw_date = true,
             ScalarType::Timestamp => saw_time = true,
-            ScalarType::IntervalMonths => saw_months = true,
-            ScalarType::IntervalDuration => saw_dur = true,
+            ScalarType::Interval => saw_months = true,
+            ScalarType::Interval => saw_dur = true,
             _ => saw_other = true,
         }
         if let Some(m_scalar) = max {
@@ -2111,7 +2107,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         }
         DataType::Date => ScalarType::Date,
         DataType::Timestamp => ScalarType::Timestamp,
-        DataType::Interval => ScalarType::IntervalDuration,
+        DataType::Interval => ScalarType::Interval,
         DataType::Time => ScalarType::Time,
         DataType::Bytea => ScalarType::Bytes,
         other @ DataType::Array(_)
@@ -2471,10 +2467,10 @@ mod test {
             ([&ct(Int64), &ct(Float32)], ct(Float32)),
             ([&ct(Float32), &ct(Float64)], ct(Float64)),
             // timelikes
-            ([&ct(Date), &ct(IntervalMonths)], ct(Date)),
-            ([&ct(IntervalMonths), &ct(Date)], ct(Date)),
-            ([&ct(Timestamp), &ct(IntervalMonths)], ct(Timestamp)),
-            ([&ct(Timestamp), &ct(IntervalDuration)], ct(Timestamp)),
+            ([&ct(Date), &ct(Interval)], ct(Date)),
+            ([&ct(Interval), &ct(Date)], ct(Date)),
+            ([&ct(Timestamp), &ct(Interval)], ct(Timestamp)),
+            ([&ct(Timestamp), &ct(Interval)], ct(Timestamp)),
         ];
 
         for (cols, expected) in col_expected {
@@ -2486,8 +2482,8 @@ mod test {
     fn find_output_type_rejects_inconsistent_expressions() {
         use ScalarType::*;
         let invalids = &[
-            [&ct(IntervalMonths), &ct(IntervalDuration)],
-            [&ct(Int32), &ct(IntervalDuration)],
+            [&ct(Interval), &ct(Interval)],
+            [&ct(Int32), &ct(Interval)],
             [&ct(Int32), &ct(Date)],
             [&ct(Int32), &ct(Timestamp)],
             [&ct(Date), &ct(Timestamp)],
