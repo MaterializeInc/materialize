@@ -272,6 +272,9 @@ impl RelationExpr {
     /// equality constraints that some of their columns must satisfy. Each element in `variable` describes a set
     /// of pairs  `(input_index, column_index)` where every value described by that set must be equal.
     ///
+    /// For example, the pair `(input, column)` indexes into `inputs[input][column]`, extracting the `input`th
+    /// input collection and for each row examining its `column`th column.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -288,19 +291,19 @@ impl RelationExpr {
     /// let data = vec![Datum::Int32(0), Datum::Int32(1)];
     ///
     /// // Three collections that could have been different.
+    /// let input0 = RelationExpr::constant(vec![data.clone()], schema.clone());
     /// let input1 = RelationExpr::constant(vec![data.clone()], schema.clone());
     /// let input2 = RelationExpr::constant(vec![data.clone()], schema.clone());
-    /// let input3 = RelationExpr::constant(vec![data.clone()], schema.clone());
     ///
     /// // Join the three relations looking for triangles, like so.
     /// //
-    /// //     Output(A,B,C) := Input1(A,B), Input2(B,C), Input3(A,C)
+    /// //     Output(A,B,C) := Input0(A,B), Input1(B,C), Input2(A,C)
     /// let joined = RelationExpr::join(
-    ///     vec![input1, input2, input3],
+    ///     vec![input0, input1, input2],
     ///     vec![
-    ///         vec![(0,0), (2,0)], // fields A of inputs 1 and 3.
-    ///         vec![(0,1), (1,0)], // fields B of inputs 1 and 2.
-    ///         vec![(1,1), (2,1)], // fields C of inputs 2 and 3.
+    ///         vec![(0,0), (2,0)], // fields A of inputs 0 and 2.
+    ///         vec![(0,1), (1,0)], // fields B of inputs 0 and 1.
+    ///         vec![(1,1), (2,1)], // fields C of inputs 1 and 2.
     ///     ],
     /// );
     ///
