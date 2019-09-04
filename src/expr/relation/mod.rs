@@ -7,12 +7,13 @@
 
 pub mod func;
 
+use self::func::AggregateFunc;
+use crate::pretty_pretty::{to_braced_doc, to_tightly_braced_doc};
+use crate::ScalarExpr;
+use pretty::Doc::Space;
+use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
-
-use self::func::AggregateFunc;
-use crate::ScalarExpr;
-use pretty::{BoxDoc, Doc};
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -557,10 +558,151 @@ impl RelationExpr {
         self.visit1_mut(|e| e.visit_mut_pre(f));
     }
 
-    /// Formats the `RelationExpr`.
-    pub fn pretty(&mut self) -> String {
-        let doc = Doc::<BoxDoc<()>>::text("Hello, world!");
-        format!("{}", doc.pretty(120),)
+    /// Convert this [`RelationExpr`] to a [`Doc`] or document for pretty printing. This
+    /// function formats each dataflow operator instance as
+    /// ```ignore
+    /// <operator-name> { <argument-1>, ..., <argument-n> }
+    /// ```
+    /// Arguments that are *not* dataflow operator instances are listed first and arguments
+    /// that are dataflow operator instances, i.e., the input dataflows, are listed second.
+    /// The former are prefixed with their names, while the latter are not. For example:
+    /// ```ignore
+    /// Project { outputs: [1], Map { scalars: [665], "X" } }
+    /// ```
+    /// identifies the outputs for `Project` and the scalars for `Map` by name, whereas the
+    /// sole inputs are nameless.
+    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
+        // A woefully incomplete helper function to format ScalarExprs. Right now, it elides
+        // most of them and only shows column numbers and literals.
+        fn fmt_scalar(scalar_expr: &ScalarExpr) -> String {
+            match scalar_expr {
+                ScalarExpr::Column(n) => format!("#{}", n),
+                ScalarExpr::Literal(d) => format!("{}", d),
+                _ => String::from("..."),
+            }
+        }
+
+        // Do the actual conversion from RelationExpr to Doc.
+        let doc = match self {
+            RelationExpr::Constant { rows, typ: _ } => {
+                // Death to the demon Clippy! It would happily complicate the signature of this
+                // very local helper function beyond any recognition.
+                #[allow(clippy::ptr_arg)]
+                fn row_to_doc(row: &Vec<Datum>) -> Doc<BoxDoc<()>> {
+                    let row = Doc::intersperse(row.iter().map(Doc::as_string), to_doc!(",", Space));
+                    to_tightly_braced_doc("(", row, ")")
+                }
+
+                if rows.len() == 1 && rows[0].len() == 1 {
+                    Doc::as_string(&rows[0][0])
+                } else if rows.len() == 1 {
+                    row_to_doc(&rows[0])
+                } else {
+                    let rows = Doc::intersperse(
+                        rows.iter().map(|r| row_to_doc(r).group()),
+                        to_doc!(",", Space),
+                    );
+                    to_tightly_braced_doc("(", rows, ")")
+                }
+            }
+            RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
+            RelationExpr::Let { name, value, body } => to_braced_doc(
+                "Let {",
+                to_doc!(name, " = ", value.to_doc().nest(2), ",", Space, body),
+                "}",
+            ),
+            RelationExpr::Project { input, outputs } => {
+                let outputs =
+                    Doc::intersperse(outputs.iter().map(Doc::as_string), to_doc!(",", Space));
+                let outputs = to_tightly_braced_doc("outputs: [", outputs.nest(2), "]").group();
+                to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
+            }
+            RelationExpr::Map { input, scalars } => {
+                let scalars = Doc::intersperse(
+                    scalars.iter().map(|(s, _)| fmt_scalar(s)),
+                    to_doc!(",", Space),
+                );
+                let scalars = to_tightly_braced_doc("scalars: [", scalars.nest(2), "]").group();
+                to_braced_doc("Map {", to_doc!(scalars, ",", Space, input), "}")
+            }
+            RelationExpr::Filter { input, predicates } => {
+                let predicates =
+                    Doc::intersperse(predicates.iter().map(fmt_scalar), to_doc!(",", Space));
+                let predicates =
+                    to_tightly_braced_doc("predicates: [", predicates.nest(2), "]").group();
+                to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
+            }
+            RelationExpr::Join { inputs, variables } => {
+                fn pair_to_doc(p: &(usize, usize)) -> Doc<BoxDoc<()>, ()> {
+                    to_doc!("(", p.0.to_string(), ", ", p.1.to_string(), ")")
+                }
+
+                let variables = Doc::intersperse(
+                    variables.iter().map(|ps| {
+                        let ps = Doc::intersperse(ps.iter().map(pair_to_doc), to_doc!(",", Space));
+                        to_tightly_braced_doc("[", ps.nest(2), "]").group()
+                    }),
+                    to_doc!(",", Space),
+                );
+                let variables =
+                    to_tightly_braced_doc("variables: [", variables.nest(2), "]").group();
+
+                let inputs =
+                    Doc::intersperse(inputs.iter().map(RelationExpr::to_doc), to_doc!(",", Space));
+
+                to_braced_doc("Join {", to_doc!(variables, ",", Space, inputs), "}")
+            }
+            RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => {
+                let keys = Doc::intersperse(
+                    group_key.iter().map(|k| format!("{}", k)),
+                    to_doc!(",", Space),
+                );
+                let keys = to_tightly_braced_doc("group_key: [", keys.nest(2), "]").group();
+
+                let aggregates = Doc::intersperse(
+                    aggregates.iter().map(|(a, _)| format!("{:?}", a.func)),
+                    to_doc!(",", Space),
+                );
+                let aggregates =
+                    to_tightly_braced_doc("aggregates: [", aggregates.nest(2), "]").group();
+
+                to_braced_doc(
+                    "Reduce {",
+                    to_doc!(keys, ",", Space, aggregates, ",", Space, input),
+                    "}",
+                )
+            }
+            RelationExpr::TopK {
+                input: _,
+                group_key: _,
+                order_key: _,
+                limit: _,
+            } => to_doc!("TopK { ", "\"Oops, TopK is not yet implemented!\"", " }").group(),
+            RelationExpr::OrDefault { input, default } => {
+                let default =
+                    Doc::intersperse(default.iter().map(Doc::as_string), to_doc!(",", Space));
+                let default = to_tightly_braced_doc("default: [", default.nest(2), "]").group();
+                to_braced_doc("OrDefault {", to_doc!(default, ",", Space, input), "}")
+            }
+            RelationExpr::Negate { input } => to_braced_doc("Negate {", input, "}"),
+            RelationExpr::Distinct { input } => to_braced_doc("Distinct {", input, "}"),
+            RelationExpr::Threshold { input } => to_braced_doc("Threshold {", input, "}"),
+            RelationExpr::Union { left, right } => {
+                to_braced_doc("Union {", to_doc!(left, ",", Space, right), "}")
+            }
+        };
+
+        // INVARIANT: RelationExpr's document is grouped. Much of the code above depends on this!
+        doc.group()
+    }
+
+    /// Pretty-print this RelationExpr to a string with 70 columns maximum.
+    pub fn pretty(&self) -> String {
+        format!("{}", self.to_doc().pretty(70))
     }
 }
 

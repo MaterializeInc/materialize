@@ -774,7 +774,7 @@ version = "0.1.0"
 dependencies = [
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "ordered-float 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "pretty 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pretty 0.5.3-alpha.0 (git+https://github.com/Marwes/pretty.rs.git?rev=7fb895eff160b8bfd6d28efb19bf24f0b9326109)",
  "regex 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex-syntax 0.6.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "repr 0.1.0",
@@ -1778,8 +1778,8 @@ dependencies = [
 
 [[package]]
 name = "pretty"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+version = "0.5.3-alpha.0"
+source = "git+https://github.com/Marwes/pretty.rs.git?rev=7fb895eff160b8bfd6d28efb19bf24f0b9326109#7fb895eff160b8bfd6d28efb19bf24f0b9326109"
 dependencies = [
  "typed-arena 1.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -2675,7 +2675,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#af140b33baa365861cdf6cf7513f9b9f22d3200c"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#fa41e9a1e070943682b04569a57afb032cd606b1"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2689,12 +2689,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#af140b33baa365861cdf6cf7513f9b9f22d3200c"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#fa41e9a1e070943682b04569a57afb032cd606b1"
 
 [[package]]
 name = "timely_communication"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#af140b33baa365861cdf6cf7513f9b9f22d3200c"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#fa41e9a1e070943682b04569a57afb032cd606b1"
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2709,7 +2709,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#af140b33baa365861cdf6cf7513f9b9f22d3200c"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git#fa41e9a1e070943682b04569a57afb032cd606b1"
 
 [[package]]
 name = "timely_sort"
@@ -3403,7 +3403,7 @@ dependencies = [
 "checksum predicates 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "53e09015b0d3f5a0ec2d4428f7559bb7b3fff341b4e159fedd1d57fac8b939ff"
 "checksum predicates-core 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "06075c3a3e92559ff8929e7a280684489ea27fe44805174c3ebd9328dcb37178"
 "checksum predicates-tree 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "8e63c4859013b38a76eca2414c64911fba30def9e3202ac461a2d22831220124"
-"checksum pretty 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "f60c0d9f6fc88ecdd245d90c1920ff76a430ab34303fc778d33b1d0a4c3bf6d3"
+"checksum pretty 0.5.3-alpha.0 (git+https://github.com/Marwes/pretty.rs.git?rev=7fb895eff160b8bfd6d28efb19bf24f0b9326109)" = "<none>"
 "checksum pretty_assertions 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)" = "3f81e1644e1b54f5a68959a29aa86cde704219254669da328ecfdf6a1f09d427"
 "checksum proc-macro2 0.4.30 (registry+https://github.com/rust-lang/crates.io-index)" = "cf3d2011ab5c909338f7887f4fc896d35932e29146c12c8d01da6b22a80ba759"
 "checksum proc-macro2 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "4c5c2380ae88876faae57698be9e9775e3544decad214599c3a6266cca6ac802"
