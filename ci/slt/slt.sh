@@ -21,7 +21,7 @@ mkdir -p target
 
 sqllogictest \
     -v --json-summary-file=target/slt-summary.json "$@" \
-    sqllogictest/test \
     test/*.slt \
     test/cockroach/*.slt \
+    test/sqlite/test \
     | tee target/slt.log
