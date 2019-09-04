@@ -10,7 +10,7 @@
 pub mod like;
 
 #[macro_use]
-mod pretty_pretty;
+pub mod pretty_pretty;
 
 mod relation;
 mod scalar;
