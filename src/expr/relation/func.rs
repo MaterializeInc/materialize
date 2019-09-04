@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+#![allow(missing_docs)]
+
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
