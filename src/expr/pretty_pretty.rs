@@ -57,15 +57,15 @@ impl<'a> From<&'a Box<RelationExpr>> for Doc<'a, BoxDoc<'a, ()>, ()> {
 ///     by 2 spaces, otherwise.
 ///
 /// For example:
-/// ```
+/// ```ignore
 /// to_braced_doc("Distinct {", "665", "}")
 /// ```
 /// results in
-/// ```
+/// ```ignore
 /// Distinct { 665 }
 /// ```
 /// when fitting on a single line and in
-/// ```
+/// ```ignore
 /// Distinct {
 ///   665
 /// }
