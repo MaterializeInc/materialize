@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use repr::*;
-use std::collections::HashSet;
 use uuid::Uuid;
 
 // these happen to be unchanged at the moment, but there might be additions later
@@ -55,6 +54,13 @@ pub enum RelationExpr {
     Distinct {
         input: Box<RelationExpr>,
     },
+    Negate {
+        input: Box<RelationExpr>,
+    },
+    Threshold {
+        input: Box<RelationExpr>,
+    },
+    /// Return the union of two dataflows
     Union {
         left: Box<RelationExpr>,
         right: Box<RelationExpr>,
@@ -95,112 +101,15 @@ pub struct AggregateExpr {
 }
 
 impl RelationExpr {
-    // TODO(jamii) use offset fix from ScalarExpr::applied_to
-    fn used_outer_columns(&self) -> HashSet<isize> {
-        let mut used_outer_columns = HashSet::new();
-        fn visit_relation(
-            expr: &RelationExpr,
-            num_outer_columns: usize,
-            used_outer_columns: &mut HashSet<isize>,
-        ) {
-            use RelationExpr::*;
-            match expr {
-                Constant { .. } => (),
-                Get { .. } => (),
-                Project { input, .. } => {
-                    visit_relation(&*input, num_outer_columns, used_outer_columns);
-                }
-                Map { input, scalars } => {
-                    visit_relation(&*input, num_outer_columns, used_outer_columns);
-                    let num_outer_columns = num_outer_columns + input.arity();
-                    for (i, (scalar, _)) in scalars.iter().enumerate() {
-                        visit_scalar(scalar, num_outer_columns + i, used_outer_columns);
-                    }
-                }
-                Filter { input, predicates } => {
-                    let num_outer_columns = num_outer_columns + input.arity();
-                    for predicate in predicates {
-                        visit_scalar(predicate, num_outer_columns, used_outer_columns);
-                    }
-                }
-                Join {
-                    left, right, on, ..
-                } => {
-                    visit_relation(&*left, num_outer_columns, used_outer_columns);
-                    visit_relation(&*right, num_outer_columns, used_outer_columns);
-                    let num_outer_columns = num_outer_columns + left.arity() + right.arity();
-                    visit_scalar(on, num_outer_columns, used_outer_columns);
-                }
-                Reduce {
-                    input,
-                    group_key,
-                    aggregates,
-                } => {
-                    visit_relation(&*input, num_outer_columns, used_outer_columns);
-                    let num_outer_columns = num_outer_columns + group_key.len();
-                    for (i, (aggregate, _)) in aggregates.iter().enumerate() {
-                        visit_scalar(&*aggregate.expr, num_outer_columns + i, used_outer_columns)
-                    }
-                }
-                Distinct { input } => {
-                    visit_relation(&*input, num_outer_columns, used_outer_columns);
-                }
-                Union { left, right } => {
-                    visit_relation(&*left, num_outer_columns, used_outer_columns);
-                    visit_relation(&*right, num_outer_columns, used_outer_columns);
-                }
-            }
-        }
-        fn visit_scalar(
-            expr: &ScalarExpr,
-            num_outer_columns: usize,
-            used_outer_columns: &mut HashSet<isize>,
-        ) {
-            use ScalarExpr::*;
-            match expr {
-                Column(column) => {
-                    let column = column + (num_outer_columns as isize);
-                    if column < 0 {
-                        used_outer_columns.insert(column);
-                    }
-                }
-                Literal(_) => (),
-                CallUnary { expr, .. } => {
-                    visit_scalar(expr, num_outer_columns, used_outer_columns);
-                }
-                CallBinary { expr1, expr2, .. } => {
-                    visit_scalar(expr1, num_outer_columns, used_outer_columns);
-                    visit_scalar(expr2, num_outer_columns, used_outer_columns);
-                }
-                CallVariadic { exprs, .. } => {
-                    for expr in exprs {
-                        visit_scalar(expr, num_outer_columns, used_outer_columns);
-                    }
-                }
-                If { cond, then, els } => {
-                    visit_scalar(&*cond, num_outer_columns, used_outer_columns);
-                    visit_scalar(&*then, num_outer_columns, used_outer_columns);
-                    visit_scalar(&*els, num_outer_columns, used_outer_columns);
-                }
-                Exists(expr) => {
-                    visit_relation(expr, num_outer_columns, used_outer_columns);
-                }
-            }
-        }
-        visit_relation(self, 0, &mut used_outer_columns);
-        used_outer_columns
-    }
-}
-
-impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
     pub fn decorrelate(self) -> Result<super::RelationExpr, failure::Error> {
-        self.applied_to(super::RelationExpr::Constant {
+        dbg!(&self);
+        dbg!(self.applied_to(super::RelationExpr::Constant {
             rows: vec![vec![]],
             typ: RelationType {
                 column_types: vec![],
             },
-        })
+        }))
     }
 
     // TODO(jamii) ensure outer is always distinct? or make distinct during reduce etc?
@@ -465,6 +374,12 @@ impl RelationExpr {
                     default: None,
                 }
             }
+            // TODO(jamii) not sure about Negate/Threshold
+            Negate { input } => input.applied_to(outer)?.negate(),
+            Threshold { input } => {
+                // assumes outer doesn't have any negative counts, which is probably safe?
+                input.applied_to(outer)?.threshold(),
+            }
         })
     }
 }
@@ -616,7 +531,9 @@ impl RelationExpr {
                 }
                 RelationType { column_types }
             }
-            RelationExpr::Distinct { input } => input.typ(),
+            RelationExpr::Distinct { input }
+            | RelationExpr::Negate { input }
+            | RelationExpr::Threshold { input } => input.typ(),
             RelationExpr::Union { left, right } => {
                 let left_typ = left.typ();
                 let right_typ = right.typ();
@@ -639,8 +556,7 @@ impl RelationExpr {
     }
 
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        unimplemented!()
-        // RelationExpr::Constant { rows, typ }
+        RelationExpr::Constant { rows, typ }
     }
 
     pub fn project(self, outputs: Vec<usize>) -> Self {
@@ -686,12 +602,10 @@ impl RelationExpr {
         }
     }
 
-    pub fn or_default(self, default: Vec<Datum>) -> Self {
-        unimplemented!()
-    }
-
     pub fn negate(self) -> Self {
-        unimplemented!()
+        RelationExpr::Negate {
+            input: Box::new(self),
+        }
     }
 
     pub fn distinct(self) -> Self {
@@ -701,7 +615,9 @@ impl RelationExpr {
     }
 
     pub fn threshold(self) -> Self {
-        unimplemented!()
+        RelationExpr::Threshold {
+            input: Box::new(self),
+        }
     }
 
     pub fn union(self, other: Self) -> Self {
