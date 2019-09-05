@@ -21,3 +21,21 @@ SELECT liker, EXISTS(
 ----
 alice true
 bob false
+
+# inner scope shadows outer scope, so `likee` without qualification refers to `likes2.likee`
+query TB rowsort
+SELECT liker, EXISTS(
+  SELECT * FROM likes as likes2 WHERE likee = likes2.liker
+) FROM likes
+----
+alice false
+bob false
+
+# similarly, without `as likes2`, `likes.liker` refers to the inner scope
+query TB rowsort
+SELECT liker, EXISTS(
+  SELECT * FROM likes WHERE likee = likes.liker
+) FROM likes
+----
+alice false
+bob false
