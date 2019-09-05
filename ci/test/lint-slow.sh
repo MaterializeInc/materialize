@@ -5,7 +5,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 #
-# hygiene.sh — lint, clippy, etc.
+# lint-slow.sh — slow linters that require building code.
 
 set -euo pipefail
 
@@ -13,8 +13,6 @@ set -euo pipefail
 
 ci_init
 
-ci_try bin/lint
-ci_try cargo fmt -- --check
 ci_try cargo test --doc
 # Intentionally run check last, since otherwise it won't use the cache.
 # https://github.com/rust-lang/rust-clippy/issues/3840
