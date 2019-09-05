@@ -177,6 +177,8 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         dataflow_conns,
         config.threads,
         config.process,
+        switchboard,
+        runtime.executor(),
         dataflow_command_receiver,
         local_input_mux.clone(),
         ExfiltratorConfig::Remote(post_address),

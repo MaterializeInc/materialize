@@ -17,9 +17,9 @@
 #![allow(clippy::clone_on_copy)]
 
 use timely::progress::frontier::Antichain;
-use timely::synchronization::sequence::Sequencer;
 
 use futures::sync::mpsc::UnboundedReceiver;
+use futures::{sink, Sink};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -32,6 +32,21 @@ use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Timestamp, View};
 use expr::RelationExpr;
 use repr::Datum;
+
+pub struct BroadcastToken;
+
+impl comm::broadcast::Token for BroadcastToken {
+    type Item = SequencedCommand;
+
+    /// Returns true, to enable loopback.
+    ///
+    /// Since the coordinator lives on the same process as one set of
+    /// workers, we need to enable loopback so that broadcasts are
+    /// transmitted intraprocess and visible to those workers.
+    fn loopback() -> bool {
+        true
+    }
+}
 
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,6 +78,7 @@ pub enum SequencedCommand {
 pub struct CommandCoordinator {
     /// Per-view maintained state.
     views: HashMap<String, ViewState>,
+    broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
     command_receiver: UnboundedReceiver<DataflowCommand>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     log: bool,
@@ -72,13 +88,18 @@ pub struct CommandCoordinator {
 
 impl CommandCoordinator {
     /// Creates a new command coordinator from input and output command queues.
-    pub fn new(
+    pub fn new<C>(
+        switchboard: comm::Switchboard<C>,
         command_receiver: UnboundedReceiver<DataflowCommand>,
         logging_config: Option<&LoggingConfig>,
         exfiltrator: Rc<Exfiltrator>,
-    ) -> Self {
+    ) -> Self
+    where
+        C: comm::Connection,
+    {
         Self {
             views: HashMap::new(),
+            broadcast_tx: switchboard.broadcast_tx::<BroadcastToken>().wait(),
             command_receiver,
             log: logging_config.is_some(),
             since_updates: Vec::new(),
@@ -87,19 +108,15 @@ impl CommandCoordinator {
         }
     }
 
-    /// Drains commands from the receiver and sequences them to the sequencer.
-    pub fn sequence_commands(&mut self, sequencer: &mut Sequencer<SequencedCommand>) {
+    /// Drains commands from the receiver, sequences them, and broadcasts the
+    /// sequence to all work threads.
+    pub fn sequence_commands(&mut self) {
         while let Ok(Some(cmd)) = self.command_receiver.try_next() {
-            self.sequence_command(cmd, sequencer);
+            self.sequence_command(cmd);
         }
     }
 
-    /// Appends a sequence of commands to `sequenced` in response to a dataflow command.
-    pub fn sequence_command(
-        &mut self,
-        command: DataflowCommand,
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
+    fn sequence_command(&mut self, command: DataflowCommand) {
         match command {
             DataflowCommand::CreateDataflows(mut dataflows) => {
                 // Transforms and registers the dataflow.
@@ -109,17 +126,23 @@ impl CommandCoordinator {
                     }
                 }
 
-                sequencer.push(SequencedCommand::CreateDataflows(dataflows.clone()));
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::CreateDataflows(dataflows.clone()),
+                );
 
                 for dataflow in dataflows.iter() {
-                    self.insert_view(dataflow, sequencer);
+                    self.insert_view(dataflow);
                 }
             }
             DataflowCommand::DropDataflows(dataflows) => {
                 for name in dataflows.iter() {
-                    self.remove_view(name, sequencer);
+                    self.remove_view(name);
                 }
-                sequencer.push(SequencedCommand::DropDataflows(dataflows));
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::DropDataflows(dataflows),
+                );
             }
             DataflowCommand::Peek {
                 mut source,
@@ -141,12 +164,15 @@ impl CommandCoordinator {
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
                     // Fast path. We can just look at the existing dataflow directly.
-                    sequencer.push(SequencedCommand::Peek {
-                        name,
-                        timestamp,
-                        conn_id,
-                        transform,
-                    });
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::Peek {
+                            name,
+                            timestamp,
+                            conn_id,
+                            transform,
+                        },
+                    );
                 } else {
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
@@ -156,21 +182,28 @@ impl CommandCoordinator {
 
                     self.optimizer.optimize(&mut source, &typ);
 
-                    sequencer.push(SequencedCommand::CreateDataflows(vec![Dataflow::View(
-                        View {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
                             name: name.clone(),
                             relation_expr: source,
                             typ,
                             as_of: Some(vec![timestamp.clone()]),
+                        })]),
+                    );
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::Peek {
+                            name: name.clone(),
+                            timestamp,
+                            conn_id,
+                            transform,
                         },
-                    )]));
-                    sequencer.push(SequencedCommand::Peek {
-                        name: name.clone(),
-                        timestamp,
-                        conn_id,
-                        transform,
-                    });
-                    sequencer.push(SequencedCommand::DropDataflows(vec![name]));
+                    );
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::DropDataflows(vec![name]),
+                    );
                 }
             }
             DataflowCommand::Explain {
@@ -183,7 +216,7 @@ impl CommandCoordinator {
                     .send_peek(conn_id, vec![vec![Datum::from(relation_expr.pretty())]]);
             }
             DataflowCommand::Shutdown => {
-                sequencer.push(SequencedCommand::Shutdown);
+                broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown);
             }
         };
     }
@@ -195,13 +228,16 @@ impl CommandCoordinator {
     ///
     /// This API is a bit wonky, but at the moment the sequencer plays the role of both send and
     /// receive, and so cannot be owned only by the coordinator.
-    pub fn maintenance(&mut self, sequencer: &mut Sequencer<SequencedCommand>) {
+    pub fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
         if !self.since_updates.is_empty() {
-            sequencer.push(SequencedCommand::AllowCompaction(std::mem::replace(
-                &mut self.since_updates,
-                Vec::new(),
-            )));
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::AllowCompaction(std::mem::replace(
+                    &mut self.since_updates,
+                    Vec::new(),
+                )),
+            );
         }
     }
 
@@ -270,30 +306,31 @@ impl CommandCoordinator {
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(
-        &mut self,
-        name: &str,
-        upper: &[Timestamp],
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
+    pub fn update_upper(&mut self, name: &str, upper: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             // We may be informed of non-changes; suppress them.
             if entry.upper.elements() != upper {
                 // Log the change to frontiers.
                 if self.log {
                     for time in upper.iter() {
-                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.to_string(),
-                            time.clone(),
-                            1,
-                        )));
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                name.to_string(),
+                                time.clone(),
+                                1,
+                            )),
+                        );
                     }
                     for time in entry.upper.elements().iter() {
-                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.to_string(),
-                            time.clone(),
-                            -1,
-                        )));
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                name.to_string(),
+                                time.clone(),
+                                -1,
+                            )),
+                        );
                     }
                 }
 
@@ -336,20 +373,19 @@ impl CommandCoordinator {
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    pub fn insert_view(
-        &mut self,
-        dataflow: &Dataflow,
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
-        self.remove_view(dataflow.name(), sequencer);
+    pub fn insert_view(&mut self, dataflow: &Dataflow) {
+        self.remove_view(dataflow.name());
         let viewstate = ViewState::new(dataflow);
         if self.log {
             for time in viewstate.upper.elements() {
-                sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                    dataflow.name().to_string(),
-                    time.clone(),
-                    1,
-                )));
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                        dataflow.name().to_string(),
+                        time.clone(),
+                        1,
+                    )),
+                );
             }
         }
         self.views.insert(dataflow.name().to_string(), viewstate);
@@ -359,21 +395,19 @@ impl CommandCoordinator {
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    pub fn insert_source(
-        &mut self,
-        name: &str,
-        compaction_ms: Timestamp,
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
-        self.remove_view(name, sequencer);
+    pub fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
+        self.remove_view(name);
         let mut viewstate = ViewState::new_source();
         if self.log {
             for time in viewstate.upper.elements() {
-                sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                    name.to_string(),
-                    time.clone(),
-                    1,
-                )));
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                        name.to_string(),
+                        time.clone(),
+                        1,
+                    )),
+                );
             }
         }
         viewstate.set_compaction_latency(compaction_ms);
@@ -383,19 +417,33 @@ impl CommandCoordinator {
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    pub fn remove_view(&mut self, name: &str, sequencer: &mut Sequencer<SequencedCommand>) {
+    pub fn remove_view(&mut self, name: &str) {
         if let Some(state) = self.views.remove(name) {
             if self.log {
                 for time in state.upper.elements() {
-                    sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                        name.to_string(),
-                        time.clone(),
-                        -1,
-                    )));
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                            name.to_string(),
+                            time.clone(),
+                            -1,
+                        )),
+                    );
                 }
             }
         }
     }
+}
+
+fn broadcast(
+    tx: &mut sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
+    cmd: SequencedCommand,
+) {
+    // TODO(benesch): avoid flushing after every send. This will require
+    // something smarter than sink::Wait, which won't flush the sink if a send
+    // gets stuck.
+    tx.send(cmd).unwrap();
+    tx.flush().unwrap();
 }
 
 /// Per-view state.

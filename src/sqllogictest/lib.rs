@@ -661,14 +661,19 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
+    // Hold a reference to the dataflow workers threads to avoid dropping them
+    // too early. Order is important here! They must appear before the runtime,
+    // so that the runtime is *dropped* after the workers. We rely on the
+    // runtime to send the shutdown signal to the workers; if the runtime goes
+    // away first, the workers won't ever get the shutdown signal.
+    _dataflow_workers: Box<dyn Drop>,
+    _runtime: tokio::runtime::Runtime,
     postgres: Postgres,
     planner: Planner,
     session: Session,
     conn_id: u32,
     dataflow_command_sender: UnboundedSender<DataflowCommand>,
     worker0_thread: std::thread::Thread,
-    // this is only here to avoid dropping it too early
-    _dataflow_workers: Box<dyn Drop>,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: Mux<Uuid, LocalInput>,
@@ -745,10 +750,13 @@ impl FullState {
         let local_input_mux = Mux::default();
         let dataflow_results_mux = Mux::default();
         let process_id = 0;
+        let (switchboard, runtime) = comm::Switchboard::local()?;
         let dataflow_workers = dataflow::serve(
             vec![None],
             NUM_TIMELY_WORKERS,
             process_id,
+            switchboard,
+            runtime.executor(),
             dataflow_command_receiver,
             local_input_mux.clone(),
             dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone()),
@@ -758,6 +766,7 @@ impl FullState {
 
         let worker0_thread = dataflow_workers.guards().into_first().thread().clone();
         Ok(FullState {
+            _runtime: runtime,
             postgres,
             planner,
             session,

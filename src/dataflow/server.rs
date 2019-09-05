@@ -13,17 +13,18 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::progress::frontier::Antichain;
-use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
 use futures::sync::mpsc::UnboundedReceiver;
+use futures::Future;
+use ore::future::sync::mpsc::ReceiverExt;
+use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
 use std::mem;
 use std::net::TcpStream;
 use std::rc::Rc;
 use std::sync::Mutex;
-use std::time::Instant;
 use uuid::Uuid;
 
 use super::render;
@@ -58,16 +59,46 @@ pub enum DataflowCommand {
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(
+///
+/// TODO(benesch): pass a config struct here, or find some other way to cut
+/// down on the number of arguments.
+#[allow(clippy::too_many_arguments)]
+pub fn serve<C>(
     sockets: Vec<Option<TcpStream>>,
     threads: usize,
     process: usize,
-    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+    switchboard: comm::Switchboard<C>,
+    mut executor: impl tokio::executor::Executor + Clone + Send + Sync + 'static,
+    external_cmd_rx: UnboundedReceiver<DataflowCommand>,
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
-) -> Result<WorkerGuards<()>, String> {
-    let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
+) -> Result<WorkerGuards<()>, String>
+where
+    C: comm::Connection,
+{
+    let external_cmd_rx = Mutex::new(Some(external_cmd_rx));
+
+    // Construct endpoints for each thread that will receive the coordinator's
+    // sequenced command stream.
+    //
+    // TODO(benesch): package up this idiom of handing out ownership of N items
+    // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
+    // is hard to read through.
+    let command_rxs = {
+        let mut rx = switchboard
+            .broadcast_rx::<coordinator::BroadcastToken>()
+            .fanout();
+        let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
+        executor
+            .spawn(
+                rx.shuttle()
+                    .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err))
+                    .boxed(),
+            )
+            .map_err(|err| format!("error spawning future: {}", err))?;
+        command_rxs
+    };
 
     let log_fn = Box::new(|_| None);
     let (builders, guard) = initialize_networking_from_sockets(sockets, process, threads, log_fn)
@@ -77,19 +108,38 @@ pub fn serve(
         .map(|x| GenericBuilder::ZeroCopy(x))
         .collect();
 
-    timely::execute::execute_from(builders, Box::new(guard), move |worker| {
-        let dataflow_command_receiver = if worker.index() == 0 {
-            dataflow_command_receiver.lock().unwrap().take()
+    timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
+        let exfiltrator = Rc::new(exfiltrator_config.clone().into());
+
+        let command_coordinator = if timely_worker.index() == 0 {
+            let external_cmd_rx = external_cmd_rx.lock().unwrap().take().unwrap();
+            Some(coordinator::CommandCoordinator::new(
+                switchboard.clone(),
+                external_cmd_rx,
+                logging_config.as_ref(),
+                Rc::clone(&exfiltrator),
+            ))
         } else {
             None
         };
-        Worker::new(
-            worker,
-            dataflow_command_receiver,
-            local_input_mux.clone(),
-            exfiltrator_config.clone(),
-            logging_config.clone(),
-        )
+
+        let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
+            .take()
+            .unwrap()
+            .request_unparks(executor.clone())
+            .unwrap();
+
+        Worker {
+            inner: timely_worker,
+            local_input_mux: local_input_mux.clone(),
+            exfiltrator,
+            pending_peeks: Vec::new(),
+            traces: TraceManager::default(),
+            logging_config: logging_config.clone(),
+            command_coordinator,
+            command_rx,
+            materialized_logger: None,
+        }
         .run()
     })
 }
@@ -114,9 +164,9 @@ where
     exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
-    sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<LoggingConfig>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
+    command_rx: UnboundedReceiver<coordinator::SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
 }
 
@@ -124,36 +174,6 @@ impl<'w, A> Worker<'w, A>
 where
     A: Allocate,
 {
-    fn new(
-        w: &'w mut TimelyWorker<A>,
-        dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
-        local_input_mux: Mux<Uuid, LocalInput>,
-        exfiltrator_config: ExfiltratorConfig,
-        logging_config: Option<LoggingConfig>,
-    ) -> Worker<'w, A> {
-        let sequencer = Sequencer::new(w, Instant::now());
-        let exfiltrator = Rc::new(exfiltrator_config.into());
-        let command_coordinator = dataflow_command_receiver.map(|dcr| {
-            coordinator::CommandCoordinator::new(
-                dcr,
-                logging_config.as_ref(),
-                Rc::clone(&exfiltrator),
-            )
-        });
-
-        Worker {
-            inner: w,
-            local_input_mux,
-            exfiltrator,
-            pending_peeks: Vec::new(),
-            traces: TraceManager::default(),
-            sequencer,
-            logging_config,
-            command_coordinator,
-            materialized_logger: None,
-        }
-    }
-
     /// Initializes timely dataflow logging and publishes as a view.
     ///
     /// The initialization respects the setting of `self.logging_config`, and in particular
@@ -217,7 +237,7 @@ where
             if let Some(coordinator) = &mut self.command_coordinator {
                 for log in logging.active_logs().iter() {
                     // Insert with 1 second compaction latency.
-                    coordinator.insert_source(log.name(), 1_000, &mut self.sequencer);
+                    coordinator.insert_source(log.name(), 1_000);
                 }
             }
         }
@@ -254,21 +274,21 @@ where
 
             if let Some(coordinator) = &mut self.command_coordinator {
                 // Sequence any pending commands.
-                coordinator.sequence_commands(&mut self.sequencer);
-                coordinator.maintenance(&mut self.sequencer);
+                coordinator.sequence_commands();
+                coordinator.maintenance();
 
                 // Update upper bounds for each maintained trace.
                 let mut upper = Antichain::new();
                 for name in self.traces.traces.keys() {
                     if let Some(by_self) = self.traces.get_by_self(name) {
                         by_self.clone().read_upper(&mut upper);
-                        coordinator.update_upper(name, upper.elements(), &mut self.sequencer);
+                        coordinator.update_upper(name, upper.elements());
                     }
                 }
             }
 
             // Handle any received commands
-            while let Some(cmd) = self.sequencer.next() {
+            while let Ok(Some(cmd)) = self.command_rx.try_next() {
                 if let coordinator::SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
