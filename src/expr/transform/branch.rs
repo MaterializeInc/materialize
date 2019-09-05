@@ -33,6 +33,7 @@ impl Branch {
             //   If input is a constant, can just inline into branch.
             //   If we can prove input has no duplicates, and key is whole of input, can remove distinct and final join.
 
+            let input_arity = input.arity();
             let input_name = format!("input_{}", uuid::Uuid::new_v4());
             let get_input = RelationExpr::Get {
                 name: input_name.clone(),
@@ -40,12 +41,14 @@ impl Branch {
             };
 
             let keyed_input = get_input.clone().project(key.clone()).distinct();
+            let keyed_input_arity = keyed_input.arity();
             let keyed_input_name = name.clone(); // this is what `branch` is looking for as input
             let get_keyed_input = RelationExpr::Get {
                 name: keyed_input_name.clone(),
                 typ: keyed_input.typ(),
             };
 
+            let branch_arity = branch.arity();
             let branch_name = format!("branch_{}", uuid::Uuid::new_v4());
             let get_branch = RelationExpr::Get {
                 name: branch_name.clone(),
@@ -78,8 +81,13 @@ impl Branch {
                     .enumerate()
                     .map(|(i, &k)| vec![(0, k), (1, i)])
                     .collect(),
-            };
-
+            }
+            // throw away the right-hand copy of the key we just joined on
+            .project(
+                (0..input_arity)
+                    .chain(input_arity + keyed_input_arity..input_arity + branch_arity)
+                    .collect(),
+            );
             *relation = RelationExpr::Let {
                 name: input_name,
                 value: input.clone(),
