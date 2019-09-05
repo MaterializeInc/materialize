@@ -23,7 +23,7 @@ repr = { path = "../repr" }
 reqwest = { version = "0.9.20", features = ["trust-dns"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.40"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", features = ["bincode"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 url = "1.7.2"
 url_serde = "0.2.0"
 uuid = { version = "0.7.4", features = ["serde", "v4"] }

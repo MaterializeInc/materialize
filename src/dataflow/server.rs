@@ -8,6 +8,8 @@
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 
+use timely::communication::allocator::generic::GenericBuilder;
+use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::progress::frontier::Antichain;
@@ -18,6 +20,7 @@ use futures::sync::mpsc::UnboundedReceiver;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
 use std::mem;
+use std::net::TcpStream;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
@@ -56,15 +59,25 @@ pub enum DataflowCommand {
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
+    sockets: Vec<Option<TcpStream>>,
+    threads: usize,
+    process: usize,
     dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
-    timely_configuration: timely::Configuration,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String> {
     let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
 
-    timely::execute(timely_configuration, move |worker| {
+    let log_fn = Box::new(|_| None);
+    let (builders, guard) = initialize_networking_from_sockets(sockets, process, threads, log_fn)
+        .map_err(|err| format!("failed to initialize networking: {}", err))?;
+    let builders = builders
+        .into_iter()
+        .map(|x| GenericBuilder::ZeroCopy(x))
+        .collect();
+
+    timely::execute::execute_from(builders, Box::new(guard), move |worker| {
         let dataflow_command_receiver = if worker.index() == 0 {
             dataflow_command_receiver.lock().unwrap().take()
         } else {

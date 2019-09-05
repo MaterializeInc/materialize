@@ -744,11 +744,14 @@ impl FullState {
         let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
         let local_input_mux = Mux::default();
         let dataflow_results_mux = Mux::default();
+        let process_id = 0;
         let dataflow_workers = dataflow::serve(
+            vec![None],
+            NUM_TIMELY_WORKERS,
+            process_id,
             dataflow_command_receiver,
             local_input_mux.clone(),
             dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone()),
-            timely::Configuration::Process(NUM_TIMELY_WORKERS),
             None, // disable logging
         )
         .unwrap();
