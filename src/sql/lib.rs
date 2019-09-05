@@ -278,163 +278,8 @@ impl Planner {
         })
     }
 
-<<<<<<< HEAD
     fn handle_create_dataflow(&mut self, stmt: Statement) -> Result<Plan, failure::Error> {
         match &stmt {
-=======
-    fn handle_drop_dataflow(&mut self, stmt: Statement) -> PlannerResult {
-        let (object_type, if_exists, names, cascade) = match stmt {
-            Statement::Drop {
-                object_type,
-                if_exists,
-                names,
-                cascade,
-            } => (object_type, if_exists, names, cascade),
-            _ => unreachable!(),
-        };
-        let names: Vec<String> = Result::from_iter(names.iter().map(extract_sql_object_name))?;
-        for name in &names {
-            match self.dataflows.get(name) {
-                Ok(dataflow) => {
-                    if !object_type_matches(object_type, dataflow) {
-                        bail!("{} is not of type {}", name, object_type);
-                    }
-                }
-                Err(e) => {
-                    if !if_exists {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        let mode = RemoveMode::from_cascade(cascade);
-        let mut removed = vec![];
-        for name in &names {
-            self.dataflows.remove(name, mode, &mut removed)?;
-        }
-        let sql_response = match object_type {
-            ObjectType::Source => SqlResponse::DroppedSource,
-            ObjectType::View => SqlResponse::DroppedView,
-            _ => bail!("unsupported SQL statement: DROP {}", object_type),
-        };
-        let removed = removed.iter().map(|d| d.name().to_owned()).collect();
-        Ok((sql_response, Some(DataflowCommand::DropDataflows(removed))))
-    }
-
-    fn handle_peek(
-        &mut self,
-        connection_uuid: Uuid,
-        name: ObjectName,
-        immediate: bool,
-    ) -> PlannerResult {
-        let name = name.to_string();
-        let dataflow = self.dataflows.get(&name)?.clone();
-        Ok((
-            SqlResponse::SendRows {
-                typ: dataflow.typ().clone(),
-                rows: Vec::new(),
-                wait_for: WaitFor::Workers,
-            },
-            Some(DataflowCommand::Peek {
-                connection_uuid,
-                source: expr::RelationExpr::Get {
-                    name: dataflow.name().to_owned(),
-                    typ: dataflow.typ().clone(),
-                },
-                when: if immediate {
-                    PeekWhen::Immediately
-                } else {
-                    PeekWhen::EarliestSource
-                },
-            }),
-        ))
-    }
-
-    pub fn handle_select(&mut self, connection_uuid: Uuid, query: Query) -> PlannerResult {
-        let relation_expr = self.plan_query(&query)?.decorrelate()?;
-        Ok((
-            SqlResponse::SendRows {
-                typ: relation_expr.typ(),
-                rows: Vec::new(),
-                wait_for: WaitFor::Workers,
-            },
-            Some(DataflowCommand::Peek {
-                connection_uuid,
-                source: relation_expr,
-                when: PeekWhen::Immediately,
-            }),
-        ))
-    }
-}
-
-pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure::Error> {
-    // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
-    Ok(match data_type {
-        DataType::Boolean => ScalarType::Bool,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
-        DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
-        DataType::SmallInt => ScalarType::Int32,
-        DataType::Int | DataType::BigInt => ScalarType::Int64,
-        DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
-        DataType::Decimal(precision, scale) => {
-            let precision = precision.unwrap_or(MAX_DECIMAL_PRECISION.into());
-            let scale = scale.unwrap_or(0);
-            if precision > MAX_DECIMAL_PRECISION.into() {
-                bail!(
-                    "decimal precision {} exceeds maximum precision {}",
-                    precision,
-                    MAX_DECIMAL_PRECISION
-                );
-            }
-            if scale > precision {
-                bail!("decimal scale {} exceeds precision {}", scale, precision);
-            }
-            ScalarType::Decimal(precision as u8, scale as u8)
-        }
-        DataType::Date => ScalarType::Date,
-        DataType::Timestamp => ScalarType::Timestamp,
-        DataType::Time => ScalarType::Time,
-        DataType::Bytea => ScalarType::Bytes,
-        other => bail!("Unexpected SQL type: {:?}", other),
-    })
-}
-
-fn build_source(
-    schema: &SourceSchema,
-    kafka_addr: SocketAddr,
-    name: String,
-    topic: String,
-) -> Result<Source, failure::Error> {
-    let (raw_schema, schema_registry_url) = match schema {
-        SourceSchema::Raw(schema) => (schema.to_owned(), None),
-        SourceSchema::Registry(url) => {
-            // TODO(benesch): we need to fetch this schema
-            // asynchronously to avoid blocking the command
-            // processing thread.
-            let url: Url = url.parse()?;
-            let ccsr_client = ccsr::Client::new(url.clone());
-            let res = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-            (res.raw, Some(url))
-        }
-    };
-    let typ = avro::validate_schema(&raw_schema)?;
-    Ok(Source {
-        name,
-        connector: SourceConnector::Kafka(KafkaSourceConnector {
-            addr: kafka_addr,
-            topic,
-            raw_schema,
-            schema_registry_url,
-        }),
-        typ,
-    })
-}
-
-impl Planner {
-    fn plan_statement(&self, stmt: &Statement) -> Result<Vec<Dataflow>, failure::Error> {
-        match stmt {
->>>>>>> Hook up sql to correlated
             Statement::CreateView {
                 name,
                 columns,
@@ -445,7 +290,7 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let relation_expr = self.plan_query(query)?.decorrelate()?;
+                let relation_expr = self.plan_query(query, &Scope::empty(None))?.decorrelate()?;
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -647,7 +492,7 @@ impl Planner {
         }
     }
 
-    fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
+    fn plan_query(&self, q: &Query, outer_scope: &Scope) -> Result<RelationExpr, failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -657,20 +502,24 @@ impl Planner {
         if !q.order_by.is_empty() {
             bail!("ORDER BY is not supported in a view definition");
         }
-        self.plan_set_expr(&q.body)
+        self.plan_set_expr(&q.body, outer_scope)
     }
 
-    fn plan_set_expr(&self, q: &SetExpr) -> Result<RelationExpr, failure::Error> {
+    fn plan_set_expr(
+        &self,
+        q: &SetExpr,
+        outer_scope: &Scope,
+    ) -> Result<RelationExpr, failure::Error> {
         match q {
-            SetExpr::Select(select) => self.plan_view_select(select),
+            SetExpr::Select(select) => self.plan_view_select(select, outer_scope),
             SetExpr::SetOperation {
                 op,
                 all,
                 left,
                 right,
             } => {
-                let left_expr = self.plan_set_expr(left)?;
-                let right_expr = self.plan_set_expr(right)?;
+                let left_expr = self.plan_set_expr(left, outer_scope)?;
+                let right_expr = self.plan_set_expr(right, outer_scope)?;
 
                 // TODO(jamii) this type-checking is redundant with RelationExpr::typ, but currently it seems that we need both because RelationExpr::typ is not allowed to return errors
                 let left_types = &left_expr.typ().column_types;
@@ -731,7 +580,7 @@ impl Planner {
                 );
                 let ctx = &ExprContext {
                     name: "values",
-                    scope: &Scope::empty(),
+                    scope: &Scope::empty(Some(outer_scope.clone())),
                     aggregate_context: None,
                 };
                 let mut expr: Option<RelationExpr> = None;
@@ -783,12 +632,16 @@ impl Planner {
         }
     }
 
-    fn plan_view_select(&self, s: &Select) -> Result<RelationExpr, failure::Error> {
+    fn plan_view_select(
+        &self,
+        s: &Select,
+        outer_scope: &Scope,
+    ) -> Result<RelationExpr, failure::Error> {
         // Step 1. Handle FROM clause, including joins.
         let (mut relation_expr, from_scope) = s
             .from
             .iter()
-            .map(|twj| self.plan_table_with_joins(twj))
+            .map(|twj| self.plan_table_with_joins(twj, outer_scope))
             .fallible()
             .fold1(|(left, left_scope), (right, right_scope)| {
                 self.plan_join_operator(
@@ -806,7 +659,7 @@ impl Planner {
                         rows: vec![vec![Datum::String("X".into())]],
                         typ: typ.clone(),
                     },
-                    Scope::from_source("dual", typ),
+                    Scope::from_source("dual", typ, Some(outer_scope.clone())),
                 ))
             })?;
 
@@ -837,7 +690,7 @@ impl Planner {
             };
             let mut group_key = vec![];
             let mut group_exprs = vec![];
-            let mut group_scope = Scope { items: vec![] };
+            let mut group_scope = Scope::empty(Some(outer_scope.clone()));
             let mut select_all_mapping = HashMap::new();
             for expr in &s.group_by {
                 let (expr, typ) = self.plan_expr(ctx, &expr)?;
@@ -966,16 +819,68 @@ impl Planner {
     fn plan_table_with_joins<'a>(
         &self,
         table_with_joins: &'a TableWithJoins,
+        outer_scope: &Scope,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
-        let (mut left, mut left_scope) = self.plan_table_factor(&table_with_joins.relation)?;
+        let (mut left, mut left_scope) =
+            self.plan_table_factor(&table_with_joins.relation, outer_scope)?;
         for join in &table_with_joins.joins {
-            let (right, right_scope) = self.plan_table_factor(&join.relation)?;
+            let (right, right_scope) = self.plan_table_factor(&join.relation, outer_scope)?;
             let (new_left, new_left_scope) =
                 self.plan_join_operator(&join.join_operator, left, left_scope, right, right_scope)?;
             left = new_left;
             left_scope = new_left_scope;
         }
         Ok((left, left_scope))
+    }
+
+    fn plan_table_factor<'a>(
+        &self,
+        table_factor: &'a TableFactor,
+        outer_scope: &Scope,
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
+        match table_factor {
+            TableFactor::Table {
+                name,
+                alias,
+                args,
+                with_hints,
+            } => {
+                if !args.is_empty() {
+                    bail!("table arguments are not supported");
+                }
+                if !with_hints.is_empty() {
+                    bail!("WITH hints are not supported");
+                }
+                let name = extract_sql_object_name(name)?;
+                let typ = self.dataflows.get_type(&name)?;
+                let expr = RelationExpr::Get {
+                    name: name.clone(),
+                    typ: typ.clone(),
+                };
+                let alias = if let Some(TableAlias { name, columns }) = alias {
+                    if !columns.is_empty() {
+                        bail!("aliasing columns is not yet supported");
+                    }
+                    name.to_owned()
+                } else {
+                    name
+                };
+                let mut scope = Scope::from_source(&name, typ.clone(), Some(outer_scope.clone()));
+                if let Some(TableAlias { name, columns }) = alias {
+                    if !columns.is_empty() {
+                        bail!("aliasing columns is not yet supported");
+                    }
+                    scope = scope.alias_table(&name);
+                }
+                Ok((expr, scope))
+            }
+            TableFactor::Derived { .. } => {
+                bail!("subqueries are not yet supported");
+            }
+            TableFactor::NestedJoin(table_with_joins) => {
+                self.plan_table_with_joins(table_with_joins, outer_scope)
+            }
+        }
     }
 
     fn plan_select_item<'a>(
@@ -1022,49 +927,6 @@ impl Planner {
                         Ok((ScalarExpr::Column(*j as isize), item.typ.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>()
-            }
-        }
-    }
-
-    fn plan_table_factor<'a>(
-        &self,
-        table_factor: &'a TableFactor,
-    ) -> Result<(RelationExpr, Scope), failure::Error> {
-        match table_factor {
-            TableFactor::Table {
-                name,
-                alias,
-                args,
-                with_hints,
-            } => {
-                if !args.is_empty() {
-                    bail!("table arguments are not supported");
-                }
-                if !with_hints.is_empty() {
-                    bail!("WITH hints are not supported");
-                }
-                let name = extract_sql_object_name(name)?;
-                let typ = self.dataflows.get_type(&name)?;
-                let expr = RelationExpr::Get {
-                    name: name.clone(),
-                    typ: typ.clone(),
-                };
-                let alias = if let Some(TableAlias { name, columns }) = alias {
-                    if !columns.is_empty() {
-                        bail!("aliasing columns is not yet supported");
-                    }
-                    name.to_owned()
-                } else {
-                    name
-                };
-                let scope = Scope::from_source(&alias, typ.clone());
-                Ok((expr, scope))
-            }
-            TableFactor::Derived { .. } => {
-                bail!("subqueries are not yet supported");
-            }
-            TableFactor::NestedJoin(table_with_joins) => {
-                self.plan_table_with_joins(table_with_joins)
             }
         }
     }
@@ -1135,20 +997,14 @@ impl Planner {
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
-<<<<<<< HEAD
-                let product = left.product(right);
-                let mut product_scope = left_scope.product(right_scope);
-=======
                 let product_scope = left_scope.product(right_scope);
->>>>>>> Hook up sql to correlated
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
                     aggregate_context: None,
                 };
-<<<<<<< HEAD
-                let (predicate, _) = self.plan_expr(ctx, expr)?;
-                for (l, r) in find_trivial_column_equivalences(&predicate) {
+                let (on, _) = self.plan_expr(ctx, expr)?;
+                for (l, r) in find_trivial_column_equivalences(&on) {
                     // When we can statically prove that two columns are
                     // equivalent after a join, the right column becomes
                     // unnamable and the left column assumes both names. This
@@ -1166,9 +1022,6 @@ impl Planner {
                         std::mem::replace(&mut product_scope.items[r].names, Vec::new());
                     product_scope.items[l].names.extend(right_names);
                 }
-                with_both(product.filter(vec![predicate]), product_scope)
-=======
-                let (on, _) = self.plan_expr(ctx, expr)?;
                 let joined = RelationExpr::Join {
                     left: Box::new(left),
                     right: Box::new(right),
@@ -1177,7 +1030,6 @@ impl Planner {
                     include_right_outer,
                 };
                 Ok((joined, product_scope))
->>>>>>> Hook up sql to correlated
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
                 &column_names,
@@ -1258,18 +1110,6 @@ impl Planner {
         let project_key =
             // coalesced join columns
             (0..map_exprs.len())
-<<<<<<< HEAD
-                .map(|i| left_scope.len() + right_scope.len() + i)
-                // other columns that weren't joined
-                .chain(
-                    (0..(left_scope.len() + right_scope.len()))
-                        .filter(|i| !dropped_columns.contains(i)),
-                )
-                .collect::<Vec<_>>();
-        let both = left.product(right).filter(join_exprs);
-        let both_scope = left_scope.product(right_scope);
-        let (both, mut both_scope) = with_both(both, both_scope)?;
-=======
             .map(|i| left_scope.len() + right_scope.len() + i)
             // other columns that weren't joined
             .chain(
@@ -1278,7 +1118,6 @@ impl Planner {
             )
             .collect::<Vec<_>>();
         let mut both_scope = left_scope.product(right_scope);
->>>>>>> Hook up sql to correlated
         both_scope.items.extend(new_items);
         let both_scope = both_scope.project(&project_key);
         let both = RelationExpr::Join {
@@ -2334,58 +2173,80 @@ struct ScopeItem {
 
 #[derive(Debug, Clone)]
 struct Scope {
+    // items in this query
     items: Vec<ScopeItem>,
+    // items inherited from an enclosing query
+    outer_items: Vec<ScopeItem>,
 }
 
 impl Scope {
-    fn empty() -> Self {
-        Scope { items: vec![] }
+    fn empty(outer_scope: Option<Scope>) -> Self {
+        Scope {
+            items: vec![],
+            outer_items: if let Some(outer_scope) = outer_scope {
+                outer_scope
+                    .outer_items
+                    .into_iter()
+                    .chain(outer_scope.items.into_iter())
+                    .collect()
+            } else {
+                vec![]
+            },
+        }
     }
 
-    fn from_source(table_name: &str, typ: RelationType) -> Self {
-        Scope {
-            items: typ
-                .column_types
-                .into_iter()
-                .map(|typ| ScopeItem {
-                    names: vec![ScopeItemName {
-                        table_name: table_name.to_owned(),
-                        column_name: typ.name.clone(),
-                    }],
-                    typ,
-                })
-                .collect(),
-        }
+    fn from_source(table_name: &str, typ: RelationType, outer_scope: Option<Scope>) -> Self {
+        let mut scope = Scope::empty(outer_scope);
+        scope.items = typ
+            .column_types
+            .into_iter()
+            .map(|typ| ScopeItem {
+                names: vec![ScopeItemName {
+                    table_name: table_name.to_owned(),
+                    column_name: typ.name.clone(),
+                }],
+                typ,
+            })
+            .collect();
+        scope
     }
 
     fn len(&self) -> usize {
         self.items.len()
     }
-
-    fn iter_names(&self) -> impl Iterator<Item = (usize, &ScopeItem, &ScopeItemName)> {
-        self.items
+    fn resolve<'a, Matches, Name>(
+        items: &'a Vec<ScopeItem>,
+        matches: Matches,
+        name: Name,
+    ) -> Result<(isize, &'a ScopeItem), failure::Error>
+    where
+        Matches: Fn(&ScopeItem) -> bool,
+        Name: Fn() -> String,
+    {
+        let mut results = items
             .iter()
             .enumerate()
             .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
             .flatten()
+            .filter(|(_, item)| (matches)(item));
+        match (results.next(), results.next()) {
+            (None, None) => bail!("no column named {} in scope", (name)()),
+            (Some((i, item)), None) => Ok((i as isize, item)),
+            (Some(_), Some(_)) => bail!("column name {} is ambiguous", (name)()),
+            _ => unreachable!(),
+        }
     }
 
     fn resolve_column<'a>(
         &'a self,
         column_name: &str,
     ) -> Result<(isize, &'a ScopeItem), failure::Error> {
-        let mut results = self
-            .iter_names()
-            .filter(|(_pos, _item, name)| name.column_name.as_deref() == Some(column_name));
-        if let Some((pos, item, _name)) = results.next() {
-            if results.find(|(i, _item, _name)| pos != *i).is_none() {
-                Ok((pos as isize, item))
-            } else {
-                bail!("column name {} is ambiguous", column_name)
-            }
-        } else {
-            bail!("no column named {} in scope", column_name)
-        }
+        let matches = |item: &ScopeItem| item.column_name.as_deref() == Some(column_name);
+        let name = || column_name.to_owned();
+        Scope::resolve(&self.items, matches, name).or_else(|_| {
+            Scope::resolve(&self.outer_items, matches, name)
+                .map(|(i, item)| (i - (self.outer_items.len() as isize), item))
+        })
     }
 
     fn resolve_table_column<'a>(
@@ -2393,33 +2254,33 @@ impl Scope {
         table_name: &str,
         column_name: &str,
     ) -> Result<(isize, &'a ScopeItem), failure::Error> {
-        let mut results = self.iter_names().filter(|(_pos, _item, name)| {
-            name.table_name == table_name && name.column_name.as_deref() == Some(column_name)
-        });
-        if let Some((pos, item, _name)) = results.next() {
-            if results.find(|(i, _item, _name)| pos != *i).is_none() {
-               Ok((pos as isize, item))
-            } else {
-                bail!("column name {}.{} is ambiguous", table_name, column_name)
-            }
-        } else {
-            bail!("no column named {}.{} in scope", table_name, column_name)
-        }
+        let matches = |item: &ScopeItem| {
+            item.table_name.as_deref() == Some(table_name)
+                && item.column_name.as_deref() == Some(column_name)
+        };
+        let name = || format!("{}.{}", table_name, column_name);
+        Scope::resolve(&self.items, matches, name).or_else(|_| {
+            Scope::resolve(&self.outer_items, matches, name)
+                .map(|(i, item)| (i - (self.outer_items.len() as isize), item))
+        })
     }
 
     fn product(self, right: Self) -> Self {
+        assert!(self.outer_items == right.outer_items);
         Scope {
             items: self
                 .items
                 .into_iter()
                 .chain(right.items.into_iter())
                 .collect(),
+            outer_items: self.outer_items,
         }
     }
 
     fn project(&self, columns: &[usize]) -> Self {
         Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
+            outer_items: self.outer_items.clone(),
         }
     }
 }
