@@ -27,6 +27,16 @@ pub fn tail<G, B>(
         input.for_each(|_, batches| {
             let mut result: Vec<Update> = Vec::new();
             for batch in batches.iter() {
+                let mut should_process = true;
+                for t in batch.upper() {
+                    if *t <= connector.since {
+                        should_process = false;
+                        break;
+                    }
+                }
+                if !should_process {
+                    continue;
+                }
                 let mut cur = batch.cursor();
                 while let Some(key) = cur.get_key(&batch) {
                     cur.map_times(&batch, |time, diff| {
