@@ -20,24 +20,22 @@ set -euo pipefail
 # are provided to us as input.
 # shellcheck disable=SC2034
 while read -r local_ref local_sha remote_ref remote_sha; do
-    if [[ "$remote_ref" = refs/heads/master ]]; then
-        oldlist=$(git stash list)
-        git stash save --quiet --include-untracked
-        newlist=$(git stash list)
-        oldref=$(git symbolic-ref --quiet HEAD)
-        if [[ -z "$oldref" ]]; then
-            oldref=$(git rev-parse HEAD)
-        fi
-        git checkout --quiet "$local_sha"
-        reset() {
-            if [[ "$oldlist" != "$newlist" ]]; then
-                git stash pop --quiet --index || true
-            fi
-            if [[ "$oldref" != "$local_sha" ]]; then
-                git checkout --quiet -
-            fi
-        }
-        trap reset EXIT
-        bin/pre-push
+    oldlist=$(git stash list)
+    git stash save --quiet --include-untracked
+    newlist=$(git stash list)
+    oldref=$(git symbolic-ref --quiet HEAD)
+    if [[ -z "$oldref" ]]; then
+        oldref=$(git rev-parse HEAD)
     fi
+    git checkout --quiet "$local_sha"
+    reset() {
+        if [[ "$oldlist" != "$newlist" ]]; then
+            git stash pop --quiet --index || true
+        fi
+        if [[ "$oldref" != "$local_sha" ]]; then
+            git checkout --quiet -
+        fi
+    }
+    trap reset EXIT
+    bin/pre-push
 done
