@@ -31,9 +31,7 @@ use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{
-    compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp,
-};
+use dataflow_types::{compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp};
 use expr::RelationExpr;
 
 /// The commands that a running dataflow server can accept.

@@ -29,8 +29,8 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
-    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
+    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
+    Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr::like::build_like_regex_from_string;
 use expr::{
@@ -469,10 +469,12 @@ impl Planner {
             },
             transform: RowSetFinishing {
                 limit: None,
-                order_by: (0..typ.column_types.len()).map(|column| ColumnOrder {
-                    column,
-                    desc: false,
-                }).collect(),
+                order_by: (0..typ.column_types.len())
+                    .map(|column| ColumnOrder {
+                        column,
+                        desc: false,
+                    })
+                    .collect(),
             },
         })
     }
@@ -508,10 +510,7 @@ impl Planner {
         }
     }
 
-    fn plan_query(
-        &self,
-        q: &Query,
-    ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
+    fn plan_query(&self, q: &Query) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
