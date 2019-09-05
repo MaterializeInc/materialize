@@ -151,7 +151,7 @@ fn split_line(pos: usize, line: &str) -> Result<Vec<String>, InputError> {
     let mut out = Vec::new();
     let mut field = String::new();
     let mut in_quotes = None;
-    let mut escaping = true;
+    let mut escaping = false;
     for (i, c) in line.char_indices() {
         if in_quotes.is_none() && c.is_whitespace() {
             if !field.is_empty() {

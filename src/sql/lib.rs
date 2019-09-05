@@ -29,8 +29,8 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink, SinkConnector, Source,
-    SourceConnector, View,
+    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
+    Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr::like::build_like_regex_from_string;
 use expr::{
@@ -64,6 +64,7 @@ pub enum Plan {
     Peek {
         source: RelationExpr,
         when: PeekWhen,
+        transform: RowSetFinishing,
     },
     Tail(Dataflow),
     SendRows {
@@ -290,7 +291,10 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let relation_expr = self.plan_query(query)?;
+                let (relation_expr, transform) = self.plan_query(query)?;
+                if transform != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
+                }
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -452,29 +456,43 @@ impl Planner {
     fn handle_peek(&mut self, name: ObjectName, immediate: bool) -> Result<Plan, failure::Error> {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
+        let typ = dataflow.typ();
         Ok(Plan::Peek {
             source: RelationExpr::Get {
                 name: dataflow.name().to_owned(),
-                typ: dataflow.typ().clone(),
+                typ: typ.clone(),
             },
             when: if immediate {
                 PeekWhen::Immediately
             } else {
                 PeekWhen::EarliestSource
             },
+            transform: RowSetFinishing {
+                limit: None,
+                order_by: (0..typ.column_types.len())
+                    .map(|column| ColumnOrder {
+                        column,
+                        desc: false,
+                    })
+                    .collect(),
+            },
         })
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let relation_expr = self.plan_query(&query)?;
+        let (relation_expr, transform) = self.plan_query(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
+            transform,
         })
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let relation_expr = self.plan_query(&query)?;
+        let (relation_expr, transform) = self.plan_query(&query)?;
+        if transform != Default::default() {
+            bail!("Explaining ORDER BY and LIMIT queries is not yet supported.");
+        }
         if stage == Stage::Dataflow {
             Ok(Plan::SendRows {
                 typ: RelationType {
@@ -492,17 +510,46 @@ impl Planner {
         }
     }
 
-    fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
+    fn plan_query(&self, q: &Query) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
-        if q.limit.is_some() {
-            bail!("LIMIT is not supported in a view definition");
-        }
-        if !q.order_by.is_empty() {
-            bail!("ORDER BY is not supported in a view definition");
-        }
-        self.plan_set_expr(&q.body)
+        let limit = match q.limit {
+            None => None,
+            Some(Expr::Value(Value::Long(x))) => Some(x as usize),
+            _ => bail!("LIMIT must be an integer constant"),
+        };
+        let expr = self.plan_set_expr(&q.body)?;
+        let output_typ = expr.typ();
+        // This is O(m*n) where m is the number of columns and n is the number of order keys.
+        // If this ever becomes a bottleneck (which I doubt) it is easy enough to make faster...
+        let order: Result<Vec<ColumnOrder>, failure::Error> = q
+            .order_by
+            .iter()
+            .map(|obe| match &obe.expr {
+                Expr::Identifier(col_name) => output_typ
+                    .column_types
+                    .iter()
+                    .enumerate()
+                    .find(|(_idx, ct)| ct.name.as_ref() == Some(col_name))
+                    .map(|(idx, _ct)| ColumnOrder {
+                        column: idx,
+                        desc: match obe.asc {
+                            None => false,
+                            Some(asc) => !asc,
+                        },
+                    })
+                    .ok_or_else(|| format_err!("ORDER BY key must be an output column name.")),
+                _ => Err(format_err!(
+                    "Arbitrary expressions for ORDER BY keys are not yet supported."
+                )),
+            })
+            .collect();
+        let transform = RowSetFinishing {
+            order_by: order?,
+            limit,
+        };
+        Ok((expr, transform))
     }
 
     fn plan_set_expr(&self, q: &SetExpr) -> Result<RelationExpr, failure::Error> {

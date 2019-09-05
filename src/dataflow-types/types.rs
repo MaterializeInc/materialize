@@ -12,6 +12,7 @@
 use expr::RelationExpr;
 use repr::{Datum, RelationType};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use url::Url;
 use uuid::Uuid;
 
@@ -40,6 +41,33 @@ pub struct Update {
     pub row: Vec<Datum>,
     pub timestamp: u64,
     pub diff: isize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ColumnOrder {
+    pub column: usize,
+    pub desc: bool,
+}
+
+pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -> Ordering {
+    for order in order {
+        let (lval, rval) = (&left[order.column], &right[order.column]);
+        let cmp = if order.desc {
+            rval.cmp(&lval)
+        } else {
+            lval.cmp(&rval)
+        };
+        if cmp != Ordering::Equal {
+            return cmp;
+        }
+    }
+    Ordering::Equal
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RowSetFinishing {
+    pub order_by: Vec<ColumnOrder>,
+    pub limit: Option<usize>,
 }
 
 /// A batch of data exfiltrated from the dataflow layer.

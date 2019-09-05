@@ -31,7 +31,7 @@ use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Dataflow, LocalInput, PeekWhen, Timestamp};
+use dataflow_types::{compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp};
 use expr::RelationExpr;
 
 /// The commands that a running dataflow server can accept.
@@ -43,6 +43,7 @@ pub enum DataflowCommand {
         conn_id: u32,
         source: RelationExpr,
         when: PeekWhen,
+        transform: RowSetFinishing,
     },
     Explain {
         conn_id: u32,
@@ -88,6 +89,7 @@ struct PendingPeek {
     timestamp: Timestamp,
     /// Whether to drop the dataflow when the peek completes.
     drop_after_peek: bool,
+    transform: RowSetFinishing,
 }
 
 struct Worker<'w, A>
@@ -297,6 +299,7 @@ where
                 timestamp,
                 conn_id,
                 drop_after_peek,
+                transform,
             } => {
                 let mut trace = self
                     .traces
@@ -310,6 +313,7 @@ where
                     conn_id,
                     timestamp,
                     drop_after_peek,
+                    transform,
                 };
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(
@@ -388,8 +392,15 @@ where
                 for _ in 0..copies {
                     results.push(key.clone());
                 }
-
                 cur.step_key(&storage)
+            }
+            if let Some(limit) = peek.transform.limit {
+                if results.len() > limit {
+                    pdqselect::select_by(&mut results, limit, |left, right| {
+                        compare_columns(&peek.transform.order_by, left, right)
+                    });
+                    results.truncate(limit);
+                }
             }
             self.exfiltrator.send_peek(peek.conn_id, results);
             if let Some(logger) = self.materialized_logger.as_mut() {

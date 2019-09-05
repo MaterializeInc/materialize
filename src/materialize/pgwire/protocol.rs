@@ -20,7 +20,7 @@ use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::queue::{self, SqlResponse, WaitFor};
-use dataflow_types::{Exfiltration, Update};
+use dataflow_types::{compare_columns, Exfiltration, RowSetFinishing, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
 use sql::Session;
@@ -142,6 +142,7 @@ pub enum StateMachine<A: Conn + 'static> {
         /// To be sent immediately
         rows: Vec<Vec<Datum>>,
         wait_for: usize,
+        transform: RowSetFinishing,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
@@ -151,6 +152,7 @@ pub enum StateMachine<A: Conn + 'static> {
         row_type: RelationType,
         peek_results: Vec<Vec<Datum>>,
         remaining_results: usize,
+        transform: RowSetFinishing,
     },
 
     #[state_machine_future(transitions(WaitForUpdates, SendUpdates, SendError, Error))]
@@ -373,6 +375,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         typ,
                         rows,
                         wait_for,
+                        transform,
                     } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
                             super::message::row_description_from_type(&typ)
@@ -384,7 +387,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             WaitFor::NoOne => 0,
                             WaitFor::Optimizer => 1,
                             WaitFor::Workers => context.num_timely_workers,
-                        }
+                        },
+                        transform,
                     }),
                     SqlResponse::SetVariable => command_complete!("SET"),
                     SqlResponse::Tailing => transition!(StartCopyOut {
@@ -427,6 +431,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             row_type: state.row_type,
             peek_results: state.rows,
             remaining_results: state.wait_for,
+            transform: state.transform,
         })
     }
 
@@ -506,8 +511,16 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             state.take()
         };
 
-        let mut peek_results = state.peek_results;
-        peek_results.sort();
+        let mut peek_results: Vec<Vec<Datum>> = state.peek_results;
+        let transform: RowSetFinishing = state.transform;
+        let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
+            compare_columns(&transform.order_by, left, right)
+        };
+        if let Some(limit) = transform.limit {
+            pdqselect::select_by(&mut peek_results, limit, sort_by);
+            peek_results.truncate(limit);
+        }
+        peek_results.sort_by(sort_by);
         let row_type = state.row_type;
         transition!(send_rows(state.conn, state.session, peek_results, row_type))
     }
