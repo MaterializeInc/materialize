@@ -87,13 +87,13 @@ pub fn translate_plan(plan: Plan, conn_id: u32) -> (SqlResponse, Option<Dataflow
                 when,
             }),
         ),
-        Plan::Tail(source) => (
+        Plan::Tail { source, since } => (
             SqlResponse::Tailing,
             Some(DataflowCommand::CreateDataflows(vec![Dataflow::Sink(
                 Sink {
                     name: format!("<temp_{}>", Uuid::new_v4()),
                     from: (source.name().to_owned(), source.typ().clone()),
-                    connector: SinkConnector::Tail(TailSinkConnector { conn_id }),
+                    connector: SinkConnector::Tail(TailSinkConnector { conn_id, since }),
                 },
             )])),
         ),

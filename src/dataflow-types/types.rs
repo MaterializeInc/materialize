@@ -157,6 +157,7 @@ pub struct KafkaSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub conn_id: u32,
+    pub since: u64, // Filter updates before this time
 }
 
 /// A view transforms one dataflow into another.

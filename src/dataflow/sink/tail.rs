@@ -30,11 +30,14 @@ pub fn tail<G, B>(
                 let mut cur = batch.cursor();
                 while let Some(key) = cur.get_key(&batch) {
                     cur.map_times(&batch, |time, diff| {
-                        result.push(Update {
-                            row: key.clone(),
-                            timestamp: *time,
-                            diff: *diff,
-                        });
+                        let time = *time;
+                        if connector.since <= time {
+                            result.push(Update {
+                                row: key.clone(),
+                                timestamp: time,
+                                diff: *diff,
+                            });
+                        }
                     });
                     cur.step_key(&batch);
                 }

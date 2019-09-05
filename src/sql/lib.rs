@@ -45,6 +45,7 @@ use repr::{ColumnType, Datum, RelationType, ScalarType};
 use store::{DataflowStore, RemoveMode};
 
 pub use session::Session;
+use std::time::UNIX_EPOCH;
 
 mod session;
 pub mod store;
@@ -65,7 +66,10 @@ pub enum Plan {
         source: RelationExpr,
         when: PeekWhen,
     },
-    Tail(Dataflow),
+    Tail {
+        source: Dataflow,
+        since: u64,
+    },
     SendRows {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
@@ -218,7 +222,11 @@ impl Planner {
     fn handle_tail(&mut self, from: ObjectName) -> Result<Plan, failure::Error> {
         let from = extract_sql_object_name(&from)?;
         let dataflow = self.dataflows.get(&from)?;
-        Ok(Plan::Tail(dataflow.clone()))
+        let now = UNIX_EPOCH.elapsed().unwrap().as_millis() as u64;
+        Ok(Plan::Tail {
+            source: dataflow.clone(),
+            since: now,
+        })
     }
 
     fn handle_show_objects(&mut self, object_type: ObjectType) -> Result<Plan, failure::Error> {
