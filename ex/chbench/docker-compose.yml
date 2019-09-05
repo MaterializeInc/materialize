@@ -6,9 +6,9 @@
 version: '3.7'
 services:
   materialized:
-    image: materialize/materialized:unstable-6bed3a5266292a4494c20eecf7d724a38c085373
+    image: materialize/materialized:unstable-c6b41f9979f1db8cdb36add66fe354fe22db8d3c
     init: true
-    command: -w12
+    command: -w1
   mysql:
     image: debezium/example-mysql:0.9
     ports:
