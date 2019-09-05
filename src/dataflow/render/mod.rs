@@ -324,6 +324,8 @@ where
                     self.collections
                         .insert(relation_expr.clone(), input1.concat(&input2));
                 }
+
+                RelationExpr::Branch { .. } => unimplemented!(),
             };
         }
     }

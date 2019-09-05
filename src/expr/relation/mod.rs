@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
 
 pub mod func;
 
@@ -721,6 +721,7 @@ impl RelationExpr {
             RelationExpr::Union { left, right } => {
                 to_braced_doc("Union {", to_doc!(left, ",", Space, right), "}")
             }
+            RelationExpr::Branch { .. } => unimplemented!(),
         };
 
         // INVARIANT: RelationExpr's document is grouped. Much of the code above depends on this!

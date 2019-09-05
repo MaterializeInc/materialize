@@ -9,7 +9,7 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
-use repr::Datum;
+use repr::{Datum, ScalarType};
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435

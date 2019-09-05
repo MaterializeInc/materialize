@@ -6,6 +6,7 @@
 use crate::{RelationExpr, ScalarExpr};
 use repr::RelationType;
 
+#[derive(Debug)]
 pub struct Branch;
 
 impl super::Transform for Branch {

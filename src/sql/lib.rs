@@ -9,7 +9,22 @@
 
 use std::convert::TryInto;
 
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{
+    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink, SinkConnector, Source,
+    SourceConnector, View,
+};
+use expr::correlated::{
+    AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
+};
+use expr::like::build_like_regex_from_string;
 use failure::{bail, ensure, format_err};
+use interchange::avro;
+use ore::collections::CollectionExt;
+use ore::iter::{FallibleIteratorExt, IteratorExt};
+use ore::option::OptionExt;
+use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
@@ -24,25 +39,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
-use url::Url;
-use uuid::Uuid;
-
-use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{
-    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink, SinkConnector, Source,
-    SourceConnector, View,
-};
-use expr::correlated::{
-    AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
-};
-use expr::like::build_like_regex_from_string;
-use interchange::avro;
-use ore::collections::CollectionExt;
-use ore::iter::{FallibleIteratorExt, IteratorExt};
-use ore::option::OptionExt;
-use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
 use store::{DataflowStore, RemoveMode};
+use url::Url;
 
 pub use session::Session;
 
@@ -62,7 +60,7 @@ pub enum Plan {
     EmptyQuery,
     DidSetVariable,
     Peek {
-        source: RelationExpr,
+        source: expr::RelationExpr,
         when: PeekWhen,
     },
     Tail(Dataflow),
@@ -72,7 +70,7 @@ pub enum Plan {
     },
     ExplainPlan {
         typ: RelationType,
-        relation_expr: RelationExpr,
+        relation_expr: expr::RelationExpr,
     },
 }
 
@@ -453,7 +451,7 @@ impl Planner {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
         Ok(Plan::Peek {
-            source: RelationExpr::Get {
+            source: expr::RelationExpr::Get {
                 name: dataflow.name().to_owned(),
                 typ: dataflow.typ().clone(),
             },
@@ -466,7 +464,9 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let relation_expr = self.plan_query(&query)?;
+        let relation_expr = self
+            .plan_query(&query, &Scope::empty(None))?
+            .decorrelate()?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
@@ -474,7 +474,9 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let relation_expr = self.plan_query(&query)?;
+        let relation_expr = self
+            .plan_query(&query, &Scope::empty(None))?
+            .decorrelate()?;
         if stage == Stage::Dataflow {
             Ok(Plan::SendRows {
                 typ: RelationType {
@@ -865,13 +867,7 @@ impl Planner {
                 } else {
                     name
                 };
-                let mut scope = Scope::from_source(&name, typ.clone(), Some(outer_scope.clone()));
-                if let Some(TableAlias { name, columns }) = alias {
-                    if !columns.is_empty() {
-                        bail!("aliasing columns is not yet supported");
-                    }
-                    scope = scope.alias_table(&name);
-                }
+                let scope = Scope::from_source(&alias, typ.clone(), Some(outer_scope.clone()));
                 Ok((expr, scope))
             }
             TableFactor::Derived { .. } => {
@@ -997,7 +993,7 @@ impl Planner {
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
-                let product_scope = left_scope.product(right_scope);
+                let mut product_scope = left_scope.product(right_scope);
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
@@ -1852,7 +1848,9 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
                 expr2,
             } => {
                 if let (Column(l), Column(r)) = (&**expr1, &**expr2) {
-                    equivalences.push((*l, *r));
+                    if *l >= 0 && *r >= 0 {
+                        equivalences.push((*l as usize, *r as usize));
+                    }
                 }
             }
             CallBinary {
@@ -2172,7 +2170,7 @@ struct ScopeItemName {
     column_name: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeItem {
     names: Vec<ScopeItemName>,
     typ: ColumnType,
@@ -2227,7 +2225,7 @@ impl Scope {
         name: Name,
     ) -> Result<(isize, &'a ScopeItem), failure::Error>
     where
-        Matches: Fn(&ScopeItem) -> bool,
+        Matches: Fn(&ScopeItemName) -> bool,
         Name: Fn() -> String,
     {
         let mut results = items
@@ -2235,10 +2233,10 @@ impl Scope {
             .enumerate()
             .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
             .flatten()
-            .filter(|(_, item)| (matches)(item));
+            .filter(|(_, _, name)| (matches)(name));
         match (results.next(), results.next()) {
             (None, None) => bail!("no column named {} in scope", (name)()),
-            (Some((i, item)), None) => Ok((i as isize, item)),
+            (Some((pos, item, _)), None) => Ok((pos as isize, item)),
             (Some(_), Some(_)) => bail!("column name {} is ambiguous", (name)()),
             _ => unreachable!(),
         }
@@ -2248,7 +2246,7 @@ impl Scope {
         &'a self,
         column_name: &str,
     ) -> Result<(isize, &'a ScopeItem), failure::Error> {
-        let matches = |item: &ScopeItem| item.column_name.as_deref() == Some(column_name);
+        let matches = |item: &ScopeItemName| item.column_name.as_deref() == Some(column_name);
         let name = || column_name.to_owned();
         Scope::resolve(&self.items, matches, name).or_else(|_| {
             Scope::resolve(&self.outer_items, matches, name)
@@ -2261,9 +2259,8 @@ impl Scope {
         table_name: &str,
         column_name: &str,
     ) -> Result<(isize, &'a ScopeItem), failure::Error> {
-        let matches = |item: &ScopeItem| {
-            item.table_name.as_deref() == Some(table_name)
-                && item.column_name.as_deref() == Some(column_name)
+        let matches = |item: &ScopeItemName| {
+            item.table_name == table_name && item.column_name.as_deref() == Some(column_name)
         };
         let name = || format!("{}.{}", table_name, column_name);
         Scope::resolve(&self.items, matches, name).or_else(|_| {
@@ -2334,31 +2331,4 @@ fn find_agg_func(
         other => bail!("Unknown aggregate function: {:?}", other),
     };
     Ok((func, scalar_type))
-}
-
-trait RelationExprExt {
-    fn let_<F>(self, f: F) -> Result<(Self, Scope), failure::Error>
-    where
-        F: FnOnce(Self) -> Result<(Self, Scope), failure::Error>,
-        Self: Sized;
-}
-
-impl RelationExprExt for RelationExpr {
-    fn let_<F>(self: RelationExpr, f: F) -> Result<(Self, Scope), failure::Error>
-    where
-        F: FnOnce(Self) -> Result<(Self, Scope), failure::Error>,
-    {
-        let name = format!("tmp_{}", Uuid::new_v4());
-        let typ = self.typ();
-        let (body, scope) = f(RelationExpr::Get {
-            name: name.clone(),
-            typ,
-        })?;
-        let expr = RelationExpr::Let {
-            name: name.clone(),
-            value: Box::new(self),
-            body: Box::new(body),
-        };
-        Ok((expr, scope))
-    }
 }
