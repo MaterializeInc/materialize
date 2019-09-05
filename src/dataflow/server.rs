@@ -32,7 +32,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Dataflow, LocalInput, PeekWhen, RowSetTransformation, Timestamp,
+    compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp,
 };
 use expr::RelationExpr;
 
@@ -45,7 +45,7 @@ pub enum DataflowCommand {
         conn_id: u32,
         source: RelationExpr,
         when: PeekWhen,
-        transform: RowSetTransformation,
+        transform: RowSetFinishing,
     },
     Explain {
         conn_id: u32,
@@ -91,7 +91,7 @@ struct PendingPeek {
     timestamp: Timestamp,
     /// Whether to drop the dataflow when the peek completes.
     drop_after_peek: bool,
-    transform: RowSetTransformation,
+    transform: RowSetFinishing,
 }
 
 struct Worker<'w, A>

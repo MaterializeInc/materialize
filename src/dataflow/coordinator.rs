@@ -29,7 +29,7 @@ use crate::exfiltrate::Exfiltrator;
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::DataflowCommand;
-use dataflow_types::{Dataflow, PeekWhen, RowSetTransformation, Timestamp, View};
+use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Timestamp, View};
 use expr::RelationExpr;
 use repr::Datum;
 
@@ -46,7 +46,7 @@ pub enum SequencedCommand {
         timestamp: Timestamp,
         conn_id: u32,
         drop_after_peek: bool,
-        transform: RowSetTransformation,
+        transform: RowSetFinishing,
     },
     /// Enable compaction in views.
     ///

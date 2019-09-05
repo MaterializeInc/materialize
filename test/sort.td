@@ -4,42 +4,51 @@
 # distributed without the express permission of Materialize, Inc.
 
 $ set schema={
-                 "type": "record",
-                 "name": "envelope",
-                 "fields": [
-                     {
-                         "name": "before",
-                         "type": [
-                             "null",
-                             {
-                                 "type": "record",
-                                 "name": "row",
-                                 "fields": [
-                                    {"name": "quote", "type": "string"},
-                                    {"name": "val", "type": "long"}
-                                 ]
-                             }
-                         ]
-                     },
-                     {
-                         "name": "after",
-                         "type": [
-                             "null",
-                             {
-                                 "type": "record",
-                                 "name": "row",
-                                 "fields": [
-                                    {"name": "quote", "type": "string"},
-                                    {"name": "val", "type": "long"}
-                                 ]
-                             }
-                         ]
-                     }
-                 ]
-             }
-
-$ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=1
-{"before": null, "after": null}
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          "null",
+          {
+            "type": "record",
+            "name": "row",
+            "fields": [
+              {
+                "name": "quote",
+                "type": "string"
+              },
+              {
+                "name": "val",
+                "type": "long"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "after",
+        "type": [
+          "null",
+          {
+            "type": "record",
+            "name": "row",
+            "fields": [
+              {
+                "name": "quote",
+                "type": "string"
+              },
+              {
+                "name": "val",
+                "type": "long"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
 
 > CREATE SOURCE foobar FROM 'kafka://${testdrive.kafka-addr}/testdrive-foobar-${testdrive.seed}' USING SCHEMA '${schema}'
 

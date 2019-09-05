@@ -10,7 +10,7 @@
 //! only a simple, transient, single-node queue is provided.
 
 use dataflow::DataflowCommand;
-use dataflow_types::{Dataflow, RowSetTransformation, Sink, SinkConnector, TailSinkConnector};
+use dataflow_types::{Dataflow, RowSetFinishing, Sink, SinkConnector, TailSinkConnector};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sql::{Plan, Session};
 use uuid::Uuid;
@@ -149,7 +149,7 @@ pub enum SqlResponse {
         typ: RelationType,
         rows: Vec<Vec<Datum>>,
         wait_for: WaitFor,
-        transform: RowSetTransformation,
+        transform: RowSetFinishing,
     },
     SetVariable,
     Tailing,

@@ -30,7 +30,7 @@ use uuid::Uuid;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
-    RowSetTransformation, Sink, SinkConnector, Source, SourceConnector, View,
+    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr::like::build_like_regex_from_string;
 use expr::{
@@ -64,7 +64,7 @@ pub enum Plan {
     Peek {
         source: RelationExpr,
         when: PeekWhen,
-        transform: RowSetTransformation,
+        transform: RowSetFinishing,
     },
     Tail(Dataflow),
     SendRows {
@@ -456,17 +456,24 @@ impl Planner {
     fn handle_peek(&mut self, name: ObjectName, immediate: bool) -> Result<Plan, failure::Error> {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
+        let typ = dataflow.typ();
         Ok(Plan::Peek {
             source: RelationExpr::Get {
                 name: dataflow.name().to_owned(),
-                typ: dataflow.typ().clone(),
+                typ: typ.clone(),
             },
             when: if immediate {
                 PeekWhen::Immediately
             } else {
                 PeekWhen::EarliestSource
             },
-            transform: RowSetTransformation::default(),
+            transform: RowSetFinishing {
+                limit: None,
+                order_by: (0..typ.column_types.len()).map(|column| ColumnOrder {
+                    column,
+                    desc: false,
+                }).collect(),
+            },
         })
     }
 
@@ -504,7 +511,7 @@ impl Planner {
     fn plan_query(
         &self,
         q: &Query,
-    ) -> Result<(RelationExpr, RowSetTransformation), failure::Error> {
+    ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -539,7 +546,7 @@ impl Planner {
                 )),
             })
             .collect();
-        let transform = RowSetTransformation {
+        let transform = RowSetFinishing {
             order_by: order?,
             limit,
         };

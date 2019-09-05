@@ -61,11 +61,11 @@ pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -
             return cmp;
         }
     }
-    left.cmp(right)
+    Ordering::Equal
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct RowSetTransformation {
+pub struct RowSetFinishing {
     pub order_by: Vec<ColumnOrder>,
     pub limit: Option<usize>,
 }

@@ -20,7 +20,7 @@ use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
 use crate::queue::{self, SqlResponse, WaitFor};
-use dataflow_types::{compare_columns, Exfiltration, RowSetTransformation, Update};
+use dataflow_types::{compare_columns, Exfiltration, RowSetFinishing, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
 use sql::Session;
@@ -142,7 +142,7 @@ pub enum StateMachine<A: Conn + 'static> {
         /// To be sent immediately
         rows: Vec<Vec<Datum>>,
         wait_for: usize,
-        transform: RowSetTransformation,
+        transform: RowSetFinishing,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
@@ -152,7 +152,7 @@ pub enum StateMachine<A: Conn + 'static> {
         row_type: RelationType,
         peek_results: Vec<Vec<Datum>>,
         remaining_results: usize,
-        transform: RowSetTransformation,
+        transform: RowSetFinishing,
     },
 
     #[state_machine_future(transitions(WaitForUpdates, SendUpdates, SendError, Error))]
@@ -512,7 +512,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         };
 
         let mut peek_results: Vec<Vec<Datum>> = state.peek_results;
-        let transform: RowSetTransformation = state.transform;
+        let transform: RowSetFinishing = state.transform;
         let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
             compare_columns(&transform.order_by, left, right)
         };
