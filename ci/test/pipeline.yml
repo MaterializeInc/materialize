@@ -3,15 +3,36 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+dag: true
+
 steps:
-  - label: ":docker: build"
+  - id: build
+    label: ":docker: build"
     command: ci/test/build.sh
     timeout_in_minutes: 30
     agents:
       queue: builder
-  - wait
-  - label: ":japanese_ogre: demon-visit"
-    command: ci/test/hygiene.sh
+
+  - id: lint-fast
+    label: Fast linters
+    command: ci/test/lint-fast.sh
+    timeout_in_minutes: 10
+    plugins:
+      - docker#v3.1.0:
+          image: materialize/ci-builder:stable-20190826-142615
+          propagate-uid-gid: true
+          mount-ssh-agent: true
+          volumes:
+          - "$HOME/.cache/sccache:/sccache"
+          - "$HOME/.cargo:/cargo"
+          environment:
+          - RUSTC_WRAPPER=sccache
+          - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
+          - CARGO_HOME=/cargo
+
+  - id: lint-slow
+    label: ":japanese_ogre: Demon visit"
+    command: ci/test/lint-slow.sh
     timeout_in_minutes: 30
     plugins:
       - docker#v3.1.0:
@@ -27,21 +48,30 @@ steps:
           - CARGO_HOME=/cargo
     agents:
       queue: builder
-  - label: ":cargo: cargo test"
+
+  - id: cargo-test
+    label: ":cargo: test"
+    depends_on: build
     timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
           config: ci/test/cargo-test.compose.yml
           run: app
-  - label: ":racing_car: testdrive"
+
+  - id: testdrive
+    label: ":racing_car: testdrive"
+    depends_on: build
     timeout_in_minutes: 30
     plugins:
       - MaterializeInc/uid#master: ~
       - docker-compose#v3.0.3:
           config: ci/test/testdrive.compose.yml
           run: testdrive
-  - label: ":bulb: Short SQL logic tests"
+
+  - id: short-sqllogictest
+    label: ":bulb: Short SQL logic tests"
+    depends_on: build
     command: ci/test/slt-fast.sh
     timeout_in_minutes: 10
     env:
@@ -51,7 +81,10 @@ steps:
       - docker-compose#v3.0.3:
           config: ci/slt/docker-compose.yml
           run: sqllogictest
-  - label: ":bulb: :bulb: Full SQL logic tests"
+
+  - id: full-sqllogictest
+    label: ":bulb: :bulb: Full SQL logic tests"
+    depends_on: build
     trigger: sql-logic-tests
     async: true
     build:
@@ -59,7 +92,10 @@ steps:
       branch: "$BUILDKITE_BRANCH"
       env:
         SQLLOGICTEST_IMAGE_ID: $BUILDKITE_BUILD_NUMBER
-  - label: ":rocket: Deploy"
+
+  - id: deploy
+    label: ":rocket: Deploy"
+    depends_on: [lint-fast, lint-slow, cargo-test, testdrive, short-sqllogictest]
     trigger: deploy
     async: true
     branches: master
