@@ -31,7 +31,7 @@ steps:
           - CARGO_HOME=/cargo
 
   - id: lint-slow
-    label: ":japanese_ogre: Demon visit"
+    label: ":japanese_ogre: Lint and Format"
     command: ci/test/lint-slow.sh
     timeout_in_minutes: 30
     plugins:
