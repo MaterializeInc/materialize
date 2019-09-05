@@ -1175,6 +1175,13 @@ impl Planner {
             Expr::Nested(expr) => self.plan_expr(ctx, expr),
             Expr::Cast { expr, data_type } => self.plan_cast(ctx, expr, data_type),
             Expr::Function(func) => self.plan_function(ctx, func),
+            Expr::Exists(query) => {
+                let expr = self.plan_query(query, &ctx.scope)?;
+                Ok((
+                    ScalarExpr::Exists(Box::new(expr)),
+                    ColumnType::new(ScalarType::Bool),
+                ))
+            }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
