@@ -2642,6 +2642,7 @@ dependencies = [
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.27 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "getopts 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
+ "interchange 0.1.0",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ore 0.1.0",
  "postgres 0.16.0-rc.2 (registry+https://github.com/rust-lang/crates.io-index)",

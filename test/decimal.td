@@ -31,27 +31,7 @@ $ set schema={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {
-                "name": "a",
-                "type": {
-                  "type": "bytes",
-                  "scale": 2,
-                  "precision": 15,
-                  "logicalType": "decimal"
-                }
-              }
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 

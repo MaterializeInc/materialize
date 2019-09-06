@@ -21,20 +21,7 @@ $ set names-schema={
                 "null"
             ]
         },
-        {
-            "name": "after",
-            "type": [
-                {
-                    "name": "row",
-                    "type": "record",
-                    "fields": [
-                        {"name": "num", "type": "long"},
-                        {"name": "name", "type": "string"}
-                    ]
-                },
-                "null"
-            ]
-        }
+        { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -61,20 +48,7 @@ $ set mods-schema={
                 "null"
             ]
         },
-        {
-            "name": "after",
-            "type": [
-                {
-                    "name": "row",
-                    "type": "record",
-                    "fields": [
-                        {"name": "num", "type": "long"},
-                        {"name": "mod", "type": "string"}
-                    ]
-                },
-                "null"
-            ]
-        }
+        { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -101,20 +75,7 @@ $ set plurals-schema={
                 "null"
             ]
         },
-        {
-            "name": "after",
-            "type": [
-                {
-                    "name": "row",
-                    "type": "record",
-                    "fields": [
-                        {"name": "num", "type": "string"},
-                        {"name": "noun", "type": "string"}
-                    ]
-                },
-                "null"
-            ]
-        }
+        { "name": "after", "type": ["row", "null"] }
     ]
   }
 

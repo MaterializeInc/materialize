@@ -20,19 +20,7 @@ $ set foo-schema={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": ["null", "long"]}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 

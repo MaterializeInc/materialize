@@ -27,20 +27,7 @@ $ set schema={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"},
-              {"name": "b", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
