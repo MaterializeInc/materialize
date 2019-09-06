@@ -30,7 +30,11 @@ mtrlz-start() {
     fi
     if ! (pgrep 'materialized' >/dev/null) ; then
         echo "Starting materialized"
-        cargo build --release --bin materialized && ./target/release/materialized
+        if [[ -z "$MTRLZ_DEBUG" ]] ; then
+            cargo build --release --bin materialized && ./target/release/materialized
+        else
+            cargo build --bin materialized && ./target/debug/materialized
+        fi
     else
         echo "materialized is already running!"
     fi
