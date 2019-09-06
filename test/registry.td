@@ -11,7 +11,7 @@ $ set schema_v1={
         "name": "before",
         "type": [
           {
-            "name": "RowBefore",
+            "name": "row",
             "type": "record",
             "fields": [
               {"name": "a", "type": "long"}
@@ -20,19 +20,7 @@ $ set schema_v1={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "RowAfter",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -44,7 +32,7 @@ $ set schema_v2={
         "name": "before",
         "type": [
           {
-            "name": "RowBefore",
+            "name": "row",
             "type": "record",
             "fields": [
               {"name": "a", "type": "long"},
@@ -54,20 +42,7 @@ $ set schema_v2={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "RowAfter",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"},
-              {"name": "b", "type": "long", "default": 42}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 

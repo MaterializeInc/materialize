@@ -10,58 +10,33 @@ $ set schema={
       {
         "name": "before",
         "type": [
-          "null",
           {
             "type": "record",
             "name": "row",
             "fields": [
-              {
-                "name": "quote",
-                "type": "string"
-              },
-              {
-                "name": "val",
-                "type": "long"
-              }
+              { "name": "quote", "type": "string" },
+              { "name": "val", "type": "long" }
             ]
-          }
+          },
+          "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          "null",
-          {
-            "type": "record",
-            "name": "row",
-            "fields": [
-              {
-                "name": "quote",
-                "type": "string"
-              },
-              {
-                "name": "val",
-                "type": "long"
-              }
-            ]
-          }
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
 > CREATE SOURCE foobar FROM 'kafka://${testdrive.kafka-addr}/testdrive-foobar-${testdrive.seed}' USING SCHEMA '${schema}'
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
-{"before":null,"after":{"quote":"I have a theory that it's impossible to prove anything, but I can't prove it.", "val":2079}}
-{"before":null,"after":{"quote":"It was a virgin forest, a place where the Hand of Man had never set foot.","val":12345}}
-{"before":null,"after":{"quote":"If it pours before seven, it has rained by eleven.","val":12345}}
-{"before":null,"after":{"quote":"All power corrupts, but we need electricity.","val":12345}}
-{"before":null,"after":{"quote":"I want to read my new poem about pork brains and outer space ...","val":6745}}
-{"before":null,"after":{"quote":"You are magnetic in your bearing.","val":24223}}
-{"before":null,"after":{"quote":"Yes, but every time I try to see things your way, I get a headache.","val":21243}}
-{"before":null,"after":{"quote":"Ring around the collar.","val":1735}}
-{"before":null,"after":{"quote":"New York is real.  The rest is done with mirrors.","val":25040}}
+{"before":null, "after": {"quote": "I have a theory that it's impossible to prove anything, but I can't prove it.", "val":2079}}
+{"before":null, "after": {"quote": "It was a virgin forest, a place where the Hand of Man had never set foot.", "val":12345}}
+{"before":null, "after": {"quote": "If it pours before seven, it has rained by eleven.", "val":12345}}
+{"before":null, "after": {"quote": "All power corrupts, but we need electricity.", "val":12345}}
+{"before":null, "after": {"quote": "I want to read my new poem about pork brains and outer space ...", "val":6745}}
+{"before":null, "after": {"quote": "You are magnetic in your bearing.", "val":24223}}
+{"before":null, "after": {"quote": "Yes, but every time I try to see things your way, I get a headache.", "val":21243}}
+{"before":null, "after": {"quote": "Ring around the collar.", "val":1735}}
+{"before":null, "after": {"quote": "New York is real.  The rest is done with mirrors.", "val":25040}}
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=43
 {"before": null, "after": null}
