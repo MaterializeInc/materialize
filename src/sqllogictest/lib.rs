@@ -719,6 +719,7 @@ fn format_row(
             (Type::Text, Datum::Float64(f)) => format!("{:.3}", f),
             (Type::Text, Datum::Date(d)) => d.to_string(),
             (Type::Text, Datum::Timestamp(d)) => d.to_string(),
+            (Type::Text, Datum::Interval(iv)) => iv.to_string(),
             other => panic!("Don't know how to format {:?}", other),
         });
     if mode == Mode::Cockroach && sort.yes() {

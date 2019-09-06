@@ -16,7 +16,7 @@ use failure::{bail, ensure, format_err};
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnType, Datum, Interval, RelationType, ScalarType};
 use sql::scalar_type_from_sql;
 
 pub struct Postgres {
@@ -216,6 +216,34 @@ fn get_column(
                 get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?.unwrap();
             Datum::Timestamp(d)
         }
+        DataType::Interval => {
+            let pgi = get_column_inner::<PgInterval>(postgres_row, i, nullable)?.unwrap();
+            if pgi.months != 0 && (pgi.days != 0 || pgi.micros != 0) {
+                bail!("can't handle pg intervals that have both months and times");
+            }
+            if pgi.months != 0 {
+                Datum::Interval(Interval::Months(pgi.months.into()))
+            } else {
+                // TODO(quodlibetor): I can't find documentation about how
+                // micros and days are supposed to sum before the epoch.
+                // Hopefully we only ever end up with one. Since we don't
+                // actually use pg in prod anywhere so I'm not digging further
+                // until this breaks.
+                if pgi.days > 0 && pgi.micros < 0 || pgi.days < 0 && pgi.micros > 0 {
+                    panic!(
+                        "postgres interval parts do not agree on sign days={} micros={}",
+                        pgi.days, pgi.micros
+                    );
+                }
+                let seconds = i64::from(pgi.days) * 86_400 + pgi.micros / 1_000_000;
+                let nanos = (pgi.micros.abs() % 1_000_000) as u32 * 1_000;
+
+                Datum::Interval(Interval::Duration {
+                    is_positive: seconds >= 0,
+                    duration: std::time::Duration::new(seconds.abs() as u64, nanos),
+                })
+            }
+        }
         DataType::Decimal(_, _) => {
             let desired_scale = match scalar_type_from_sql(sql_type).unwrap() {
                 ScalarType::Decimal(_precision, desired_scale) => desired_scale,
@@ -317,6 +345,35 @@ impl FromSql<'_> for DecimalWrapper {
     fn accepts(ty: &PostgresType) -> bool {
         match *ty {
             PostgresType::NUMERIC => true,
+            _ => false,
+        }
+    }
+}
+
+/// The interal representation of an interval in pg
+#[derive(Debug)]
+struct PgInterval {
+    pub micros: i64,
+    pub days: i32,
+    pub months: i32,
+}
+
+impl FromSql<'_> for PgInterval {
+    fn from_sql(
+        _ty: &PostgresType,
+        raw: &[u8],
+    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
+        let mut raw = Cursor::new(raw);
+        Ok(PgInterval {
+            micros: raw.read_i64::<NetworkEndian>()?,
+            days: raw.read_i32::<NetworkEndian>()?,
+            months: raw.read_i32::<NetworkEndian>()?,
+        })
+    }
+
+    fn accepts(ty: &PostgresType) -> bool {
+        match *ty {
+            PostgresType::INTERVAL => true,
             _ => false,
         }
     }

@@ -1410,6 +1410,7 @@ impl Planner {
         Ok((expr, typ))
     }
 
+    /// Figure out what the Expression should be, and the value of the result
     fn plan_binary_op<'a>(
         &self,
         ctx: &ExprContext,
@@ -1417,12 +1418,21 @@ impl Planner {
         left: &'a Expr,
         right: &'a Expr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
-        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
+        let (mut lexpr, lty) = self.plan_expr(ctx, left)?;
+        let (mut rexpr, rty) = self.plan_expr(ctx, right)?;
 
-        let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
+        let both_decimals = match (&lty.scalar_type, &rty.scalar_type) {
             (ScalarType::Decimal(_, _), ScalarType::Decimal(_, _)) => true,
             _ => false,
+        };
+
+        let (mut ltype, mut rtype, timelike) = match (&lty.scalar_type, &rty.scalar_type) {
+            (ScalarType::Date, ScalarType::Interval) => (lty, rty, true),
+            (ScalarType::Timestamp, ScalarType::Interval) => (lty, rty, true),
+            // for intervals on the left, flip them around
+            (ScalarType::Interval, ScalarType::Date) => (rty, lty, true),
+            (ScalarType::Interval, ScalarType::Timestamp) => (rty, lty, true),
+            (_, _) => (lty, rty, false),
         };
 
         let is_cmp = op == &BinaryOperator::Lt
@@ -1437,13 +1447,17 @@ impl Planner {
             || op == &BinaryOperator::Multiply
             || op == &BinaryOperator::Divide;
 
-        // For arithmetic where both inputs are already decimals, we skip
-        // coalescing, which could result in a rescale if the decimals have
-        // different precisions, because we tightly control the rescale when
-        // planning the arithmetic operation (below). E.g., decimal
-        // multiplication does not need to rescale its inputs, even when the
-        // inputs have different scales.
-        if is_cmp || (is_arithmetic && !both_decimals) {
+        // For arithmetic there are two type categories where we skip coalescing:
+        //
+        // * both inputs are already decimals: it could result in a rescale
+        //   if the decimals have different precisions, because we tightly
+        //   control the rescale when planning the arithmetic operation (below).
+        //   E.g., decimal multiplication does not need to rescale its inputs,
+        //   even when the inputs have different scales.
+        // * inputs are timelike: math is non commutative, there are very
+        //   specific rules about what makes sense, defined in the specific
+        //   comparisons below
+        if is_cmp || (is_arithmetic && !(both_decimals || timelike)) {
             let ctx = op.to_string();
             let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
             assert_eq!(exprs.len(), 2);
@@ -1533,6 +1547,12 @@ impl Planner {
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::AddFloat64, ScalarType::Float64)
                 }
+                (ScalarType::Date, ScalarType::Interval) => {
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                }
+                (ScalarType::Timestamp, ScalarType::Interval) => {
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                }
                 _ => bail!(
                     "no overload for {:?} + {:?}",
                     ltype.scalar_type,
@@ -1547,6 +1567,12 @@ impl Planner {
                 }
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::SubFloat64, ScalarType::Float64)
+                }
+                (ScalarType::Date, ScalarType::Interval) => {
+                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
+                }
+                (ScalarType::Timestamp, ScalarType::Interval) => {
+                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
                 }
                 _ => bail!(
                     "no overload for {:?} - {:?}",
@@ -1862,7 +1888,11 @@ impl Planner {
                 ScalarType::Timestamp,
             ),
             Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
-            Value::Interval(_) => bail!("INTERVAL literals are not supported: {}", l.to_string()),
+            Value::Interval(iv) => {
+                iv.fields_match_precision()?;
+                let i = iv.computed_permissive()?;
+                (Datum::Interval(i.into()), ScalarType::Interval)
+            }
             Value::Null => (Datum::Null, ScalarType::Null),
         };
         let nullable = datum == Datum::Null;
@@ -1920,8 +1950,33 @@ where
     C: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
+    let out_typ = find_output_type(&exprs.iter().map(|(_, typ)| typ).collect::<Vec<_>>())?;
+    let mut out = Vec::new();
+    for (expr, typ) in exprs {
+        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
+            Ok((expr, _)) => out.push(expr),
+            Err(_) => bail!(
+                "{} does not have uniform type: {:?} vs {:?}",
+                context,
+                typ,
+                out_typ,
+            ),
+        }
+    }
+    Ok((out, out_typ))
+}
 
-    let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
+/// Find a type that we can expect the output of a sequence of expressions to be
+///
+/// There aren't any real guarantees about what we output, except that it's
+/// possible that we'll be able to build this result.
+///
+/// # Examples
+///
+/// - `1i32 + 2i64` -> `i64`
+/// - `1i64 + Decimal(2)` -> `Decimal`
+fn find_output_type(col_typs: &[&ColumnType]) -> Result<ColumnType, failure::Error> {
+    let scalar_type_prec = |scalar_type: &&ScalarType| match scalar_type {
         ScalarType::Null => 0,
         ScalarType::Int32 => 1,
         ScalarType::Int64 => 2,
@@ -1930,29 +1985,15 @@ where
         ScalarType::Float64 => 5,
         _ => 6,
     };
-    let max_scalar_type = exprs
+    let nullable = col_typs.iter().any(|typ| typ.nullable);
+    let max = col_typs
         .iter()
-        .map(|(_expr, typ)| &typ.scalar_type)
-        .max_by_key(|scalar_type| scalar_type_prec(scalar_type))
-        .unwrap()
-        .clone();
-    let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
-    let mut out = Vec::new();
-    let out_typ = ColumnType::new(max_scalar_type).nullable(nullable);
-    for (expr, typ) in exprs {
-        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
-            Ok((expr, _)) => out.push(expr),
-            Err(_) => bail!(
-                "{} does not have uniform type: {:?} vs {:?}",
-                context,
-                typ,
-                out_typ
-            ),
-        }
-    }
-    Ok((out, out_typ))
+        .map(|typ| &typ.scalar_type)
+        .max_by_key(scalar_type_prec);
+    Ok(ColumnType::new(max.unwrap().clone()).nullable(nullable))
 }
 
+/// Figure out whether we need to cast a value in order for an operation to succeed
 fn plan_cast_internal<C>(
     context: C,
     expr: ScalarExpr,
@@ -2047,9 +2088,17 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         }
         DataType::Date => ScalarType::Date,
         DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Interval => ScalarType::Interval,
         DataType::Time => ScalarType::Time,
         DataType::Bytea => ScalarType::Bytes,
-        other => bail!("Unexpected SQL type: {:?}", other),
+        other @ DataType::Array(_)
+        | other @ DataType::Binary(..)
+        | other @ DataType::Blob(_)
+        | other @ DataType::Clob(_)
+        | other @ DataType::Custom(_)
+        | other @ DataType::Regclass
+        | other @ DataType::Uuid
+        | other @ DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", other),
     })
 }
 
@@ -2198,6 +2247,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     }
 }
 
+#[derive(Debug)]
 struct ExprContext<'a> {
     name: &'static str,
     scope: &'a Scope,
@@ -2378,5 +2428,30 @@ impl RelationExprExt for RelationExpr {
             body: Box::new(body),
         };
         Ok((expr, scope))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn ct(s: ScalarType) -> ColumnType {
+        ColumnType::new(s)
+    }
+
+    #[test]
+    fn find_output_type_chooses_higher_precision() {
+        use ScalarType::*;
+        let col_expected = &[
+            ([&ct(Int32), &ct(Int64)], ct(Int64)),
+            ([&ct(Int64), &ct(Int32)], ct(Int64)),
+            ([&ct(Int64), &ct(Decimal(10, 10))], ct(Decimal(10, 10))),
+            ([&ct(Int64), &ct(Float32)], ct(Float32)),
+            ([&ct(Float32), &ct(Float64)], ct(Float64)),
+        ];
+
+        for (cols, expected) in col_expected {
+            assert_eq!(find_output_type(cols).unwrap(), *expected);
+        }
     }
 }
