@@ -121,8 +121,13 @@ where
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
         let exfiltrator = Rc::new(exfiltrator_config.into());
-        let command_coordinator = dataflow_command_receiver
-            .map(|dcr| coordinator::CommandCoordinator::new(dcr, Rc::clone(&exfiltrator)));
+        let command_coordinator = dataflow_command_receiver.map(|dcr| {
+            coordinator::CommandCoordinator::new(
+                dcr,
+                logging_config.as_ref(),
+                Rc::clone(&exfiltrator),
+            )
+        });
 
         Worker {
             inner: w,
@@ -196,10 +201,9 @@ where
             self.materialized_logger = self.inner.log_register().get("materialized");
 
             if let Some(coordinator) = &mut self.command_coordinator {
-                coordinator.logger = self.inner.log_register().get("materialized");
                 for log in logging.active_logs().iter() {
                     // Insert with 1 second compaction latency.
-                    coordinator.insert_source(log.name(), 1_000);
+                    coordinator.insert_source(log.name(), 1_000, &mut self.sequencer);
                 }
             }
         }
@@ -244,7 +248,7 @@ where
                 for name in self.traces.traces.keys() {
                     if let Some(by_self) = self.traces.get_by_self(name) {
                         by_self.clone().read_upper(&mut upper);
-                        coordinator.update_upper(name, upper.elements());
+                        coordinator.update_upper(name, upper.elements(), &mut self.sequencer);
                     }
                 }
             }
@@ -331,6 +335,14 @@ where
             coordinator::SequencedCommand::AllowCompaction(list) => {
                 for (name, frontier) in list {
                     self.traces.allow_compaction(&name, &frontier[..]);
+                }
+            }
+
+            coordinator::SequencedCommand::AppendLog(event) => {
+                if self.inner.index() == 0 {
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        logger.log(event);
+                    }
                 }
             }
 

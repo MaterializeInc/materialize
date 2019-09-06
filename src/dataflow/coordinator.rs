@@ -26,9 +26,9 @@ use std::rc::Rc;
 use uuid::Uuid;
 
 use crate::exfiltrate::Exfiltrator;
-use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use crate::DataflowCommand;
+use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Timestamp, View};
 use expr::RelationExpr;
 use repr::Datum;
@@ -54,6 +54,8 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(String, Vec<Timestamp>)>),
+    /// Append a new event to the log stream.
+    AppendLog(MaterializedEvent),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -64,7 +66,7 @@ pub struct CommandCoordinator {
     views: HashMap<String, ViewState>,
     command_receiver: UnboundedReceiver<DataflowCommand>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
-    pub logger: Option<logging::materialized::Logger>,
+    log: bool,
     optimizer: expr::transform::Optimizer,
     exfiltrator: Rc<Exfiltrator>,
 }
@@ -73,12 +75,13 @@ impl CommandCoordinator {
     /// Creates a new command coordinator from input and output command queues.
     pub fn new(
         command_receiver: UnboundedReceiver<DataflowCommand>,
+        logging_config: Option<&LoggingConfig>,
         exfiltrator: Rc<Exfiltrator>,
     ) -> Self {
         Self {
             views: HashMap::new(),
             command_receiver,
-            logger: None,
+            log: logging_config.is_some(),
             since_updates: Vec::new(),
             optimizer: Default::default(),
             exfiltrator,
@@ -105,14 +108,17 @@ impl CommandCoordinator {
                     if let Dataflow::View(view) = dataflow {
                         self.optimizer.optimize(&mut view.relation_expr, &view.typ);
                     }
-                    self.insert_view(dataflow);
                 }
 
-                sequencer.push(SequencedCommand::CreateDataflows(dataflows));
+                sequencer.push(SequencedCommand::CreateDataflows(dataflows.clone()));
+
+                for dataflow in dataflows.iter() {
+                    self.insert_view(dataflow, sequencer);
+                }
             }
             DataflowCommand::DropDataflows(dataflows) => {
                 for name in dataflows.iter() {
-                    self.remove_view(name);
+                    self.remove_view(name, sequencer);
                 }
                 sequencer.push(SequencedCommand::DropDataflows(dataflows));
             }
@@ -263,25 +269,30 @@ impl CommandCoordinator {
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(&mut self, name: &str, upper: &[Timestamp]) {
+    pub fn update_upper(
+        &mut self,
+        name: &str,
+        upper: &[Timestamp],
+        sequencer: &mut Sequencer<SequencedCommand>,
+    ) {
         if let Some(entry) = self.views.get_mut(name) {
             // We may be informed of non-changes; suppress them.
             if entry.upper.elements() != upper {
                 // Log the change to frontiers.
-                if let Some(logger) = self.logger.as_mut() {
+                if self.log {
                     for time in entry.upper.elements().iter() {
-                        logger.log(MaterializedEvent::Frontier(
+                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
                             name.to_string(),
                             time.clone(),
                             -1,
-                        ));
+                        )));
                     }
                     for time in upper.iter() {
-                        logger.log(MaterializedEvent::Frontier(
+                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
                             name.to_string(),
                             time.clone(),
                             1,
-                        ));
+                        )));
                     }
                 }
 
@@ -324,16 +335,20 @@ impl CommandCoordinator {
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    pub fn insert_view(&mut self, dataflow: &Dataflow) {
-        self.remove_view(dataflow.name());
+    pub fn insert_view(
+        &mut self,
+        dataflow: &Dataflow,
+        sequencer: &mut Sequencer<SequencedCommand>,
+    ) {
+        self.remove_view(dataflow.name(), sequencer);
         let viewstate = ViewState::new(dataflow);
-        if let Some(logger) = self.logger.as_mut() {
+        if self.log {
             for time in viewstate.upper.elements() {
-                logger.log(MaterializedEvent::Frontier(
+                sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
                     dataflow.name().to_string(),
                     time.clone(),
                     1,
-                ));
+                )));
             }
         }
         self.views.insert(dataflow.name().to_string(), viewstate);
@@ -343,16 +358,21 @@ impl CommandCoordinator {
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    pub fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
-        self.remove_view(name);
+    pub fn insert_source(
+        &mut self,
+        name: &str,
+        compaction_ms: Timestamp,
+        sequencer: &mut Sequencer<SequencedCommand>,
+    ) {
+        self.remove_view(name, sequencer);
         let mut viewstate = ViewState::new_source();
-        if let Some(logger) = self.logger.as_mut() {
+        if self.log {
             for time in viewstate.upper.elements() {
-                logger.log(MaterializedEvent::Frontier(
+                sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
                     name.to_string(),
                     time.clone(),
                     1,
-                ));
+                )));
             }
         }
         viewstate.set_compaction_latency(compaction_ms);
@@ -362,15 +382,15 @@ impl CommandCoordinator {
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    pub fn remove_view(&mut self, name: &str) {
+    pub fn remove_view(&mut self, name: &str, sequencer: &mut Sequencer<SequencedCommand>) {
         if let Some(state) = self.views.remove(name) {
-            if let Some(logger) = &mut self.logger {
+            if self.log {
                 for time in state.upper.elements() {
-                    logger.log(MaterializedEvent::Frontier(
+                    sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
                         name.to_string(),
                         time.clone(),
                         -1,
-                    ));
+                    )));
                 }
             }
         }
