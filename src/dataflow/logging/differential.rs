@@ -88,8 +88,7 @@ pub fn construct<A: Allocate>(
                 let time_ms = ((ts.as_millis() as Timestamp / granularity_ms) + 1) * granularity_ms;
                 if let DifferentialEvent::TraceShare(event) = event {
                     Some(((event.operator, worker), time_ms, event.diff))
-                }
-                else {
+                } else {
                     None
                 }
             })
@@ -112,7 +111,7 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Differential(DifferentialLog::Sharing),
                 sharing.trace,
-            )
+            ),
         ]
         .into_iter()
         .filter(|(name, _trace)| config.active_logs().contains(name))
