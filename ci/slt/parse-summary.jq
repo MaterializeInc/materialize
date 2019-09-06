@@ -7,5 +7,5 @@
 
 {
     "keys": keys_unsorted | join(", "),
-    "values": values | join(", ")
+    "values": values | map(tostring) | join(", ")
 } | "INSERT INTO slt (commit, \(.keys)) VALUES ('\($commit)', \(.values))"
