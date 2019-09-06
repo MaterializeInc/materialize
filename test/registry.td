@@ -3,6 +3,13 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+# Verify the error message is useful when a schema is not present in the
+# registry.
+
+! CREATE SOURCE noexist FROM 'kafka://${testdrive.kafka-addr}/testdrive-noexist-${testdrive.seed}'
+  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+fetching latest schema for subject 'testdrive-noexist-${testdrive.seed}-value' from registry: subject not found
+
 $ set schema_v1={
     "type": "record",
     "name": "envelope",

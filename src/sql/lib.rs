@@ -9,7 +9,7 @@
 
 use std::convert::TryInto;
 
-use failure::{bail, ensure, format_err};
+use failure::{bail, ensure, format_err, ResultExt};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
@@ -2060,29 +2060,36 @@ fn build_source(
     topic: String,
 ) -> Result<Source, failure::Error> {
     let (key_schema, value_schema, schema_registry_url) = match schema {
-        // TODO(jldlaughlin): we need a way to pass in primary key information when building a source from a string
+        // TODO(jldlaughlin): we need a way to pass in primary key information
+        // when building a source from a string
         SourceSchema::Raw(schema) => (None, schema.to_owned(), None),
+
         SourceSchema::Registry(url) => {
-            // TODO(benesch): we need to fetch this schema
-            // asynchronously to avoid blocking the command
-            // processing thread.
+            // TODO(benesch): we need to fetch this schema asynchronously to
+            // avoid blocking the command processing thread.
             let url: Url = url.parse()?;
             let ccsr_client = ccsr::Client::new(url.clone());
 
-            let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-            let key_schema_value =
-                match ccsr_client.get_schema_by_subject(&format!("{}-key", topic)) {
-                    Result::Ok(schema) => Some(schema.raw),
-                    Result::Err(_err) => None,
-                };
-            (key_schema_value, value_schema.raw, Some(url))
+            let value_schema_name = format!("{}-value", topic);
+            let value_schema = ccsr_client
+                .get_schema_by_subject(&value_schema_name)
+                .with_context(|err| {
+                    format!(
+                        "fetching latest schema for subject '{}' from registry: {}",
+                        value_schema_name, err
+                    )
+                })?;
+            let key_schema = ccsr_client
+                .get_schema_by_subject(&format!("{}-key", topic))
+                .ok();
+            (key_schema.map(|s| s.raw), value_schema.raw, Some(url))
         }
     };
 
     let typ = avro::validate_value_schema(&value_schema)?;
     let pkey_indices = match key_schema {
         Some(key_schema) => avro::validate_key_schema(&key_schema, &typ)?,
-        None => Vec::new(), // Right now, this will only happen for SourceSchema::Raw input. See above TODO.
+        None => Vec::new(),
     };
 
     Ok(Source {
