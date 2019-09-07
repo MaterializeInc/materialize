@@ -24,7 +24,10 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::render;
-use crate::arrangement::{manager::{KeysOnlyHandle, WithDrop}, TraceManager};
+use crate::arrangement::{
+    manager::{KeysOnlyHandle, WithDrop},
+    TraceManager,
+};
 use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
@@ -179,13 +182,16 @@ where
 
             // Install traces as maintained views.
             for (log, trace) in t_traces {
-                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
+                self.traces
+                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
             for (log, trace) in d_traces {
-                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
+                self.traces
+                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
             for (log, trace) in m_traces {
-                self.traces.set_by_self(log.name().to_string(), WithDrop::from(trace));
+                self.traces
+                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");

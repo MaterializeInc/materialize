@@ -114,7 +114,11 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys_mut(&mut self, name: &str, keys: &[usize]) -> Option<&mut WithDrop<KeysValsHandle>> {
+    pub fn get_by_keys_mut(
+        &mut self,
+        name: &str,
+        keys: &[usize],
+    ) -> Option<&mut WithDrop<KeysValsHandle>> {
         self.traces.get_mut(name)?.by_keys.get_mut(keys)
     }
 
@@ -225,7 +229,10 @@ impl<T> WithDrop<T> {
 
 impl<T> From<T> for WithDrop<T> {
     fn from(element: T) -> Self {
-        Self { element, to_drop: None }
+        Self {
+            element,
+            to_drop: None,
+        }
     }
 }
 

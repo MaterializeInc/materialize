@@ -23,7 +23,7 @@ use repr::Datum;
 
 use super::sink;
 use super::source;
-use crate::arrangement::{TraceManager, manager::WithDrop};
+use crate::arrangement::{manager::WithDrop, TraceManager};
 use crate::exfiltrate::Exfiltrator;
 
 mod context;
@@ -64,14 +64,18 @@ pub fn build_dataflow<A: Allocate>(
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
-            manager.set_by_self(src.name.to_owned(), WithDrop::new(arrangement.trace, capability));
+            manager.set_by_self(
+                src.name.to_owned(),
+                WithDrop::new(arrangement.trace, capability),
+            );
         }
         Dataflow::Sink(sink) => {
             // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
             // the concept of dropping a sink.
             let trace = manager.get_by_self_mut(&sink.from.0).expect("View missing");
             let _token = trace.to_drop().clone();
-            let (arrangement, _button) = trace.import_core(scope, &format!("Import({:?})", sink.from));
+            let (arrangement, _button) =
+                trace.import_core(scope, &format!("Import({:?})", sink.from));
 
             match sink.connector {
                 SinkConnector::Kafka(c) => {

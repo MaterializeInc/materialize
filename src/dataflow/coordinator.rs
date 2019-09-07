@@ -135,14 +135,12 @@ impl CommandCoordinator {
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
                     // Fast path. We can just look at the existing dataflow directly.
-                    sequencer.push(
-                        SequencedCommand::Peek {
-                            name,
-                            timestamp,
-                            conn_id,
-                            transform,
-                        }
-                    );
+                    sequencer.push(SequencedCommand::Peek {
+                        name,
+                        timestamp,
+                        conn_id,
+                        transform,
+                    });
                 } else {
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
@@ -152,22 +150,20 @@ impl CommandCoordinator {
 
                     self.optimizer.optimize(&mut source, &typ);
 
-                    sequencer.push(
-                        SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
+                    sequencer.push(SequencedCommand::CreateDataflows(vec![Dataflow::View(
+                        View {
                             name: name.clone(),
                             relation_expr: source,
                             typ,
                             as_of: Some(vec![timestamp.clone()]),
-                        })])
-                    );
-                    sequencer.push(
-                        SequencedCommand::Peek {
-                            name: name.clone(),
-                            timestamp,
-                            conn_id,
-                            transform,
-                        }
-                    );
+                        },
+                    )]));
+                    sequencer.push(SequencedCommand::Peek {
+                        name: name.clone(),
+                        timestamp,
+                        conn_id,
+                        transform,
+                    });
                     sequencer.push(SequencedCommand::DropDataflows(vec![name]));
                 }
             }
