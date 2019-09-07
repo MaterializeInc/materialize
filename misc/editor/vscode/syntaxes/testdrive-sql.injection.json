@@ -1,0 +1,14 @@
+{
+    "scopeName": "testdrive-sql.injection",
+    "injectionSelector": "L:string",
+    "patterns": [
+        {
+            "name": "variable.other.bracket.testdrive",
+            "begin": "\\${",
+            "end": "}",
+            "captures": {
+                "0": { "name": "punctuation.definition.variable.testdrive" }
+            }
+        }
+    ]
+}
