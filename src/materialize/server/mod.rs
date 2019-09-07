@@ -30,6 +30,8 @@ mod http;
 
 pub struct Config {
     pub logging_granularity: Option<Duration>,
+    /// The version of materialized
+    pub version: String,
     pub timely: timely::Configuration,
 }
 
@@ -116,7 +118,10 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     let listener = if is_primary {
         let listen_addr: SocketAddr = "0.0.0.0:6875".parse()?;
         let listener = TcpListener::bind(&listen_addr)?;
-        println!("materialized listening on {}...", listen_addr);
+        println!(
+            "materialized v{} listening on {}...",
+            config.version, listen_addr
+        );
         Some(listener)
     } else {
         None

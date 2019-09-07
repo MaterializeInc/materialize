@@ -73,11 +73,18 @@ fn run() -> Result<(), failure::Error> {
     );
 
     let popts = opts.parse(&args[1..])?;
+    let cargo_version = env!("CARGO_PKG_VERSION");
+    let git_sha = env!("MZ_GIT_SHA", "");
+    let version = if git_sha.is_empty() {
+        cargo_version.into()
+    } else {
+        format!("{} ({})", cargo_version, git_sha)
+    };
     if popts.opt_present("h") {
         print!("{}", opts.usage("usage: materialized [options]"));
         return Ok(());
     } else if popts.opt_present("v") {
-        println!("materialized v{}", env!("CARGO_PKG_VERSION"));
+        println!("materialized v{}", version);
         return Ok(());
     }
 
@@ -121,6 +128,7 @@ fn run() -> Result<(), failure::Error> {
 
     materialize::server::serve(materialize::server::Config {
         logging_granularity,
+        version,
         timely: timely_config,
     })
 }
