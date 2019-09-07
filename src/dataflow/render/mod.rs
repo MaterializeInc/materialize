@@ -8,7 +8,7 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::AsCollection;
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
@@ -23,7 +23,7 @@ use repr::Datum;
 
 use super::sink;
 use super::source;
-use crate::arrangement::TraceManager;
+use crate::arrangement::{TraceManager, manager::WithDrop};
 use crate::exfiltrate::Exfiltrator;
 
 mod context;
@@ -33,7 +33,6 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    names: &mut HashMap<String, Box<dyn Drop>>,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
 ) {
@@ -43,49 +42,41 @@ pub fn build_dataflow<A: Allocate>(
 
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
-            let relation_expr = match src.connector {
+            let (stream, capability) = match src.connector {
                 SourceConnector::Kafka(c) => {
                     // Distribute read responsibility among workers.
                     use differential_dataflow::hashable::Hashable;
                     let hash = src.name.hashed() as usize;
                     let read_from_kafka = hash % worker_peers == worker_index;
-
-                    let (stream, capability) = source::kafka(scope, &src.name, c, read_from_kafka);
-                    if let Some(capability) = capability {
-                        names.insert(src.name.clone(), Box::new(capability));
-                    }
-                    stream
+                    source::kafka(scope, &src.name, c, read_from_kafka)
                 }
                 SourceConnector::Local(c) => {
-                    let (stream, capability) =
-                        source::local(scope, &src.name, c, worker_index == 0, local_input_mux);
-                    if let Some(capability) = capability {
-                        names.insert(src.name.clone(), Box::new(capability));
-                    }
-                    stream
+                    source::local(scope, &src.name, c, worker_index == 0, local_input_mux)
                 }
             };
 
             use crate::arrangement::manager::KeysOnlySpine;
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
-            let arrangement = relation_expr
+            let arrangement = stream
                 .as_collection()
                 // TODO: We might choose to arrange by a more effective key.
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
-            manager.set_by_self(src.name.to_owned(), arrangement.trace);
+            manager.set_by_self(src.name.to_owned(), WithDrop::new(arrangement.trace, capability));
         }
         Dataflow::Sink(sink) => {
-            let done = Rc::new(Cell::new(false));
-            let (arrangement, _) = manager
-                .get_by_self(&sink.from.0)
-                .cloned()
-                .unwrap_or_else(|| panic!(format!("unable to find dataflow {:?}", sink.from)))
-                .import_core(scope, &format!("Import({:?})", sink.from));
+            // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
+            // the concept of dropping a sink.
+            let trace = manager.get_by_self_mut(&sink.from.0).expect("View missing");
+            let _token = trace.to_drop().clone();
+            let (arrangement, _button) = trace.import_core(scope, &format!("Import({:?})", sink.from));
+
             match sink.connector {
                 SinkConnector::Kafka(c) => {
+                    // TODO: This appears to be not shared at the moment.
+                    let done = Rc::new(Cell::new(false));
                     sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
                 }
                 SinkConnector::Tail(c) => {
@@ -105,12 +96,13 @@ pub fn build_dataflow<A: Allocate>(
             // so that other similar uses (e.g. with iterative scopes) do not require weird
             // alternate type signatures.
             scope.clone().region(|region| {
-                let mut buttons = Vec::new();
+                let mut tokens = Vec::new();
                 let mut context = Context::<_, _, _, Timestamp>::new();
                 view.relation_expr.visit(&mut |e| {
                     if let RelationExpr::Get { name, typ: _ } = e {
                         // Import the believed-to-exist base arrangement.
                         if let Some(mut trace) = manager.get_by_self(&name).cloned() {
+                            let token = trace.to_drop().clone();
                             let (arranged, button) =
                                 trace.import_frontier_core(scope, name, as_of.clone());
                             let arranged = arranged.enter(region);
@@ -118,7 +110,7 @@ pub fn build_dataflow<A: Allocate>(
                                 .collections
                                 .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
 
-                            buttons.push(button.press_on_drop());
+                            tokens.push((button.press_on_drop(), token));
                         }
                         // // Experimental: add all indexed collections.
                         // // TODO: view could name arrangements of value for each get.
@@ -146,8 +138,8 @@ pub fn build_dataflow<A: Allocate>(
                     .map(|x| (x, ()))
                     .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", view.name));
 
-                names.insert(view.name.to_string(), Box::new(buttons));
-                manager.set_by_self(view.name, arrangement.trace);
+                // names.insert(view.name.to_string(), Box::new(buttons));
+                manager.set_by_self(view.name, WithDrop::new(arrangement.trace, tokens));
 
                 // TODO: We could export a variety of arrangements if we were instructed
                 // to do so. We don't have a language for that at the moment.
