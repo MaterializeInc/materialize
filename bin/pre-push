@@ -15,7 +15,7 @@ SHLIB_NOT_IN_CI=1
 
 ci_try bin/lint
 ci_try cargo fmt -- --check
-ci_try cargo test
 ci_try bin/check
+ci_try cargo test
 
 ci_status_report
