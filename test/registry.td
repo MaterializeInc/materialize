@@ -145,30 +145,36 @@ $ set valid_key_schema={
     ]
   }
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing} publish=true timestamp=1
+$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing}
+  publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing} publish=true timestamp=2
+$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing}
+  publish=true timestamp=2
 {"before": null, "after": null}
 
 ! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-missing-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}';
 Value schema missing primary key column: b
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type} publish=true timestamp=3
+$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
+  publish=true timestamp=3
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type} publish=true timestamp=4
+$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
+  publish=true timestamp=4
 {"before": null, "after": null}
 
 ! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-mismatched-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}';
-key and value column types do not match: key ColumnType { name: Some("a"), nullable: false, scalar_type: Int32 } vs. value ColumnType { name: Some("a"), nullable: false, scalar_type: Int64
+key and value column types do not match: key ColumnType { name: Some("a"), nullable: false, scalar_type: Int32 } vs. value ColumnType { name: Some("a"), nullable: false, scalar_type: Int64 }
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema} publish=true timestamp=5
+$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
+  publish=true timestamp=5
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema} publish=true timestamp=6
+$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
+  publish=true timestamp=6
 {"before": null, "after": null}
 
 > CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'

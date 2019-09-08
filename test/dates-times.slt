@@ -6,28 +6,32 @@
 mode cockroach
 
 statement ok
-CREATE TABLE datish (
+CREATE TABLE dateish (
     a DATE
 )
 
 statement ok
-INSERT INTO datish VALUES (DATE '2019-12-31')
+INSERT INTO dateish VALUES (DATE '2019-12-31')
 
 query T
-SELECT a FROM datish
+SELECT a FROM dateish
 ----
 2019-12-31
 
 statement ok
-CREATE TABLE ts_ish (
+CREATE TABLE timestampish (
     b TIMESTAMP
 )
 
 statement ok
-INSERT INTO ts_ish VALUES (TIMESTAMP '1969-06-01 10:10:10.410'), (TIMESTAMP '1997-02-03 11:12:59.9'), (TIMESTAMP '2020-01-01 1:2:3.789')
+INSERT INTO timestampish
+VALUES
+    (TIMESTAMP '1969-06-01 10:10:10.410'),
+    (TIMESTAMP '1997-02-03 11:12:59.9'),
+    (TIMESTAMP '2020-01-01 1:2:3.789')
 
 query T rowsort
-SELECT b FROM ts_ish
+SELECT b FROM timestampish
 ----
 1969-06-01 10:10:10.410
 1997-02-03 11:12:59.900
@@ -69,7 +73,7 @@ SELECT * FROM iv_ish
 1 year
 03:00:00
 
-# Date Arithmatic
+# Date arithmetic with month intervals.
 
 query T
 SELECT DATE '2000-01-01' + INTERVAL '1' MONTH
@@ -101,7 +105,7 @@ SELECT DATE '2000-01-01' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-# Timestamp arithmatic, should be the same as DATE
+# Timestamp arithmetic with month intervals. Should behave the same as DATE.
 
 query T
 SELECT TIMESTAMP '2000-01-01 00:00:00' + INTERVAL '1' YEAR
@@ -113,12 +117,7 @@ SELECT TIMESTAMP '2000-01-01 00:00:00' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-query T
-SELECT TIMESTAMP '2000-01-01 00:00:00' + INTERVAL '7' HOUR
-----
-2000-01-01 07:00:00
-
-# Durationlike Intervals
+# Date arithmetic with duration intervals.
 
 query T
 SELECT DATE '2000-01-01' + INTERVAL '7' DAY
@@ -150,8 +149,6 @@ SELECT DATE '2000-01-01' + INTERVAL '22.0044' SECOND
 ----
 2000-01-01 00:00:22.004400
 
-# subtraction
-
 query T
 SELECT DATE '2000-01-01' - INTERVAL '22' DAY
 ----
@@ -161,3 +158,10 @@ query T
 SELECT DATE '2000-01-01' - INTERVAL '22' SECOND
 ----
 1999-12-31 23:59:38
+
+# Timestamp arithmetic with duration intervals.
+
+query T
+SELECT TIMESTAMP '2000-01-01 00:00:00' + INTERVAL '7' HOUR
+----
+2000-01-01 07:00:00

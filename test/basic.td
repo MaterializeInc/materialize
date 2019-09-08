@@ -107,14 +107,3 @@ b  c
 ------
 1  3
 2  1
-
-# TODO(benesch): this test doesn't seem right.
-#
-# > CREATE MATERIALIZED VIEW test6 AS
-#   SELECT data.* FROM data GROUP BY b;
-#
-# > PEEK test6
-# b  max
-# ------
-# 1  3
-# 2  1
