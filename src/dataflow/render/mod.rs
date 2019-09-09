@@ -66,16 +66,24 @@ pub fn build_dataflow<A: Allocate>(
                 }
             };
 
-            use crate::arrangement::manager::KeysOnlySpine;
+            use crate::arrangement::manager::KeysValsSpine;
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
+            let pkey_indices_clone = src.pkey_indices.clone();
             let arrangement = relation_expr
                 .as_collection()
-                // TODO: We might choose to arrange by a more effective key.
-                .map(|x| (x, ()))
-                .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
+                .map(move |x| {
+                    let keys: Vec<_> = x.clone()
+                        .into_iter()
+                        .enumerate()
+                        .filter(|(i, _)| pkey_indices_clone.contains(&i))
+                        .map(|(_, e)| e)
+                        .collect();
+                    (keys, x)
+                })
+                .arrange_named::<KeysValsSpine>(&format!("Arrange Keys: {}", src.name));
 
-            manager.set_by_self(src.name.to_owned(), arrangement.trace);
+            manager.set_by_keys(src.name.to_owned(), &src.pkey_indices, arrangement.trace);
         }
         Dataflow::Sink(sink) => {
             let done = Rc::new(Cell::new(false));
