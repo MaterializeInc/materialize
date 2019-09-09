@@ -233,13 +233,6 @@ where
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
-
-            if let Some(coordinator) = &mut self.command_coordinator {
-                for log in logging.active_logs().iter() {
-                    // Insert with 1 second compaction latency.
-                    coordinator.insert_source(log.name(), 1_000);
-                }
-            }
         }
     }
 

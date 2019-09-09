@@ -97,7 +97,7 @@ impl CommandCoordinator {
     where
         C: comm::Connection,
     {
-        Self {
+        let mut coordinator = Self {
             views: HashMap::new(),
             broadcast_tx: switchboard.broadcast_tx::<BroadcastToken>().wait(),
             command_receiver,
@@ -105,7 +105,16 @@ impl CommandCoordinator {
             since_updates: Vec::new(),
             optimizer: Default::default(),
             exfiltrator,
+        };
+
+        if let Some(logging_config) = logging_config {
+            for log in logging_config.active_logs().iter() {
+                // Insert with 1 second compaction latency.
+                coordinator.insert_source(log.name(), 1_000);
+            }
         }
+
+        coordinator
     }
 
     /// Drains commands from the receiver, sequences them, and broadcasts the
