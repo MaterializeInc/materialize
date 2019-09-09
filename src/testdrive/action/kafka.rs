@@ -280,8 +280,8 @@ impl Action for IngestAction {
                 .map_err(|e| format!("schema registry error: {}", e))?;
         }
 
-        let schema =
-            Schema::parse_str(&self.schema).map_err(|e| format!("parsing avro schema: {}", e))?;
+        let schema = interchange::avro::parse_schema(&self.schema)
+            .map_err(|e| format!("parsing avro schema: {}", e))?;
         let mut futs = FuturesUnordered::new();
         for row in &self.rows {
             let val = json_to_avro(

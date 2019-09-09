@@ -32,7 +32,7 @@ rusqlite = { version = "0.20", features = ["bundled"] }
 serde_json = "1"
 sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", features = ["bincode"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 uuid = "*"
 walkdir = "2"
 whoami = "0.5.3"

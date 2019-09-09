@@ -1,0 +1,20 @@
+The mzsql grammar, in syntaxes/mzsql.tmLanguage.json, is derived from
+the original SQL TextMate bundle, available online at
+
+    https://github.com/textmate/sql.tmbundle/blob/6d4edbc113d3272f7c097d6b1504624289ee2bc5/Syntaxes/SQL.plist
+
+with the following license:
+
+    Permission to copy, use, modify, sell and distribute this
+    software is granted. This software is provided "as is" without
+    express or implied warranty, and with no claim as to its
+    suitability for any purpose.
+
+That grammar was later imported into the vscode-mssql plugin, available
+online at
+
+    https://github.com/microsoft/vscode-mssql/blob/50a2461aa2cb2fe3a307d7605be238856e4158ce/syntaxes/SQL.plist
+
+and modified by various contributors, who agreed to license their
+contributions under the MIT license, a copy of which can be found in
+the LICENSE file at the root of this repository.

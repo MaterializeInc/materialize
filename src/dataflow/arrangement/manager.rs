@@ -87,19 +87,19 @@ impl TraceManager {
 
     /// Returns a copy of the by_self arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_self(&self, name: &str) -> Option<&KeysOnlyHandle> {
+    pub fn get_by_self(&self, name: &str) -> Option<&WithDrop<KeysOnlyHandle>> {
         self.traces.get(name)?.by_self.as_ref()
     }
 
     /// Returns a copy of the by_self arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_self_mut(&mut self, name: &str) -> Option<&mut KeysOnlyHandle> {
+    pub fn get_by_self_mut(&mut self, name: &str) -> Option<&mut WithDrop<KeysOnlyHandle>> {
         self.traces.get_mut(name)?.by_self.as_mut()
     }
 
     /// Binds the by_self arrangement.
     #[allow(dead_code)]
-    pub fn set_by_self(&mut self, name: String, trace: KeysOnlyHandle) {
+    pub fn set_by_self(&mut self, name: String, trace: WithDrop<KeysOnlyHandle>) {
         self.traces
             .entry(name)
             .or_insert_with(CollectionTraces::default)
@@ -108,13 +108,17 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(&self, name: &str, keys: &[usize]) -> Option<&KeysValsHandle> {
+    pub fn get_by_keys(&self, name: &str, keys: &[usize]) -> Option<&WithDrop<KeysValsHandle>> {
         self.traces.get(name)?.by_keys.get(keys)
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys_mut(&mut self, name: &str, keys: &[usize]) -> Option<&mut KeysValsHandle> {
+    pub fn get_by_keys_mut(
+        &mut self,
+        name: &str,
+        keys: &[usize],
+    ) -> Option<&mut WithDrop<KeysValsHandle>> {
         self.traces.get_mut(name)?.by_keys.get_mut(keys)
     }
 
@@ -122,13 +126,13 @@ impl TraceManager {
     pub fn get_all_keyed(
         &mut self,
         name: &str,
-    ) -> Option<impl Iterator<Item = (&Vec<usize>, &mut KeysValsHandle)>> {
+    ) -> Option<impl Iterator<Item = (&Vec<usize>, &mut WithDrop<KeysValsHandle>)>> {
         Some(self.traces.get_mut(name)?.by_keys.iter_mut())
     }
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(&mut self, name: String, keys: &[usize], trace: KeysValsHandle) {
+    pub fn set_by_keys(&mut self, name: String, keys: &[usize], trace: WithDrop<KeysValsHandle>) {
         self.traces
             .entry(name)
             .or_insert_with(CollectionTraces::default)
@@ -150,9 +154,9 @@ impl TraceManager {
 /// Maintained traces for a collection.
 pub struct CollectionTraces {
     /// The collection arranged "by self", where the key is the record.
-    by_self: Option<KeysOnlyHandle>,
+    by_self: Option<WithDrop<KeysOnlyHandle>>,
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    by_keys: HashMap<Vec<usize>, KeysValsHandle>,
+    by_keys: HashMap<Vec<usize>, WithDrop<KeysValsHandle>>,
 }
 
 impl CollectionTraces {
@@ -194,5 +198,53 @@ impl Default for CollectionTraces {
             by_self: None,
             by_keys: HashMap::new(),
         }
+    }
+}
+
+/// A thin wrapper containing an associated item to drop.
+///
+/// This type is used for controlled shutdown of dataflows as handles are dropped.
+/// The associated `to_drop` will be dropped with the element, and can be observed
+/// by other bits of clean-up code.
+#[derive(Clone)]
+pub struct WithDrop<T> {
+    element: T,
+    to_drop: Option<std::rc::Rc<Box<dyn std::any::Any>>>,
+}
+
+impl<T> WithDrop<T> {
+    /// Creates a new wrapper with an item to drop.
+    pub fn new<S: std::any::Any>(element: T, to_drop: S) -> Self {
+        Self {
+            element,
+            to_drop: Some(std::rc::Rc::new(Box::new(to_drop))),
+        }
+    }
+
+    /// Read access to the drop token, so that others can clone it.
+    pub fn to_drop(&self) -> &Option<std::rc::Rc<Box<dyn std::any::Any>>> {
+        &self.to_drop
+    }
+}
+
+impl<T> From<T> for WithDrop<T> {
+    fn from(element: T) -> Self {
+        Self {
+            element,
+            to_drop: None,
+        }
+    }
+}
+
+impl<T> std::ops::Deref for WithDrop<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.element
+    }
+}
+
+impl<T> std::ops::DerefMut for WithDrop<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.element
     }
 }

@@ -3,11 +3,13 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
+use chrono::NaiveDateTime;
+use serde::{Deserialize, Serialize};
+
 use crate::like::build_like_regex_from_string;
-use repr::Datum;
+use repr::{Datum, Interval};
 
 pub fn and(a: Datum, b: Datum) -> Datum {
     match (&a, &b) {
@@ -212,6 +214,94 @@ pub fn add_float64(a: Datum, b: Datum) -> Datum {
         return Datum::Null;
     }
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
+}
+
+pub fn add_timelike_with_interval(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+
+    let dt = a.unwrap_timestamp_with_promotion();
+    Datum::Timestamp(match b {
+        Datum::Interval(Interval::Months(months)) => add_timelike_months(dt, months),
+        Datum::Interval(Interval::Duration {
+            is_positive,
+            duration,
+        }) => add_timelike_duration(dt, is_positive, duration),
+        _ => panic!(
+            "Tried to do timelike addition on something not timelike: {:?}",
+            b
+        ),
+    })
+}
+
+pub fn sub_timelike_with_interval(a: Datum, b: Datum) -> Datum {
+    let inverse = match b {
+        Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
+        Datum::Interval(Interval::Duration {
+            is_positive,
+            duration,
+        }) => Datum::Interval(Interval::Duration {
+            is_positive: !is_positive,
+            duration,
+        }),
+        _ => panic!(
+            "Tried to do timelike subtraction on something not timelike: {:?}",
+            b
+        ),
+    };
+    add_timelike_with_interval(a, inverse)
+}
+
+fn add_timelike_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
+    use chrono::{Datelike, Timelike};
+    use std::convert::TryInto;
+
+    if months == 0 {
+        return dt;
+    }
+
+    let mut months: i32 = months.try_into().expect("fewer than i64 months");
+    let (mut year, mut month, mut day) = (dt.year(), dt.month0() as i32, dt.day());
+    let years = months / 12;
+    year += years;
+    months %= 12;
+    // positive modulus is easier to reason about
+    if months < 0 {
+        year -= 1;
+        months += 12;
+    }
+    month = (month + months) % 12;
+    // account for dt.month0
+    month += 1;
+
+    // handle going from January 31st to February by saturation
+    let mut new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
+    while new_d.is_none() {
+        debug_assert!(day > 28, "there are no months with fewer than 28 days");
+        day -= 1;
+        new_d = chrono::NaiveDate::from_ymd_opt(year, month as u32, day);
+    }
+    let new_d = new_d.unwrap();
+
+    // Neither postgres nor mysql support leap seconds, so this should be safe.
+    //
+    // Both my testing and https://dba.stackexchange.com/a/105829 support the
+    // idea that we should ignore leap seconds
+    new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
+}
+
+fn add_timelike_duration(
+    dt: NaiveDateTime,
+    is_positive: bool,
+    duration: std::time::Duration,
+) -> NaiveDateTime {
+    let d = chrono::Duration::from_std(duration).expect("a duration that fits into i64 seconds");
+    if is_positive {
+        dt + d
+    } else {
+        dt - d
+    }
 }
 
 pub fn add_decimal(a: Datum, b: Datum) -> Datum {
@@ -468,11 +558,13 @@ pub enum BinaryFunc {
     AddInt64,
     AddFloat32,
     AddFloat64,
+    AddTimelikeWithInterval,
     AddDecimal,
     SubInt32,
     SubInt64,
     SubFloat32,
     SubFloat64,
+    SubTimelikeWithInterval,
     SubDecimal,
     MulInt32,
     MulInt64,
@@ -506,11 +598,13 @@ impl BinaryFunc {
             BinaryFunc::AddInt64 => add_int64,
             BinaryFunc::AddFloat32 => add_float32,
             BinaryFunc::AddFloat64 => add_float64,
+            BinaryFunc::AddTimelikeWithInterval => add_timelike_with_interval,
             BinaryFunc::AddDecimal => add_decimal,
             BinaryFunc::SubInt32 => sub_int32,
             BinaryFunc::SubInt64 => sub_int64,
             BinaryFunc::SubFloat32 => sub_float32,
             BinaryFunc::SubFloat64 => sub_float64,
+            BinaryFunc::SubTimelikeWithInterval => sub_timelike_with_interval,
             BinaryFunc::SubDecimal => sub_decimal,
             BinaryFunc::MulInt32 => mul_int32,
             BinaryFunc::MulInt64 => mul_int64,
@@ -621,5 +715,35 @@ impl VariadicFunc {
         match self {
             VariadicFunc::Coalesce => coalesce,
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use chrono::prelude::*;
+
+    use super::*;
+
+    #[test]
+    fn add_interval_months() {
+        let dt = ym(2000, 1);
+
+        assert_eq!(add_timelike_months(dt, 0), dt);
+        assert_eq!(add_timelike_months(dt, 1), ym(2000, 2));
+        assert_eq!(add_timelike_months(dt, 12), ym(2001, 1));
+        assert_eq!(add_timelike_months(dt, 13), ym(2001, 2));
+        assert_eq!(add_timelike_months(dt, 24), ym(2002, 1));
+        assert_eq!(add_timelike_months(dt, 30), ym(2002, 7));
+
+        // and negatives
+        assert_eq!(add_timelike_months(dt, -1), ym(1999, 12));
+        assert_eq!(add_timelike_months(dt, -12), ym(1999, 1));
+        assert_eq!(add_timelike_months(dt, -13), ym(1998, 12));
+        assert_eq!(add_timelike_months(dt, -24), ym(1998, 1));
+        assert_eq!(add_timelike_months(dt, -30), ym(1997, 7));
+    }
+
+    fn ym(year: i32, month: u32) -> NaiveDateTime {
+        NaiveDate::from_ymd(year, month, 1).and_hms(0, 0, 0)
     }
 }

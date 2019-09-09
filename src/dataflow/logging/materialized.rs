@@ -17,7 +17,9 @@ use timely::logging::WorkerIdentifier;
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
 
 /// A logged materialized event.
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum MaterializedEvent {
     /// Dataflow command, true for create and false for drop.
     Dataflow(String, bool),
@@ -28,7 +30,9 @@ pub enum MaterializedEvent {
 }
 
 /// A logged peek event.
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Peek {
     /// The name of the view the peek targets.
     name: String,

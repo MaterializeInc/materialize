@@ -9,10 +9,12 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+chrono = "0.4"
 failure = "0.1.5"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 regex = "1.2.1"
 regex-syntax = "0.6.8"
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
-pretty = "0.5.2"
+# TODO(grimmr): upgrade to 0.5.3 after release, when `space_()` becomes officially available.
+pretty = { git = "https://github.com/Marwes/pretty.rs.git", rev = "7fb895eff160b8bfd6d28efb19bf24f0b9326109" }

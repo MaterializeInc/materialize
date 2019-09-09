@@ -3,6 +3,13 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+# Verify the error message is useful when a schema is not present in the
+# registry.
+
+! CREATE SOURCE noexist FROM 'kafka://${testdrive.kafka-addr}/testdrive-noexist-${testdrive.seed}'
+  USING SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+fetching latest schema for subject 'testdrive-noexist-${testdrive.seed}-value' from registry: subject not found
+
 $ set schema_v1={
     "type": "record",
     "name": "envelope",
@@ -11,7 +18,7 @@ $ set schema_v1={
         "name": "before",
         "type": [
           {
-            "name": "RowBefore",
+            "name": "row",
             "type": "record",
             "fields": [
               {"name": "a", "type": "long"}
@@ -20,19 +27,7 @@ $ set schema_v1={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "RowAfter",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -44,7 +39,7 @@ $ set schema_v2={
         "name": "before",
         "type": [
           {
-            "name": "RowBefore",
+            "name": "row",
             "type": "record",
             "fields": [
               {"name": "a", "type": "long"},
@@ -54,20 +49,7 @@ $ set schema_v2={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "RowAfter",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"},
-              {"name": "b", "type": "long", "default": 42}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -163,30 +145,36 @@ $ set valid_key_schema={
     ]
   }
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing} publish=true timestamp=1
+$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing}
+  publish=true timestamp=1
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing} publish=true timestamp=2
+$ kafka-ingest format=avro topic=missing-data schema=${schema_v1} key_schema=${key_schema_missing}
+  publish=true timestamp=2
 {"before": null, "after": null}
 
 ! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-missing-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}';
 Value schema missing primary key column: b
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type} publish=true timestamp=3
+$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
+  publish=true timestamp=3
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type} publish=true timestamp=4
+$ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=${key_schema_wrong_type}
+  publish=true timestamp=4
 {"before": null, "after": null}
 
 ! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-mismatched-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}';
-key and value column types do not match: key ColumnType { name: Some("a"), nullable: false, scalar_type: Int32 } vs. value ColumnType { name: Some("a"), nullable: false, scalar_type: Int64
+key and value column types do not match: key ColumnType { name: Some("a"), nullable: false, scalar_type: Int32 } vs. value ColumnType { name: Some("a"), nullable: false, scalar_type: Int64 }
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema} publish=true timestamp=5
+$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
+  publish=true timestamp=5
 {"before": null, "after": {"a": 1}}
 
-$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema} publish=true timestamp=6
+$ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
+  publish=true timestamp=6
 {"before": null, "after": null}
 
 > CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'

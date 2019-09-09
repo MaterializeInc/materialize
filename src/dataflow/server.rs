@@ -8,6 +8,8 @@
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 
+use timely::communication::allocator::generic::GenericBuilder;
+use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::progress::frontier::Antichain;
@@ -17,21 +19,24 @@ use timely::worker::Worker as TimelyWorker;
 use futures::sync::mpsc::UnboundedReceiver;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::mem;
+use std::net::TcpStream;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::Instant;
 use uuid::Uuid;
 
 use super::render;
-use crate::arrangement::{manager::KeysOnlyHandle, TraceManager};
+use crate::arrangement::{
+    manager::{KeysOnlyHandle, WithDrop},
+    TraceManager,
+};
 use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Dataflow, LocalInput, PeekWhen, Timestamp};
+use dataflow_types::{compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp};
 use expr::RelationExpr;
 
 /// The commands that a running dataflow server can accept.
@@ -43,6 +48,7 @@ pub enum DataflowCommand {
         conn_id: u32,
         source: RelationExpr,
         when: PeekWhen,
+        transform: RowSetFinishing,
     },
     Explain {
         conn_id: u32,
@@ -53,15 +59,25 @@ pub enum DataflowCommand {
 
 /// Initiates a timely dataflow computation, processing materialized commands.
 pub fn serve(
+    sockets: Vec<Option<TcpStream>>,
+    threads: usize,
+    process: usize,
     dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
-    timely_configuration: timely::Configuration,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String> {
     let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
 
-    timely::execute(timely_configuration, move |worker| {
+    let log_fn = Box::new(|_| None);
+    let (builders, guard) = initialize_networking_from_sockets(sockets, process, threads, log_fn)
+        .map_err(|err| format!("failed to initialize networking: {}", err))?;
+    let builders = builders
+        .into_iter()
+        .map(|x| GenericBuilder::ZeroCopy(x))
+        .collect();
+
+    timely::execute::execute_from(builders, Box::new(guard), move |worker| {
         let dataflow_command_receiver = if worker.index() == 0 {
             dataflow_command_receiver.lock().unwrap().take()
         } else {
@@ -86,8 +102,7 @@ struct PendingPeek {
     conn_id: u32,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
-    /// Whether to drop the dataflow when the peek completes.
-    drop_after_peek: bool,
+    transform: RowSetFinishing,
 }
 
 struct Worker<'w, A>
@@ -97,9 +112,8 @@ where
     inner: &'w mut TimelyWorker<A>,
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
-    pending_peeks: Vec<(PendingPeek, KeysOnlyHandle)>,
+    pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
-    names: HashMap<String, Box<dyn Drop>>,
     sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<LoggingConfig>,
     command_coordinator: Option<coordinator::CommandCoordinator>,
@@ -119,8 +133,13 @@ where
     ) -> Worker<'w, A> {
         let sequencer = Sequencer::new(w, Instant::now());
         let exfiltrator = Rc::new(exfiltrator_config.into());
-        let command_coordinator = dataflow_command_receiver
-            .map(|dcr| coordinator::CommandCoordinator::new(dcr, Rc::clone(&exfiltrator)));
+        let command_coordinator = dataflow_command_receiver.map(|dcr| {
+            coordinator::CommandCoordinator::new(
+                dcr,
+                logging_config.as_ref(),
+                Rc::clone(&exfiltrator),
+            )
+        });
 
         Worker {
             inner: w,
@@ -128,7 +147,6 @@ where
             exfiltrator,
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
-            names: HashMap::new(),
             sequencer,
             logging_config,
             command_coordinator,
@@ -182,22 +200,24 @@ where
 
             // Install traces as maintained views.
             for (log, trace) in t_traces {
-                self.traces.set_by_self(log.name().to_string(), trace);
+                self.traces
+                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
             for (log, trace) in d_traces {
-                self.traces.set_by_self(log.name().to_string(), trace);
+                self.traces
+                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
             for (log, trace) in m_traces {
-                self.traces.set_by_self(log.name().to_string(), trace);
+                self.traces
+                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
 
             if let Some(coordinator) = &mut self.command_coordinator {
-                coordinator.logger = self.inner.log_register().get("materialized");
                 for log in logging.active_logs().iter() {
                     // Insert with 1 second compaction latency.
-                    coordinator.insert_source(log.name(), 1_000);
+                    coordinator.insert_source(log.name(), 1_000, &mut self.sequencer);
                 }
             }
         }
@@ -242,7 +262,7 @@ where
                 for name in self.traces.traces.keys() {
                     if let Some(by_self) = self.traces.get_by_self(name) {
                         by_self.clone().read_upper(&mut upper);
-                        coordinator.update_upper(name, upper.elements());
+                        coordinator.update_upper(name, upper.elements(), &mut self.sequencer);
                     }
                 }
             }
@@ -275,7 +295,6 @@ where
                         dataflow,
                         &mut self.traces,
                         self.inner,
-                        &mut self.names,
                         &mut self.local_input_mux,
                         self.exfiltrator.clone(),
                     );
@@ -287,7 +306,6 @@ where
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                     }
-                    self.names.remove(name);
                     self.traces.del_trace(name);
                 }
             }
@@ -296,7 +314,7 @@ where
                 name,
                 timestamp,
                 conn_id,
-                drop_after_peek,
+                transform,
             } => {
                 let mut trace = self
                     .traces
@@ -309,7 +327,7 @@ where
                     name,
                     conn_id,
                     timestamp,
-                    drop_after_peek,
+                    transform,
                 };
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(
@@ -330,9 +348,16 @@ where
                 }
             }
 
+            coordinator::SequencedCommand::AppendLog(event) => {
+                if self.inner.index() == 0 {
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        logger.log(event);
+                    }
+                }
+            }
+
             coordinator::SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
-                self.names.clear();
                 self.traces.del_all_traces();
                 self.shutdown_logging();
             }
@@ -343,7 +368,6 @@ where
     fn process_peeks(&mut self) {
         // See if time has advanced enough to handle any of our pending
         // peeks.
-        let mut dataflows_to_be_dropped = vec![];
         let mut pending_peeks = mem::replace(&mut self.pending_peeks, Vec::new());
         pending_peeks.retain(|(peek, trace)| {
             let mut upper = timely::progress::frontier::Antichain::new();
@@ -388,8 +412,15 @@ where
                 for _ in 0..copies {
                     results.push(key.clone());
                 }
-
                 cur.step_key(&storage)
+            }
+            if let Some(limit) = peek.transform.limit {
+                if results.len() > limit {
+                    pdqselect::select_by(&mut results, limit, |left, right| {
+                        compare_columns(&peek.transform.order_by, left, right)
+                    });
+                    results.truncate(limit);
+                }
             }
             self.exfiltrator.send_peek(peek.conn_id, results);
             if let Some(logger) = self.materialized_logger.as_mut() {
@@ -402,16 +433,8 @@ where
                     false,
                 ));
             }
-            if peek.drop_after_peek {
-                dataflows_to_be_dropped.push(peek.name.clone());
-            }
             false // don't retain
         });
         mem::replace(&mut self.pending_peeks, pending_peeks);
-        if !dataflows_to_be_dropped.is_empty() {
-            self.handle_command(coordinator::SequencedCommand::DropDataflows(
-                dataflows_to_be_dropped,
-            ));
-        }
     }
 }

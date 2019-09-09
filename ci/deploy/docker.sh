@@ -9,9 +9,12 @@
 
 set -euo pipefail
 
-docker pull "materialize/ci-materialized:$MATERIALIZED_IMAGE_ID"
+source misc/shlib/shlib.bash
+
+docker pull "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID"
 
 for tag in "unstable-$BUILDKITE_COMMIT" latest; do
-    docker tag "materialize/ci-materialized:$MATERIALIZED_IMAGE_ID" "materialize/materialized:$tag"
-    docker push "materialize/materialized:$tag"
+    echo "Processing docker tag $tag"
+    run docker tag "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID" "materialize/materialized:$tag"
+    run docker push "materialize/materialized:$tag"
 done

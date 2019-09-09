@@ -27,20 +27,7 @@ $ set schema={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": "long"},
-              {"name": "b", "type": "long"}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -120,14 +107,3 @@ b  c
 ------
 1  3
 2  1
-
-# TODO(benesch): this test doesn't seem right.
-#
-# > CREATE MATERIALIZED VIEW test6 AS
-#   SELECT data.* FROM data GROUP BY b;
-#
-# > PEEK test6
-# b  max
-# ------
-# 1  3
-# 2  1

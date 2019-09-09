@@ -6,29 +6,162 @@
 mode cockroach
 
 statement ok
-CREATE TABLE datish (
+CREATE TABLE dateish (
     a DATE
 )
 
 statement ok
-INSERT INTO datish VALUES (DATE '2019-12-31')
+INSERT INTO dateish VALUES (DATE '2019-12-31')
 
 query T
-SELECT a FROM datish
+SELECT a FROM dateish
 ----
 2019-12-31
 
 statement ok
-CREATE TABLE ts_ish (
+CREATE TABLE timestampish (
     b TIMESTAMP
 )
 
 statement ok
-INSERT INTO ts_ish VALUES (TIMESTAMP '1969-06-01 10:10:10.410'), (TIMESTAMP '1997-02-03 11:12:59.9'), (TIMESTAMP '2020-01-01 1:2:3.789')
+INSERT INTO timestampish
+VALUES
+    (TIMESTAMP '1969-06-01 10:10:10.410'),
+    (TIMESTAMP '1997-02-03 11:12:59.9'),
+    (TIMESTAMP '2020-01-01 1:2:3.789')
 
 query T rowsort
-SELECT b FROM ts_ish
+SELECT b FROM timestampish
 ----
 1969-06-01 10:10:10.410
 1997-02-03 11:12:59.900
 2020-01-01 01:02:03.789
+
+
+query T
+SELECT INTERVAL '1' MONTH
+----
+1 month
+
+query T
+SELECT INTERVAL '1' YEAR
+----
+1 year
+
+query T
+SELECT INTERVAL '1-3' YEAR TO MONTH
+----
+1 year 3 months
+
+query T
+SELECT INTERVAL '1' MINUTE
+----
+01:00
+
+statement ok
+CREATE TABLE iv_ish (
+    b INTERVAL
+)
+
+statement ok
+INSERT INTO iv_ish VALUES (INTERVAL '1' YEAR), (INTERVAL '3' HOUR), (INTERVAL '4 2' DAY TO HOUR)
+
+query T rowsort
+SELECT * FROM iv_ish
+----
+4 days 02:00:00
+1 year
+03:00:00
+
+# Date arithmetic with month intervals.
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '1' MONTH
+----
+2000-02-01 00:00:00
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '1' YEAR
+----
+2001-01-01 00:00:00
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '-1' MONTH
+----
+1999-12-01 00:00:00
+
+query T
+SELECT DATE '2000-01-01' - INTERVAL '1' MONTH
+----
+1999-12-01 00:00:00
+
+query T
+SELECT DATE '2000-01-01' - INTERVAL '-1' MONTH
+----
+2000-02-01 00:00:00
+
+query T
+SELECT DATE '2000-01-01' - INTERVAL '1' YEAR
+----
+1999-01-01 00:00:00
+
+# Timestamp arithmetic with month intervals. Should behave the same as DATE.
+
+query T
+SELECT TIMESTAMP '2000-01-01 00:00:00' + INTERVAL '1' YEAR
+----
+2001-01-01 00:00:00
+
+query T
+SELECT TIMESTAMP '2000-01-01 00:00:00' - INTERVAL '1' YEAR
+----
+1999-01-01 00:00:00
+
+# Date arithmetic with duration intervals.
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '7' DAY
+----
+2000-01-08 00:00:00
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '7 5:4:3.2' DAY TO SECOND
+----
+2000-01-08 05:04:03.200
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '4' HOUR
+----
+2000-01-01 04:00:00
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '3' MINUTE
+----
+2000-01-01 00:03:00
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '22' SECOND
+----
+2000-01-01 00:00:22
+
+query T
+SELECT DATE '2000-01-01' + INTERVAL '22.0044' SECOND
+----
+2000-01-01 00:00:22.004400
+
+query T
+SELECT DATE '2000-01-01' - INTERVAL '22' DAY
+----
+1999-12-10 00:00:00
+
+query T
+SELECT DATE '2000-01-01' - INTERVAL '22' SECOND
+----
+1999-12-31 23:59:38
+
+# Timestamp arithmetic with duration intervals.
+
+query T
+SELECT TIMESTAMP '2000-01-01 00:00:00' + INTERVAL '7' HOUR
+----
+2000-01-01 07:00:00

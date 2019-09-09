@@ -51,6 +51,8 @@ docker_run "cargo test --no-run && cargo test --no-run --message-format=json > t
 
 ci_collapsed_heading "Preparing Docker context"
 {
+    cp target/release/materialized misc/docker/ci-raw-materialized
+
     # NOTE(benesch): the debug information is large enough that it slows down CI,
     # since we're packaging these binaries up into Docker images and shipping them
     # around. A bit unfortunate, since it'd be nice to have useful backtraces if
@@ -88,6 +90,8 @@ ci_collapsed_heading "Preparing Docker context"
                     + if (.target.kind != "lib") then ".\(.target.name)" else "" end)
         }
         | "\(.executable) \(.cwd) \(.slug)"' test-binaries.json)
+    mkdir misc/docker/ci-cargo-test/tests/examples
+    cp target/debug/examples/pingpong misc/docker/ci-cargo-test/tests/examples
     cp target/release/testdrive misc/docker/ci-cargo-test/tests
     cp misc/shlib/* misc/docker/ci-cargo-test/shlib
 
@@ -97,12 +101,23 @@ ci_collapsed_heading "Preparing Docker context"
     mv target/release/sqllogictest misc/docker/ci-sqllogictest
 }
 
-for image in materialized testdrive sqllogictest cargo-test; do
+images=(
+    materialized
+    testdrive
+    sqllogictest
+    cargo-test
+)
+
+if [[ "$BUILDKITE_BRANCH" = master ]]; then
+    images+=(raw-materialized)
+fi
+
+for image in "${images[@]}"; do
     ci_collapsed_heading "Building Docker image $image"
     tag=materialize/ci-$image:${BUILDKITE_BUILD_NUMBER}
     docker build \
         --tag "$tag" \
         --pull \
-        misc/docker/ci-$image
+        "misc/docker/ci-$image"
     docker push "$tag"
 done

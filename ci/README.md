@@ -102,6 +102,16 @@ reproduced here. If you need to recreate the SSH key:
 
 If you need the Docker hub password, it's in the company 1Password.
 
+## Docker Images
+
+We produce several docker images as part of CI, all are prefixed with `ci-`
+until they are ready for end-users to use.
+
+The two tradeoffs that we try to balance are CI speed and end-user convenience.
+Right now that mostly manifests as creating stripped binaries for use within CI
+and a `ci-raw-materialized` unstripped docker image for use in all
+interactive/deployed scenarios.
+
 ## Build caching
 
 Rust compilation is slow enough that we use [sccache], a distributed build cache

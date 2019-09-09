@@ -9,7 +9,7 @@ use failure::format_err;
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::Future;
 use log::error;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
@@ -17,6 +17,7 @@ use tokio::prelude::*;
 
 use crate::pgwire;
 use crate::queue;
+use comm::Switchboard;
 use dataflow::{self, DataflowCommand, ExfiltratorConfig};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Exfiltration;
@@ -24,30 +25,30 @@ use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use ore::netio;
-use ore::netio::SniffingStream;
+use ore::netio::{SniffedStream, SniffingStream};
+use ore::tokio::net::TcpStreamExt;
 
 mod http;
 
 pub struct Config {
     pub logging_granularity: Option<Duration>,
-    pub timely: timely::Configuration,
+    /// The version of materialized.
+    pub version: String,
+    pub threads: usize,
+    pub process: usize,
+    pub addresses: Vec<String>,
 }
 
 impl Config {
     /// The number of timely workers described the by the configuration.
     pub fn num_timely_workers(&self) -> usize {
-        match &self.timely {
-            timely::Configuration::Thread => 1,
-            timely::Configuration::Process(n) => *n,
-            timely::Configuration::Cluster {
-                threads, addresses, ..
-            } => threads * addresses.len(),
-        }
+        self.threads * self.addresses.len()
     }
 }
 
 fn handle_connection(
-    tcp_stream: TcpStream,
+    conn: TcpStream,
+    switchboard: Switchboard<SniffedStream<TcpStream>>,
     cmdq_tx: UnboundedSender<queue::Command>,
     dataflow_results_mux: Mux<u32, Exfiltration>,
     num_timely_workers: usize,
@@ -58,7 +59,7 @@ fn handle_connection(
     // you won't be able to tell what protocol you have. For now, eight bytes
     // is the magic number, but this may need to change if we learn to speak
     // new protocols.
-    let ss = SniffingStream::new(tcp_stream);
+    let ss = SniffingStream::new(conn);
     netio::read_exact_or_eof(ss, [0; 8])
         .from_err()
         .and_then(move |(ss, buf, nread)| {
@@ -70,11 +71,16 @@ fn handle_connection(
                     dataflow_results_mux,
                     num_timely_workers,
                 )
-                .either_a()
+                .boxed()
             } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed(), dataflow_results_mux).either_b()
+                http::handle_connection(ss.into_sniffed(), dataflow_results_mux).boxed()
+            } else if comm::protocol::match_handshake(buf) {
+                switchboard
+                    .handle_connection(ss.into_sniffed())
+                    .from_err()
+                    .boxed()
             } else {
-                reject_connection(ss.into_sniffed()).from_err().either_c()
+                reject_connection(ss.into_sniffed()).from_err().boxed()
             }
         })
         .map_err(|err| error!("error handling request: {}", err))
@@ -94,43 +100,86 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
 
     // Extract timely dataflow parameters.
     let num_timely_workers = config.num_timely_workers();
-    let is_primary = match &config.timely {
-        timely::Configuration::Thread => true,
-        timely::Configuration::Process(_) => true,
-        timely::Configuration::Cluster { process, .. } => process == &0,
-    };
-    let post_address = match &config.timely {
-        timely::Configuration::Thread | timely::Configuration::Process(_) => {
-            "http://localhost:6875/api/dataflow-results".to_owned()
-        }
-        timely::Configuration::Cluster { addresses, .. } => {
-            let address = addresses[0]
-                .split(':')
-                .next()
-                .expect("Failed to find port in timely address");
-            format!("http://{}:6875/api/dataflow-results", address)
-        }
-    };
+    let is_primary = config.process == 0;
+    let post_address = format!("http://{}/api/dataflow-results", config.addresses[0]);
 
     // Initialize pgwire / http listener.
-    let listener = if is_primary {
-        let listen_addr: SocketAddr = "0.0.0.0:6875".parse()?;
-        let listener = TcpListener::bind(&listen_addr)?;
-        println!("materialized listening on {}...", listen_addr);
-        Some(listener)
-    } else {
-        None
-    };
+    let listen_addr = SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        config.addresses[config.process]
+            .split(':')
+            .nth(1)
+            .ok_or_else(|| format_err!("unable to parse node address"))?
+            .parse()?,
+    );
+    let listener = TcpListener::bind(&listen_addr)?;
+    println!(
+        "materialized v{} listening on {}...",
+        config.version, listen_addr
+    );
+
+    let switchboard = Switchboard::new(config.addresses, config.process);
+    let mut runtime = tokio::runtime::Runtime::new()?;
+    runtime.spawn({
+        let switchboard = switchboard.clone();
+        listener
+            .incoming()
+            .for_each(move |conn| {
+                // Set TCP_NODELAY to disable tinygram prevention (Nagle's
+                // algorithm), which forces a 40ms delay between each query
+                // on linux. According to John Nagle [0], the true problem
+                // is delayed acks, but disabling those is a receive-side
+                // operation (TCP_QUICKACK), and we can't always control the
+                // client. PostgreSQL sets TCP_NODELAY on both sides of its
+                // sockets, so it seems sane to just do the same.
+                //
+                // If set_nodelay fails, it's a programming error, so panic.
+                //
+                // [0]: https://news.ycombinator.com/item?id=10608356
+                conn.set_nodelay(true).expect("set_nodelay failed");
+                if is_primary {
+                    tokio::spawn(handle_connection(
+                        conn,
+                        switchboard.clone(),
+                        cmdq_tx.clone(),
+                        dataflow_results_mux.clone(),
+                        num_timely_workers,
+                    ));
+                } else {
+                    // When not the primary, we only need to route switchboard
+                    // traffic.
+                    let ss = SniffingStream::new(conn).into_sniffed();
+                    tokio::spawn(
+                        switchboard
+                            .handle_connection(ss)
+                            .map_err(|err| error!("error handling connection: {}", err)),
+                    );
+                }
+                Ok(())
+            })
+            .map_err(|err| error!("error accepting connection: {}", err))
+    });
+
+    let dataflow_conns = runtime
+        .block_on(switchboard.rendezvous(Duration::from_secs(30)))?
+        .into_iter()
+        .map(|conn| match conn {
+            None => Ok(None),
+            Some(conn) => Ok(Some(conn.into_inner().into_std()?)),
+        })
+        .collect::<Result<_, io::Error>>()?;
 
     let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
 
     // Construct timely dataflow instance.
     let local_input_mux = Mux::default();
     let dd_workers = dataflow::serve(
+        dataflow_conns,
+        config.threads,
+        config.process,
         dataflow_command_receiver,
         local_input_mux.clone(),
         ExfiltratorConfig::Remote(post_address),
-        config.timely,
         logging_config.clone(),
     )
     .map_err(|s| format_err!("{}", s))?;
@@ -144,39 +193,8 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         worker0_thread.clone(),
     );
 
-    // Draw connections off of the listener.
-    if let Some(listener) = listener {
-        let start = future::lazy(move || {
-            let server = listener
-                .incoming()
-                .for_each(move |stream| {
-                    // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-                    // algorithm), which forces a 40ms delay between each query
-                    // on linux. According to John Nagle [0], the true problem
-                    // is delayed acks, but disabling those is a receive-side
-                    // operation (TCP_QUICKACK), and we can't always control the
-                    // client. PostgreSQL sets TCP_NODELAY on both sides of its
-                    // sockets, so it seems sane to just do the same.
-                    //
-                    // If set_nodelay fails, it's a programming error, so panic.
-                    //
-                    // [0]: https://news.ycombinator.com/item?id=10608356
-                    stream.set_nodelay(true).expect("set_nodelay failed");
-                    tokio::spawn(handle_connection(
-                        stream,
-                        cmdq_tx.clone(),
-                        dataflow_results_mux.clone(),
-                        num_timely_workers,
-                    ));
-                    Ok(())
-                })
-                .map_err(|err| error!("error accepting connection: {}", err));
-            tokio::spawn(server);
-
-            Ok(())
-        });
-        tokio::run(start);
-    }
-
-    Ok(())
+    runtime
+        .shutdown_on_idle()
+        .wait()
+        .map_err(|()| unreachable!())
 }

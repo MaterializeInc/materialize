@@ -9,7 +9,7 @@
 
 use std::convert::TryInto;
 
-use failure::{bail, ensure, format_err};
+use failure::{bail, ensure, format_err, ResultExt};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
@@ -29,8 +29,8 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, Sink, SinkConnector, Source,
-    SourceConnector, View,
+    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
+    Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr::like::build_like_regex_from_string;
 use expr::{
@@ -64,6 +64,7 @@ pub enum Plan {
     Peek {
         source: RelationExpr,
         when: PeekWhen,
+        transform: RowSetFinishing,
     },
     Tail(Dataflow),
     SendRows {
@@ -290,7 +291,10 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let relation_expr = self.plan_query(query)?;
+                let (relation_expr, transform) = self.plan_query(query)?;
+                if transform != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
+                }
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -452,29 +456,43 @@ impl Planner {
     fn handle_peek(&mut self, name: ObjectName, immediate: bool) -> Result<Plan, failure::Error> {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
+        let typ = dataflow.typ();
         Ok(Plan::Peek {
             source: RelationExpr::Get {
                 name: dataflow.name().to_owned(),
-                typ: dataflow.typ().clone(),
+                typ: typ.clone(),
             },
             when: if immediate {
                 PeekWhen::Immediately
             } else {
                 PeekWhen::EarliestSource
             },
+            transform: RowSetFinishing {
+                limit: None,
+                order_by: (0..typ.column_types.len())
+                    .map(|column| ColumnOrder {
+                        column,
+                        desc: false,
+                    })
+                    .collect(),
+            },
         })
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let relation_expr = self.plan_query(&query)?;
+        let (relation_expr, transform) = self.plan_query(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
+            transform,
         })
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let mut relation_expr = self.plan_query(&query)?;
+        let (relation_expr, transform) = self.plan_query(&query)?;
+        if transform != Default::default() {
+            bail!("Explaining ORDER BY and LIMIT queries is not yet supported.");
+        }
         if stage == Stage::Dataflow {
             Ok(Plan::SendRows {
                 typ: RelationType {
@@ -492,17 +510,46 @@ impl Planner {
         }
     }
 
-    fn plan_query(&self, q: &Query) -> Result<RelationExpr, failure::Error> {
+    fn plan_query(&self, q: &Query) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
-        if q.limit.is_some() {
-            bail!("LIMIT is not supported in a view definition");
-        }
-        if !q.order_by.is_empty() {
-            bail!("ORDER BY is not supported in a view definition");
-        }
-        self.plan_set_expr(&q.body)
+        let limit = match q.limit {
+            None => None,
+            Some(Expr::Value(Value::Long(x))) => Some(x as usize),
+            _ => bail!("LIMIT must be an integer constant"),
+        };
+        let expr = self.plan_set_expr(&q.body)?;
+        let output_typ = expr.typ();
+        // This is O(m*n) where m is the number of columns and n is the number of order keys.
+        // If this ever becomes a bottleneck (which I doubt) it is easy enough to make faster...
+        let order: Result<Vec<ColumnOrder>, failure::Error> = q
+            .order_by
+            .iter()
+            .map(|obe| match &obe.expr {
+                Expr::Identifier(col_name) => output_typ
+                    .column_types
+                    .iter()
+                    .enumerate()
+                    .find(|(_idx, ct)| ct.name.as_ref() == Some(col_name))
+                    .map(|(idx, _ct)| ColumnOrder {
+                        column: idx,
+                        desc: match obe.asc {
+                            None => false,
+                            Some(asc) => !asc,
+                        },
+                    })
+                    .ok_or_else(|| format_err!("ORDER BY key must be an output column name.")),
+                _ => Err(format_err!(
+                    "Arbitrary expressions for ORDER BY keys are not yet supported."
+                )),
+            })
+            .collect();
+        let transform = RowSetFinishing {
+            order_by: order?,
+            limit,
+        };
+        Ok((expr, transform))
     }
 
     fn plan_set_expr(&self, q: &SetExpr) -> Result<RelationExpr, failure::Error> {
@@ -1363,6 +1410,7 @@ impl Planner {
         Ok((expr, typ))
     }
 
+    /// Figure out what the Expression should be, and the value of the result
     fn plan_binary_op<'a>(
         &self,
         ctx: &ExprContext,
@@ -1370,12 +1418,21 @@ impl Planner {
         left: &'a Expr,
         right: &'a Expr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
-        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
+        let (mut lexpr, lty) = self.plan_expr(ctx, left)?;
+        let (mut rexpr, rty) = self.plan_expr(ctx, right)?;
 
-        let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
+        let both_decimals = match (&lty.scalar_type, &rty.scalar_type) {
             (ScalarType::Decimal(_, _), ScalarType::Decimal(_, _)) => true,
             _ => false,
+        };
+
+        let (mut ltype, mut rtype, timelike) = match (&lty.scalar_type, &rty.scalar_type) {
+            (ScalarType::Date, ScalarType::Interval) => (lty, rty, true),
+            (ScalarType::Timestamp, ScalarType::Interval) => (lty, rty, true),
+            // for intervals on the left, flip them around
+            (ScalarType::Interval, ScalarType::Date) => (rty, lty, true),
+            (ScalarType::Interval, ScalarType::Timestamp) => (rty, lty, true),
+            (_, _) => (lty, rty, false),
         };
 
         let is_cmp = op == &BinaryOperator::Lt
@@ -1390,13 +1447,17 @@ impl Planner {
             || op == &BinaryOperator::Multiply
             || op == &BinaryOperator::Divide;
 
-        // For arithmetic where both inputs are already decimals, we skip
-        // coalescing, which could result in a rescale if the decimals have
-        // different precisions, because we tightly control the rescale when
-        // planning the arithmetic operation (below). E.g., decimal
-        // multiplication does not need to rescale its inputs, even when the
-        // inputs have different scales.
-        if is_cmp || (is_arithmetic && !both_decimals) {
+        // For arithmetic there are two type categories where we skip coalescing:
+        //
+        // * both inputs are already decimals: it could result in a rescale
+        //   if the decimals have different precisions, because we tightly
+        //   control the rescale when planning the arithmetic operation (below).
+        //   E.g., decimal multiplication does not need to rescale its inputs,
+        //   even when the inputs have different scales.
+        // * inputs are timelike: math is non commutative, there are very
+        //   specific rules about what makes sense, defined in the specific
+        //   comparisons below
+        if is_cmp || (is_arithmetic && !(both_decimals || timelike)) {
             let ctx = op.to_string();
             let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
             assert_eq!(exprs.len(), 2);
@@ -1486,6 +1547,12 @@ impl Planner {
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::AddFloat64, ScalarType::Float64)
                 }
+                (ScalarType::Date, ScalarType::Interval) => {
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                }
+                (ScalarType::Timestamp, ScalarType::Interval) => {
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                }
                 _ => bail!(
                     "no overload for {:?} + {:?}",
                     ltype.scalar_type,
@@ -1500,6 +1567,12 @@ impl Planner {
                 }
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::SubFloat64, ScalarType::Float64)
+                }
+                (ScalarType::Date, ScalarType::Interval) => {
+                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
+                }
+                (ScalarType::Timestamp, ScalarType::Interval) => {
+                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
                 }
                 _ => bail!(
                     "no overload for {:?} - {:?}",
@@ -1815,7 +1888,11 @@ impl Planner {
                 ScalarType::Timestamp,
             ),
             Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
-            Value::Interval(_) => bail!("INTERVAL literals are not supported: {}", l.to_string()),
+            Value::Interval(iv) => {
+                iv.fields_match_precision()?;
+                let i = iv.computed_permissive()?;
+                (Datum::Interval(i.into()), ScalarType::Interval)
+            }
             Value::Null => (Datum::Null, ScalarType::Null),
         };
         let nullable = datum == Datum::Null;
@@ -1873,8 +1950,33 @@ where
     C: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
+    let out_typ = find_output_type(&exprs.iter().map(|(_, typ)| typ).collect::<Vec<_>>())?;
+    let mut out = Vec::new();
+    for (expr, typ) in exprs {
+        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
+            Ok((expr, _)) => out.push(expr),
+            Err(_) => bail!(
+                "{} does not have uniform type: {:?} vs {:?}",
+                context,
+                typ,
+                out_typ,
+            ),
+        }
+    }
+    Ok((out, out_typ))
+}
 
-    let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
+/// Find a type that we can expect the output of a sequence of expressions to be
+///
+/// There aren't any real guarantees about what we output, except that it's
+/// possible that we'll be able to build this result.
+///
+/// # Examples
+///
+/// - `1i32 + 2i64` -> `i64`
+/// - `1i64 + Decimal(2)` -> `Decimal`
+fn find_output_type(col_typs: &[&ColumnType]) -> Result<ColumnType, failure::Error> {
+    let scalar_type_prec = |scalar_type: &&ScalarType| match scalar_type {
         ScalarType::Null => 0,
         ScalarType::Int32 => 1,
         ScalarType::Int64 => 2,
@@ -1883,29 +1985,15 @@ where
         ScalarType::Float64 => 5,
         _ => 6,
     };
-    let max_scalar_type = exprs
+    let nullable = col_typs.iter().any(|typ| typ.nullable);
+    let max = col_typs
         .iter()
-        .map(|(_expr, typ)| &typ.scalar_type)
-        .max_by_key(|scalar_type| scalar_type_prec(scalar_type))
-        .unwrap()
-        .clone();
-    let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
-    let mut out = Vec::new();
-    let out_typ = ColumnType::new(max_scalar_type).nullable(nullable);
-    for (expr, typ) in exprs {
-        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
-            Ok((expr, _)) => out.push(expr),
-            Err(_) => bail!(
-                "{} does not have uniform type: {:?} vs {:?}",
-                context,
-                typ,
-                out_typ
-            ),
-        }
-    }
-    Ok((out, out_typ))
+        .map(|typ| &typ.scalar_type)
+        .max_by_key(scalar_type_prec);
+    Ok(ColumnType::new(max.unwrap().clone()).nullable(nullable))
 }
 
+/// Figure out whether we need to cast a value in order for an operation to succeed
 fn plan_cast_internal<C>(
     context: C,
     expr: ScalarExpr,
@@ -2000,9 +2088,17 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         }
         DataType::Date => ScalarType::Date,
         DataType::Timestamp => ScalarType::Timestamp,
+        DataType::Interval => ScalarType::Interval,
         DataType::Time => ScalarType::Time,
         DataType::Bytea => ScalarType::Bytes,
-        other => bail!("Unexpected SQL type: {:?}", other),
+        other @ DataType::Array(_)
+        | other @ DataType::Binary(..)
+        | other @ DataType::Blob(_)
+        | other @ DataType::Clob(_)
+        | other @ DataType::Custom(_)
+        | other @ DataType::Regclass
+        | other @ DataType::Uuid
+        | other @ DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", other),
     })
 }
 
@@ -2013,29 +2109,36 @@ fn build_source(
     topic: String,
 ) -> Result<Source, failure::Error> {
     let (key_schema, value_schema, schema_registry_url) = match schema {
-        // TODO(jldlaughlin): we need a way to pass in primary key information when building a source from a string
+        // TODO(jldlaughlin): we need a way to pass in primary key information
+        // when building a source from a string
         SourceSchema::Raw(schema) => (None, schema.to_owned(), None),
+
         SourceSchema::Registry(url) => {
-            // TODO(benesch): we need to fetch this schema
-            // asynchronously to avoid blocking the command
-            // processing thread.
+            // TODO(benesch): we need to fetch this schema asynchronously to
+            // avoid blocking the command processing thread.
             let url: Url = url.parse()?;
             let ccsr_client = ccsr::Client::new(url.clone());
 
-            let value_schema = ccsr_client.get_schema_by_subject(&format!("{}-value", topic))?;
-            let key_schema_value =
-                match ccsr_client.get_schema_by_subject(&format!("{}-key", topic)) {
-                    Result::Ok(schema) => Some(schema.raw),
-                    Result::Err(_err) => None,
-                };
-            (key_schema_value, value_schema.raw, Some(url))
+            let value_schema_name = format!("{}-value", topic);
+            let value_schema = ccsr_client
+                .get_schema_by_subject(&value_schema_name)
+                .with_context(|err| {
+                    format!(
+                        "fetching latest schema for subject '{}' from registry: {}",
+                        value_schema_name, err
+                    )
+                })?;
+            let key_schema = ccsr_client
+                .get_schema_by_subject(&format!("{}-key", topic))
+                .ok();
+            (key_schema.map(|s| s.raw), value_schema.raw, Some(url))
         }
     };
 
     let typ = avro::validate_value_schema(&value_schema)?;
     let pkey_indices = match key_schema {
         Some(key_schema) => avro::validate_key_schema(&key_schema, &typ)?,
-        None => Vec::new(), // Right now, this will only happen for SourceSchema::Raw input. See above TODO.
+        None => Vec::new(),
     };
 
     Ok(Source {
@@ -2151,6 +2254,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     }
 }
 
+#[derive(Debug)]
 struct ExprContext<'a> {
     name: &'static str,
     scope: &'a Scope,
@@ -2331,5 +2435,30 @@ impl RelationExprExt for RelationExpr {
             body: Box::new(body),
         };
         Ok((expr, scope))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn ct(s: ScalarType) -> ColumnType {
+        ColumnType::new(s)
+    }
+
+    #[test]
+    fn find_output_type_chooses_higher_precision() {
+        use ScalarType::*;
+        let col_expected = &[
+            ([&ct(Int32), &ct(Int64)], ct(Int64)),
+            ([&ct(Int64), &ct(Int32)], ct(Int64)),
+            ([&ct(Int64), &ct(Decimal(10, 10))], ct(Decimal(10, 10))),
+            ([&ct(Int64), &ct(Float32)], ct(Float32)),
+            ([&ct(Float32), &ct(Float64)], ct(Float64)),
+        ];
+
+        for (cols, expected) in col_expected {
+            assert_eq!(find_output_type(cols).unwrap(), *expected);
+        }
     }
 }

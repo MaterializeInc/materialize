@@ -6,12 +6,12 @@
 pub mod decimal;
 pub mod regex;
 
-use std::fmt;
-
 use chrono::{NaiveDate, NaiveDateTime};
 use failure::format_err;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
+use sqlparser::ast::Interval as SqlInterval;
+use std::fmt::{self, Write};
 
 use self::decimal::Significand;
 use self::regex::Regex;
@@ -42,6 +42,10 @@ pub enum Datum {
     Date(NaiveDate),
     /// A DateTime
     Timestamp(NaiveDateTime),
+    /// A span of time
+    ///
+    /// Either a concrete number of seconds, or an abstract number of Months
+    Interval(Interval),
     /// An exact decimal number, possibly with a fractional component, with up
     /// to 38 digits of precision.
     Decimal(Significand),
@@ -164,6 +168,36 @@ impl Datum {
         }
     }
 
+    /// Get a NaiveDateTime, if we are a Date convert that into a DateTime
+    pub fn unwrap_timestamp_with_promotion(&self) -> chrono::NaiveDateTime {
+        match self {
+            Datum::Timestamp(ts) => *ts,
+            Datum::Date(d) => d.and_hms(0, 0, 0),
+            _ => panic!(
+                "Datum::unwrap_timestamp_with_promotion called on {:?}",
+                self
+            ),
+        }
+    }
+
+    pub fn unwrap_interval_months(&self) -> i64 {
+        match self {
+            Datum::Interval(Interval::Months(count)) => *count,
+            _ => panic!("Datum::unwrap_interval_months called on {:?}", self),
+        }
+    }
+
+    /// Returns `(is_positive, duration)`
+    pub fn unwrap_interval_duration(&self) -> (bool, std::time::Duration) {
+        match self {
+            Datum::Interval(Interval::Duration {
+                is_positive,
+                duration,
+            }) => (*is_positive, *duration),
+            _ => panic!("Datum::unwrap_interval_months called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_decimal(&self) -> Significand {
         match self {
             Datum::Decimal(d) => *d,
@@ -212,6 +246,8 @@ impl Datum {
             (Datum::Date(_), _) => false,
             (Datum::Timestamp(_), ScalarType::Timestamp) => true,
             (Datum::Timestamp(_), _) => false,
+            (Datum::Interval(_), ScalarType::Interval) => true,
+            (Datum::Interval(_), _) => false,
             (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
             (Datum::Decimal(_), _) => false,
             (Datum::Bytes(_), ScalarType::Bytes) => true,
@@ -282,6 +318,25 @@ impl From<Significand> for Datum {
     }
 }
 
+impl From<chrono::Duration> for Datum {
+    fn from(duration: chrono::Duration) -> Datum {
+        let n_secs = duration.num_seconds();
+        Datum::Interval(Interval::Duration {
+            is_positive: n_secs >= 0,
+            duration: std::time::Duration::new(
+                n_secs.abs() as u64,
+                (duration.num_nanoseconds().unwrap_or(0) % 1_000_000_000) as u32,
+            ),
+        })
+    }
+}
+
+impl From<SqlInterval> for Datum {
+    fn from(other: SqlInterval) -> Datum {
+        Datum::Interval(other.into())
+    }
+}
+
 impl From<String> for Datum {
     fn from(s: String) -> Datum {
         Datum::String(s)
@@ -319,6 +374,44 @@ where
     }
 }
 
+impl fmt::Display for Datum {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Datum::Null => f.write_str("null"),
+            Datum::True => f.write_str("true"),
+            Datum::False => f.write_str("false"),
+            Datum::Int32(num) => write!(f, "{}", num),
+            Datum::Int64(num) => write!(f, "{}", num),
+            Datum::Float32(num) => write!(f, "{}", num),
+            Datum::Float64(num) => write!(f, "{}", num),
+            Datum::Date(d) => write!(f, "{}", d),
+            Datum::Timestamp(t) => write!(f, "{}", t),
+            Datum::Interval(iv) => write!(f, "{}", iv),
+            Datum::Decimal(num) => write!(f, "{:?}", num),
+            Datum::Bytes(dat) => {
+                f.write_str("0x")?;
+                for b in dat.iter() {
+                    write!(f, "{:02x}", b)?;
+                }
+                Ok(())
+            }
+            Datum::String(s) => {
+                f.write_str("\"")?;
+                for c in s.chars() {
+                    if c == '"' {
+                        f.write_str("\\\"")?;
+                    } else {
+                        f.write_char(c)?;
+                    }
+                }
+                f.write_str("\"")
+            }
+            // A Regex<Regex<Regex>>? Oh my!
+            Datum::Regex(Regex(rex)) => write!(f, "/{}/", rex),
+        }
+    }
+}
+
 /// The fundamental type of a [`Datum`].
 ///
 /// A fundamental type is what is typically thought of as a type, like "Int32"
@@ -346,6 +439,10 @@ pub enum ScalarType {
     Date,
     Time,
     Timestamp,
+    /// A possibly-negative time span
+    ///
+    /// Represented by the [`Interval`] enum
+    Interval,
     Bytes,
     String,
     Regex,
@@ -379,9 +476,170 @@ impl fmt::Display for ScalarType {
             Date => f.write_str("date"),
             Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
+            Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
             Regex => f.write_str("regex"),
         }
+    }
+}
+
+/// Either a number of months, or a number of seconds
+///
+/// Inlined from [`sqlparser::ast::Interval`] so that we can impl deserialize, ord
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+pub enum Interval {
+    /// A possibly negative number of months for field types like `YEAR`
+    Months(i64),
+    /// An actual timespan, possibly negative, because why not
+    Duration {
+        is_positive: bool,
+        duration: std::time::Duration,
+    },
+}
+
+impl From<SqlInterval> for Interval {
+    fn from(other: SqlInterval) -> Interval {
+        match other {
+            SqlInterval::Months(count) => Interval::Months(count),
+            SqlInterval::Duration {
+                is_positive,
+                duration,
+            } => Interval::Duration {
+                is_positive,
+                duration,
+            },
+        }
+    }
+}
+
+/// Format an interval in a human form
+///
+/// Example outputs:
+///
+/// * 1 year
+/// * 2 years
+/// * 00
+/// * 01:00.01
+impl fmt::Display for Interval {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Interval::Months(c) => {
+                let mut c = *c;
+                if c == 0 {
+                    f.write_str("0 months")?;
+                    return Ok(());
+                }
+                if c < 0 {
+                    f.write_char('-')?;
+                }
+                c = c.abs();
+                if c >= 12 {
+                    let years = c / 12;
+                    c %= 12;
+                    write!(f, "{} year", years)?;
+                    if years > 1 {
+                        f.write_char('s')?;
+                    }
+                    if c > 0 {
+                        f.write_char(' ')?;
+                    }
+                }
+                if c > 0 {
+                    write!(f, "{} month", c)?;
+                    if c > 1 {
+                        f.write_char('s')?;
+                    }
+                }
+            }
+            Interval::Duration {
+                is_positive,
+                duration,
+            } => {
+                if !*is_positive {
+                    f.write_char('-')?;
+                }
+                let mut secs = duration.as_secs();
+                let nanos = duration.subsec_nanos();
+                let mut hours = secs / 3600;
+                let mut days = 0;
+                if hours > 0 {
+                    secs %= 3600;
+                    if hours >= 24 {
+                        days = hours / 24;
+                        hours %= 24;
+                        write!(f, "{} day", days)?;
+                        if days > 1 {
+                            f.write_char('s')?;
+                        }
+                        f.write_char(' ')?;
+                    }
+                    write!(f, "{:02}:", hours)?;
+                }
+                let minutes = secs / 60;
+                if minutes > 0 || hours > 0 || days > 0 {
+                    secs %= 60;
+                    write!(f, "{:02}:", minutes)?;
+                }
+                write!(f, "{:02}", secs)?;
+                if nanos > 0 {
+                    write!(f, ".{}", nanos)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn interval_fmt() {
+        assert_eq!(&Interval::Months(1).to_string(), "1 month");
+        assert_eq!(&Interval::Months(0).to_string(), "0 months");
+        assert_eq!(&Interval::Months(12).to_string(), "1 year");
+        assert_eq!(&Interval::Months(13).to_string(), "1 year 1 month");
+        assert_eq!(&Interval::Months(24).to_string(), "2 years");
+        assert_eq!(&Interval::Months(25).to_string(), "2 years 1 month");
+        assert_eq!(&Interval::Months(26).to_string(), "2 years 2 months");
+
+        fn dur(is_positive: bool, d: u64) -> String {
+            Interval::Duration {
+                is_positive,
+                duration: std::time::Duration::from_secs(d),
+            }
+            .to_string()
+        }
+        assert_eq!(&dur(true, 86_400 * 2), "2 days 00:00:00");
+        assert_eq!(&dur(true, 86_400 * 2 + 3_600 * 3), "2 days 03:00:00");
+        assert_eq!(
+            &dur(true, 86_400 * 2 + 3_600 * 3 + 60 * 45 + 6),
+            "2 days 03:45:06"
+        );
+        assert_eq!(
+            &dur(true, 86_400 * 2 + 3_600 * 3 + 60 * 45),
+            "2 days 03:45:00"
+        );
+        assert_eq!(&dur(true, 86_400 * 2 + 6), "2 days 00:00:06");
+        assert_eq!(&dur(true, 86_400 * 2 + 60 * 45 + 6), "2 days 00:45:06");
+        assert_eq!(&dur(true, 86_400 * 2 + 3_600 * 3 + 6), "2 days 03:00:06");
+        assert_eq!(&dur(true, 3_600 * 3 + 60 * 45 + 6), "03:45:06");
+        assert_eq!(&dur(true, 3_600 * 3 + 6), "03:00:06");
+        assert_eq!(&dur(true, 3_600 * 3), "03:00:00");
+        assert_eq!(&dur(true, 60 * 45 + 6), "45:06");
+        assert_eq!(&dur(true, 60 * 45), "45:00");
+        assert_eq!(&dur(true, 6), "06");
+
+        assert_eq!(&dur(false, 86_400 * 2 + 6), "-2 days 00:00:06");
+        assert_eq!(&dur(false, 86_400 * 2 + 60 * 45 + 6), "-2 days 00:45:06");
+        assert_eq!(&dur(false, 86_400 * 2 + 3_600 * 3 + 6), "-2 days 03:00:06");
+        assert_eq!(&dur(false, 3_600 * 3 + 60 * 45 + 6), "-03:45:06");
+        assert_eq!(&dur(false, 3_600 * 3 + 6), "-03:00:06");
+        assert_eq!(&dur(false, 3_600 * 3), "-03:00:00");
+        assert_eq!(&dur(false, 60 * 45 + 6), "-45:06");
+        assert_eq!(&dur(false, 60 * 45), "-45:00");
+        assert_eq!(&dur(false, 6), "-06");
     }
 }

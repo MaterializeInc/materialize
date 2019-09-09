@@ -1,0 +1,131 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "SQL Logic Test",
+	"patterns": [
+        { "include": "#comment" },
+        { "include": "#halt" },
+        { "include": "#hash-threshold" },
+        { "include": "#kv-batch-size" },
+        { "include": "#mode" },
+        { "include": "#onlyif" },
+        { "include": "#query" },
+        { "include": "#repeat" },
+        { "include": "#statement" },
+        { "include": "#subtest" },
+        { "include": "#user" }
+	],
+	"repository": {
+        "comment": {
+            "patterns": [{
+                "name": "comment.line.sqllogictest",
+                "match": "(^|\\G\\s+)#.*$"
+            }]
+        },
+        "halt": {
+            "match": "^halt",
+            "name": "keyword.other.sqllogictest"
+        },
+        "hash-threshold": {
+            "match": "^(hash-threshold)\\s+(\\d+)",
+            "captures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "constant.numeric.sqllogictest" }
+            }
+        },
+        "kv-batch-size": {
+            "match": "^(kv-batch-size)\\s+(\\d+)",
+            "captures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "constant.numeric.sqllogictest" }
+            }
+        },
+        "mode": {
+            "match": "^(mode)\\s+(cockroach|standard)",
+            "captures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "keyword.other.sqllogictest" }
+            }
+        },
+        "onlyif": {
+            "begin": "^(skipif|onlyif)\\s+(cockroachdb|mysql|mssql|postgresql|sqlite)",
+            "end": "$",
+            "captures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "keyword.other.sqllogictest" }
+            },
+            "patterns": [{ "include": "#comment" }]
+        },
+        "query": {
+            "begin": "^(query)\\s+(?:(error)\\s+(.*)|([A-Z]+)(?:\\s+(\\S+))?(?:\\s+(\\S+))?.*)$",
+            "end": "^----$|^$",
+            "beginCaptures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "keyword.other.sqllogictest" },
+                "3": { "name": "string.unquoted.sqllogictest" },
+                "4": { "name": "constant.other.sqllogictest" },
+                "5": {
+                    "patterns": [
+                        { "include": "#query-options-partialsort" },
+                        { "include": "#query-options-standard" }
+                    ]
+                },
+                "6": { "name": "variable.other.sqllogictest" }
+            },
+            "endCaptures": {
+                "0": { "name": "keyword.operator.sqllogictest" }
+            },
+            "patterns": [{ "include": "source.mzsql" }]
+        },
+        "query-options-standard": {
+            "match": "(colnames|nosort|rowsort|valuesort|retry)",
+            "name": "keyword.operator.sqllogictest"
+        },
+        "query-options-partialsort": {
+            "match": "(partialsort)\\(([^)]+)\\)",
+            "captures": {
+                "1": { "name": "keyword.operator.sqllogictest" },
+                "2": {
+                    "patterns": [{
+                        "match": "\\d+",
+                        "name": "constant.numeric.sqllogictest"
+                    }]
+                }
+            }
+        },
+        "repeat": {
+            "match": "^(repeat)\\s+(\\d+)",
+            "captures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "constant.numeric.sqllogictest" }
+            }
+        },
+        "statement": {
+            "begin": "(?i:^(statement)\\s+(?:(ok).*|(error)(.*)|(count)\\s+(\\d+).*))$",
+            "end": "^$",
+            "beginCaptures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "keyword.other.sqllogictest" },
+                "3": { "name": "keyword.other.sqllogictest" },
+                "4": { "name": "string.unquoted.sqllogictest" },
+                "5": { "name": "keyword.other.sqllogictest" },
+                "6": { "name": "constant.numeric.sqllogictest" }
+            },
+            "patterns": [{ "include": "source.mzsql" }]
+        },
+        "subtest": {
+            "match": "^(subtest)\\s+(\\S+)",
+            "captures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "string.unquoted.sqllogictest" }
+            }
+        },
+        "user": {
+            "match": "^(user)\\s+(\\S+)",
+            "captures": {
+                "1": { "name": "keyword.other.sqllogictest" },
+                "2": { "name": "string.unquoted.sqllogictest" }
+            }
+        }
+	},
+	"scopeName": "source.sqllogictest"
+}
