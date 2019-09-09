@@ -42,7 +42,6 @@ where
 
         let mut config = ClientConfig::new();
         config
-            .set("produce.offset.report", "true")
             .set("auto.offset.reset", "smallest")
             .set("group.id", &format!("materialize-{}", name))
             .set("enable.auto.commit", "false")
