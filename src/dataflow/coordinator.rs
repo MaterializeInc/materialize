@@ -281,18 +281,18 @@ impl CommandCoordinator {
             if entry.upper.elements() != upper {
                 // Log the change to frontiers.
                 if self.log {
-                    for time in entry.upper.elements().iter() {
-                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.to_string(),
-                            time.clone(),
-                            -1,
-                        )));
-                    }
                     for time in upper.iter() {
                         sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
                             name.to_string(),
                             time.clone(),
                             1,
+                        )));
+                    }
+                    for time in entry.upper.elements().iter() {
+                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                            name.to_string(),
+                            time.clone(),
+                            -1,
                         )));
                     }
                 }
