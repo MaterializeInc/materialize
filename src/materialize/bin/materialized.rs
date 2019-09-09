@@ -73,13 +73,7 @@ fn run() -> Result<(), failure::Error> {
     );
 
     let popts = opts.parse(&args[1..])?;
-    let cargo_version = env!("CARGO_PKG_VERSION");
-    let git_sha = env!("MZ_GIT_SHA", "");
-    let version = if git_sha.is_empty() {
-        cargo_version.into()
-    } else {
-        format!("{} ({})", cargo_version, git_sha)
-    };
+    let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("MZ_GIT_SHA"));
     if popts.opt_present("h") {
         print!("{}", opts.usage("usage: materialized [options]"));
         return Ok(());

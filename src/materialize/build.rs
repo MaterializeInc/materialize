@@ -11,9 +11,9 @@ fn main() {
         .arg("--verify")
         .arg("HEAD")
         .output();
-    let sha = match out {
-        Ok(sha) => String::from_utf8(sha.stdout[..10].to_vec()).unwrap(),
-        Err(_) => "".into(),
-    };
+    let sha = out
+        .as_ref()
+        .map(|sha| std::str::from_utf8(&sha.stdout[..10]).unwrap())
+        .expect("able to load git sha");
     println!("cargo:rustc-env=MZ_GIT_SHA={}", sha);
 }
