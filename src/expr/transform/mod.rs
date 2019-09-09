@@ -14,6 +14,7 @@ pub mod aggregation;
 pub mod branch;
 pub mod empty_map;
 pub mod fusion;
+pub mod inline_let;
 pub mod join_order;
 pub mod predicate_pushdown;
 pub mod reduction;
@@ -54,6 +55,8 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::transform::Transform>> = vec![
+            Box::new(crate::transform::branch::Branch),
+            Box::new(crate::transform::inline_let::InlineLet),
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),
             Box::new(crate::transform::reduction::UndistributeAnd),
@@ -63,7 +66,6 @@ impl Default for Optimizer {
             Box::new(crate::transform::fusion::filter::Filter),
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::empty_map::EmptyMap),
-            Box::new(crate::transform::branch::Branch),
         ];
         Self { transforms }
     }
