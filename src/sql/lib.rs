@@ -2156,6 +2156,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     }
 }
 
+#[derive(Debug)]
 struct ExprContext<'a> {
     name: &'static str,
     scope: &'a Scope,
@@ -2182,6 +2183,12 @@ struct Scope {
     items: Vec<ScopeItem>,
     // items inherited from an enclosing query
     outer_items: Vec<ScopeItem>,
+}
+#[derive(Debug)]
+enum Resolution<'a> {
+    NotFound,
+    Found((isize, &'a ScopeItem)),
+    Ambiguous,
 }
 
 impl Scope {
@@ -2219,14 +2226,10 @@ impl Scope {
     fn len(&self) -> usize {
         self.items.len()
     }
-    fn resolve<'a, Matches, Name>(
-        items: &'a Vec<ScopeItem>,
-        matches: Matches,
-        name: Name,
-    ) -> Result<(isize, &'a ScopeItem), failure::Error>
+
+    fn resolve<'a, Matches>(items: &'a Vec<ScopeItem>, matches: Matches) -> Resolution
     where
         Matches: Fn(&ScopeItemName) -> bool,
-        Name: Fn() -> String,
     {
         let mut results = items
             .iter()
@@ -2234,11 +2237,15 @@ impl Scope {
             .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
             .flatten()
             .filter(|(_, _, name)| (matches)(name));
-        match (results.next(), results.next()) {
-            (None, None) => bail!("no column named {} in scope", (name)()),
-            (Some((pos, item, _)), None) => Ok((pos as isize, item)),
-            (Some(_), Some(_)) => bail!("column name {} is ambiguous", (name)()),
-            _ => unreachable!(),
+        match results.next() {
+            None => Resolution::NotFound,
+            Some((pos, item, _name)) => {
+                if results.find(|(pos2, _item, _name)| pos != *pos2).is_none() {
+                    Resolution::Found((pos as isize, item))
+                } else {
+                    Resolution::Ambiguous
+                }
+            }
         }
     }
 
@@ -2247,11 +2254,20 @@ impl Scope {
         column_name: &str,
     ) -> Result<(isize, &'a ScopeItem), failure::Error> {
         let matches = |item: &ScopeItemName| item.column_name.as_deref() == Some(column_name);
-        let name = || column_name.to_owned();
-        Scope::resolve(&self.items, matches, name).or_else(|_| {
-            Scope::resolve(&self.outer_items, matches, name)
-                .map(|(i, item)| (i - (self.outer_items.len() as isize), item))
-        })
+        let mut resolution = Scope::resolve(&self.items, matches);
+        if let Resolution::NotFound = resolution {
+            resolution = match Scope::resolve(&self.outer_items, matches) {
+                Resolution::Found((i, item)) => {
+                    Resolution::Found((i - (self.outer_items.len() as isize), item))
+                }
+                other => other,
+            }
+        }
+        match resolution {
+            Resolution::NotFound => bail!("No column named {} in scope", column_name),
+            Resolution::Found(found) => Ok(found),
+            Resolution::Ambiguous => bail!("Column name {} is ambiguous", column_name),
+        }
     }
 
     fn resolve_table_column<'a>(
@@ -2262,11 +2278,24 @@ impl Scope {
         let matches = |item: &ScopeItemName| {
             item.table_name == table_name && item.column_name.as_deref() == Some(column_name)
         };
-        let name = || format!("{}.{}", table_name, column_name);
-        Scope::resolve(&self.items, matches, name).or_else(|_| {
-            Scope::resolve(&self.outer_items, matches, name)
-                .map(|(i, item)| (i - (self.outer_items.len() as isize), item))
-        })
+        let mut resolution = Scope::resolve(&self.items, matches);
+        if let Resolution::NotFound = resolution {
+            resolution = match Scope::resolve(&self.outer_items, matches) {
+                Resolution::Found((i, item)) => {
+                    Resolution::Found((i - (self.outer_items.len() as isize), item))
+                }
+                other => other,
+            }
+        }
+        match resolution {
+            Resolution::NotFound => {
+                bail!("No column named {}.{} in scope", table_name, column_name)
+            }
+            Resolution::Found(found) => Ok(found),
+            Resolution::Ambiguous => {
+                bail!("Column name {}.{} is ambiguous", table_name, column_name)
+            }
+        }
     }
 
     fn product(self, right: Self) -> Self {
