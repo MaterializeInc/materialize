@@ -69,8 +69,7 @@ pub enum RelationExpr {
 
 #[derive(Debug, Clone)]
 pub enum ScalarExpr {
-    /// A negative column number references a variable from the outer scope
-    Column(isize),
+    Column(ColumnRef),
     Literal(Datum),
     CallUnary {
         func: UnaryFunc,
@@ -91,6 +90,14 @@ pub enum ScalarExpr {
         els: Box<ScalarExpr>,
     },
     Exists(Box<RelationExpr>),
+}
+
+#[derive(Debug, Clone)]
+pub enum ColumnRef {
+    /// References a variable from the input relation
+    Inner(usize),
+    /// References a variable from the outer scope
+    Outer(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -394,10 +401,13 @@ impl ScalarExpr {
         use super::ScalarExpr as SS;
 
         Ok(match self {
-            Column(column) => {
-                let column = (outer_arity as isize) + column;
-                assert!(column >= 0);
-                SS::Column(column as usize)
+            Column(ColumnRef::Inner(column)) => {
+                let column = outer_arity + column;
+                SS::Column(column)
+            }
+            Column(ColumnRef::Outer(column)) => {
+                assert!(column < outer_arity);
+                SS::Column(column)
             }
             Literal(datum) => SS::Literal(datum),
             CallUnary { func, expr } => SS::CallUnary {
@@ -426,7 +436,7 @@ impl ScalarExpr {
                 }
             }
             Exists(expr) => {
-                // TODO(jamii) can optimize this using expr.used_outer_columns as key
+                // TODO(jamii) can optimize this only projecting columns of inner that are used in expr
                 let inner_name = format!("inner_{}", Uuid::new_v4());
                 let get_inner = SR::Get {
                     name: inner_name.clone(),
@@ -628,12 +638,14 @@ impl RelationExpr {
 }
 
 impl ScalarExpr {
-    pub fn columns(is: &[isize]) -> Vec<ScalarExpr> {
-        is.iter().map(|i| ScalarExpr::Column(*i)).collect()
+    pub fn columns(is: &[usize]) -> Vec<ScalarExpr> {
+        is.iter()
+            .map(|i| ScalarExpr::Column(ColumnRef::Inner(*i)))
+            .collect()
     }
 
-    pub fn column(column: isize) -> Self {
-        ScalarExpr::Column(column)
+    pub fn column(column: usize) -> Self {
+        ScalarExpr::Column(ColumnRef::Inner(column))
     }
 
     pub fn literal(datum: Datum) -> Self {

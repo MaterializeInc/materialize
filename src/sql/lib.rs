@@ -15,7 +15,8 @@ use dataflow_types::{
     SourceConnector, View,
 };
 use expr::correlated::{
-    AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, RelationExpr, ScalarExpr, UnaryFunc,
+    VariadicFunc,
 };
 use expr::like::build_like_regex_from_string;
 use failure::{bail, ensure, format_err};
@@ -697,13 +698,12 @@ impl Planner {
             for expr in &s.group_by {
                 let (expr, typ) = self.plan_expr(ctx, &expr)?;
                 match &expr {
-                    ScalarExpr::Column(i) if *i >= 0 => {
+                    ScalarExpr::Column(ColumnRef::Inner(i)) => {
                         // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
-                        let i = *i as usize;
-                        if !group_key.contains(&i) {
-                            group_key.push(i);
-                            select_all_mapping.insert(i, group_scope.len());
-                            group_scope.items.push(from_scope.items[i].clone());
+                        if !group_key.contains(i) {
+                            group_key.push(*i);
+                            select_all_mapping.insert(*i, group_scope.len());
+                            group_scope.items.push(from_scope.items[*i].clone());
                         }
                     }
                     _ => {
@@ -785,9 +785,8 @@ impl Planner {
                     self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
                 {
                     match &expr {
-                        ScalarExpr::Column(i)
-                            if *i >= 0
-                                && typ.name == relation_type.column_types[*i as usize].name =>
+                        ScalarExpr::Column(ColumnRef::Inner(i))
+                            if typ.name == relation_type.column_types[*i].name =>
                         {
                             // Note that if the column name changed (i.e.,
                             // because the select item was aliased), then we
@@ -798,7 +797,7 @@ impl Planner {
                             // this optimization is actually important, perhaps
                             // it should become a proper query transformation
                             // and we shouldn't bother trying to do it here.
-                            project_key.push(*i as usize);
+                            project_key.push(*i);
                         }
                         _ => {
                             project_key.push(group_scope.len() + project_exprs.len());
@@ -901,7 +900,7 @@ impl Planner {
                     let j = select_all_mapping.get(&i).ok_or_else(|| {
                         format_err!("internal error: unable to resolve scope item {:?}", item)
                     })?;
-                    Ok((ScalarExpr::Column(*j as isize), item.typ.clone()))
+                    Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), item.typ.clone()))
                 })
                 .collect::<Result<Vec<_>, _>>(),
             SelectItem::QualifiedWildcard(table_name) => {
@@ -920,7 +919,7 @@ impl Planner {
                         let j = select_all_mapping.get(&i).ok_or_else(|| {
                             format_err!("internal error: unable to resolve scope item {:?}", item)
                         })?;
-                        Ok((ScalarExpr::Column(*j as isize), item.typ.clone()))
+                        Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), item.typ.clone()))
                     })
                     .collect::<Result<Vec<_>, _>>()
             }
@@ -1081,18 +1080,32 @@ impl Planner {
         for column_name in column_names {
             let (l, l_item) = left_scope.resolve_column(column_name)?;
             let (r, r_item) = right_scope.resolve_column(column_name)?;
+            let l = match l {
+                ColumnRef::Inner(l) => l,
+                ColumnRef::Outer(_) => bail!(
+                    "Internal error: name {} in USING resolved to outer column",
+                    column_name
+                ),
+            };
+            let r = match r {
+                ColumnRef::Inner(r) => r,
+                ColumnRef::Outer(_) => bail!(
+                    "Internal error: name {} in USING resolved to outer column",
+                    column_name
+                ),
+            };
             let typ = l_item.typ.union(&r_item.typ)?;
             join_exprs.push(ScalarExpr::CallBinary {
                 func: BinaryFunc::Eq,
-                expr1: Box::new(ScalarExpr::Column(l)),
-                expr2: Box::new(ScalarExpr::Column((left_scope.len() as isize) + r)),
+                expr1: Box::new(ScalarExpr::Column(ColumnRef::Inner(l))),
+                expr2: Box::new(ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r))),
             });
             map_exprs.push((
                 ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![
-                        ScalarExpr::Column(l),
-                        ScalarExpr::Column((left_scope.len() as isize) + r),
+                        ScalarExpr::Column(ColumnRef::Inner(l)),
+                        ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
                     ],
                 },
                 typ.clone(),
@@ -1101,7 +1114,7 @@ impl Planner {
             names.extend(r_item.names.clone());
             new_items.push(ScopeItem { names, typ });
             dropped_columns.insert(l);
-            dropped_columns.insert((left_scope.len() as isize) + r);
+            dropped_columns.insert(left_scope.len() + r);
         }
         let project_key =
             // coalesced join columns
@@ -1110,7 +1123,7 @@ impl Planner {
             // other columns that weren't joined
             .chain(
                 (0..(left_scope.len() + right_scope.len()))
-                    .filter(|i| !dropped_columns.contains(&(*i as isize))),
+                    .filter(|i| !dropped_columns.contains(i)),
             )
             .collect::<Vec<_>>();
         let mut both_scope = left_scope.product(right_scope);
@@ -1253,7 +1266,7 @@ impl Planner {
                         sql_func,
                     )
                 })?;
-                Ok((ScalarExpr::Column(*i as isize), typ.clone()))
+                Ok((ScalarExpr::Column(ColumnRef::Inner(*i)), typ.clone()))
             } else {
                 bail!("aggregate functions are not allowed in {}", ctx.name);
             }
@@ -1847,10 +1860,10 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
                 expr1,
                 expr2,
             } => {
-                if let (Column(l), Column(r)) = (&**expr1, &**expr2) {
-                    if *l >= 0 && *r >= 0 {
-                        equivalences.push((*l as usize, *r as usize));
-                    }
+                if let (Column(ColumnRef::Inner(l)), Column(ColumnRef::Inner(r))) =
+                    (&**expr1, &**expr2)
+                {
+                    equivalences.push((*l, *r));
                 }
             }
             CallBinary {
@@ -2184,10 +2197,11 @@ struct Scope {
     // items inherited from an enclosing query
     outer_items: Vec<ScopeItem>,
 }
+
 #[derive(Debug)]
 enum Resolution<'a> {
     NotFound,
-    Found((isize, &'a ScopeItem)),
+    Found((usize, &'a ScopeItem)),
     Ambiguous,
 }
 
@@ -2227,75 +2241,64 @@ impl Scope {
         self.items.len()
     }
 
-    fn resolve<'a, Matches>(items: &'a Vec<ScopeItem>, matches: Matches) -> Resolution
+    fn resolve<'a, Matches>(
+        &'a self,
+        matches: Matches,
+        name_in_error: &str,
+    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error>
     where
         Matches: Fn(&ScopeItemName) -> bool,
     {
-        let mut results = items
-            .iter()
-            .enumerate()
-            .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
-            .flatten()
-            .filter(|(_, _, name)| (matches)(name));
-        match results.next() {
-            None => Resolution::NotFound,
-            Some((pos, item, _name)) => {
-                if results.find(|(pos2, _item, _name)| pos != *pos2).is_none() {
-                    Resolution::Found((pos as isize, item))
-                } else {
-                    Resolution::Ambiguous
+        let resolve_over = |items: &'a [ScopeItem]| {
+            let mut results = items
+                .iter()
+                .enumerate()
+                .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
+                .flatten()
+                .filter(|(_, _, name)| (matches)(name));
+            match results.next() {
+                None => Resolution::NotFound,
+                Some((pos, item, _name)) => {
+                    if results.find(|(pos2, _item, _name)| pos != *pos2).is_none() {
+                        Resolution::Found((pos, item))
+                    } else {
+                        Resolution::Ambiguous
+                    }
                 }
             }
+        };
+        match resolve_over(&self.items) {
+            Resolution::NotFound => match resolve_over(&self.outer_items) {
+                Resolution::NotFound => bail!("No column named {} in scope", name_in_error),
+                Resolution::Found((pos, item)) => Ok((ColumnRef::Outer(pos), item)),
+                Resolution::Ambiguous => bail!("Column name {} is ambiguous", name_in_error),
+            },
+            Resolution::Found((pos, item)) => Ok((ColumnRef::Inner(pos), item)),
+            Resolution::Ambiguous => bail!("Column name {} is ambiguous", name_in_error),
         }
     }
 
     fn resolve_column<'a>(
         &'a self,
         column_name: &str,
-    ) -> Result<(isize, &'a ScopeItem), failure::Error> {
-        let matches = |item: &ScopeItemName| item.column_name.as_deref() == Some(column_name);
-        let mut resolution = Scope::resolve(&self.items, matches);
-        if let Resolution::NotFound = resolution {
-            resolution = match Scope::resolve(&self.outer_items, matches) {
-                Resolution::Found((i, item)) => {
-                    Resolution::Found((i - (self.outer_items.len() as isize), item))
-                }
-                other => other,
-            }
-        }
-        match resolution {
-            Resolution::NotFound => bail!("No column named {} in scope", column_name),
-            Resolution::Found(found) => Ok(found),
-            Resolution::Ambiguous => bail!("Column name {} is ambiguous", column_name),
-        }
+    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
+        self.resolve(
+            |item: &ScopeItemName| item.column_name.as_deref() == Some(column_name),
+            column_name,
+        )
     }
 
     fn resolve_table_column<'a>(
         &'a self,
         table_name: &str,
         column_name: &str,
-    ) -> Result<(isize, &'a ScopeItem), failure::Error> {
-        let matches = |item: &ScopeItemName| {
-            item.table_name == table_name && item.column_name.as_deref() == Some(column_name)
-        };
-        let mut resolution = Scope::resolve(&self.items, matches);
-        if let Resolution::NotFound = resolution {
-            resolution = match Scope::resolve(&self.outer_items, matches) {
-                Resolution::Found((i, item)) => {
-                    Resolution::Found((i - (self.outer_items.len() as isize), item))
-                }
-                other => other,
-            }
-        }
-        match resolution {
-            Resolution::NotFound => {
-                bail!("No column named {}.{} in scope", table_name, column_name)
-            }
-            Resolution::Found(found) => Ok(found),
-            Resolution::Ambiguous => {
-                bail!("Column name {}.{} is ambiguous", table_name, column_name)
-            }
-        }
+    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
+        self.resolve(
+            |item: &ScopeItemName| {
+                item.table_name == table_name && item.column_name.as_deref() == Some(column_name)
+            },
+            &format!("{}.{}", table_name, column_name),
+        )
     }
 
     fn product(self, right: Self) -> Self {
