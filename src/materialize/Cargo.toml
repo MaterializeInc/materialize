@@ -19,6 +19,7 @@ byteorder = "1.3"
 bytes = "0.4"
 cast = "0.2"
 ccsr = { path = "../ccsr" }
+comm = { path = "../comm" }
 csv = "1.1"
 chrono = "0.4"
 dataflow = { path = "../dataflow" }
@@ -46,7 +47,7 @@ simplelog = "0.7"
 smallvec = "0.6"
 sql = { path = "../sql" }
 state_machine_future = { git = "https://github.com/benesch/state_machine_future.git", branch = "context-generic-bounds" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow.git", features = ["bincode"] }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.1"
 tokio-threadpool = "0.1"
 url = "1.7.2"

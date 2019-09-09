@@ -80,7 +80,8 @@ impl<S> SniffingStream<S> {
     /// by the `SniffingStream`.
     ///
     /// The `SniffingStream` is consumed by this method.
-    pub fn into_sniffed(self) -> SniffedStream<S> {
+    pub fn into_sniffed(mut self) -> SniffedStream<S> {
+        self.buf.truncate(self.len);
         SniffedStream {
             inner: self.inner,
             buf: self.buf,
@@ -126,6 +127,16 @@ pub struct SniffedStream<S> {
     inner: S,
     buf: SmallVec<[u8; INLINE_BUF_LEN]>,
     off: usize,
+}
+
+impl<S> SniffedStream<S> {
+    /// Consumes the `SniffedStream`, returning the underlying stream. Be very
+    /// careful with this function! The underlying stream pointer will have been
+    /// advanced past any bytes sniffed from the [`SniffingStream`] that created
+    /// this [`SniffedStream`].
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
 }
 
 impl<S> fmt::Debug for SniffedStream<S> {

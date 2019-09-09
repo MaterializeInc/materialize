@@ -106,30 +106,19 @@ fn run() -> Result<(), failure::Error> {
         bail!("process ID {} is not between 0 and {}", process, processes);
     }
 
-    let timely_config = if processes > 1 {
-        let addresses = match address_file {
-            None => (0..processes)
-                .map(|i| format!("localhost:{}", 2101 + i))
-                .collect(),
-            Some(address_file) => read_address_file(&address_file, processes)?,
-        };
-        timely::Configuration::Cluster {
-            threads,
-            process,
-            addresses,
-            report: false,
-            log_fn: Box::new(|_| None),
-        }
-    } else if threads > 1 {
-        timely::Configuration::Process(threads)
-    } else {
-        timely::Configuration::Thread
+    let addresses = match address_file {
+        None => (0..processes)
+            .map(|i| format!("127.0.0.1:{}", 6875 + i))
+            .collect(),
+        Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
     materialize::server::serve(materialize::server::Config {
         logging_granularity,
         version,
-        timely: timely_config,
+        threads,
+        process,
+        addresses,
     })
 }
 

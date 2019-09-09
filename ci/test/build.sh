@@ -90,6 +90,8 @@ ci_collapsed_heading "Preparing Docker context"
                     + if (.target.kind != "lib") then ".\(.target.name)" else "" end)
         }
         | "\(.executable) \(.cwd) \(.slug)"' test-binaries.json)
+    mkdir misc/docker/ci-cargo-test/tests/examples
+    cp target/debug/examples/pingpong misc/docker/ci-cargo-test/tests/examples
     cp target/release/testdrive misc/docker/ci-cargo-test/tests
     cp misc/shlib/* misc/docker/ci-cargo-test/shlib
 

@@ -2,6 +2,7 @@
 members = [
     "fuzz",
     "src/ccsr",
+    "src/comm",
     "src/dataflow",
     "src/dataflow-bin",
     "src/dataflow-types",
@@ -31,3 +32,6 @@ futures = { git = "ssh://git@github.com/MaterializeInc/futures-rs.git", branch =
 #
 # [patch."ssh://git@github.com/MaterializeInc/sqlparser.git"]
 # sqlparser = { path = "../sqlparser" }
+
+[patch."https://github.com/TimelyDataflow/timely-dataflow"]
+timely = { git = "https://github.com/frankmcsherry/timely-dataflow", branch = "tpc_openup"}
