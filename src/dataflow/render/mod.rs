@@ -25,6 +25,7 @@ use super::sink;
 use super::source;
 use crate::arrangement::{manager::WithDrop, TraceManager};
 use crate::exfiltrate::Exfiltrator;
+use crate::logging::materialized::{Logger, MaterializedEvent};
 
 mod context;
 use context::{ArrangementFlavor, Context};
@@ -35,6 +36,7 @@ pub fn build_dataflow<A: Allocate>(
     worker: &mut TimelyWorker<A>,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
+    logger: &mut Option<Logger>,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
@@ -113,6 +115,14 @@ pub fn build_dataflow<A: Allocate>(
                             context
                                 .collections
                                 .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
+
+                            // Log the dependency.
+                            if let Some(logger) = logger {
+                                logger.log(MaterializedEvent::DataflowDependency {
+                                    dataflow: view.name.clone(),
+                                    source: name.clone(),
+                                });
+                            }
 
                             tokens.push((button.press_on_drop(), token));
                         }

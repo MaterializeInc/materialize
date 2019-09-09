@@ -297,6 +297,7 @@ where
                         self.inner,
                         &mut self.local_input_mux,
                         self.exfiltrator.clone(),
+                        &mut self.materialized_logger,
                     );
                 }
             }

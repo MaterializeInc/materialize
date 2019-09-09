@@ -23,6 +23,8 @@ pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifi
 pub enum MaterializedEvent {
     /// Dataflow command, true for create and false for drop.
     Dataflow(String, bool),
+    /// Dataflow depends on a named source of data.
+    DataflowDependency { dataflow: String, source: String },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Available frontier information for views.
@@ -78,12 +80,14 @@ pub fn construct<A: Allocate>(
         use timely::dataflow::channels::pact::Pipeline;
         let mut input = demux.new_input(&logs, Pipeline);
         let (mut dataflow_out, dataflow) = demux.new_output();
+        let (mut dependency_out, dependency) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
+                let mut dependency = dependency_out.activate();
                 let mut peek = peek_out.activate();
                 let mut frontier = frontier_out.activate();
 
@@ -91,6 +95,7 @@ pub fn construct<A: Allocate>(
                     data.swap(&mut demux_buffer);
 
                     let mut dataflow_session = dataflow.session(&time);
+                    let mut dependency_session = dependency.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut frontier_session = frontier.session(&time);
 
@@ -100,6 +105,9 @@ pub fn construct<A: Allocate>(
                         match datum {
                             MaterializedEvent::Dataflow(name, is_create) => {
                                 dataflow_session.give((name, worker, is_create, time_ns))
+                            }
+                            MaterializedEvent::DataflowDependency { dataflow, source } => {
+                                dependency_session.give((dataflow, source, worker, time_ns))
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
                                 peek_session.give((peek, worker, is_install, time_ns))
@@ -121,6 +129,16 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map(|(name, worker)| vec![Datum::String(name), Datum::Int64(worker as i64)])
+            .arrange_by_self();
+
+        let dependency_current = dependency
+            .map(move |(dataflow, source, worker, time_ns)| {
+                let time_ms = (time_ns / 1_000_000) as Timestamp;
+                let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
+                ((dataflow, source, worker), time_ms, 1)
+            })
+            .as_collection()
+            .map(|(dataflow, source, worker)| vec![Datum::String(dataflow), Datum::String(source), Datum::Int64(worker as i64)])
             .arrange_by_self();
 
         let peek_current = peek
@@ -203,6 +221,10 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Materialized(MaterializedLog::DataflowCurrent),
                 dataflow_current.trace,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::DataflowDependency),
+                dependency_current.trace,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::FrontierCurrent),

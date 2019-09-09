@@ -58,6 +58,7 @@ pub enum DifferentialLog {
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub enum MaterializedLog {
     DataflowCurrent,
+    DataflowDependency,
     FrontierCurrent,
     PeekCurrent,
     PeekDuration,
@@ -76,6 +77,7 @@ impl LogVariant {
             LogVariant::Differential(DifferentialLog::Arrangement),
             LogVariant::Differential(DifferentialLog::Sharing),
             LogVariant::Materialized(MaterializedLog::DataflowCurrent),
+            LogVariant::Materialized(MaterializedLog::DataflowDependency),
             LogVariant::Materialized(MaterializedLog::FrontierCurrent),
             LogVariant::Materialized(MaterializedLog::PeekCurrent),
             LogVariant::Materialized(MaterializedLog::PeekDuration),
@@ -95,6 +97,7 @@ impl LogVariant {
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
             LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => "logs_dataflow_dependency",
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers",
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations",
@@ -170,6 +173,13 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationType {
                 column_types: vec![
                     ColumnType::new(ScalarType::String).name("name"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                ],
+            },
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::String).name("dataflow"),
+                    ColumnType::new(ScalarType::String).name("source"),
                     ColumnType::new(ScalarType::Int64).name("worker"),
                 ],
             },
