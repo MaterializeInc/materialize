@@ -131,7 +131,7 @@ mod tests {
         let listener = TcpListener::bind(&addr)?;
         let addr = listener.local_addr()?;
         drop(listener);
-        // Hope tthat no one else will be listening on this port now.
+        // Hope that no one else will be listening on this port now.
         let mut runtime = Runtime::new()?;
         match runtime.block_on(TryConnectFuture::<TcpStream>::new(
             addr,
