@@ -11,7 +11,6 @@ use crate::RelationExpr;
 use repr::RelationType;
 
 pub mod aggregation;
-pub mod branch;
 pub mod empty_map;
 pub mod fusion;
 pub mod inline_let;
@@ -55,7 +54,6 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::transform::Transform>> = vec![
-            Box::new(crate::transform::branch::Branch),
             Box::new(crate::transform::inline_let::InlineLet),
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),

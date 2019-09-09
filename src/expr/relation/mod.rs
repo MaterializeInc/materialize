@@ -128,13 +128,6 @@ pub enum RelationExpr {
         /// A source collection.
         right: Box<RelationExpr>,
     },
-    Branch {
-        name: String,
-        input: Box<RelationExpr>,
-        key: Vec<usize>,
-        branch: Box<RelationExpr>,
-        default: Option<Vec<(Datum, ColumnType)>>,
-    },
 }
 
 impl RelationExpr {
@@ -224,19 +217,6 @@ impl RelationExpr {
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap(),
                 }
-            }
-            RelationExpr::Branch {
-                input, key, branch, ..
-            } => {
-                RelationType {
-                    column_types: input
-                        .typ()
-                        .column_types
-                        .into_iter()
-                        .chain(branch.typ().column_types.drain(key.len()..))
-                        .collect(),
-                }
-                // TODO(jamii) check type of default too
             }
         }
     }
@@ -455,7 +435,7 @@ impl RelationExpr {
             RelationExpr::Get { name, .. } => {
                 out.push(&name);
             }
-            RelationExpr::Let { name, .. } | RelationExpr::Branch { name, .. } => {
+            RelationExpr::Let { name, .. } => {
                 out.retain(|n| n != name);
             }
             _ => (),
@@ -502,10 +482,6 @@ impl RelationExpr {
             RelationExpr::Union { left, right } => {
                 f(left);
                 f(right);
-            }
-            RelationExpr::Branch { input, branch, .. } => {
-                f(input);
-                f(branch);
             }
         }
     }
@@ -559,10 +535,6 @@ impl RelationExpr {
             RelationExpr::Union { left, right } => {
                 f(left);
                 f(right);
-            }
-            RelationExpr::Branch { input, branch, .. } => {
-                f(input);
-                f(branch);
             }
         }
     }
@@ -721,7 +693,6 @@ impl RelationExpr {
             RelationExpr::Union { left, right } => {
                 to_braced_doc("Union {", to_doc!(left, ",", Space, right), "}")
             }
-            RelationExpr::Branch { .. } => unimplemented!(),
         };
 
         // INVARIANT: RelationExpr's document is grouped. Much of the code above depends on this!
