@@ -48,7 +48,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 {"before": null, "after": null}
 
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
+  USING SCHEMA '${schema}'
 
 > PEEK data
 2019-08-27 "2019-08-27 00:17:09.000877"

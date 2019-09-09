@@ -6,87 +6,87 @@
 mode cockroach
 
 statement ok
-create table foo (a integer)
+CREATE TABLE foo (a integer)
 
 statement ok
-insert into foo values (37)
+INSERT INTO foo VALUES (37)
 
 statement ok
-create table bar (a integer, b integer)
+CREATE TABLE bar (a integer, b integer)
 
 statement ok
-insert into bar values (37, 42), (37, 42);
+INSERT INTO bar VALUES (37, 42), (37, 42);
 
 query II
-select *, count(*) from foo group by a
+SELECT *, count(*) FROM foo GROUP BY a
 ----
 37 1
 
 query II
-select *, count(*) from foo group by a, a, a+1
+SELECT *, count(*) FROM foo GROUP BY a, a, a+1
 ----
 37 1
 
 query I
-select a from foo group by a, foo.a
+SELECT a FROM foo GROUP BY a, foo.a
 ----
 37
 
 statement error no column named bar.b in scope
-select *, count(*) from bar group by a;
+SELECT *, count(*) FROM bar GROUP BY a;
 
 query II
-select a, count(*) from bar group by a;
+SELECT a, count(*) FROM bar GROUP BY a;
 ----
 37 2
 
 query II
-select * from bar group by a, b;
+SELECT * FROM bar GROUP BY a, b;
 ----
 37 42
 
 statement ok
-create table quux(a integer);
+CREATE TABLE quux (a integer);
 
 query I
-select count(a) from quux where a < 0;
+SELECT count(a) FROM quux WHERE a < 0;
 ----
 0
 
 query I
-select count(*) from quux where a < 0;
+SELECT count(*) FROM quux WHERE a < 0;
 ----
 0
 
 statement ok
-insert into quux values (37), (null)
+INSERT INTO quux VALUES (37), (NULL)
 
 query I
-select count(*) from quux;
+SELECT count(*) FROM quux;
 ----
 2
 
 query I
-select count(a) from quux
+SELECT count(a) FROM quux
 ----
 1
 
 query I
-select count(a) from quux where a < 0
+SELECT count(a) FROM quux WHERE a < 0
 ----
 0
 
 query I
-select count(*) from quux where a < 0
+SELECT count(*) FROM quux WHERE a < 0
 ----
 0
 
 query I
-select sum(a) from quux
+SELECT sum(a) FROM quux
 ----
 37
 
 query I
-select sum(a) from quux where a < 0
+SELECT sum(a) FROM quux WHERE a < 0
 ----
 NULL

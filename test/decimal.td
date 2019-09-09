@@ -42,7 +42,8 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+> CREATE SOURCE data FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}'
+  USING SCHEMA '${schema}'
 
 > PEEK data
 17.94
