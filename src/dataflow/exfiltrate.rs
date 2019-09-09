@@ -3,8 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use dataflow_types::{Exfiltration, Update};
 use ore::mpmc::Mux;
@@ -22,7 +21,7 @@ pub enum ExfiltratorConfig {
 #[derive(Clone, Debug)]
 pub enum Exfiltrator {
     Local(Mux<u32, Exfiltration>),
-    Remote(Rc<RpcClient>),
+    Remote(Arc<RpcClient>),
 }
 
 impl Exfiltrator {
@@ -58,14 +57,14 @@ impl From<ExfiltratorConfig> for Exfiltrator {
     fn from(c: ExfiltratorConfig) -> Exfiltrator {
         match c {
             ExfiltratorConfig::Local(mux) => Exfiltrator::Local(mux),
-            ExfiltratorConfig::Remote(addr) => Exfiltrator::Remote(Rc::new(RpcClient::new(addr))),
+            ExfiltratorConfig::Remote(addr) => Exfiltrator::Remote(Arc::new(RpcClient::new(addr))),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RpcClient {
-    inner: RefCell<reqwest::Client>,
+    inner: Mutex<reqwest::Client>,
     addr: String,
 }
 
@@ -77,7 +76,7 @@ impl RpcClient {
             .expect("building reqwest client failed");
 
         RpcClient {
-            inner: RefCell::new(inner),
+            inner: Mutex::new(inner),
             addr,
         }
     }
@@ -85,7 +84,8 @@ impl RpcClient {
     fn post(&self, conn_id: u32, exfiltration: Exfiltration) {
         let encoded = bincode::serialize(&exfiltration).unwrap();
         self.inner
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .post(&self.addr)
             .header("X-Materialize-Connection-Id", conn_id.to_string())
             .body(encoded)

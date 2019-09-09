@@ -19,13 +19,12 @@
 use timely::progress::frontier::Antichain;
 
 use futures::sync::mpsc::UnboundedReceiver;
-use futures::{sink, Sink};
+use futures::{sink, Async, Sink};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::rc::Rc;
 use uuid::Uuid;
 
-use crate::exfiltrate::Exfiltrator;
+use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging::materialized::MaterializedEvent;
 use crate::DataflowCommand;
 use dataflow_types::logging::LoggingConfig;
@@ -74,6 +73,18 @@ pub enum SequencedCommand {
     Shutdown,
 }
 
+/// Information from timely dataflow workers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerMessageWithMeta {
+    pub worker_id: usize,
+    pub message: WorkerMessage,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum WorkerMessage {
+    FrontierUppers(Vec<(String, Vec<Timestamp>)>),
+}
+
 /// State necessary to sequence commands and populate peek timestamps.
 pub struct CommandCoordinator {
     /// Per-view maintained state.
@@ -83,7 +94,7 @@ pub struct CommandCoordinator {
     since_updates: Vec<(String, Vec<Timestamp>)>,
     log: bool,
     optimizer: expr::transform::Optimizer,
-    exfiltrator: Rc<Exfiltrator>,
+    exfiltrator: Exfiltrator,
 }
 
 impl CommandCoordinator {
@@ -92,7 +103,7 @@ impl CommandCoordinator {
         switchboard: comm::Switchboard<C>,
         command_receiver: UnboundedReceiver<DataflowCommand>,
         logging_config: Option<&LoggingConfig>,
-        exfiltrator: Rc<Exfiltrator>,
+        exfiltrator_config: ExfiltratorConfig,
     ) -> Self
     where
         C: comm::Connection,
@@ -104,7 +115,7 @@ impl CommandCoordinator {
             log: logging_config.is_some(),
             since_updates: Vec::new(),
             optimizer: Default::default(),
-            exfiltrator,
+            exfiltrator: exfiltrator_config.into(),
         };
 
         if let Some(logging_config) = logging_config {
@@ -117,9 +128,37 @@ impl CommandCoordinator {
         coordinator
     }
 
+    pub fn run(&mut self, worker_rx: comm::mpsc::Receiver<WorkerMessageWithMeta>) {
+        // TODO(benesch): this function spins hot. Teach it to block when
+        // there's nothing to do. This `Notify` stuff below is about convincing
+        // the futures runtime to let us spin hot; it really, really wants us
+        // to be able to block.
+
+        struct DummyNotifier;
+        impl futures::executor::Notify for DummyNotifier {
+            fn notify(&self, _id: usize) {}
+        }
+        let notifier = futures::executor::NotifyHandle::from(std::sync::Arc::new(DummyNotifier));
+        let mut worker_rx = futures::executor::spawn(worker_rx);
+
+        loop {
+            self.sequence_commands();
+            self.maintenance();
+            while let Ok(Async::Ready(Some(msg))) = worker_rx.poll_stream_notify(&notifier, 0) {
+                match msg.message {
+                    WorkerMessage::FrontierUppers(updates) => {
+                        for (name, frontier) in updates {
+                            self.update_upper(&name, &frontier)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Drains commands from the receiver, sequences them, and broadcasts the
     /// sequence to all work threads.
-    pub fn sequence_commands(&mut self) {
+    fn sequence_commands(&mut self) {
         while let Ok(Some(cmd)) = self.command_receiver.try_next() {
             self.sequence_command(cmd);
         }

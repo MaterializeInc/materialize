@@ -32,7 +32,7 @@ pub trait Transform {
 /// review at some point to improve the quality, coverage, and architecture of
 /// the optimizations.
 pub struct Optimizer {
-    transforms: Vec<Box<dyn crate::transform::Transform>>,
+    transforms: Vec<Box<dyn crate::transform::Transform + Send>>,
 }
 
 impl fmt::Debug for Optimizer {
@@ -52,7 +52,7 @@ impl Optimizer {
 
 impl Default for Optimizer {
     fn default() -> Self {
-        let transforms: Vec<Box<dyn crate::transform::Transform>> = vec![
+        let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),
             Box::new(crate::transform::reduction::UndistributeAnd),

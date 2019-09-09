@@ -16,7 +16,7 @@ use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
 use futures::sync::mpsc::UnboundedReceiver;
-use futures::Future;
+use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
@@ -77,7 +77,14 @@ pub fn serve<C>(
 where
     C: comm::Connection,
 {
-    let external_cmd_rx = Mutex::new(Some(external_cmd_rx));
+    let (coord_tx, coord_rx) = switchboard.mpsc();
+    let mut coord = coordinator::CommandCoordinator::new(
+        switchboard.clone(),
+        external_cmd_rx,
+        logging_config.as_ref(),
+        exfiltrator_config.clone(),
+    );
+    std::thread::spawn(move || coord.run(coord_rx));
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
@@ -109,20 +116,6 @@ where
         .collect();
 
     timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
-        let exfiltrator = Rc::new(exfiltrator_config.clone().into());
-
-        let command_coordinator = if timely_worker.index() == 0 {
-            let external_cmd_rx = external_cmd_rx.lock().unwrap().take().unwrap();
-            Some(coordinator::CommandCoordinator::new(
-                switchboard.clone(),
-                external_cmd_rx,
-                logging_config.as_ref(),
-                Rc::clone(&exfiltrator),
-            ))
-        } else {
-            None
-        };
-
         let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
             .take()
             .unwrap()
@@ -132,11 +125,11 @@ where
         Worker {
             inner: timely_worker,
             local_input_mux: local_input_mux.clone(),
-            exfiltrator,
+            exfiltrator: Rc::new(exfiltrator_config.clone().into()),
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             logging_config: logging_config.clone(),
-            command_coordinator,
+            coord_tx: coord_tx.clone(),
             command_rx,
             materialized_logger: None,
         }
@@ -165,7 +158,7 @@ where
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
-    command_coordinator: Option<coordinator::CommandCoordinator>,
+    coord_tx: comm::mpsc::Sender<coordinator::WorkerMessageWithMeta>,
     command_rx: UnboundedReceiver<coordinator::SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
 }
@@ -254,6 +247,8 @@ where
 
         self.initialize_logging();
 
+        let mut coord_tx = self.coord_tx.connect().wait().unwrap().wait();
+
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -265,22 +260,25 @@ where
             // a command or when new Kafka messages have arrived.
             self.inner.step_or_park(None);
 
-            if let Some(coordinator) = &mut self.command_coordinator {
-                // Sequence any pending commands.
-                coordinator.sequence_commands();
-                coordinator.maintenance();
-
-                // Update upper bounds for each maintained trace.
+            // Send progress information to the coordinator.
+            {
                 let mut upper = Antichain::new();
+                let mut progress = Vec::new();
                 for name in self.traces.traces.keys() {
                     if let Some(by_self) = self.traces.get_by_self(name) {
                         by_self.clone().read_upper(&mut upper);
-                        coordinator.update_upper(name, upper.elements());
+                        progress.push((name.to_owned(), upper.elements().to_vec()));
                     }
                 }
+                coord_tx
+                    .send(coordinator::WorkerMessageWithMeta {
+                        worker_id: self.inner.index(),
+                        message: coordinator::WorkerMessage::FrontierUppers(progress),
+                    })
+                    .unwrap();
             }
 
-            // Handle any received commands
+            // Handle any received commands.
             while let Ok(Some(cmd)) = self.command_rx.try_next() {
                 if let coordinator::SequencedCommand::Shutdown = cmd {
                     shutdown = true;
