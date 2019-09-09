@@ -20,70 +20,18 @@ use timely::progress::frontier::Antichain;
 
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::{sink, Async, Sink};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging::materialized::MaterializedEvent;
-use crate::DataflowCommand;
+use crate::{
+    BroadcastToken, DataflowCommand, SequencedCommand, WorkerMessage, WorkerMessageWithMeta,
+};
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Timestamp, View};
+use dataflow_types::{Dataflow, PeekWhen, Timestamp, View};
 use expr::RelationExpr;
 use repr::Datum;
-
-pub struct BroadcastToken;
-
-impl comm::broadcast::Token for BroadcastToken {
-    type Item = SequencedCommand;
-
-    /// Returns true, to enable loopback.
-    ///
-    /// Since the coordinator lives on the same process as one set of
-    /// workers, we need to enable loopback so that broadcasts are
-    /// transmitted intraprocess and visible to those workers.
-    fn loopback() -> bool {
-        true
-    }
-}
-
-/// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum SequencedCommand {
-    /// Create a sequence of dataflows.
-    CreateDataflows(Vec<Dataflow>),
-    /// Drop the dataflows bound to these names.
-    DropDataflows(Vec<String>),
-    /// Peek at a materialized view.
-    Peek {
-        name: String,
-        timestamp: Timestamp,
-        conn_id: u32,
-        transform: RowSetFinishing,
-    },
-    /// Enable compaction in views.
-    ///
-    /// Each entry in the vector names a view and provides a frontier after which
-    /// accumulations must be correct. The workers gain the liberty of compacting
-    /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(String, Vec<Timestamp>)>),
-    /// Append a new event to the log stream.
-    AppendLog(MaterializedEvent),
-    /// Disconnect inputs, drain dataflows, and shut down timely workers.
-    Shutdown,
-}
-
-/// Information from timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerMessageWithMeta {
-    pub worker_id: usize,
-    pub message: WorkerMessage,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WorkerMessage {
-    FrontierUppers(Vec<(String, Vec<Timestamp>)>),
-}
 
 /// State necessary to sequence commands and populate peek timestamps.
 pub struct CommandCoordinator {

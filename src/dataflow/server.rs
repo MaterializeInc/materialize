@@ -40,6 +40,23 @@ use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp};
 use expr::RelationExpr;
 
+/// A [`comm::broadcast::Token`] that permits broadcasting commands to the
+/// Timely workers.
+pub struct BroadcastToken;
+
+impl comm::broadcast::Token for BroadcastToken {
+    type Item = SequencedCommand;
+
+    /// Returns true, to enable loopback.
+    ///
+    /// Since the coordinator lives on the same process as one set of
+    /// workers, we need to enable loopback so that broadcasts are
+    /// transmitted intraprocess and visible to those workers.
+    fn loopback() -> bool {
+        true
+    }
+}
+
 /// The commands that a running dataflow server can accept.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DataflowCommand {
@@ -56,6 +73,44 @@ pub enum DataflowCommand {
         relation_expr: RelationExpr,
     },
     Shutdown,
+}
+
+/// Explicit instructions for timely dataflow workers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum SequencedCommand {
+    /// Create a sequence of dataflows.
+    CreateDataflows(Vec<Dataflow>),
+    /// Drop the dataflows bound to these names.
+    DropDataflows(Vec<String>),
+    /// Peek at a materialized view.
+    Peek {
+        name: String,
+        timestamp: Timestamp,
+        conn_id: u32,
+        transform: RowSetFinishing,
+    },
+    /// Enable compaction in views.
+    ///
+    /// Each entry in the vector names a view and provides a frontier after which
+    /// accumulations must be correct. The workers gain the liberty of compacting
+    /// the corresponding maintained traces up through that frontier.
+    AllowCompaction(Vec<(String, Vec<Timestamp>)>),
+    /// Append a new event to the log stream.
+    AppendLog(MaterializedEvent),
+    /// Disconnect inputs, drain dataflows, and shut down timely workers.
+    Shutdown,
+}
+
+/// Information from timely dataflow workers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerMessageWithMeta {
+    pub worker_id: usize,
+    pub message: WorkerMessage,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum WorkerMessage {
+    FrontierUppers(Vec<(String, Vec<Timestamp>)>),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -94,7 +149,7 @@ where
     // is hard to read through.
     let command_rxs = {
         let mut rx = switchboard
-            .broadcast_rx::<coordinator::BroadcastToken>()
+            .broadcast_rx::<BroadcastToken>()
             .fanout();
         let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
         executor
@@ -158,8 +213,8 @@ where
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
-    coord_tx: comm::mpsc::Sender<coordinator::WorkerMessageWithMeta>,
-    command_rx: UnboundedReceiver<coordinator::SequencedCommand>,
+    coord_tx: comm::mpsc::Sender<WorkerMessageWithMeta>,
+    command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
 }
 
@@ -271,16 +326,16 @@ where
                     }
                 }
                 coord_tx
-                    .send(coordinator::WorkerMessageWithMeta {
+                    .send(WorkerMessageWithMeta {
                         worker_id: self.inner.index(),
-                        message: coordinator::WorkerMessage::FrontierUppers(progress),
+                        message: WorkerMessage::FrontierUppers(progress),
                     })
                     .unwrap();
             }
 
             // Handle any received commands.
             while let Ok(Some(cmd)) = self.command_rx.try_next() {
-                if let coordinator::SequencedCommand::Shutdown = cmd {
+                if let SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
                 self.handle_command(cmd);
@@ -292,9 +347,9 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: coordinator::SequencedCommand) {
+    fn handle_command(&mut self, cmd: SequencedCommand) {
         match cmd {
-            coordinator::SequencedCommand::CreateDataflows(dataflows) => {
+            SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(
@@ -313,7 +368,7 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::DropDataflows(dataflows) => {
+            SequencedCommand::DropDataflows(dataflows) => {
                 for name in &dataflows {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
@@ -322,7 +377,7 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Peek {
+            SequencedCommand::Peek {
                 name,
                 timestamp,
                 conn_id,
@@ -354,13 +409,13 @@ where
                 self.pending_peeks.push((pending_peek, trace));
             }
 
-            coordinator::SequencedCommand::AllowCompaction(list) => {
+            SequencedCommand::AllowCompaction(list) => {
                 for (name, frontier) in list {
                     self.traces.allow_compaction(&name, &frontier[..]);
                 }
             }
 
-            coordinator::SequencedCommand::AppendLog(event) => {
+            SequencedCommand::AppendLog(event) => {
                 if self.inner.index() == 0 {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(event);
@@ -368,7 +423,7 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Shutdown => {
+            SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.traces.del_all_traces();
                 self.shutdown_logging();
