@@ -32,7 +32,6 @@ use crate::arrangement::{
     manager::{KeysOnlyHandle, WithDrop},
     TraceManager,
 };
-use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
@@ -97,19 +96,21 @@ pub enum SequencedCommand {
     AllowCompaction(Vec<(String, Vec<Timestamp>)>),
     /// Append a new event to the log stream.
     AppendLog(MaterializedEvent),
+    /// Request that feedback is streamed to the provided channel.
+    EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
 
 /// Information from timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerMessageWithMeta {
+pub struct WorkerFeedbackWithMeta {
     pub worker_id: usize,
-    pub message: WorkerMessage,
+    pub message: WorkerFeedback,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum WorkerMessage {
+pub enum WorkerFeedback {
     FrontierUppers(Vec<(String, Vec<Timestamp>)>),
 }
 
@@ -124,7 +125,6 @@ pub fn serve<C>(
     process: usize,
     switchboard: comm::Switchboard<C>,
     mut executor: impl tokio::executor::Executor + Clone + Send + Sync + 'static,
-    external_cmd_rx: UnboundedReceiver<DataflowCommand>,
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
@@ -132,15 +132,6 @@ pub fn serve<C>(
 where
     C: comm::Connection,
 {
-    let (coord_tx, coord_rx) = switchboard.mpsc();
-    let mut coord = coordinator::CommandCoordinator::new(
-        switchboard.clone(),
-        external_cmd_rx,
-        logging_config.as_ref(),
-        exfiltrator_config.clone(),
-    );
-    std::thread::spawn(move || coord.run(coord_rx));
-
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
     //
@@ -148,9 +139,7 @@ where
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
     let command_rxs = {
-        let mut rx = switchboard
-            .broadcast_rx::<BroadcastToken>()
-            .fanout();
+        let mut rx = switchboard.broadcast_rx::<BroadcastToken>().fanout();
         let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
         executor
             .spawn(
@@ -184,7 +173,7 @@ where
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             logging_config: logging_config.clone(),
-            coord_tx: coord_tx.clone(),
+            feedback_tx: None,
             command_rx,
             materialized_logger: None,
         }
@@ -213,7 +202,7 @@ where
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
-    coord_tx: comm::mpsc::Sender<WorkerMessageWithMeta>,
+    feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
 }
@@ -302,8 +291,6 @@ where
 
         self.initialize_logging();
 
-        let mut coord_tx = self.coord_tx.connect().wait().unwrap().wait();
-
         let mut shutdown = false;
         while !shutdown {
             // Enable trace compaction.
@@ -316,7 +303,7 @@ where
             self.inner.step_or_park(None);
 
             // Send progress information to the coordinator.
-            {
+            if let Some(feedback_tx) = &mut self.feedback_tx {
                 let mut upper = Antichain::new();
                 let mut progress = Vec::new();
                 for name in self.traces.traces.keys() {
@@ -325,11 +312,12 @@ where
                         progress.push((name.to_owned(), upper.elements().to_vec()));
                     }
                 }
-                coord_tx
-                    .send(WorkerMessageWithMeta {
+                feedback_tx
+                    .send(WorkerFeedbackWithMeta {
                         worker_id: self.inner.index(),
-                        message: WorkerMessage::FrontierUppers(progress),
+                        message: WorkerFeedback::FrontierUppers(progress),
                     })
+                    .wait()
                     .unwrap();
             }
 
@@ -421,6 +409,13 @@ where
                         logger.log(event);
                     }
                 }
+            }
+
+            SequencedCommand::EnableFeedback(tx) => {
+                self.feedback_tx =
+                    Some(Box::new(tx.connect().wait().unwrap().sink_map_err(|err| {
+                        panic!("error sending worker feedback: {}", err)
+                    })));
             }
 
             SequencedCommand::Shutdown => {

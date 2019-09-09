@@ -23,10 +23,10 @@ use futures::{sink, Async, Sink};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
-use crate::logging::materialized::MaterializedEvent;
-use crate::{
-    BroadcastToken, DataflowCommand, SequencedCommand, WorkerMessage, WorkerMessageWithMeta,
+use dataflow::exfiltrate::{Exfiltrator, ExfiltratorConfig};
+use dataflow::logging::materialized::MaterializedEvent;
+use dataflow::{
+    BroadcastToken, DataflowCommand, SequencedCommand, WorkerFeedback,
 };
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{Dataflow, PeekWhen, Timestamp, View};
@@ -34,7 +34,8 @@ use expr::RelationExpr;
 use repr::Datum;
 
 /// State necessary to sequence commands and populate peek timestamps.
-pub struct CommandCoordinator {
+pub struct CommandCoordinator<C> {
+    switchboard: comm::Switchboard<C>,
     /// Per-view maintained state.
     views: HashMap<String, ViewState>,
     broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
@@ -45,20 +46,24 @@ pub struct CommandCoordinator {
     exfiltrator: Exfiltrator,
 }
 
-impl CommandCoordinator {
+impl<C> CommandCoordinator<C>
+where
+    C: comm::Connection,
+{
     /// Creates a new command coordinator from input and output command queues.
-    pub fn new<C>(
+    pub fn new(
         switchboard: comm::Switchboard<C>,
         command_receiver: UnboundedReceiver<DataflowCommand>,
         logging_config: Option<&LoggingConfig>,
         exfiltrator_config: ExfiltratorConfig,
     ) -> Self
-    where
-        C: comm::Connection,
     {
+        let broadcast_tx = switchboard.broadcast_tx::<BroadcastToken>().wait();
+
         let mut coordinator = Self {
+            switchboard,
             views: HashMap::new(),
-            broadcast_tx: switchboard.broadcast_tx::<BroadcastToken>().wait(),
+            broadcast_tx,
             command_receiver,
             log: logging_config.is_some(),
             since_updates: Vec::new(),
@@ -76,7 +81,14 @@ impl CommandCoordinator {
         coordinator
     }
 
-    pub fn run(&mut self, worker_rx: comm::mpsc::Receiver<WorkerMessageWithMeta>) {
+    pub fn run(&mut self) {
+        let (feedback_tx, feedback_rx) = self.switchboard.mpsc();
+
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::EnableFeedback(feedback_tx),
+        );
+
         // TODO(benesch): this function spins hot. Teach it to block when
         // there's nothing to do. This `Notify` stuff below is about convincing
         // the futures runtime to let us spin hot; it really, really wants us
@@ -87,14 +99,14 @@ impl CommandCoordinator {
             fn notify(&self, _id: usize) {}
         }
         let notifier = futures::executor::NotifyHandle::from(std::sync::Arc::new(DummyNotifier));
-        let mut worker_rx = futures::executor::spawn(worker_rx);
+        let mut feedback_rx = futures::executor::spawn(feedback_rx);
 
         loop {
             self.sequence_commands();
             self.maintenance();
-            while let Ok(Async::Ready(Some(msg))) = worker_rx.poll_stream_notify(&notifier, 0) {
+            while let Ok(Async::Ready(Some(msg))) = feedback_rx.poll_stream_notify(&notifier, 0) {
                 match msg.message {
-                    WorkerMessage::FrontierUppers(updates) => {
+                    WorkerFeedback::FrontierUppers(updates) => {
                         for (name, frontier) in updates {
                             self.update_upper(&name, &frontier)
                         }
@@ -354,6 +366,7 @@ impl CommandCoordinator {
     /// which the associated trace is certain to produce valid results. For times greater
     /// or equal to some element of the since frontier the accumulation will be correct,
     /// and for other times no such guarantee holds.
+    #[allow(dead_code)]
     pub fn update_since(&mut self, name: &str, since: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             entry.since.clear();
@@ -362,6 +375,7 @@ impl CommandCoordinator {
     }
 
     /// The since frontier of a maintained view, if it exists.
+    #[allow(dead_code)]
     pub fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.since)
     }
@@ -452,6 +466,7 @@ pub struct ViewState {
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
+    #[allow(dead_code)]
     since: Antichain<Timestamp>,
     /// Compaction delay.
     ///

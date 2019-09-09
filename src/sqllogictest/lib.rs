@@ -28,7 +28,6 @@ use dataflow_types::{
     SourceConnector, Update,
 };
 use materialize::queue::{translate_plan, SqlResponse, WaitFor};
-use ore::collections::CollectionExt;
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
@@ -673,7 +672,6 @@ struct FullState {
     session: Session,
     conn_id: u32,
     dataflow_command_sender: UnboundedSender<DataflowCommand>,
-    worker0_thread: std::thread::Thread,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: Mux<Uuid, LocalInput>,
@@ -746,25 +744,32 @@ impl FullState {
         let logging_config = None;
         let planner = Planner::new(logging_config);
         let session = Session::default();
-        let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
         let local_input_mux = Mux::default();
         let dataflow_results_mux = Mux::default();
         let process_id = 0;
         let (switchboard, runtime) = comm::Switchboard::local()?;
+        let exfiltrator_config = dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone());
         let dataflow_workers = dataflow::serve(
             vec![None],
             NUM_TIMELY_WORKERS,
             process_id,
-            switchboard,
+            switchboard.clone(),
             runtime.executor(),
-            dataflow_command_receiver,
             local_input_mux.clone(),
-            dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone()),
+            exfiltrator_config.clone(),
             None, // disable logging
-        )
-        .unwrap();
+        ).unwrap();
 
-        let worker0_thread = dataflow_workers.guards().into_first().thread().clone();
+        let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
+        let mut coord = materialize::queue::coordinator::CommandCoordinator::new(
+            switchboard.clone(),
+            dataflow_command_receiver,
+            None, // disable logging
+            exfiltrator_config,
+        );
+        // TODO(benesch): don't leak this thread.
+        std::thread::spawn(move || coord.run());
+
         Ok(FullState {
             _runtime: runtime,
             postgres,
@@ -777,7 +782,6 @@ impl FullState {
             local_input_uuids: HashMap::new(),
             local_input_mux,
             dataflow_results_mux,
-            worker0_thread,
         })
     }
 
@@ -793,7 +797,6 @@ impl FullState {
         self.dataflow_command_sender
             .unbounded_send(dataflow_command.clone())
             .unwrap();
-        self.worker0_thread.unpark();
         receiver
     }
 
@@ -1247,8 +1250,6 @@ impl Drop for FullState {
             self.dataflow_command_sender
                 .unbounded_send(DataflowCommand::Shutdown),
         );
-
-        self.worker0_thread.unpark();
     }
 }
 

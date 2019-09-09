@@ -18,10 +18,9 @@ use tokio::prelude::*;
 use crate::pgwire;
 use crate::queue;
 use comm::Switchboard;
-use dataflow::{self, DataflowCommand, ExfiltratorConfig};
+use dataflow::{self, ExfiltratorConfig};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Exfiltration;
-use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use ore::netio;
@@ -95,13 +94,15 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
     let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<queue::Command>();
-    let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded::<DataflowCommand>();
     let dataflow_results_mux = Mux::default();
 
     // Extract timely dataflow parameters.
     let num_timely_workers = config.num_timely_workers();
     let is_primary = config.process == 0;
-    let post_address = format!("http://{}/api/dataflow-results", config.addresses[0]);
+    let exfiltrator_config = ExfiltratorConfig::Remote(format!(
+        "http://{}/api/dataflow-results",
+        config.addresses[0]
+    ));
 
     // Initialize pgwire / http listener.
     let listen_addr = SocketAddr::new(
@@ -173,26 +174,24 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
 
     // Construct timely dataflow instance.
     let local_input_mux = Mux::default();
-    let dd_workers = dataflow::serve(
+    let _dd_workers = dataflow::serve(
         dataflow_conns,
         config.threads,
         config.process,
-        switchboard,
+        switchboard.clone(),
         runtime.executor(),
-        dataflow_command_receiver,
         local_input_mux.clone(),
-        ExfiltratorConfig::Remote(post_address),
+        exfiltrator_config.clone(),
         logging_config.clone(),
     )
     .map_err(|s| format_err!("{}", s))?;
 
     // Initialize command queue and sql planner
-    let worker0_thread = dd_workers.guards().into_first().thread();
     queue::transient::serve(
+        switchboard,
         logging_config.as_ref(),
+        exfiltrator_config,
         cmdq_rx,
-        dataflow_command_sender,
-        worker0_thread.clone(),
     );
 
     runtime

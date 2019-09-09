@@ -15,6 +15,7 @@ use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sql::{Plan, Session};
 use uuid::Uuid;
 
+pub mod coordinator;
 pub mod transient;
 
 /// Incoming raw SQL from users.

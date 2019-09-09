@@ -5,19 +5,31 @@
 
 //! A trivial single-node command queue that doesn't store state at all.
 
-use dataflow::DataflowCommand;
+use dataflow::ExfiltratorConfig;
 use dataflow_types::logging::LoggingConfig;
-use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::sync::mpsc::UnboundedReceiver;
 use futures::Stream;
 
 use super::{translate_plan, Command, Response};
+use crate::queue::coordinator;
 
-pub fn serve(
+pub fn serve<C>(
+    switchboard: comm::Switchboard<C>,
     logging_config: Option<&LoggingConfig>,
+    exfiltrator_config: ExfiltratorConfig,
     cmd_rx: UnboundedReceiver<Command>,
-    dataflow_command_sender: UnboundedSender<DataflowCommand>,
-    worker0_thread: std::thread::Thread,
-) {
+) where
+    C: comm::Connection,
+{
+    let (dataflow_cmd_tx, dataflow_cmd_rx) = futures::sync::mpsc::unbounded();
+    let mut coord = coordinator::CommandCoordinator::new(
+        switchboard.clone(),
+        dataflow_cmd_rx,
+        logging_config,
+        exfiltrator_config,
+    );
+    std::thread::spawn(move || coord.run());
+
     let mut planner = sql::Planner::new(logging_config);
     std::thread::spawn(move || {
         for msg in cmd_rx.wait() {
@@ -33,12 +45,10 @@ pub fn serve(
                 };
 
             if let Some(dataflow_command) = dataflow_command {
-                dataflow_command_sender
+                dataflow_cmd_tx
                     .unbounded_send(dataflow_command.clone())
                     // if the dataflow server has gone down, just explode
                     .unwrap();
-
-                worker0_thread.unpark();
             }
 
             // The client connection may disappear at any time, so the error
