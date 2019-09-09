@@ -37,7 +37,7 @@ log = "0.4"
 metastore = { path = "../metastore" }
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
-parse_duration = "1.0.2"
+parse_duration = "1.0.3"
 pdqselect = "0.1.0"
 rand = "0.7"
 regex = "1.2.1"
