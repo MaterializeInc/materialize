@@ -29,11 +29,11 @@ empty_tree=$(git hash-object -t tree /dev/null)
 files=$(git diff --ignore-submodules=all --name-only "$empty_tree")
 
 copyright_files=$(grep -vE \
-    -e '.gitignore' \
+    -e '.(git|vscode)ignore' \
     -e '.gitmodules' \
     -e '(^|/)Cargo\.lock$' \
     -e '(^|/)Cargo\.toml$' \
-    -e '^LICENSE$' \
+    -e '(^|/)LICENSE$' \
     -e '^rust-toolchain$' \
     -e '^rustfmt.toml$' \
     -e '\.md$' \
