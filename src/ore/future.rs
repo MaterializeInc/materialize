@@ -9,8 +9,8 @@
 //! the [`futures`](futures) crate.
 
 use futures::future::{Either, Map};
-use futures::try_ready;
-use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::stream::{Fuse, FuturesUnordered, StreamFuture};
+use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use std::io;
 use std::marker::PhantomData;
 
@@ -204,6 +204,24 @@ pub trait StreamExt: Stream {
     {
         Recv { inner: Some(self) }
     }
+
+    /// Flattens a stream of streams into one continuous stream, but does not
+    /// exhaust each incoming stream before moving on to the next.
+    ///
+    /// In other words, this is a combination of [`Stream::flatten`] and
+    /// [`Stream::select`]. The streams may be interleaved in any order, but
+    /// the ordering within one of the underlying streams is preserved.
+    fn select_flatten(self) -> SelectFlatten<Self>
+    where
+        Self: Stream + Sized,
+        Self::Item: Stream,
+        <Self::Item as Stream>::Error: From<Self::Error>,
+    {
+        SelectFlatten {
+            incoming_streams: self.fuse(),
+            active_streams: FuturesUnordered::new(),
+        }
+    }
 }
 
 impl<S: Stream> StreamExt for S {}
@@ -250,6 +268,82 @@ impl<S: Stream<Error = io::Error>> Future for Recv<S> {
         };
         let stream = self.inner.take().unwrap();
         item.map(|v| Async::Ready((v, stream)))
+    }
+}
+
+/// The stream returned by [`StreamExt::select_flatten`].
+#[derive(Debug)]
+pub struct SelectFlatten<S>
+where
+    S: Stream,
+{
+    /// The stream of incoming streams.
+    incoming_streams: Fuse<S>,
+    /// The set of currently active streams that have been received from
+    /// `incoming_streams`. Streams are removed from the set when they are
+    /// closed.
+    active_streams: FuturesUnordered<StreamFuture<S::Item>>,
+}
+
+impl<S> Stream for SelectFlatten<S>
+where
+    S: Stream,
+    S::Item: Stream,
+    <S::Item as Stream>::Error: From<S::Error>,
+{
+    type Item = <S::Item as Stream>::Item;
+    type Error = <S::Item as Stream>::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        // First, drain the incoming stream queue.
+        loop {
+            match self.incoming_streams.poll() {
+                Ok(Async::Ready(Some(stream))) => {
+                    // New stream available. Add it to the set of active
+                    // streams. Then look for more incoming streams.
+                    self.active_streams.push(stream.into_future())
+                }
+                Ok(Async::Ready(None)) | Ok(Async::NotReady) => {
+                    // The incoming stream queue is drained, at least for now.
+                    // Move on to checking for ready items.
+                    break;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        // Second, try to find an item from a ready stream.
+        loop {
+            match self.active_streams.poll() {
+                Ok(Async::Ready(Some((Some(item), stream)))) => {
+                    // An active stream yielded an item. Arrange to receive the
+                    // next item from the stream, then propagate the received
+                    // item.
+                    self.active_streams.push(stream.into_future());
+                    return Ok(Async::Ready(Some(item)));
+                }
+                Ok(Async::Ready(Some((None, _stream)))) => {
+                    // An active stream yielded a `None`, which means it has
+                    // terminated. Drop it on the floor. Then go around the loop
+                    // to see if another stream is ready.
+                }
+                Ok(Async::Ready(None)) => {
+                    if self.incoming_streams.is_done() {
+                        // There are no remaining active streams, and our
+                        // incoming stream queue is done too. We're good and
+                        // truly finished, so propagate the termination event.
+                        return Ok(Async::Ready(None));
+                    } else {
+                        // There are no remaining active streams, but we might
+                        // yet get another stream from the incoming stream
+                        // queue. Indicate that we're not yet ready.
+                        return Ok(Async::NotReady);
+                    }
+                }
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err((err, _stream)) => return Err(err),
+            }
+        }
     }
 }
 
