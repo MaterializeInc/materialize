@@ -57,18 +57,35 @@ pub fn build_dataflow<A: Allocate>(
                 }
             };
 
-            use crate::arrangement::manager::KeysOnlySpine;
+            use crate::arrangement::manager::{KeysOnlySpine, KeysValsSpine};
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
-            let arrangement = stream
+            let stream_clone = stream.clone();
+            let arrangement_by_self = stream_clone
                 .as_collection()
-                // TODO: We might choose to arrange by a more effective key.
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
             manager.set_by_self(
                 src.name.to_owned(),
-                WithDrop::new(arrangement.trace, capability),
+                WithDrop::new(arrangement_by_self.trace, capability.clone()),
+            );
+
+            let pkey_indices_clone = src.pkey_indices.clone();
+            let arrangement_by_key = stream
+                .as_collection()
+                .map(move |x| {
+                    (
+                        pkey_indices_clone.iter().map(|i| x[*i].clone()).collect(),
+                        x,
+                    )
+                })
+                .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
+
+            manager.set_by_keys(
+                src.name.to_owned(),
+                &src.pkey_indices,
+                WithDrop::new(arrangement_by_key.trace, capability),
             );
         }
         Dataflow::Sink(sink) => {
