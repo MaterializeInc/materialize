@@ -130,7 +130,6 @@ impl RelationExpr {
         use super::RelationExpr as SR;
         use super::ScalarExpr as SS;
         if let super::RelationExpr::Get { .. } = &get_outer {
-            ()
         } else {
             panic!(
                 "get_outer: expected a RelationExpr::Get, found {:?}",
