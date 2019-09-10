@@ -1,0 +1,45 @@
+{
+    "name": "materialize",
+    "displayName": "Materialize",
+    "description": "Language support for Materialize developers",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.38.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "testdrive",
+                "aliases": ["Testdrive"],
+                "extensions": [".td"],
+                "configuration": "./testdrive.lang.json"
+            },
+            {
+                "id": "mzsql",
+                "aliases": ["Materialize SQL"],
+                "extensions": [".mzsql"],
+                "configuration": "./mzsql.lang.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "testdrive",
+                "scopeName": "source.testdrive",
+                "path": "./syntaxes/testdrive.tmLanguage.json"
+            },
+            {
+                "scopeName": "testdrive-sql.injection",
+                "injectTo": ["source.testdrive", "source.mzsql"],
+                "path": "./syntaxes/testdrive-sql.injection.json"
+            },
+            {
+                "language": "mzsql",
+                "scopeName": "source.mzsql",
+                "path": "./syntaxes/mzsql.tmLanguage.json"
+            }
+        ]
+    }
+}

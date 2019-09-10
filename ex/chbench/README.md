@@ -82,19 +82,7 @@ some materialized views!
 
 ```shell session
 $ docker-compose run cli
-# TODO(benesch): figure out how to make CREATE SOURCES work.
-CREATE SOURCE warehouse FROM 'kafka://kafka:9092/mysql.tpcch.warehouse' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE district FROM 'kafka://kafka:9092/mysql.tpcch.district' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE customer FROM 'kafka://kafka:9092/mysql.tpcch.customer' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE history FROM 'kafka://kafka:9092/mysql.tpcch.history' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE neworder FROM 'kafka://kafka:9092/mysql.tpcch.neworder' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE order FROM 'kafka://kafka:9092/mysql.tpcch.order' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE orderline FROM 'kafka://kafka:9092/mysql.tpcch.orderline' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE item FROM 'kafka://kafka:9092/mysql.tpcch.item' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE stock FROM 'kafka://kafka:9092/mysql.tpcch.stock' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE nation FROM 'kafka://kafka:9092/mysql.tpcch.nation' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE supplier FROM 'kafka://kafka:9092/mysql.tpcch.supplier' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-CREATE SOURCE region FROM 'kafka://kafka:9092/mysql.tpcch.region' USING SCHEMA REGISTRY 'http://schema-registry:8081';
+CREATE SOURCES LIKE 'mysql.tpcch.%' FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';
 
 CREATE VIEW q01 as SELECT
         ol_number,
@@ -104,7 +92,7 @@ CREATE VIEW q01 as SELECT
         avg(ol_amount) as avg_amount,
         count(*) as count_order
 FROM
-        orderline
+        mysql_tpcch_orderline
 WHERE
         ol_delivery_d > date '1998-12-01'
 GROUP BY
@@ -123,3 +111,15 @@ $ docker-compose run cli watch-sql "PEEK q01"
 
 [CH-benCHmark]: https://db.in.tum.de/research/projects/CHbenCHmark/index.shtml?lang=en
 [docker-compose]: https://docs.docker.com/compose/
+
+## Using Docker for Mac
+
+You should run this demo on an EC2 VM or Linux machine. Should you want to run
+this demo on a Mac laptop, you'll want to increase memory available to Docker
+Engine using the following steps:
+
+1. Open Docker for Mac's preferences window
+2. Go to the "Advanced" section.
+3. Slide the "Memory" slider to at least 8 GiB.
+4. Click "Apply and Restart".
+5. Continue with the `docker-compose` steps listed above.

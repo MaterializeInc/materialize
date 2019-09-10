@@ -101,11 +101,13 @@ where
                             if ms >= *cap.time() {
                                 cap.downgrade(&ms)
                             } else {
+                                let cur = *cap.time();
                                 error!(
-                                    "{}: fast-forwarding out-of-order Kafka timestamp from {} to {}",
+                                    "{}: fast-forwarding out-of-order Kafka timestamp {}ms ({} -> {})",
                                     name,
+                                    cur - ms,
                                     ms,
-                                    *cap.time()
+                                    cur,
                                 );
                             };
 

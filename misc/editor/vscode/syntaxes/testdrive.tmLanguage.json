@@ -1,0 +1,92 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Testdrive",
+	"patterns": [
+        { "include": "#comment" },
+        { "include": "#command" },
+        { "include": "#json" },
+        { "include": "#sql" },
+        { "include": "#string" }
+	],
+	"repository": {
+        "comment": {
+            "patterns": [{
+                "name": "comment.line.number-sign.testdrive",
+                "match": "^#.*$"
+            }]
+        },
+        "command": {
+            "patterns": [{
+                "name": "meta.command",
+                "begin": "^(\\$)\\s*(\\S+)?",
+                "end": "^(?=[^ ])",
+                "beginCaptures": {
+                    "1": { "name": "keyword.operator.testdrive" },
+                    "2": { "name": "storage.type.testdrive" }
+                },
+                "patterns": [
+                    { "include": "#command-arg-name" },
+                    { "include": "#json" },
+                    { "include": "#number" },
+                    { "include": "#variable" },
+                    { "include": "#symbol" }
+                ]
+            }]
+        },
+        "command-arg-name": {
+            "patterns": [{
+                "contentName": "variable.parameter.testdrive",
+                "begin": "\\s(?=\\S)",
+                "end": "="
+            }]
+        },
+        "number": {
+            "patterns": [{
+                "name": "constant.numeric.testdrive",
+                "match": "\\b-?(\\d*\\.)?\\d+\\b"
+            }]
+        },
+        "json": {
+            "patterns": [{
+                "begin": "{",
+                "end": "}",
+                "patterns": [{ "include": "source.json" }]
+            }]
+        },
+        "sql": {
+            "patterns": [{
+                "begin": "^(>|!)",
+                "end": "^(?=[^ ])",
+                "beginCaptures": {
+                    "1": { "name": "keyword.operator.testdrive" }
+                },
+                "patterns": [{ "include": "source.mzsql" }]
+            }]
+        },
+		"string": {
+			"name": "string.quoted.double.testdrive",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.testdrive",
+					"match": "\\\\\""
+				}
+			]
+        },
+        "symbol": {
+            "name": "string.unquoted.testdrive",
+            "begin": "\\S",
+            "end": "\\S"
+        },
+        "variable": {
+            "name": "variable.other.bracket.testdrive",
+            "begin": "\\${",
+            "end": "}",
+            "captures": {
+                "0": { "name": "punctuation.definition.variable.testdrive" }
+            }
+        }
+	},
+	"scopeName": "source.testdrive"
+}

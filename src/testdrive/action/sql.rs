@@ -59,7 +59,7 @@ impl Action for SqlAction {
         let max = match self.stmt {
             // TODO(benesch): this is horrible. PEEK needs to learn to wait
             // until it's up to date.
-            Statement::Peek { .. } => 7,
+            Statement::Peek { .. } | Statement::Query { .. } => 7,
             _ => 0,
         };
         let mut i = 0;

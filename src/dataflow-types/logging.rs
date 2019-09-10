@@ -52,6 +52,7 @@ pub enum TimelyLog {
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub enum DifferentialLog {
     Arrangement,
+    Sharing,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
@@ -73,6 +74,7 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Elapsed),
             LogVariant::Timely(TimelyLog::Histogram),
             LogVariant::Differential(DifferentialLog::Arrangement),
+            LogVariant::Differential(DifferentialLog::Sharing),
             LogVariant::Materialized(MaterializedLog::DataflowCurrent),
             LogVariant::Materialized(MaterializedLog::FrontierCurrent),
             LogVariant::Materialized(MaterializedLog::PeekCurrent),
@@ -91,6 +93,7 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
             LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
+            LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers",
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks",
@@ -155,6 +158,13 @@ impl LogVariant {
                     ColumnType::new(ScalarType::Int64).name("worker"),
                     ColumnType::new(ScalarType::Int64).name("records"),
                     ColumnType::new(ScalarType::Int64).name("batches"),
+                ],
+            },
+            LogVariant::Differential(DifferentialLog::Sharing) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::Int64).name("operator"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                    ColumnType::new(ScalarType::Int64).name("count"),
                 ],
             },
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationType {

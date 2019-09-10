@@ -2,6 +2,7 @@
 members = [
     "fuzz",
     "src/ccsr",
+    "src/comm",
     "src/dataflow",
     "src/dataflow-bin",
     "src/dataflow-types",

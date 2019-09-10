@@ -24,19 +24,27 @@ use std::sync::Mutex;
 /// struct Discarder;
 ///
 /// impl io::Write for Discarder {
-///     fn write(&mut self, buf: &[u8]) -> io::Result<usize> { Ok(buf.len()) }
-///     fn flush(&mut self) -> io::Result<()> { Ok(()) }
+///     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+///         Ok(buf.len())
+///     }
+///     fn flush(&mut self) -> io::Result<()> {
+///         Ok(())
+///     }
 /// }
 ///
 /// let stderr: Box<io::Write + Send> = Box::new(io::stderr());
 /// let lottery = Lottery::new(stderr, || Box::new(Discarder));
 /// crossbeam::thread::scope(|thread_scope| {
-///     (0..5).into_iter()
-///         .map(|_| thread_scope.spawn(|_| {
-///             write!(lottery.draw(), "Can you hear me?");
-///         }))
+///     (0..5)
+///         .into_iter()
+///         .map(|_| {
+///             thread_scope.spawn(|_| {
+///                 write!(lottery.draw(), "Can you hear me?");
+///             })
+///         })
 ///         .for_each(|handle| handle.join().unwrap());
-/// }).unwrap()
+/// })
+/// .unwrap()
 /// ```
 #[derive(Debug)]
 pub struct Lottery<T, F>

@@ -9,6 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+chrono = "0.4"
 failure = "0.1.5"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 regex = "1.2.1"

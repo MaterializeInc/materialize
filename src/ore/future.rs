@@ -10,11 +10,19 @@
 
 use futures::future::{Either, Map};
 use futures::try_ready;
-use futures::{Async, Future, Poll, Stream};
+use futures::{Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
 use std::io;
+use std::marker::PhantomData;
+
+pub mod sync;
 
 /// Extension methods for futures.
 pub trait FutureExt {
+    /// Boxes this future.
+    fn boxed(self) -> Box<dyn Future<Item = Self::Item, Error = Self::Error> + Send>
+    where
+        Self: Future + Send + 'static;
+
     /// Wraps this future an [`Either`] future, with this future becoming the
     /// left variant.
     fn left<U>(self) -> Either<Self, U>
@@ -64,6 +72,13 @@ impl<T> FutureExt for T
 where
     T: Future,
 {
+    fn boxed(self) -> Box<dyn Future<Item = T::Item, Error = T::Error> + Send>
+    where
+        T: Send + 'static,
+    {
+        Box::new(self)
+    }
+
     fn left<U>(self) -> Either<T, U> {
         Either::A(self)
     }
@@ -235,5 +250,30 @@ impl<S: Stream<Error = io::Error>> Future for Recv<S> {
         };
         let stream = self.inner.take().unwrap();
         item.map(|v| Async::Ready((v, stream)))
+    }
+}
+
+/// Constructs a sink that consumes its input and sends it nowhere.
+pub fn dev_null<T, E>() -> DevNull<T, E> {
+    DevNull(PhantomData, PhantomData)
+}
+
+/// A sink that consumes its input and sends it nowhere.
+///
+/// Primarily useful as a base sink when folding multiple sinks into one using
+/// [`futures::Stream::fanout`].
+#[derive(Debug)]
+pub struct DevNull<T, E>(PhantomData<T>, PhantomData<E>);
+
+impl<T, E> Sink for DevNull<T, E> {
+    type SinkItem = T;
+    type SinkError = E;
+
+    fn start_send(&mut self, _: T) -> StartSend<Self::SinkItem, Self::SinkError> {
+        Ok(AsyncSink::Ready)
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        Ok(Async::Ready(()))
     }
 }

@@ -20,19 +20,7 @@ $ set foo-schema={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "a", "type": ["null", "long"]}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -44,7 +32,8 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
 $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE foo FROM 'kafka://${testdrive.kafka-addr}/testdrive-foo-${testdrive.seed}' USING SCHEMA '${foo-schema}'
+> CREATE SOURCE foo FROM 'kafka://${testdrive.kafka-addr}/testdrive-foo-${testdrive.seed}'
+  USING SCHEMA '${foo-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM foo JOIN foo as foo2 USING (a);

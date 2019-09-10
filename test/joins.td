@@ -21,20 +21,7 @@ $ set names-schema={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "num", "type": "long"},
-              {"name": "name", "type": "string"}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -61,20 +48,7 @@ $ set mods-schema={
           "null"
         ]
       },
-      {
-        "name": "after",
-        "type": [
-          {
-            "name": "row",
-            "type": "record",
-            "fields": [
-              {"name": "num", "type": "long"},
-              {"name": "mod", "type": "string"}
-            ]
-          },
-          "null"
-        ]
-      }
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
@@ -89,9 +63,11 @@ $ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
 $ kafka-ingest format=avro topic=mods schema=${mods-schema} timestamp=2
 {"before": null, "after": null}
 
-> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}' USING SCHEMA '${names-schema}'
+> CREATE SOURCE names FROM 'kafka://${testdrive.kafka-addr}/testdrive-names-${testdrive.seed}'
+  USING SCHEMA '${names-schema}'
 
-> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}' USING SCHEMA '${mods-schema}'
+> CREATE SOURCE mods FROM 'kafka://${testdrive.kafka-addr}/testdrive-mods-${testdrive.seed}'
+  USING SCHEMA '${mods-schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
   SELECT * FROM names JOIN mods USING (num);
@@ -165,7 +141,8 @@ num mod
 2 even
 
 > CREATE MATERIALIZED VIEW test9 AS
-  SELECT foo.mod, foo.num, bar.name FROM names as bar, mods as foo WHERE bar.num = foo.num AND foo.mod = 'even';
+  SELECT foo.mod, foo.num, bar.name FROM names as bar, mods as foo
+  WHERE bar.num = foo.num AND foo.mod = 'even';
 
 > PEEK test9;
 mod num name
