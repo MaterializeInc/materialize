@@ -208,4 +208,23 @@ impl LogVariant {
             },
         }
     }
+    /// Reports the primary keys for each logged collection.
+    pub fn primary_key(&self) -> Option<Vec<usize>> {
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => Some(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Channels) => Some(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Messages) => Some(vec![0]),
+            LogVariant::Timely(TimelyLog::Shutdown) => Some(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Text) => None,
+            LogVariant::Timely(TimelyLog::Elapsed) => Some(vec![0]),
+            LogVariant::Timely(TimelyLog::Histogram) => Some(vec![0]),
+            LogVariant::Differential(DifferentialLog::Arrangement) => Some(vec![0, 1]),
+            LogVariant::Differential(DifferentialLog::Sharing) => Some(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => Some(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => None,
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => None,
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => Some(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => Some(vec![0, 1]),
+        }
+    }
 }
