@@ -681,7 +681,13 @@ impl Planner {
                 }
                 Ok(expr.unwrap())
             }
-            SetExpr::Query { .. } => bail!("subqueries are not yet supported"),
+            SetExpr::Query(query) => {
+                let (expr, transform) = self.plan_query(query, outer_scope)?;
+                if transform != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                }
+                Ok(expr)
+            }
         }
     }
 
