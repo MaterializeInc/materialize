@@ -10,6 +10,7 @@ pub mod func;
 use self::func::AggregateFunc;
 use crate::pretty_pretty::{to_braced_doc, to_tightly_braced_doc};
 use crate::ScalarExpr;
+use failure::ResultExt;
 use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -215,6 +216,7 @@ impl RelationExpr {
                         .zip(right_typ.column_types.iter())
                         .map(|(l, r)| l.union(r))
                         .collect::<Result<Vec<_>, _>>()
+                        .with_context(|e| format!("{}\nIn {:#?}", e, self))
                         .unwrap(),
                 }
             }
