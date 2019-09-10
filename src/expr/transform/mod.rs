@@ -19,11 +19,31 @@ pub mod predicate_pushdown;
 pub mod reduction;
 pub mod split_predicates;
 
-pub trait Transform {
+pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
     ///
     /// Arguably the metadata *shouldn't* change, but we're new here.
     fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType);
+}
+
+#[derive(Debug)]
+pub struct Fixpoint {
+    transforms: Vec<Box<dyn crate::transform::Transform>>,
+}
+
+impl Transform for Fixpoint {
+    fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+        for _ in 0..100 {
+            let original = relation.clone();
+            for transform in &self.transforms {
+                transform.transform(relation, &relation.typ());
+            }
+            if *relation == original {
+                return;
+            }
+        }
+        panic!("Fixpoint looped 100 times! {:#?} {:#?}", self, relation);
+    }
 }
 
 /// A naive optimizer for relation expressions.
@@ -32,14 +52,9 @@ pub trait Transform {
 /// set that were sufficient to get some of TPC-H up and working. It is worth a
 /// review at some point to improve the quality, coverage, and architecture of
 /// the optimizations.
+#[derive(Debug)]
 pub struct Optimizer {
     transforms: Vec<Box<dyn crate::transform::Transform>>,
-}
-
-impl fmt::Debug for Optimizer {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Optimizer({} transforms)", self.transforms.len())
-    }
 }
 
 impl Optimizer {
@@ -59,8 +74,12 @@ impl Default for Optimizer {
             Box::new(crate::transform::reduction::DeMorgans),
             Box::new(crate::transform::reduction::UndistributeAnd),
             Box::new(crate::transform::split_predicates::SplitPredicates),
-            Box::new(crate::transform::fusion::join::Join),
-            Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
+            Box::new(crate::transform::Fixpoint {
+                transforms: vec![
+                    Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
+                    Box::new(crate::transform::fusion::join::Join),
+                ],
+            }),
             Box::new(crate::transform::fusion::filter::Filter),
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::empty_map::EmptyMap),
