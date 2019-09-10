@@ -367,7 +367,7 @@ impl RelationExpr {
                             .iter()
                             .map(|(aggregate, _)| {
                                 let (datum, scalar_type) = aggregate.func.default();
-                                let nullable = &datum == &Datum::Null;
+                                let nullable = datum == Datum::Null;
                                 (
                                     datum,
                                     ColumnType {

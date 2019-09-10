@@ -1036,6 +1036,7 @@ impl Planner {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn plan_join_constraint<'a>(
         &self,
         constraint: &'a JoinConstraint,
@@ -1119,6 +1120,7 @@ impl Planner {
     }
 
     // See page 440 of ANSI SQL 2016 spec for details on scoping of using/natural joins
+    #[allow(clippy::too_many_arguments)]
     fn plan_using_constraint(
         &self,
         column_names: &[String],
