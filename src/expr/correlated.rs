@@ -107,99 +107,6 @@ pub struct AggregateExpr {
     pub distinct: bool,
 }
 
-impl super::RelationExpr {
-    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    fn let_<Body>(self, body: Body) -> Result<super::RelationExpr, failure::Error>
-    where
-        Body: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
-    {
-        if let super::RelationExpr::Get { .. } = self {
-            // already done
-            body(self)
-        } else {
-            let name = format!("tmp_{}", Uuid::new_v4());
-            let get = super::RelationExpr::Get {
-                name: name.clone(),
-                typ: self.typ(),
-            };
-            let body = (body)(get)?;
-            Ok(super::RelationExpr::Let {
-                name,
-                value: Box::new(self),
-                body: Box::new(body),
-            })
-        }
-    }
-
-    /// Left-join `self` against the first columns of `keys_and_values`, using `default` for any missing rows
-    /// (Assumes `keys_and_values` doesn't contain any keys that are not in `self`)
-    fn lookup(
-        self,
-        keys_and_values: super::RelationExpr,
-        default: Vec<(Datum, ColumnType)>,
-    ) -> super::RelationExpr {
-        let keys = self;
-        keys_and_values
-            .let_(|get_keys_and_values| {
-                let keys_and_defaults = get_keys_and_values
-                    .clone()
-                    .project((0..keys.arity()).collect())
-                    .distinct()
-                    .negate()
-                    .union(keys)
-                    .map(
-                        default
-                            .iter()
-                            .map(|(datum, typ)| {
-                                (super::ScalarExpr::Literal(datum.clone()), typ.clone())
-                            })
-                            .collect(),
-                    );
-                Ok(super::RelationExpr::Union {
-                    left: Box::new(get_keys_and_values),
-                    right: Box::new(keys_and_defaults),
-                })
-            })
-            .unwrap()
-    }
-
-    /// Perform some operation using `self` and then inner-join the results with `self`.
-    /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
-    fn branch<Branch>(self, branch: Branch) -> Result<super::RelationExpr, failure::Error>
-    where
-        Branch: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
-    {
-        self.let_(|get_outer| {
-            // TODO(jamii) can optimize this by looking at what columns `branch` actually uses
-            let key = (0..get_outer.arity()).collect::<Vec<_>>();
-            let keyed_outer = get_outer.clone().project(key.clone()).distinct();
-            keyed_outer.let_(|get_keyed_outer| {
-                let branch = branch(get_keyed_outer.clone())?;
-                branch.let_(|get_branch| {
-                    let joined = super::RelationExpr::Join {
-                        inputs: vec![get_outer.clone(), get_branch.clone()],
-                        variables: key
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &k)| vec![(0, k), (1, i)])
-                            .collect(),
-                    }
-                    // throw away the right-hand copy of the key we just joined on
-                    .project(
-                        (0..get_outer.arity())
-                            .chain(
-                                get_outer.arity() + get_keyed_outer.arity()
-                                    ..get_outer.arity() + get_branch.arity(),
-                            )
-                            .collect(),
-                    );
-                    Ok(joined)
-                })
-            })
-        })
-    }
-}
-
 impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
     /// Rewrite `self` into a `super::RelationExpr` which has no correlated subqueries
@@ -694,5 +601,98 @@ impl ScalarExpr {
             then: Box::new(t),
             els: Box::new(f),
         }
+    }
+}
+
+impl super::RelationExpr {
+    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
+    fn let_<Body>(self, body: Body) -> Result<super::RelationExpr, failure::Error>
+    where
+        Body: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+    {
+        if let super::RelationExpr::Get { .. } = self {
+            // already done
+            body(self)
+        } else {
+            let name = format!("tmp_{}", Uuid::new_v4());
+            let get = super::RelationExpr::Get {
+                name: name.clone(),
+                typ: self.typ(),
+            };
+            let body = (body)(get)?;
+            Ok(super::RelationExpr::Let {
+                name,
+                value: Box::new(self),
+                body: Box::new(body),
+            })
+        }
+    }
+
+    /// Left-join `self` against the first columns of `keys_and_values`, using `default` for any missing rows
+    /// (Assumes `keys_and_values` doesn't contain any keys that are not in `self`)
+    fn lookup(
+        self,
+        keys_and_values: super::RelationExpr,
+        default: Vec<(Datum, ColumnType)>,
+    ) -> super::RelationExpr {
+        let keys = self;
+        keys_and_values
+            .let_(|get_keys_and_values| {
+                let keys_and_defaults = get_keys_and_values
+                    .clone()
+                    .project((0..keys.arity()).collect())
+                    .distinct()
+                    .negate()
+                    .union(keys)
+                    .map(
+                        default
+                            .iter()
+                            .map(|(datum, typ)| {
+                                (super::ScalarExpr::Literal(datum.clone()), typ.clone())
+                            })
+                            .collect(),
+                    );
+                Ok(super::RelationExpr::Union {
+                    left: Box::new(get_keys_and_values),
+                    right: Box::new(keys_and_defaults),
+                })
+            })
+            .unwrap()
+    }
+
+    /// Perform some operation using `self` and then inner-join the results with `self`.
+    /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
+    fn branch<Branch>(self, branch: Branch) -> Result<super::RelationExpr, failure::Error>
+    where
+        Branch: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+    {
+        self.let_(|get_outer| {
+            // TODO(jamii) can optimize this by looking at what columns `branch` actually uses
+            let key = (0..get_outer.arity()).collect::<Vec<_>>();
+            let keyed_outer = get_outer.clone().project(key.clone()).distinct();
+            keyed_outer.let_(|get_keyed_outer| {
+                let branch = branch(get_keyed_outer.clone())?;
+                branch.let_(|get_branch| {
+                    let joined = super::RelationExpr::Join {
+                        inputs: vec![get_outer.clone(), get_branch.clone()],
+                        variables: key
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &k)| vec![(0, k), (1, i)])
+                            .collect(),
+                    }
+                    // throw away the right-hand copy of the key we just joined on
+                    .project(
+                        (0..get_outer.arity())
+                            .chain(
+                                get_outer.arity() + get_keyed_outer.arity()
+                                    ..get_outer.arity() + get_branch.arity(),
+                            )
+                            .collect(),
+                    );
+                    Ok(joined)
+                })
+            })
+        })
     }
 }
