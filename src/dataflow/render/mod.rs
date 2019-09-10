@@ -55,15 +55,26 @@ pub fn build_dataflow<A: Allocate>(
                 }
             };
 
-            use crate::arrangement::manager::KeysValsSpine;
+            use crate::arrangement::manager::{KeysOnlySpine, KeysValsSpine};
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
-            let pkey_indices_clone = src.pkey_indices.clone();
-            let arrangement = stream
+            let stream_clone = stream.clone();
+            let arrangement_by_self = stream_clone
+                .as_collection()
+                .map(|x| (x, ()))
+                .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
+            manager.set_by_self(
+                src.name.to_owned(), // Clones borrowed data.
+                WithDrop::new(arrangement_by_self.trace, capability.clone()),
+            );
+
+            let pkey_indices_clone = src.pkey_indices.clone();
+            let arrangement_by_key = stream
                 .as_collection()
                 .map(move |x| {
-                    let keys: Vec<_> = x.clone()
+                    let keys: Vec<_> = x
+                        .clone()
                         .into_iter()
                         .enumerate()
                         .filter(|(i, _)| pkey_indices_clone.contains(&i))
@@ -72,9 +83,12 @@ pub fn build_dataflow<A: Allocate>(
                     (keys, x)
                 })
                 .arrange_named::<KeysValsSpine>(&format!("Arrange Keys: {}", src.name));
-          
-            manager.set_by_keys(src.name.to_owned(), &src.pkey_indices, WithDrop::new(arrangement.trace, capability));
 
+            manager.set_by_keys(
+                src.name.to_owned(),
+                &src.pkey_indices,
+                WithDrop::new(arrangement_by_key.trace, capability),
+            );
         }
         Dataflow::Sink(sink) => {
             // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
