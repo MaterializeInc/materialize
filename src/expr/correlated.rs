@@ -397,7 +397,9 @@ impl RelationExpr {
                     Ok(input.reduce(group_key, aggregates))
                 })
             }
-            Distinct { input } => outer.branch(None, |get_outer| input.applied_to(get_outer)),
+            Distinct { input } => outer.branch(None, |get_outer| {
+                Ok(input.applied_to(get_outer)?.distinct())
+            }),
             // TODO(jamii) not sure about Negate/Threshold
             Negate { input } => Ok(input.applied_to(outer)?.negate()),
             Threshold { input } => {
