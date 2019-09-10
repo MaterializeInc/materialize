@@ -112,17 +112,22 @@ impl super::RelationExpr {
     where
         Body: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
     {
-        let name = format!("tmp_{}", Uuid::new_v4());
-        let get = super::RelationExpr::Get {
-            name: name.clone(),
-            typ: self.typ(),
-        };
-        let body = (body)(get)?;
-        Ok(super::RelationExpr::Let {
-            name,
-            value: Box::new(self),
-            body: Box::new(body),
-        })
+        if let super::RelationExpr::Get { .. } = self {
+            // already done
+            body(self)
+        } else {
+            let name = format!("tmp_{}", Uuid::new_v4());
+            let get = super::RelationExpr::Get {
+                name: name.clone(),
+                typ: self.typ(),
+            };
+            let body = (body)(get)?;
+            Ok(super::RelationExpr::Let {
+                name,
+                value: Box::new(self),
+                body: Box::new(body),
+            })
+        }
     }
 
     fn branch<Branch>(
