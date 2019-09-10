@@ -72,16 +72,7 @@ pub fn build_dataflow<A: Allocate>(
             let pkey_indices_clone = src.pkey_indices.clone();
             let arrangement_by_key = stream
                 .as_collection()
-                .map(move |x| {
-                    let keys: Vec<_> = x
-                        .clone()
-                        .into_iter()
-                        .enumerate()
-                        .filter(|(i, _)| pkey_indices_clone.contains(&i))
-                        .map(|(_, e)| e)
-                        .collect();
-                    (keys, x)
-                })
+                .map(move |x| (pkey_indices_clone.iter().map(|i| x[i].clone()).collect(), x))
                 .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
 
             manager.set_by_keys(
