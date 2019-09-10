@@ -227,5 +227,4 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekDuration) => Some(vec![0, 1]),
         }
     }
-
 }
