@@ -108,6 +108,7 @@ pub struct AggregateExpr {
 }
 
 impl super::RelationExpr {
+    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
     fn let_<Body>(self, body: Body) -> Result<super::RelationExpr, failure::Error>
     where
         Body: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
@@ -130,44 +131,53 @@ impl super::RelationExpr {
         }
     }
 
-    fn branch<Branch>(
+    /// Left-join `self` against the first columns of `keys_and_values`, using `default` for any missing rows
+    /// (Assumes `keys_and_values` doesn't contain any keys that are not in `self`)
+    fn lookup(
         self,
-        default: Option<Vec<(Datum, ColumnType)>>,
-        branch: Branch,
-    ) -> Result<super::RelationExpr, failure::Error>
+        keys_and_values: super::RelationExpr,
+        default: Vec<(Datum, ColumnType)>,
+    ) -> super::RelationExpr {
+        let keys = self;
+        keys_and_values
+            .let_(|get_keys_and_values| {
+                let keys_and_defaults = get_keys_and_values
+                    .clone()
+                    .project((0..keys.arity()).collect())
+                    .distinct()
+                    .negate()
+                    .union(keys)
+                    .map(
+                        default
+                            .iter()
+                            .map(|(datum, typ)| {
+                                (super::ScalarExpr::Literal(datum.clone()), typ.clone())
+                            })
+                            .collect(),
+                    );
+                Ok(super::RelationExpr::Union {
+                    left: Box::new(get_keys_and_values),
+                    right: Box::new(keys_and_defaults),
+                })
+            })
+            .unwrap()
+    }
+
+    /// Perform some operation using `self` and then inner-join the results with `self`.
+    /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
+    fn branch<Branch>(self, branch: Branch) -> Result<super::RelationExpr, failure::Error>
     where
         Branch: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
     {
-        // TODO(jamii) can optimize this by looking at what columns `branch` uses
-        let key = (0..self.arity()).collect::<Vec<_>>();
         self.let_(|get_outer| {
+            // TODO(jamii) can optimize this by looking at what columns `branch` actually uses
+            let key = (0..get_outer.arity()).collect::<Vec<_>>();
             let keyed_outer = get_outer.clone().project(key.clone()).distinct();
             keyed_outer.let_(|get_keyed_outer| {
                 let branch = branch(get_keyed_outer.clone())?;
                 branch.let_(|get_branch| {
-                    let with_default = if let Some(default) = default {
-                        let missing_keys = get_branch
-                            .clone()
-                            .project((0..key.len()).collect())
-                            .distinct()
-                            .negate();
-                        let default_keys = get_keyed_outer.clone().union(missing_keys).map(
-                            default
-                                .iter()
-                                .map(|(datum, typ)| {
-                                    (super::ScalarExpr::Literal(datum.clone()), typ.clone())
-                                })
-                                .collect(),
-                        );
-                        super::RelationExpr::Union {
-                            left: Box::new(get_branch.clone()),
-                            right: Box::new(default_keys),
-                        }
-                    } else {
-                        get_branch.clone()
-                    };
                     let joined = super::RelationExpr::Join {
-                        inputs: vec![get_outer.clone(), with_default],
+                        inputs: vec![get_outer.clone(), get_branch.clone()],
                         variables: key
                             .iter()
                             .enumerate()
@@ -192,37 +202,49 @@ impl super::RelationExpr {
 
 impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
+    /// Rewrite `self` into a `super::RelationExpr` which has no correlated subqueries
     pub fn decorrelate(self) -> Result<super::RelationExpr, failure::Error> {
-        self.applied_to(super::RelationExpr::Constant {
+        super::RelationExpr::Constant {
             rows: vec![vec![]],
             typ: RelationType {
                 column_types: vec![],
             },
-        })
+        }
+        .let_(|get_outer| self.applied_to(get_outer))
     }
 
-    // TODO(jamii) ensure outer is always distinct? or make distinct during reduce etc?
-    fn applied_to(self, outer: super::RelationExpr) -> Result<super::RelationExpr, failure::Error> {
+    /// Evaluate `self` for each row in `outer`.
+    /// (`get_outer` should be a `Get` with no duplicate rows)
+    fn applied_to(
+        self,
+        get_outer: super::RelationExpr,
+    ) -> Result<super::RelationExpr, failure::Error> {
         use self::RelationExpr::*;
         use super::RelationExpr as SR;
         use super::ScalarExpr as SS;
+        if let super::RelationExpr::Get { .. } = &get_outer {
+            ()
+        } else {
+            panic!(
+                "get_outer: expected a RelationExpr::Get, found {:?}",
+                get_outer
+            );
+        }
         match self {
-            Constant { rows, typ } => Ok(outer.product(SR::Constant { rows, typ })),
-            Get { name, typ } => Ok(outer.product(SR::Get { name, typ })),
+            Constant { rows, typ } => Ok(get_outer.product(SR::Constant { rows, typ })),
+            Get { name, typ } => Ok(get_outer.product(SR::Get { name, typ })),
             Project { input, outputs } => {
-                let outer_arity = outer.arity();
-                let input = input.applied_to(outer)?;
-                let outputs = (0..outer_arity)
-                    .chain(outputs.into_iter().map(|i| outer_arity + i))
+                let input = input.applied_to(get_outer.clone())?;
+                let outputs = (0..get_outer.arity())
+                    .chain(outputs.into_iter().map(|i| get_outer.arity() + i))
                     .collect::<Vec<_>>();
                 Ok(input.project(outputs))
             }
             Map { input, scalars } => {
-                let outer_arity = outer.arity();
-                let mut input = input.applied_to(outer)?;
+                let mut input = input.applied_to(get_outer.clone())?;
                 for (scalar, typ) in scalars {
                     let old_arity = input.arity();
-                    let scalar = scalar.applied_to(outer_arity, &mut input)?;
+                    let scalar = scalar.applied_to(get_outer.arity(), &mut input)?;
                     let new_arity = input.arity();
                     input = input.map(vec![(scalar, typ)]);
                     if old_arity != new_arity {
@@ -233,11 +255,10 @@ impl RelationExpr {
                 Ok(input)
             }
             Filter { input, predicates } => {
-                let outer_arity = outer.arity();
-                let mut input = input.applied_to(outer)?;
+                let mut input = input.applied_to(get_outer.clone())?;
                 for predicate in predicates {
                     let old_arity = input.arity();
-                    let predicate = predicate.applied_to(outer_arity, &mut input)?;
+                    let predicate = predicate.applied_to(get_outer.arity(), &mut input)?;
                     let new_arity = input.arity();
                     input = input.filter(vec![predicate]);
                     if old_arity != new_arity {
@@ -254,163 +275,155 @@ impl RelationExpr {
                 include_left_outer,
                 include_right_outer,
             } => {
-                outer.let_(|get_outer| {
-                    let left = left.applied_to(get_outer.clone())?;
-                    left.let_(|get_left| {
-                        let right = right.applied_to(get_outer.clone())?;
-                        right.let_(|get_right| {
-                            let mut product = SR::Join {
-                                inputs: vec![get_left.clone(), get_right.clone()],
-                                variables: (0..get_outer.arity())
-                                    .map(|i| vec![(0, i), (1, i)])
-                                    .collect(),
-                            };
-                            let old_arity = product.arity();
-                            let on = on.applied_to(get_outer.arity(), &mut product)?;
-                            let mut join = product.filter(vec![on]);
-                            let new_arity = join.arity();
-                            if old_arity != new_arity {
-                                // this means we added some columns to handle subqueries, and now we need to get rid of them
-                                join = join.project((0..old_arity).collect());
+                let left = left.applied_to(get_outer.clone())?;
+                left.let_(|get_left| {
+                    let right = right.applied_to(get_outer.clone())?;
+                    right.let_(|get_right| {
+                        let mut product = SR::Join {
+                            inputs: vec![get_left.clone(), get_right.clone()],
+                            variables: (0..get_outer.arity())
+                                .map(|i| vec![(0, i), (1, i)])
+                                .collect(),
+                        };
+                        let old_arity = product.arity();
+                        let on = on.applied_to(get_outer.arity(), &mut product)?;
+                        let mut join = product.filter(vec![on]);
+                        let new_arity = join.arity();
+                        if old_arity != new_arity {
+                            // this means we added some columns to handle subqueries, and now we need to get rid of them
+                            join = join.project((0..old_arity).collect());
+                        }
+                        join.let_(|get_join| {
+                            let mut result = get_join.clone();
+                            if include_left_outer {
+                                let left_outer = get_left
+                                    .clone()
+                                    .union(
+                                        get_join
+                                            .clone()
+                                            .project(
+                                                (0..get_outer.arity() + get_left.arity()).collect(),
+                                            )
+                                            .distinct()
+                                            .negate(),
+                                    )
+                                    .map(
+                                        (0..get_right.arity())
+                                            .map(|_| {
+                                                (
+                                                    SS::Literal(Datum::Null),
+                                                    ColumnType::new(ScalarType::Null),
+                                                )
+                                            })
+                                            .collect(),
+                                    );
+                                result = result.union(left_outer);
                             }
-                            join.let_(|get_join| {
-                                let mut result = get_join.clone();
-                                if include_left_outer {
-                                    let left_outer = get_left
-                                        .clone()
-                                        .union(
-                                            get_join
-                                                .clone()
-                                                .project(
-                                                    (0..get_outer.arity() + get_left.arity())
-                                                        .collect(),
-                                                )
-                                                .distinct()
-                                                .negate(),
-                                        )
-                                        .map(
-                                            (0..get_right.arity())
-                                                .map(|_| {
-                                                    (
-                                                        SS::Literal(Datum::Null),
-                                                        ColumnType::new(ScalarType::Null),
+                            if include_right_outer {
+                                let right_outer = get_right
+                                    .clone()
+                                    .union(
+                                        get_join
+                                            .clone()
+                                            .project(
+                                                (0..get_outer.arity())
+                                                    .chain(
+                                                        get_outer.arity() + get_left.arity()
+                                                            ..get_outer.arity()
+                                                                + get_left.arity()
+                                                                + get_right.arity(),
                                                     )
-                                                })
-                                                .collect(),
-                                        );
-                                    result = result.union(left_outer);
-                                }
-                                if include_right_outer {
-                                    let right_outer = get_right
-                                        .clone()
-                                        .union(
-                                            get_join
-                                                .clone()
-                                                .project(
-                                                    (0..get_outer.arity())
-                                                        .chain(
-                                                            get_outer.arity() + get_left.arity()
-                                                                ..get_outer.arity()
-                                                                    + get_left.arity()
-                                                                    + get_right.arity(),
-                                                        )
-                                                        .collect(),
+                                                    .collect(),
+                                            )
+                                            .distinct()
+                                            .negate(),
+                                    )
+                                    .map(
+                                        (0..get_left.arity())
+                                            .map(|_| {
+                                                (
+                                                    SS::Literal(Datum::Null),
+                                                    ColumnType::new(ScalarType::Null),
                                                 )
-                                                .distinct()
-                                                .negate(),
-                                        )
-                                        .map(
-                                            (0..get_left.arity())
-                                                .map(|_| {
-                                                    (
-                                                        SS::Literal(Datum::Null),
-                                                        ColumnType::new(ScalarType::Null),
-                                                    )
-                                                })
-                                                .collect(),
-                                        )
-                                        .project(
-                                            (0..get_outer.arity())
-                                                .chain(
-                                                    get_outer.arity() + get_right.arity()
-                                                        ..get_outer.arity()
-                                                            + get_right.arity()
-                                                            + get_left.arity(),
-                                                )
-                                                .chain(
-                                                    get_outer.arity()
-                                                        ..get_outer.arity() + get_right.arity(),
-                                                )
-                                                .collect(),
-                                        );
-                                    result = result.union(right_outer);
-                                }
-                                Ok(result)
-                            })
+                                            })
+                                            .collect(),
+                                    )
+                                    .project(
+                                        (0..get_outer.arity())
+                                            .chain(
+                                                get_outer.arity() + get_right.arity()
+                                                    ..get_outer.arity()
+                                                        + get_right.arity()
+                                                        + get_left.arity(),
+                                            )
+                                            .chain(
+                                                get_outer.arity()
+                                                    ..get_outer.arity() + get_right.arity(),
+                                            )
+                                            .collect(),
+                                    );
+                                result = result.union(right_outer);
+                            }
+                            Ok(result)
                         })
                     })
                 })
             }
-            Union { left, right } => outer.branch(None, |get_outer| {
+            Union { left, right } => {
                 let left = left.applied_to(get_outer.clone())?;
                 let right = right.applied_to(get_outer.clone())?;
                 Ok(left.union(right))
-            }),
+            }
             Reduce {
                 input,
                 group_key,
                 aggregates,
             } => {
-                let default = if group_key.is_empty() {
-                    Some(
-                        aggregates
-                            .iter()
-                            .map(|(aggregate, _)| {
-                                let (datum, scalar_type) = aggregate.func.default();
-                                let nullable = datum == Datum::Null;
-                                (
-                                    datum,
-                                    ColumnType {
-                                        name: None,
-                                        nullable,
-                                        scalar_type,
-                                    },
-                                )
-                            })
-                            .collect(),
-                    )
-                } else {
-                    None
-                };
-                outer.branch(default, |get_outer| {
-                    let mut input = input.applied_to(get_outer.clone())?;
-                    let group_key = (0..get_outer.arity())
-                        .chain(group_key.iter().map(|i| get_outer.arity() + i))
-                        .collect();
-                    let aggregates = aggregates
-                        .into_iter()
-                        // TODO(jamii) how do we deal with the extra columns here?
-                        .map(|(aggregate, typ)| {
-                            Ok((aggregate.applied_to(get_outer.arity(), &mut input)?, typ))
+                let mut input = input.applied_to(get_outer.clone())?;
+                let applied_group_key = (0..get_outer.arity())
+                    .chain(group_key.iter().map(|i| get_outer.arity() + i))
+                    .collect();
+                let applied_aggregates = aggregates
+                    .clone()
+                    .into_iter()
+                    // TODO(jamii) how do we deal with the extra columns here?
+                    .map(|(aggregate, typ)| {
+                        Ok((aggregate.applied_to(get_outer.arity(), &mut input)?, typ))
+                    })
+                    .collect::<Result<Vec<_>, failure::Error>>()?;
+                let mut reduced = input.reduce(applied_group_key, applied_aggregates);
+                if group_key.is_empty() {
+                    let default = aggregates
+                        .iter()
+                        .map(|(aggregate, _)| {
+                            let (datum, scalar_type) = aggregate.func.default();
+                            let nullable = datum == Datum::Null;
+                            (
+                                datum,
+                                ColumnType {
+                                    name: None,
+                                    nullable,
+                                    scalar_type,
+                                },
+                            )
                         })
-                        .collect::<Result<Vec<_>, failure::Error>>()?;
-                    Ok(input.reduce(group_key, aggregates))
-                })
+                        .collect();
+                    reduced = get_outer.lookup(reduced, default);
+                }
+                Ok(reduced)
             }
-            Distinct { input } => outer.branch(None, |get_outer| {
-                Ok(input.applied_to(get_outer)?.distinct())
-            }),
-            // TODO(jamii) not sure about Negate/Threshold
-            Negate { input } => Ok(input.applied_to(outer)?.negate()),
-            Threshold { input } => {
-                // assumes outer doesn't have any negative counts, which is probably safe?
-                Ok(input.applied_to(outer)?.threshold())
-            }
+            Distinct { input } => Ok(input.applied_to(get_outer)?.distinct()),
+            Negate { input } => Ok(input.applied_to(get_outer)?.negate()),
+            // assumes outer doesn't have any negative counts, which is probably safe?
+            Threshold { input } => Ok(input.applied_to(get_outer)?.threshold()),
         }
     }
 }
 
 impl ScalarExpr {
+    /// Evaluate `self` for every row in `inner`
+    /// The first `outer_arity` columns of `inner` hold values from the outer query
+    /// The remaining columns of `inner` hold values from the current query
     fn applied_to(
         self,
         outer_arity: usize,
@@ -455,17 +468,8 @@ impl ScalarExpr {
                 }
             }
             Exists(expr) => {
-                // TODO(jamii) can optimize this only projecting columns of inner that are used in expr
-                let default = Some(vec![(
-                    Datum::False,
-                    ColumnType {
-                        name: None,
-                        nullable: false,
-                        scalar_type: ScalarType::Bool,
-                    },
-                )]);
-                *inner = inner.clone().branch(default, |get_inner| {
-                    Ok(expr
+                *inner = inner.take().branch(|get_inner| {
+                    let exists = expr
                         .applied_to(get_inner.clone())?
                         .project((0..get_inner.arity()).collect())
                         .map(vec![(
@@ -475,7 +479,16 @@ impl ScalarExpr {
                                 scalar_type: ScalarType::Bool,
                                 nullable: false,
                             },
-                        )]))
+                        )]);
+                    let default = vec![(
+                        Datum::False,
+                        ColumnType {
+                            name: None,
+                            nullable: false,
+                            scalar_type: ScalarType::Bool,
+                        },
+                    )];
+                    Ok(get_inner.lookup(exists, default))
                 })?;
                 SS::Column(inner.arity() - 1)
             }
