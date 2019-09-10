@@ -31,10 +31,6 @@ impl Project {
                 *outputs = outputs.iter().map(|i| outputs2[*i]).collect();
                 **input = inner.take();
             }
-
-            if outputs.is_empty() {
-                *relation = input.take();
-            }
         }
     }
 }
