@@ -332,14 +332,14 @@ impl RelationExpr {
                                         .project(
                                             (0..get_outer.arity())
                                                 .chain(
-                                                    get_outer.arity() + get_left.arity()
+                                                    get_outer.arity() + get_right.arity()
                                                         ..get_outer.arity()
-                                                            + get_left.arity()
-                                                            + get_right.arity(),
+                                                            + get_right.arity()
+                                                            + get_left.arity(),
                                                 )
                                                 .chain(
                                                     get_outer.arity()
-                                                        ..get_outer.arity() + get_left.arity(),
+                                                        ..get_outer.arity() + get_right.arity(),
                                                 )
                                                 .collect(),
                                         );
