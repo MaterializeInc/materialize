@@ -44,7 +44,6 @@ impl InlineLet {
                 }
                 _ => (),
             });
-            let mut body = (**body).clone();
             if num_gets <= 1 {
                 // if only used once, just inline it
                 body.visit_mut_pre(&mut |relation| match relation {
@@ -57,7 +56,7 @@ impl InlineLet {
                 // otherwise lift it to the top so it's out of the way
                 lets.push((name.clone(), (**value).clone()));
             }
-            *relation = body;
+            *relation = body.take();
             // might be another Let in the body so have to recur explicitly here
             self.action(relation, metadata, lets);
         }

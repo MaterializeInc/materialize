@@ -5,8 +5,6 @@
 
 #![deny(missing_debug_implementations)]
 
-use std::fmt;
-
 use crate::RelationExpr;
 use repr::RelationType;
 
@@ -78,11 +76,12 @@ impl Default for Optimizer {
                 transforms: vec![
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
+                    Box::new(crate::transform::fusion::filter::Filter),
+                    Box::new(crate::transform::empty_map::EmptyMap),
                 ],
             }),
-            Box::new(crate::transform::fusion::filter::Filter),
             Box::new(crate::transform::join_order::JoinOrder),
-            Box::new(crate::transform::empty_map::EmptyMap),
+            Box::new(crate::transform::fusion::project::Project),
         ];
         Self { transforms }
     }

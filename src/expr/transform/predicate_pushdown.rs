@@ -244,13 +244,13 @@ impl PredicatePushdown {
                             predicate
                         })
                         .collect();
-                    *relation = input.clone().filter(predicates).project(outputs.clone());
+                    *relation = input.take().filter(predicates).project(outputs.clone());
                 }
                 RelationExpr::Filter {
                     input,
                     predicates: predicates2,
                 } => {
-                    *relation = input.clone().filter(
+                    *relation = input.take().filter(
                         predicates
                             .clone()
                             .into_iter()

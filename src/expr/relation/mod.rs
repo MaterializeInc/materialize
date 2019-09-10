@@ -703,6 +703,18 @@ impl RelationExpr {
     pub fn pretty(&self) -> String {
         format!("{}", self.to_doc().pretty(70))
     }
+
+    pub fn take(&mut self) -> RelationExpr {
+        std::mem::replace(
+            self,
+            RelationExpr::Constant {
+                rows: vec![],
+                typ: RelationType {
+                    column_types: vec![],
+                },
+            },
+        )
+    }
 }
 
 /// Describes an aggregation expression.
