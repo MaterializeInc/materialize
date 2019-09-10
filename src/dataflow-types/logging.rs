@@ -97,7 +97,9 @@ impl LogVariant {
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
             LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => "logs_dataflow_dependency",
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
+                "logs_dataflow_dependency"
+            }
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers",
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations",

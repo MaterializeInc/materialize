@@ -3,15 +3,18 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use super::{LogVariant, MaterializedLog};
-use crate::arrangement::KeysOnlyHandle;
-use dataflow_types::Timestamp;
-use repr::Datum;
 use std::time::Duration;
+
+use log::error;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::logging::WorkerIdentifier;
+
+use super::{LogVariant, MaterializedLog};
+use crate::arrangement::KeysOnlyHandle;
+use dataflow_types::Timestamp;
+use repr::Datum;
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -85,6 +88,7 @@ pub fn construct<A: Allocate>(
         let (mut frontier_out, frontier) = demux.new_output();
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
+            let mut active_dataflows = std::collections::HashMap::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
@@ -104,10 +108,48 @@ pub fn construct<A: Allocate>(
 
                         match datum {
                             MaterializedEvent::Dataflow(name, is_create) => {
-                                dataflow_session.give((name, worker, is_create, time_ns))
+                                dataflow_session.give((name.clone(), worker, is_create, time_ns));
+
+                                // For now we know that these always happen in
+                                // the correct order, but it may be necessary
+                                // down the line to have dataflows keep a
+                                // reference to their own sources and a logger
+                                // that is called on them in a `with_drop` handler
+                                if is_create {
+                                    active_dataflows.insert((name, worker), vec![]);
+                                } else {
+                                    let key = &(name, worker);
+                                    match active_dataflows.remove(key) {
+                                        Some(sources) => {
+                                            for (source, worker) in sources {
+                                                let n = key.0.clone();
+                                                dependency_session
+                                                    .give((n, source, worker, false, time_ns));
+                                            }
+                                        }
+                                        None => error!(
+                                            "no active dataflow exists at time of drop. \
+                                             name={} worker={}",
+                                            key.0, worker
+                                        ),
+                                    }
+                                }
                             }
                             MaterializedEvent::DataflowDependency { dataflow, source } => {
-                                dependency_session.give((dataflow, source, worker, time_ns))
+                                let df = dataflow.clone();
+                                let s = source.clone();
+                                dependency_session.give((df, s, worker, true, time_ns));
+                                let key = (dataflow, worker);
+                                match active_dataflows.get_mut(&key) {
+                                    Some(existing_sources) => {
+                                        existing_sources.push((source, worker))
+                                    }
+                                    None => error!(
+                                        "tried to create source for dataflow that doesn't exist: \
+                                         dataflow={} source={} worker={}",
+                                        key.0, source, worker,
+                                    ),
+                                }
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
                                 peek_session.give((peek, worker, is_install, time_ns))
@@ -132,13 +174,20 @@ pub fn construct<A: Allocate>(
             .arrange_by_self();
 
         let dependency_current = dependency
-            .map(move |(dataflow, source, worker, time_ns)| {
+            .map(move |(dataflow, source, worker, is_create, time_ns)| {
                 let time_ms = (time_ns / 1_000_000) as Timestamp;
                 let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
-                ((dataflow, source, worker), time_ms, 1)
+                let diff = if is_create { 1 } else { -1 };
+                ((dataflow, source, worker), time_ms, diff)
             })
             .as_collection()
-            .map(|(dataflow, source, worker)| vec![Datum::String(dataflow), Datum::String(source), Datum::Int64(worker as i64)])
+            .map(|(dataflow, source, worker)| {
+                vec![
+                    Datum::String(dataflow),
+                    Datum::String(source),
+                    Datum::Int64(worker as i64),
+                ]
+            })
             .arrange_by_self();
 
         let peek_current = peek
