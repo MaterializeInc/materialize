@@ -19,7 +19,7 @@ num-bigint = "0.2.2"
 ore = { path = "../ore" }
 repr = { path = "../repr" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
-unicase = "2.4.0"
+unicase = "2.5.1"
 url = "1.7.2"
 uuid = { version = "0.7.4", features = ["serde", "v4"] }
 
