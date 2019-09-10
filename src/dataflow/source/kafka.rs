@@ -42,13 +42,13 @@ where
 
         let mut config = ClientConfig::new();
         config
-            .set("produce.offset.report", "true")
             .set("auto.offset.reset", "smallest")
             .set("group.id", &format!("materialize-{}", name))
             .set("enable.auto.commit", "false")
             .set("enable.partition.eof", "false")
             .set("auto.offset.reset", "earliest")
             .set("session.timeout.ms", "6000")
+            .set("max.poll.interval.ms", "300000") // 5 minutes
             .set("fetch.message.max.bytes", "134217728")
             .set("enable.sparse.connections", "true")
             .set("bootstrap.servers", &addr.to_string());
@@ -127,6 +127,8 @@ where
                     }
                 }
             }
+            // Ensure that we poll kafka more often than the eviction timeout
+            activator.activate_after(Duration::from_secs(60));
         }
     });
 
