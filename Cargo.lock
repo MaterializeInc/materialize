@@ -288,7 +288,7 @@ name = "ccsr"
 version = "0.1.0"
 dependencies = [
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "hyper 0.12.33 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hyper 0.12.34 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest 0.9.20 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.99 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "0.12.33"
+version = "0.12.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bytes 0.4.12 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1086,7 +1086,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bytes 0.4.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
- "hyper 0.12.33 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hyper 0.12.34 (registry+https://github.com/rust-lang/crates.io-index)",
  "native-tls 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-io 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -1313,7 +1313,7 @@ dependencies = [
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "getopts 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
- "hyper 0.12.33 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hyper 0.12.34 (registry+https://github.com/rust-lang/crates.io-index)",
  "interchange 0.1.0",
  "itertools 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "jemallocator 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2186,7 +2186,7 @@ dependencies = [
  "flate2 1.0.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "http 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
- "hyper 0.12.33 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hyper 0.12.34 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper-tls 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "mime 0.3.13 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3384,7 +3384,7 @@ dependencies = [
 "checksum http-body 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "6741c859c1b2463a423a1dbce98d418e6c3c3fc720fb0d45528657320920292d"
 "checksum httparse 1.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "e8734b0cfd3bc3e101ec59100e101c2eecd19282202e87808b3037b442777a83"
 "checksum humantime 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3ca7e5f2e110db35f93b837c81797f3714500b81d517bf20c431b16d3ca4f114"
-"checksum hyper 0.12.33 (registry+https://github.com/rust-lang/crates.io-index)" = "7cb44cbce9d8ee4fb36e4c0ad7b794ac44ebaad924b9c8291a63215bb44c2c8f"
+"checksum hyper 0.12.34 (registry+https://github.com/rust-lang/crates.io-index)" = "898a87371a3999b2f731b9af636cd76aa20de10e69c2daf3e71388326b619fe0"
 "checksum hyper-tls 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)" = "3a800d6aa50af4b5850b2b0f659625ce9504df908e9733b635720483be26174f"
 "checksum ident_case 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 "checksum idna 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "38f09e0f0b1fb55fdee1f17470ad800da77af5186a1a76c026b679358b7e844e"
