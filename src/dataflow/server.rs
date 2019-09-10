@@ -36,8 +36,7 @@ use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp};
-use expr::RelationExpr;
+use dataflow_types::{compare_columns, Dataflow, LocalInput, RowSetFinishing, Timestamp};
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
 /// Timely workers.
@@ -54,24 +53,6 @@ impl comm::broadcast::Token for BroadcastToken {
     fn loopback() -> bool {
         true
     }
-}
-
-/// The commands that a running dataflow server can accept.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DataflowCommand {
-    CreateDataflows(Vec<Dataflow>),
-    DropDataflows(Vec<String>),
-    Peek {
-        conn_id: u32,
-        source: RelationExpr,
-        when: PeekWhen,
-        transform: RowSetFinishing,
-    },
-    Explain {
-        conn_id: u32,
-        relation_expr: RelationExpr,
-    },
-    Shutdown,
 }
 
 /// Explicit instructions for timely dataflow workers.

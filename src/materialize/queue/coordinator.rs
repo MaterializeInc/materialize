@@ -18,57 +18,46 @@
 
 use timely::progress::frontier::Antichain;
 
-use futures::sync::mpsc::UnboundedReceiver;
-use futures::{sink, Async, Sink};
+use futures::{sink, Sink as FuturesSink};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use dataflow::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use dataflow::logging::materialized::MaterializedEvent;
-use dataflow::{
-    BroadcastToken, DataflowCommand, SequencedCommand, WorkerFeedback,
-};
+use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Dataflow, PeekWhen, Timestamp, View};
+use dataflow_types::{Dataflow, PeekWhen, Sink, SinkConnector, TailSinkConnector, Timestamp, View};
 use expr::RelationExpr;
-use repr::Datum;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
+use sql::Plan;
 
-/// State necessary to sequence commands and populate peek timestamps.
-pub struct CommandCoordinator<C> {
+use crate::queue::{SqlResponse, WaitFor};
+
+/// Glues the external world to the Timely workers.
+pub struct Coordinator<C> {
     switchboard: comm::Switchboard<C>,
-    /// Per-view maintained state.
-    views: HashMap<String, ViewState>,
     broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
-    command_receiver: UnboundedReceiver<DataflowCommand>,
+    optimizer: expr::transform::Optimizer,
+    views: HashMap<String, ViewState>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     log: bool,
-    optimizer: expr::transform::Optimizer,
-    exfiltrator: Exfiltrator,
 }
 
-impl<C> CommandCoordinator<C>
+impl<C> Coordinator<C>
 where
     C: comm::Connection,
 {
-    /// Creates a new command coordinator from input and output command queues.
-    pub fn new(
-        switchboard: comm::Switchboard<C>,
-        command_receiver: UnboundedReceiver<DataflowCommand>,
-        logging_config: Option<&LoggingConfig>,
-        exfiltrator_config: ExfiltratorConfig,
-    ) -> Self
-    {
-        let broadcast_tx = switchboard.broadcast_tx::<BroadcastToken>().wait();
+    pub fn new(switchboard: comm::Switchboard<C>, logging_config: Option<&LoggingConfig>) -> Self {
+        let broadcast_tx = switchboard
+            .broadcast_tx::<dataflow::BroadcastToken>()
+            .wait();
 
         let mut coordinator = Self {
             switchboard,
-            views: HashMap::new(),
             broadcast_tx,
-            command_receiver,
-            log: logging_config.is_some(),
-            since_updates: Vec::new(),
             optimizer: Default::default(),
-            exfiltrator: exfiltrator_config.into(),
+            views: HashMap::new(),
+            since_updates: Vec::new(),
+            log: logging_config.is_some(),
         };
 
         if let Some(logging_config) = logging_config {
@@ -81,80 +70,72 @@ where
         coordinator
     }
 
-    pub fn run(&mut self) {
-        let (feedback_tx, feedback_rx) = self.switchboard.mpsc();
+    // TODO(benesch): the `ts_override` parameter exists only to support
+    // sqllogictest and is kind of gross. See if we can get rid of it.
+    pub fn sequence_plan(
+        &mut self,
+        plan: Plan,
+        conn_id: u32,
+        ts_override: Option<Timestamp>,
+    ) -> SqlResponse {
+        match plan {
+            Plan::CreateSource(source) => {
+                self.create_dataflows(vec![Dataflow::Source(source)]);
+                SqlResponse::CreatedSource
+            }
 
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::EnableFeedback(feedback_tx),
-        );
-
-        // TODO(benesch): this function spins hot. Teach it to block when
-        // there's nothing to do. This `Notify` stuff below is about convincing
-        // the futures runtime to let us spin hot; it really, really wants us
-        // to be able to block.
-
-        struct DummyNotifier;
-        impl futures::executor::Notify for DummyNotifier {
-            fn notify(&self, _id: usize) {}
-        }
-        let notifier = futures::executor::NotifyHandle::from(std::sync::Arc::new(DummyNotifier));
-        let mut feedback_rx = futures::executor::spawn(feedback_rx);
-
-        loop {
-            self.sequence_commands();
-            self.maintenance();
-            while let Ok(Async::Ready(Some(msg))) = feedback_rx.poll_stream_notify(&notifier, 0) {
-                match msg.message {
-                    WorkerFeedback::FrontierUppers(updates) => {
-                        for (name, frontier) in updates {
-                            self.update_upper(&name, &frontier)
-                        }
-                    }
+            Plan::CreateSources(sources) => {
+                self.create_dataflows(
+                    sources
+                        .iter()
+                        .map(|s| Dataflow::Source(s.clone()))
+                        .collect(),
+                );
+                SqlResponse::SendRows {
+                    typ: RelationType::new(vec![ColumnType::new(ScalarType::String).name("Topic")]),
+                    rows: sources
+                        .iter()
+                        .map(|s| vec![Datum::from(s.name.to_owned())])
+                        .collect(),
+                    wait_for: WaitFor::NoOne,
+                    transform: Default::default(),
                 }
             }
-        }
-    }
 
-    /// Drains commands from the receiver, sequences them, and broadcasts the
-    /// sequence to all work threads.
-    fn sequence_commands(&mut self) {
-        while let Ok(Some(cmd)) = self.command_receiver.try_next() {
-            self.sequence_command(cmd);
-        }
-    }
+            Plan::CreateSink(sink) => {
+                self.create_dataflows(vec![Dataflow::Sink(sink)]);
+                SqlResponse::CreatedSink
+            }
 
-    fn sequence_command(&mut self, command: DataflowCommand) {
-        match command {
-            DataflowCommand::CreateDataflows(mut dataflows) => {
-                // Transforms and registers the dataflow.
-                for dataflow in dataflows.iter_mut() {
-                    if let Dataflow::View(view) = dataflow {
-                        self.optimizer.optimize(&mut view.relation_expr, &view.typ);
-                    }
-                }
+            Plan::CreateView(view) => {
+                self.create_dataflows(vec![Dataflow::View(view)]);
+                SqlResponse::CreatedView
+            }
 
+            Plan::DropSources(names) => {
+                self.drop_dataflows(names);
+                // Though the plan specifies a number of sources to drop, multiple
+                // sources can only be dropped via DROP SOURCE root CASCADE, so
+                // the tagline is still singular, as in "DROP SOURCE".
+                SqlResponse::DroppedSource
+            }
+
+            Plan::DropViews(names) => {
+                // See note in `DropSources` about the conversion from plural to
+                // singular.
                 broadcast(
                     &mut self.broadcast_tx,
-                    SequencedCommand::CreateDataflows(dataflows.clone()),
+                    SequencedCommand::DropDataflows(names),
                 );
+                SqlResponse::DroppedView
+            }
 
-                for dataflow in dataflows.iter() {
-                    self.insert_view(dataflow);
-                }
-            }
-            DataflowCommand::DropDataflows(dataflows) => {
-                for name in dataflows.iter() {
-                    self.remove_view(name);
-                }
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::DropDataflows(dataflows),
-                );
-            }
-            DataflowCommand::Peek {
+            Plan::EmptyQuery => SqlResponse::EmptyQuery,
+
+            Plan::DidSetVariable => SqlResponse::SetVariable,
+
+            Plan::Peek {
                 mut source,
-                conn_id,
                 when,
                 transform,
             } => {
@@ -164,10 +145,13 @@ where
                 // also to ensure that there is a view in place to query, if the source of data
                 // for the peek is not a base relation.
 
+                let typ = source.typ();
+
                 // Choose a timestamp for all workers to use in the peek.
                 // We minimize over all participating views, to ensure that the query will not
                 // need to block on the arrival of further input data.
-                let timestamp = self.determine_timestamp(&source, when);
+                let timestamp =
+                    ts_override.unwrap_or_else(|| self.determine_timestamp(&source, when));
 
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
@@ -178,7 +162,7 @@ where
                             name,
                             timestamp,
                             conn_id,
-                            transform,
+                            transform: transform.clone(),
                         },
                     );
                 } else {
@@ -190,22 +174,19 @@ where
 
                     self.optimizer.optimize(&mut source, &typ);
 
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::CreateDataflows(vec![Dataflow::View(View {
-                            name: name.clone(),
-                            relation_expr: source,
-                            typ,
-                            as_of: Some(vec![timestamp.clone()]),
-                        })]),
-                    );
+                    self.create_dataflows(vec![Dataflow::View(View {
+                        name: name.clone(),
+                        relation_expr: source,
+                        typ,
+                        as_of: Some(vec![timestamp.clone()]),
+                    })]);
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::Peek {
                             name: name.clone(),
                             timestamp,
                             conn_id,
-                            transform,
+                            transform: transform.clone(),
                         },
                     );
                     broadcast(
@@ -213,29 +194,79 @@ where
                         SequencedCommand::DropDataflows(vec![name]),
                     );
                 }
+
+                SqlResponse::SendRows {
+                    typ,
+                    rows: vec![],
+                    wait_for: WaitFor::Workers,
+                    transform,
+                }
             }
-            DataflowCommand::Explain {
-                conn_id,
-                mut relation_expr,
-            } => {
-                let typ = relation_expr.typ();
-                self.optimizer.optimize(&mut relation_expr, &typ);
-                self.exfiltrator
-                    .send_peek(conn_id, vec![vec![Datum::from(relation_expr.pretty())]]);
+
+            Plan::Tail(source) => {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
+                        name: format!("<temp_{}>", Uuid::new_v4()),
+                        from: (source.name().to_owned(), source.typ().clone()),
+                        connector: SinkConnector::Tail(TailSinkConnector { conn_id }),
+                    })]),
+                );
+                SqlResponse::Tailing
             }
-            DataflowCommand::Shutdown => {
-                broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown);
+
+            Plan::SendRows { typ, rows } => SqlResponse::SendRows {
+                typ,
+                rows,
+                wait_for: WaitFor::NoOne,
+                transform: Default::default(),
+            },
+
+            Plan::ExplainPlan { typ, relation_expr } => SqlResponse::SendRows {
+                typ,
+                rows: vec![vec![Datum::from(relation_expr.pretty())]],
+                wait_for: WaitFor::Optimizer,
+                transform: Default::default(),
+            },
+        }
+    }
+
+    pub fn create_dataflows(&mut self, mut dataflows: Vec<Dataflow>) {
+        for dataflow in dataflows.iter_mut() {
+            if let Dataflow::View(view) = dataflow {
+                self.optimizer.optimize(&mut view.relation_expr, &view.typ);
             }
-        };
+        }
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(dataflows.clone()),
+        );
+        for dataflow in dataflows.iter() {
+            self.insert_view(dataflow);
+        }
+    }
+
+    pub fn drop_dataflows(&mut self, dataflow_names: Vec<String>) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::DropDataflows(dataflow_names),
+        )
+    }
+
+    pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {
+        let (tx, rx) = self.switchboard.mpsc();
+        broadcast(&mut self.broadcast_tx, SequencedCommand::EnableFeedback(tx));
+        rx
+    }
+
+    pub fn shutdown(&mut self) {
+        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
     }
 
     /// Perform maintenance work associated with the coordinator.
     ///
-    /// Primarily, this involves sequencing compaction commands, which should be issued whenever
-    /// available, but the sequencer is otherwise only provided in response to received commands.
-    ///
-    /// This API is a bit wonky, but at the moment the sequencer plays the role of both send and
-    /// receive, and so cannot be owned only by the coordinator.
+    /// Primarily, this involves sequencing compaction commands, which should be
+    /// issued whenever available.
     pub fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
         if !self.since_updates.is_empty() {
@@ -356,7 +387,7 @@ where
     }
 
     /// The upper frontier of a maintained view, if it exists.
-    pub fn upper_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
+    fn upper_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.upper)
     }
 
@@ -367,7 +398,7 @@ where
     /// or equal to some element of the since frontier the accumulation will be correct,
     /// and for other times no such guarantee holds.
     #[allow(dead_code)]
-    pub fn update_since(&mut self, name: &str, since: &[Timestamp]) {
+    fn update_since(&mut self, name: &str, since: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             entry.since.clear();
             entry.since.extend(since.iter().cloned());
@@ -376,14 +407,14 @@ where
 
     /// The since frontier of a maintained view, if it exists.
     #[allow(dead_code)]
-    pub fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
+    fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.since)
     }
 
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    pub fn insert_view(&mut self, dataflow: &Dataflow) {
+    fn insert_view(&mut self, dataflow: &Dataflow) {
         self.remove_view(dataflow.name());
         let viewstate = ViewState::new(dataflow);
         if self.log {
@@ -405,7 +436,7 @@ where
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    pub fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
+    fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
         self.remove_view(name);
         let mut viewstate = ViewState::new_source();
         if self.log {
@@ -427,7 +458,7 @@ where
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    pub fn remove_view(&mut self, name: &str) {
+    fn remove_view(&mut self, name: &str) {
         if let Some(state) = self.views.remove(name) {
             if self.log {
                 for time in state.upper.elements() {

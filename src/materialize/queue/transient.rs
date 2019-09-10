@@ -5,58 +5,68 @@
 
 //! A trivial single-node command queue that doesn't store state at all.
 
-use dataflow::ExfiltratorConfig;
+use dataflow::{WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::Stream;
 
-use super::{translate_plan, Command, Response};
+use super::{Command, Response};
 use crate::queue::coordinator;
+
+enum Message {
+    Command(Command),
+    Worker(WorkerFeedbackWithMeta),
+}
 
 pub fn serve<C>(
     switchboard: comm::Switchboard<C>,
     logging_config: Option<&LoggingConfig>,
-    exfiltrator_config: ExfiltratorConfig,
     cmd_rx: UnboundedReceiver<Command>,
 ) where
     C: comm::Connection,
 {
-    let (dataflow_cmd_tx, dataflow_cmd_rx) = futures::sync::mpsc::unbounded();
-    let mut coord = coordinator::CommandCoordinator::new(
-        switchboard.clone(),
-        dataflow_cmd_rx,
-        logging_config,
-        exfiltrator_config,
-    );
-    std::thread::spawn(move || coord.run());
+    let mut coord = coordinator::Coordinator::new(switchboard.clone(), logging_config);
+    let feedback_rx = coord.enable_feedback();
 
     let mut planner = sql::Planner::new(logging_config);
+
+    let messages = cmd_rx
+        .map(Message::Command)
+        .map_err(|()| unreachable!())
+        .select(feedback_rx.map(Message::Worker));
+
     std::thread::spawn(move || {
-        for msg in cmd_rx.wait() {
-            let mut cmd = msg.unwrap();
+        for msg in messages.wait() {
+            match msg.unwrap() {
+                Message::Command(mut cmd) => {
+                    let conn_id = cmd.conn_id;
+                    let sql_result =
+                        planner
+                            .handle_command(&mut cmd.session, cmd.sql)
+                            .map(|plan| {
+                                coord.sequence_plan(plan, conn_id, None /* ts_override */)
+                            });
 
-            let (sql_result, dataflow_command) =
-                match planner.handle_command(&mut cmd.session, cmd.sql) {
-                    Ok(plan) => {
-                        let (sql_response, dataflow_command) = translate_plan(plan, cmd.conn_id);
-                        (Ok(sql_response), dataflow_command)
+                    // The client connection may disappear at any time, so the error
+                    // handling here is deliberately relaxed.
+                    let _ = cmd.tx.send(Response {
+                        sql_result,
+                        session: cmd.session,
+                    });
+                }
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id,
+                    message: WorkerFeedback::FrontierUppers(updates),
+                }) => {
+                    // Only take information from worker 0 for now. We'll want
+                    // to do something smarter soon. Ask Frank for details.
+                    if worker_id == 0 {
+                        for (name, frontier) in updates {
+                            coord.update_upper(&name, &frontier);
+                        }
                     }
-                    Err(err) => (Err(err), None),
-                };
-
-            if let Some(dataflow_command) = dataflow_command {
-                dataflow_cmd_tx
-                    .unbounded_send(dataflow_command.clone())
-                    // if the dataflow server has gone down, just explode
-                    .unwrap();
+                }
             }
-
-            // The client connection may disappear at any time, so the error
-            // handling here is deliberately relaxed.
-            let _ = cmd.tx.send(Response {
-                sql_result,
-                session: cmd.session,
-            });
         }
     });
 }

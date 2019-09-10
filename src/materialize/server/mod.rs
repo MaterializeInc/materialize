@@ -186,13 +186,10 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     )
     .map_err(|s| format_err!("{}", s))?;
 
-    // Initialize command queue and sql planner
-    queue::transient::serve(
-        switchboard,
-        logging_config.as_ref(),
-        exfiltrator_config,
-        cmdq_rx,
-    );
+    // Initialize command queue and sql planner, but only on the primary.
+    if is_primary {
+        queue::transient::serve(switchboard, logging_config.as_ref(), cmdq_rx);
+    }
 
     runtime
         .shutdown_on_idle()

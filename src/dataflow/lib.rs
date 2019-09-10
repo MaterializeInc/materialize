@@ -15,7 +15,4 @@ pub mod logging;
 pub mod server;
 
 pub use exfiltrate::ExfiltratorConfig;
-pub use server::{
-    serve, BroadcastToken, DataflowCommand, SequencedCommand, WorkerFeedback,
-    WorkerFeedbackWithMeta,
-};
+pub use server::{serve, BroadcastToken, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
