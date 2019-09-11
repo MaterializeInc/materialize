@@ -25,7 +25,7 @@ impl InlineLet {
             *relation = RelationExpr::Let {
                 name,
                 value: Box::new(value),
-                body: Box::new(relation.clone()),
+                body: Box::new(relation.take()),
             };
         }
     }
@@ -48,13 +48,13 @@ impl InlineLet {
                 // if only used once, just inline it
                 body.visit_mut_pre(&mut |relation| match relation {
                     RelationExpr::Get { name: get_name, .. } if name == get_name => {
-                        *relation = (**value).clone();
+                        *relation = value.take();
                     }
                     _ => (),
                 });
             } else {
                 // otherwise lift it to the top so it's out of the way
-                lets.push((name.clone(), (**value).clone()));
+                lets.push((name.clone(), value.take()));
             }
             *relation = body.take();
             // might be another Let in the body so have to recur explicitly here
