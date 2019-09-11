@@ -122,7 +122,7 @@ impl TraceManager {
         self.traces.get_mut(name)?.by_keys.get_mut(keys)
     }
 
-    #[allow(dead_code)]
+    /// Returns a copy of all by_key arrangements, should they exist.
     pub fn get_all_keyed(
         &mut self,
         name: &str,
