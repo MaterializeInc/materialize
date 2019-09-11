@@ -378,6 +378,7 @@ impl ScalarExpr {
                     let exists = expr
                         .applied_to(get_inner.clone())?
                         .project((0..get_inner.arity()).collect())
+                        .distinct()
                         .map(vec![(
                             SS::Literal(Datum::True),
                             ColumnType {
