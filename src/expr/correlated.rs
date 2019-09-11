@@ -59,7 +59,6 @@ pub enum RelationExpr {
     Threshold {
         input: Box<RelationExpr>,
     },
-    /// Return the union of two dataflows
     Union {
         left: Box<RelationExpr>,
         right: Box<RelationExpr>,
@@ -88,6 +87,7 @@ pub enum ScalarExpr {
         then: Box<ScalarExpr>,
         els: Box<ScalarExpr>,
     },
+    /// Returns true if the `RelationExpr` returns any rows
     Exists(Box<RelationExpr>),
 }
 
