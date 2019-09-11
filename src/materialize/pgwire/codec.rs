@@ -73,6 +73,7 @@ impl Encoder for Codec {
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
             BackendMessage::ParameterStatus(_, _) => b'S',
+            BackendMessage::ParseComplete => b'1',
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse => b'H',
             BackendMessage::CopyData(_) => b'd',
@@ -147,6 +148,9 @@ impl Encoder for Codec {
             }
             BackendMessage::CommandComplete { tag } => {
                 buf.put_string(tag);
+            }
+            BackendMessage::ParseComplete => {
+                eprintln!("placing parse complete");
             }
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
@@ -252,6 +256,44 @@ impl Decoder for Codec {
                             query: buf.slice_to(frame_len - 1),
                         },
                         b'X' => FrontendMessage::Terminate,
+                        b'P' => {
+                            let (name, buf) = read_cstr(&buf, frame_len)?;
+                            let (sql, buf) = read_cstr(buf, frame_len - name.len() + 1)?;
+
+                            // A parameter data type can be left unspecified by setting
+                            // it to zero, or by making the array of parameter type OIDs
+                            // shorter than the number of parameter symbols ($n) used in
+                            // the query string. Another special case is that a
+                            // parameter's type can be specified as void (that is, the
+                            // OID of the void pseudo-type). This is meant to allow
+                            // parameter symbols to be used for function parameters that
+                            // are actually OUT parameters. Ordinarily there is no
+                            // context in which a void parameter could be used, but if
+                            // such a parameter symbol appears in a function's parameter
+                            // list, it is effectively ignored. For example, a function
+                            // call such as foo($1,$2,$3,$4) could match a function with
+                            // two IN and two OUT arguments, if $3 and $4 are specified
+                            // as having type void.
+                            //
+                            // Oh god
+                            let parameter_data_type_count = NetworkEndian::read_u16(&buf[..2]);
+                            let mut offset = 0;
+                            let mut param_dts = vec![];
+                            for _ in 0..parameter_data_type_count {
+                                if offset + 4 >= buf.len() {
+                                    break;
+                                }
+                                param_dts.push(NetworkEndian::read_u32(&buf[offset..offset + 4]));
+                                offset += 4;
+                            }
+
+                            FrontendMessage::Parse {
+                                name: name.into(),
+                                sql: sql.into(),
+                                parameter_data_type_count,
+                                parameter_data_types: param_dts,
+                            }
+                        }
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -276,5 +318,32 @@ impl<B: BufMut> Pgbuf for B {
     fn put_string<T: IntoBuf>(&mut self, s: T) {
         self.put(s);
         self.put(b'\0');
+    }
+}
+
+#[derive(Debug)]
+struct MyErr;
+
+impl std::error::Error for MyErr {}
+impl std::fmt::Display for MyErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("MyError")
+    }
+}
+
+fn read_cstr(slice: &[u8], max: usize) -> Result<(&str, &[u8]), io::Error> {
+    fn err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidInput, source.into())
+    };
+    if let Some(pos) = slice.iter().position(|b| *b == 0) {
+        if pos > max {
+            return Err(err(MyErr));
+        }
+        Ok((
+            std::str::from_utf8(&slice[..pos]).map_err(err)?,
+            &slice[pos + 1..],
+        ))
+    } else {
+        Err(err(MyErr))
     }
 }

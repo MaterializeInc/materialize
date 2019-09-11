@@ -46,6 +46,7 @@ pub enum SqlResponse {
         typ: RelationType,
         rx: RowsFuture,
     },
+    ParseComplete,
     SetVariable,
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,

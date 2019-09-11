@@ -40,8 +40,18 @@ impl Severity {
 
 #[derive(Debug)]
 pub enum FrontendMessage {
-    Startup { version: u32 },
-    Query { query: Bytes },
+    Startup {
+        version: u32,
+    },
+    Query {
+        query: Bytes,
+    },
+    Parse {
+        name: String,
+        sql: String,
+        parameter_data_type_count: u16,
+        parameter_data_types: Vec<u32>,
+    },
     Terminate,
 }
 
@@ -57,6 +67,7 @@ pub enum BackendMessage {
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<FieldValue>>),
     ParameterStatus(&'static str, String),
+    ParseComplete,
     ErrorResponse {
         severity: Severity,
         code: &'static str,
