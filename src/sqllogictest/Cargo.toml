@@ -14,6 +14,7 @@ path = "lib.rs"
 [dependencies]
 byteorder = "*"
 chrono = "0.4"
+comm = { path = "../comm" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.5"
@@ -33,6 +34,7 @@ serde_json = "1"
 sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+tokio = "0.1"
 uuid = "*"
 walkdir = "2"
 whoami = "0.5.3"

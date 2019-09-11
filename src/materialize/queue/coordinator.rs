@@ -17,113 +17,125 @@
 #![allow(clippy::clone_on_copy)]
 
 use timely::progress::frontier::Antichain;
-use timely::synchronization::sequence::Sequencer;
 
-use futures::sync::mpsc::UnboundedReceiver;
-use serde::{Deserialize, Serialize};
+use futures::{sink, Sink as FuturesSink};
 use std::collections::HashMap;
-use std::rc::Rc;
 use uuid::Uuid;
 
-use crate::exfiltrate::Exfiltrator;
-use crate::logging::materialized::MaterializedEvent;
-use crate::DataflowCommand;
+use dataflow::logging::materialized::MaterializedEvent;
+use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Timestamp, View};
+use dataflow_types::{Dataflow, PeekWhen, Sink, SinkConnector, TailSinkConnector, Timestamp, View};
 use expr::RelationExpr;
-use repr::Datum;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
+use sql::Plan;
 
-/// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum SequencedCommand {
-    /// Create a sequence of dataflows.
-    CreateDataflows(Vec<Dataflow>),
-    /// Drop the dataflows bound to these names.
-    DropDataflows(Vec<String>),
-    /// Peek at a materialized view.
-    Peek {
-        name: String,
-        timestamp: Timestamp,
-        conn_id: u32,
-        transform: RowSetFinishing,
-    },
-    /// Enable compaction in views.
-    ///
-    /// Each entry in the vector names a view and provides a frontier after which
-    /// accumulations must be correct. The workers gain the liberty of compacting
-    /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(String, Vec<Timestamp>)>),
-    /// Append a new event to the log stream.
-    AppendLog(MaterializedEvent),
-    /// Disconnect inputs, drain dataflows, and shut down timely workers.
-    Shutdown,
-}
+use crate::queue::{SqlResponse, WaitFor};
 
-/// State necessary to sequence commands and populate peek timestamps.
-pub struct CommandCoordinator {
-    /// Per-view maintained state.
+/// Glues the external world to the Timely workers.
+pub struct Coordinator<C> {
+    switchboard: comm::Switchboard<C>,
+    broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
+    optimizer: expr::transform::Optimizer,
     views: HashMap<String, ViewState>,
-    command_receiver: UnboundedReceiver<DataflowCommand>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     log: bool,
-    optimizer: expr::transform::Optimizer,
-    exfiltrator: Rc<Exfiltrator>,
 }
 
-impl CommandCoordinator {
-    /// Creates a new command coordinator from input and output command queues.
-    pub fn new(
-        command_receiver: UnboundedReceiver<DataflowCommand>,
-        logging_config: Option<&LoggingConfig>,
-        exfiltrator: Rc<Exfiltrator>,
-    ) -> Self {
-        Self {
-            views: HashMap::new(),
-            command_receiver,
-            log: logging_config.is_some(),
-            since_updates: Vec::new(),
+impl<C> Coordinator<C>
+where
+    C: comm::Connection,
+{
+    pub fn new(switchboard: comm::Switchboard<C>, logging_config: Option<&LoggingConfig>) -> Self {
+        let broadcast_tx = switchboard
+            .broadcast_tx::<dataflow::BroadcastToken>()
+            .wait();
+
+        let mut coordinator = Self {
+            switchboard,
+            broadcast_tx,
             optimizer: Default::default(),
-            exfiltrator,
+            views: HashMap::new(),
+            since_updates: Vec::new(),
+            log: logging_config.is_some(),
+        };
+
+        if let Some(logging_config) = logging_config {
+            for log in logging_config.active_logs().iter() {
+                // Insert with 1 second compaction latency.
+                coordinator.insert_source(log.name(), 1_000);
+            }
         }
+
+        coordinator
     }
 
-    /// Drains commands from the receiver and sequences them to the sequencer.
-    pub fn sequence_commands(&mut self, sequencer: &mut Sequencer<SequencedCommand>) {
-        while let Ok(Some(cmd)) = self.command_receiver.try_next() {
-            self.sequence_command(cmd, sequencer);
-        }
-    }
-
-    /// Appends a sequence of commands to `sequenced` in response to a dataflow command.
-    pub fn sequence_command(
+    // TODO(benesch): the `ts_override` parameter exists only to support
+    // sqllogictest and is kind of gross. See if we can get rid of it.
+    pub fn sequence_plan(
         &mut self,
-        command: DataflowCommand,
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
-        match command {
-            DataflowCommand::CreateDataflows(mut dataflows) => {
-                // Transforms and registers the dataflow.
-                for dataflow in dataflows.iter_mut() {
-                    if let Dataflow::View(view) = dataflow {
-                        self.optimizer.optimize(&mut view.relation_expr, &view.typ);
-                    }
-                }
+        plan: Plan,
+        conn_id: u32,
+        ts_override: Option<Timestamp>,
+    ) -> SqlResponse {
+        match plan {
+            Plan::CreateSource(source) => {
+                self.create_dataflows(vec![Dataflow::Source(source)]);
+                SqlResponse::CreatedSource
+            }
 
-                sequencer.push(SequencedCommand::CreateDataflows(dataflows.clone()));
-
-                for dataflow in dataflows.iter() {
-                    self.insert_view(dataflow, sequencer);
+            Plan::CreateSources(sources) => {
+                self.create_dataflows(
+                    sources
+                        .iter()
+                        .map(|s| Dataflow::Source(s.clone()))
+                        .collect(),
+                );
+                SqlResponse::SendRows {
+                    typ: RelationType::new(vec![ColumnType::new(ScalarType::String).name("Topic")]),
+                    rows: sources
+                        .iter()
+                        .map(|s| vec![Datum::from(s.name.to_owned())])
+                        .collect(),
+                    wait_for: WaitFor::NoOne,
+                    transform: Default::default(),
                 }
             }
-            DataflowCommand::DropDataflows(dataflows) => {
-                for name in dataflows.iter() {
-                    self.remove_view(name, sequencer);
-                }
-                sequencer.push(SequencedCommand::DropDataflows(dataflows));
+
+            Plan::CreateSink(sink) => {
+                self.create_dataflows(vec![Dataflow::Sink(sink)]);
+                SqlResponse::CreatedSink
             }
-            DataflowCommand::Peek {
+
+            Plan::CreateView(view) => {
+                self.create_dataflows(vec![Dataflow::View(view)]);
+                SqlResponse::CreatedView
+            }
+
+            Plan::DropSources(names) => {
+                self.drop_dataflows(names);
+                // Though the plan specifies a number of sources to drop, multiple
+                // sources can only be dropped via DROP SOURCE root CASCADE, so
+                // the tagline is still singular, as in "DROP SOURCE".
+                SqlResponse::DroppedSource
+            }
+
+            Plan::DropViews(names) => {
+                // See note in `DropSources` about the conversion from plural to
+                // singular.
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::DropDataflows(names),
+                );
+                SqlResponse::DroppedView
+            }
+
+            Plan::EmptyQuery => SqlResponse::EmptyQuery,
+
+            Plan::DidSetVariable => SqlResponse::SetVariable,
+
+            Plan::Peek {
                 mut source,
-                conn_id,
                 when,
                 transform,
             } => {
@@ -133,20 +145,26 @@ impl CommandCoordinator {
                 // also to ensure that there is a view in place to query, if the source of data
                 // for the peek is not a base relation.
 
+                let typ = source.typ();
+
                 // Choose a timestamp for all workers to use in the peek.
                 // We minimize over all participating views, to ensure that the query will not
                 // need to block on the arrival of further input data.
-                let timestamp = self.determine_timestamp(&source, when);
+                let timestamp =
+                    ts_override.unwrap_or_else(|| self.determine_timestamp(&source, when));
 
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
                     // Fast path. We can just look at the existing dataflow directly.
-                    sequencer.push(SequencedCommand::Peek {
-                        name,
-                        timestamp,
-                        conn_id,
-                        transform,
-                    });
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::Peek {
+                            name,
+                            timestamp,
+                            conn_id,
+                            transform: transform.clone(),
+                        },
+                    );
                 } else {
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
@@ -156,52 +174,109 @@ impl CommandCoordinator {
 
                     self.optimizer.optimize(&mut source, &typ);
 
-                    sequencer.push(SequencedCommand::CreateDataflows(vec![Dataflow::View(
-                        View {
-                            name: name.clone(),
-                            relation_expr: source,
-                            typ,
-                            as_of: Some(vec![timestamp.clone()]),
-                        },
-                    )]));
-                    sequencer.push(SequencedCommand::Peek {
+                    self.create_dataflows(vec![Dataflow::View(View {
                         name: name.clone(),
-                        timestamp,
-                        conn_id,
-                        transform,
-                    });
-                    sequencer.push(SequencedCommand::DropDataflows(vec![name]));
+                        relation_expr: source,
+                        typ,
+                        as_of: Some(vec![timestamp.clone()]),
+                    })]);
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::Peek {
+                            name: name.clone(),
+                            timestamp,
+                            conn_id,
+                            transform: transform.clone(),
+                        },
+                    );
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::DropDataflows(vec![name]),
+                    );
+                }
+
+                SqlResponse::SendRows {
+                    typ,
+                    rows: vec![],
+                    wait_for: WaitFor::Workers,
+                    transform,
                 }
             }
-            DataflowCommand::Explain {
-                conn_id,
-                mut relation_expr,
-            } => {
-                let typ = relation_expr.typ();
-                self.optimizer.optimize(&mut relation_expr, &typ);
-                self.exfiltrator
-                    .send_peek(conn_id, vec![vec![Datum::from(relation_expr.pretty())]]);
+
+            Plan::Tail(source) => {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
+                        name: format!("<temp_{}>", Uuid::new_v4()),
+                        from: (source.name().to_owned(), source.typ().clone()),
+                        connector: SinkConnector::Tail(TailSinkConnector { conn_id }),
+                    })]),
+                );
+                SqlResponse::Tailing
             }
-            DataflowCommand::Shutdown => {
-                sequencer.push(SequencedCommand::Shutdown);
+
+            Plan::SendRows { typ, rows } => SqlResponse::SendRows {
+                typ,
+                rows,
+                wait_for: WaitFor::NoOne,
+                transform: Default::default(),
+            },
+
+            Plan::ExplainPlan { typ, relation_expr } => SqlResponse::SendRows {
+                typ,
+                rows: vec![vec![Datum::from(relation_expr.pretty())]],
+                wait_for: WaitFor::Optimizer,
+                transform: Default::default(),
+            },
+        }
+    }
+
+    pub fn create_dataflows(&mut self, mut dataflows: Vec<Dataflow>) {
+        for dataflow in dataflows.iter_mut() {
+            if let Dataflow::View(view) = dataflow {
+                self.optimizer.optimize(&mut view.relation_expr, &view.typ);
             }
-        };
+        }
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(dataflows.clone()),
+        );
+        for dataflow in dataflows.iter() {
+            self.insert_view(dataflow);
+        }
+    }
+
+    pub fn drop_dataflows(&mut self, dataflow_names: Vec<String>) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::DropDataflows(dataflow_names),
+        )
+    }
+
+    pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {
+        let (tx, rx) = self.switchboard.mpsc();
+        broadcast(&mut self.broadcast_tx, SequencedCommand::EnableFeedback(tx));
+        rx
+    }
+
+    pub fn shutdown(&mut self) {
+        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown)
     }
 
     /// Perform maintenance work associated with the coordinator.
     ///
-    /// Primarily, this involves sequencing compaction commands, which should be issued whenever
-    /// available, but the sequencer is otherwise only provided in response to received commands.
-    ///
-    /// This API is a bit wonky, but at the moment the sequencer plays the role of both send and
-    /// receive, and so cannot be owned only by the coordinator.
-    pub fn maintenance(&mut self, sequencer: &mut Sequencer<SequencedCommand>) {
+    /// Primarily, this involves sequencing compaction commands, which should be
+    /// issued whenever available.
+    pub fn maintenance(&mut self) {
         // Take this opportunity to drain `since_update` commands.
         if !self.since_updates.is_empty() {
-            sequencer.push(SequencedCommand::AllowCompaction(std::mem::replace(
-                &mut self.since_updates,
-                Vec::new(),
-            )));
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::AllowCompaction(std::mem::replace(
+                    &mut self.since_updates,
+                    Vec::new(),
+                )),
+            );
         }
     }
 
@@ -270,30 +345,31 @@ impl CommandCoordinator {
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(
-        &mut self,
-        name: &str,
-        upper: &[Timestamp],
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
+    pub fn update_upper(&mut self, name: &str, upper: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             // We may be informed of non-changes; suppress them.
             if entry.upper.elements() != upper {
                 // Log the change to frontiers.
                 if self.log {
                     for time in upper.iter() {
-                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.to_string(),
-                            time.clone(),
-                            1,
-                        )));
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                name.to_string(),
+                                time.clone(),
+                                1,
+                            )),
+                        );
                     }
                     for time in entry.upper.elements().iter() {
-                        sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.to_string(),
-                            time.clone(),
-                            -1,
-                        )));
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                                name.to_string(),
+                                time.clone(),
+                                -1,
+                            )),
+                        );
                     }
                 }
 
@@ -311,7 +387,7 @@ impl CommandCoordinator {
     }
 
     /// The upper frontier of a maintained view, if it exists.
-    pub fn upper_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
+    fn upper_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.upper)
     }
 
@@ -321,7 +397,8 @@ impl CommandCoordinator {
     /// which the associated trace is certain to produce valid results. For times greater
     /// or equal to some element of the since frontier the accumulation will be correct,
     /// and for other times no such guarantee holds.
-    pub fn update_since(&mut self, name: &str, since: &[Timestamp]) {
+    #[allow(dead_code)]
+    fn update_since(&mut self, name: &str, since: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             entry.since.clear();
             entry.since.extend(since.iter().cloned());
@@ -329,27 +406,27 @@ impl CommandCoordinator {
     }
 
     /// The since frontier of a maintained view, if it exists.
-    pub fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
+    #[allow(dead_code)]
+    fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.since)
     }
 
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    pub fn insert_view(
-        &mut self,
-        dataflow: &Dataflow,
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
-        self.remove_view(dataflow.name(), sequencer);
+    fn insert_view(&mut self, dataflow: &Dataflow) {
+        self.remove_view(dataflow.name());
         let viewstate = ViewState::new(dataflow);
         if self.log {
             for time in viewstate.upper.elements() {
-                sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                    dataflow.name().to_string(),
-                    time.clone(),
-                    1,
-                )));
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                        dataflow.name().to_string(),
+                        time.clone(),
+                        1,
+                    )),
+                );
             }
         }
         self.views.insert(dataflow.name().to_string(), viewstate);
@@ -359,21 +436,19 @@ impl CommandCoordinator {
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    pub fn insert_source(
-        &mut self,
-        name: &str,
-        compaction_ms: Timestamp,
-        sequencer: &mut Sequencer<SequencedCommand>,
-    ) {
-        self.remove_view(name, sequencer);
+    fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
+        self.remove_view(name);
         let mut viewstate = ViewState::new_source();
         if self.log {
             for time in viewstate.upper.elements() {
-                sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                    name.to_string(),
-                    time.clone(),
-                    1,
-                )));
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                        name.to_string(),
+                        time.clone(),
+                        1,
+                    )),
+                );
             }
         }
         viewstate.set_compaction_latency(compaction_ms);
@@ -383,19 +458,33 @@ impl CommandCoordinator {
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    pub fn remove_view(&mut self, name: &str, sequencer: &mut Sequencer<SequencedCommand>) {
+    fn remove_view(&mut self, name: &str) {
         if let Some(state) = self.views.remove(name) {
             if self.log {
                 for time in state.upper.elements() {
-                    sequencer.push(SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                        name.to_string(),
-                        time.clone(),
-                        -1,
-                    )));
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                            name.to_string(),
+                            time.clone(),
+                            -1,
+                        )),
+                    );
                 }
             }
         }
     }
+}
+
+fn broadcast(
+    tx: &mut sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
+    cmd: SequencedCommand,
+) {
+    // TODO(benesch): avoid flushing after every send. This will require
+    // something smarter than sink::Wait, which won't flush the sink if a send
+    // gets stuck.
+    tx.send(cmd).unwrap();
+    tx.flush().unwrap();
 }
 
 /// Per-view state.
@@ -408,6 +497,7 @@ pub struct ViewState {
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
+    #[allow(dead_code)]
     since: Antichain<Timestamp>,
     /// Compaction delay.
     ///

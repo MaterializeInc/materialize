@@ -6,14 +6,13 @@
 //! Driver for timely/differential dataflow.
 
 mod arrangement;
-mod exfiltrate;
 mod render;
 mod sink;
 mod source;
 
-pub mod coordinator;
+pub mod exfiltrate;
 pub mod logging;
 pub mod server;
 
 pub use exfiltrate::ExfiltratorConfig;
-pub use server::{serve, DataflowCommand};
+pub use server::{serve, BroadcastToken, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
