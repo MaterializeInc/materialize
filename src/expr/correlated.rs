@@ -41,8 +41,7 @@ pub enum RelationExpr {
         left: Box<RelationExpr>,
         right: Box<RelationExpr>,
         on: ScalarExpr,
-        include_left_outer: bool,
-        include_right_outer: bool,
+        kind: JoinKind,
     },
     /// Group input by key
     /// SPECIAL CASE: when key is empty and input is empty, return a single row with aggregates over empty groups
@@ -98,6 +97,14 @@ pub enum ColumnRef {
     Inner(usize),
     /// References a variable from the outer scope
     Outer(usize),
+}
+
+#[derive(Debug, Clone)]
+pub enum JoinKind {
+    Inner,
+    LeftOuter,
+    RightOuter,
+    FullOuter,
 }
 
 #[derive(Debug, Clone)]
@@ -178,8 +185,7 @@ impl RelationExpr {
                 left,
                 right,
                 on,
-                include_left_outer,
-                include_right_outer,
+                kind,
             } => {
                 let left = left.applied_to(get_outer.clone())?;
                 left.let_(|get_left| {
@@ -201,7 +207,7 @@ impl RelationExpr {
                         }
                         join.let_(|get_join| {
                             let mut result = get_join.clone();
-                            if include_left_outer {
+                            if let JoinKind::LeftOuter | JoinKind::FullOuter = kind {
                                 let left_outer = get_left
                                     .clone()
                                     .union(
@@ -225,7 +231,7 @@ impl RelationExpr {
                                     );
                                 result = result.union(left_outer);
                             }
-                            if include_right_outer {
+                            if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                                 let right_outer = get_right
                                     .clone()
                                     .union(
@@ -522,8 +528,7 @@ impl RelationExpr {
             left: Box::new(self),
             right: Box::new(right),
             on: ScalarExpr::Literal(Datum::True),
-            include_left_outer: false,
-            include_right_outer: false,
+            kind: JoinKind::Inner,
         }
     }
 

@@ -15,8 +15,8 @@ use dataflow_types::{
     Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr::correlated::{
-    AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, RelationExpr, ScalarExpr, UnaryFunc,
-    VariadicFunc,
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, JoinKind, RelationExpr, ScalarExpr,
+    UnaryFunc, VariadicFunc,
 };
 use expr::like::build_like_regex_from_string;
 use failure::{bail, ensure, format_err, ResultExt};
@@ -998,8 +998,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                false,
-                false,
+                JoinKind::Inner,
             ),
             JoinOperator::LeftOuter(constraint) => self.plan_join_constraint(
                 &constraint,
@@ -1007,8 +1006,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                true,
-                false,
+                JoinKind::LeftOuter,
             ),
             JoinOperator::RightOuter(constraint) => self.plan_join_constraint(
                 &constraint,
@@ -1016,8 +1014,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                false,
-                true,
+                JoinKind::RightOuter,
             ),
             JoinOperator::FullOuter(constraint) => self.plan_join_constraint(
                 &constraint,
@@ -1025,8 +1022,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                true,
-                true,
+                JoinKind::FullOuter,
             ),
             JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
             // The remaining join types are MSSQL-specific. We are unlikely to
@@ -1045,8 +1041,7 @@ impl Planner {
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-        include_left_outer: bool,
-        include_right_outer: bool,
+        kind: JoinKind,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
@@ -1079,8 +1074,7 @@ impl Planner {
                     left: Box::new(left),
                     right: Box::new(right),
                     on,
-                    include_left_outer,
-                    include_right_outer,
+                    kind,
                 };
                 Ok((joined, product_scope))
             }
@@ -1090,8 +1084,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                include_left_outer,
-                include_right_outer,
+                kind,
             ),
             JoinConstraint::Natural => {
                 let mut column_names = vec![];
@@ -1113,8 +1106,7 @@ impl Planner {
                     left_scope,
                     right,
                     right_scope,
-                    include_left_outer,
-                    include_right_outer,
+                    kind,
                 )
             }
         }
@@ -1129,8 +1121,7 @@ impl Planner {
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-        include_left_outer: bool,
-        include_right_outer: bool,
+        kind: JoinKind,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         let mut join_exprs = vec![];
         let mut map_exprs = vec![];
@@ -1192,8 +1183,7 @@ impl Planner {
             left: Box::new(left),
             right: Box::new(right),
             on: ScalarExpr::Literal(Datum::True),
-            include_left_outer,
-            include_right_outer,
+            kind,
         }
         .filter(join_exprs)
         .map(map_exprs)
