@@ -25,6 +25,7 @@ use super::sink;
 use super::source;
 use crate::arrangement::{manager::WithDrop, TraceManager};
 use crate::exfiltrate::Exfiltrator;
+use crate::logging::materialized::{Logger, MaterializedEvent};
 
 mod context;
 use context::{ArrangementFlavor, Context};
@@ -35,6 +36,7 @@ pub fn build_dataflow<A: Allocate>(
     worker: &mut TimelyWorker<A>,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
     exfiltrator: Rc<Exfiltrator>,
+    logger: &mut Option<Logger>,
 ) {
     let worker_timer = worker.timer();
     let worker_index = worker.index();
@@ -55,18 +57,35 @@ pub fn build_dataflow<A: Allocate>(
                 }
             };
 
-            use crate::arrangement::manager::KeysOnlySpine;
+            use crate::arrangement::manager::{KeysOnlySpine, KeysValsSpine};
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
-            let arrangement = stream
+            let stream_clone = stream.clone();
+            let arrangement_by_self = stream_clone
                 .as_collection()
-                // TODO: We might choose to arrange by a more effective key.
                 .map(|x| (x, ()))
                 .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
 
             manager.set_by_self(
                 src.name.to_owned(),
-                WithDrop::new(arrangement.trace, capability),
+                WithDrop::new(arrangement_by_self.trace, capability.clone()),
+            );
+
+            let pkey_indices_clone = src.pkey_indices.clone();
+            let arrangement_by_key = stream
+                .as_collection()
+                .map(move |x| {
+                    (
+                        pkey_indices_clone.iter().map(|i| x[*i].clone()).collect(),
+                        x,
+                    )
+                })
+                .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
+
+            manager.set_by_keys(
+                src.name.to_owned(),
+                &src.pkey_indices,
+                WithDrop::new(arrangement_by_key.trace, capability),
             );
         }
         Dataflow::Sink(sink) => {
@@ -113,6 +132,14 @@ pub fn build_dataflow<A: Allocate>(
                             context
                                 .collections
                                 .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
+
+                            // Log the dependency.
+                            if let Some(logger) = logger {
+                                logger.log(MaterializedEvent::DataflowDependency {
+                                    dataflow: view.name.clone(),
+                                    source: name.clone(),
+                                });
+                            }
 
                             tokens.push((button.press_on_drop(), token));
                         }

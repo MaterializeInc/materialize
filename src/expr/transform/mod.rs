@@ -26,7 +26,7 @@ pub trait Transform: std::fmt::Debug {
 
 #[derive(Debug)]
 pub struct Fixpoint {
-    transforms: Vec<Box<dyn crate::transform::Transform>>,
+    transforms: Vec<Box<dyn crate::transform::Transform + Send>>,
 }
 
 impl Transform for Fixpoint {
@@ -52,7 +52,7 @@ impl Transform for Fixpoint {
 /// the optimizations.
 #[derive(Debug)]
 pub struct Optimizer {
-    transforms: Vec<Box<dyn crate::transform::Transform>>,
+    transforms: Vec<Box<dyn crate::transform::Transform + Send>>,
 }
 
 impl Optimizer {
@@ -66,7 +66,7 @@ impl Optimizer {
 
 impl Default for Optimizer {
     fn default() -> Self {
-        let transforms: Vec<Box<dyn crate::transform::Transform>> = vec![
+        let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
             Box::new(crate::transform::inline_let::InlineLet),
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),

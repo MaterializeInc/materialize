@@ -32,6 +32,7 @@
 //! [`Send`] and so can be freely sent between threads.
 
 use futures::{Future, Poll, Sink, Stream};
+use ore::future::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
@@ -103,7 +104,7 @@ impl<D> Receiver<D> {
             conn_rx
                 .map_err(|_| -> bincode::Error { unreachable!() })
                 .map(protocol::decoder)
-                .flatten(),
+                .select_flatten(),
         ))
     }
 }

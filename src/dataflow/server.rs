@@ -13,17 +13,18 @@ use timely::communication::allocator::zero_copy::initialize::initialize_networki
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::progress::frontier::Antichain;
-use timely::synchronization::sequence::Sequencer;
 use timely::worker::Worker as TimelyWorker;
 
 use futures::sync::mpsc::UnboundedReceiver;
+use futures::{Future, Sink};
+use ore::future::sync::mpsc::ReceiverExt;
+use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
 use std::mem;
 use std::net::TcpStream;
 use std::rc::Rc;
 use std::sync::Mutex;
-use std::time::Instant;
 use uuid::Uuid;
 
 use super::render;
@@ -31,43 +32,105 @@ use crate::arrangement::{
     manager::{KeysOnlyHandle, WithDrop},
     TraceManager,
 };
-use crate::coordinator;
 use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{compare_columns, Dataflow, LocalInput, PeekWhen, RowSetFinishing, Timestamp};
-use expr::RelationExpr;
+use dataflow_types::{compare_columns, Dataflow, LocalInput, RowSetFinishing, Timestamp};
 
-/// The commands that a running dataflow server can accept.
+/// A [`comm::broadcast::Token`] that permits broadcasting commands to the
+/// Timely workers.
+pub struct BroadcastToken;
+
+impl comm::broadcast::Token for BroadcastToken {
+    type Item = SequencedCommand;
+
+    /// Returns true, to enable loopback.
+    ///
+    /// Since the coordinator lives on the same process as one set of
+    /// workers, we need to enable loopback so that broadcasts are
+    /// transmitted intraprocess and visible to those workers.
+    fn loopback() -> bool {
+        true
+    }
+}
+
+/// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum DataflowCommand {
+pub enum SequencedCommand {
+    /// Create a sequence of dataflows.
     CreateDataflows(Vec<Dataflow>),
+    /// Drop the dataflows bound to these names.
     DropDataflows(Vec<String>),
+    /// Peek at a materialized view.
     Peek {
+        name: String,
+        timestamp: Timestamp,
         conn_id: u32,
-        source: RelationExpr,
-        when: PeekWhen,
         transform: RowSetFinishing,
     },
-    Explain {
-        conn_id: u32,
-        relation_expr: RelationExpr,
-    },
+    /// Enable compaction in views.
+    ///
+    /// Each entry in the vector names a view and provides a frontier after which
+    /// accumulations must be correct. The workers gain the liberty of compacting
+    /// the corresponding maintained traces up through that frontier.
+    AllowCompaction(Vec<(String, Vec<Timestamp>)>),
+    /// Append a new event to the log stream.
+    AppendLog(MaterializedEvent),
+    /// Request that feedback is streamed to the provided channel.
+    EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
+    /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
 
+/// Information from timely dataflow workers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerFeedbackWithMeta {
+    pub worker_id: usize,
+    pub message: WorkerFeedback,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum WorkerFeedback {
+    FrontierUppers(Vec<(String, Vec<Timestamp>)>),
+}
+
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve(
+///
+/// TODO(benesch): pass a config struct here, or find some other way to cut
+/// down on the number of arguments.
+#[allow(clippy::too_many_arguments)]
+pub fn serve<C>(
     sockets: Vec<Option<TcpStream>>,
     threads: usize,
     process: usize,
-    dataflow_command_receiver: UnboundedReceiver<DataflowCommand>,
+    switchboard: comm::Switchboard<C>,
+    mut executor: impl tokio::executor::Executor + Clone + Send + Sync + 'static,
     local_input_mux: Mux<Uuid, LocalInput>,
     exfiltrator_config: ExfiltratorConfig,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
-) -> Result<WorkerGuards<()>, String> {
-    let dataflow_command_receiver = Mutex::new(Some(dataflow_command_receiver));
+) -> Result<WorkerGuards<()>, String>
+where
+    C: comm::Connection,
+{
+    // Construct endpoints for each thread that will receive the coordinator's
+    // sequenced command stream.
+    //
+    // TODO(benesch): package up this idiom of handing out ownership of N items
+    // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
+    // is hard to read through.
+    let command_rxs = {
+        let mut rx = switchboard.broadcast_rx::<BroadcastToken>().fanout();
+        let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
+        executor
+            .spawn(
+                rx.shuttle()
+                    .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err))
+                    .boxed(),
+            )
+            .map_err(|err| format!("error spawning future: {}", err))?;
+        command_rxs
+    };
 
     let log_fn = Box::new(|_| None);
     let (builders, guard) = initialize_networking_from_sockets(sockets, process, threads, log_fn)
@@ -77,19 +140,24 @@ pub fn serve(
         .map(|x| GenericBuilder::ZeroCopy(x))
         .collect();
 
-    timely::execute::execute_from(builders, Box::new(guard), move |worker| {
-        let dataflow_command_receiver = if worker.index() == 0 {
-            dataflow_command_receiver.lock().unwrap().take()
-        } else {
-            None
-        };
-        Worker::new(
-            worker,
-            dataflow_command_receiver,
-            local_input_mux.clone(),
-            exfiltrator_config.clone(),
-            logging_config.clone(),
-        )
+    timely::execute::execute_from(builders, Box::new(guard), move |timely_worker| {
+        let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % threads]
+            .take()
+            .unwrap()
+            .request_unparks(executor.clone())
+            .unwrap();
+
+        Worker {
+            inner: timely_worker,
+            local_input_mux: local_input_mux.clone(),
+            exfiltrator: Rc::new(exfiltrator_config.clone().into()),
+            pending_peeks: Vec::new(),
+            traces: TraceManager::default(),
+            logging_config: logging_config.clone(),
+            feedback_tx: None,
+            command_rx,
+            materialized_logger: None,
+        }
         .run()
     })
 }
@@ -114,9 +182,9 @@ where
     exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
-    sequencer: Sequencer<coordinator::SequencedCommand>,
     logging_config: Option<LoggingConfig>,
-    command_coordinator: Option<coordinator::CommandCoordinator>,
+    feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
+    command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
 }
 
@@ -124,36 +192,6 @@ impl<'w, A> Worker<'w, A>
 where
     A: Allocate,
 {
-    fn new(
-        w: &'w mut TimelyWorker<A>,
-        dataflow_command_receiver: Option<UnboundedReceiver<DataflowCommand>>,
-        local_input_mux: Mux<Uuid, LocalInput>,
-        exfiltrator_config: ExfiltratorConfig,
-        logging_config: Option<LoggingConfig>,
-    ) -> Worker<'w, A> {
-        let sequencer = Sequencer::new(w, Instant::now());
-        let exfiltrator = Rc::new(exfiltrator_config.into());
-        let command_coordinator = dataflow_command_receiver.map(|dcr| {
-            coordinator::CommandCoordinator::new(
-                dcr,
-                logging_config.as_ref(),
-                Rc::clone(&exfiltrator),
-            )
-        });
-
-        Worker {
-            inner: w,
-            local_input_mux,
-            exfiltrator,
-            pending_peeks: Vec::new(),
-            traces: TraceManager::default(),
-            sequencer,
-            logging_config,
-            command_coordinator,
-            materialized_logger: None,
-        }
-    }
-
     /// Initializes timely dataflow logging and publishes as a view.
     ///
     /// The initialization respects the setting of `self.logging_config`, and in particular
@@ -213,13 +251,6 @@ where
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
-
-            if let Some(coordinator) = &mut self.command_coordinator {
-                for log in logging.active_logs().iter() {
-                    // Insert with 1 second compaction latency.
-                    coordinator.insert_source(log.name(), 1_000, &mut self.sequencer);
-                }
-            }
         }
     }
 
@@ -252,24 +283,28 @@ where
             // a command or when new Kafka messages have arrived.
             self.inner.step_or_park(None);
 
-            if let Some(coordinator) = &mut self.command_coordinator {
-                // Sequence any pending commands.
-                coordinator.sequence_commands(&mut self.sequencer);
-                coordinator.maintenance(&mut self.sequencer);
-
-                // Update upper bounds for each maintained trace.
+            // Send progress information to the coordinator.
+            if let Some(feedback_tx) = &mut self.feedback_tx {
                 let mut upper = Antichain::new();
+                let mut progress = Vec::new();
                 for name in self.traces.traces.keys() {
                     if let Some(by_self) = self.traces.get_by_self(name) {
                         by_self.clone().read_upper(&mut upper);
-                        coordinator.update_upper(name, upper.elements(), &mut self.sequencer);
+                        progress.push((name.to_owned(), upper.elements().to_vec()));
                     }
                 }
+                feedback_tx
+                    .send(WorkerFeedbackWithMeta {
+                        worker_id: self.inner.index(),
+                        message: WorkerFeedback::FrontierUppers(progress),
+                    })
+                    .wait()
+                    .unwrap();
             }
 
-            // Handle any received commands
-            while let Some(cmd) = self.sequencer.next() {
-                if let coordinator::SequencedCommand::Shutdown = cmd {
+            // Handle any received commands.
+            while let Ok(Some(cmd)) = self.command_rx.try_next() {
+                if let SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
                 self.handle_command(cmd);
@@ -281,9 +316,9 @@ where
         }
     }
 
-    fn handle_command(&mut self, cmd: coordinator::SequencedCommand) {
+    fn handle_command(&mut self, cmd: SequencedCommand) {
         match cmd {
-            coordinator::SequencedCommand::CreateDataflows(dataflows) => {
+            SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(
@@ -297,11 +332,12 @@ where
                         self.inner,
                         &mut self.local_input_mux,
                         self.exfiltrator.clone(),
+                        &mut self.materialized_logger,
                     );
                 }
             }
 
-            coordinator::SequencedCommand::DropDataflows(dataflows) => {
+            SequencedCommand::DropDataflows(dataflows) => {
                 for name in &dataflows {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
@@ -310,7 +346,7 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Peek {
+            SequencedCommand::Peek {
                 name,
                 timestamp,
                 conn_id,
@@ -342,13 +378,13 @@ where
                 self.pending_peeks.push((pending_peek, trace));
             }
 
-            coordinator::SequencedCommand::AllowCompaction(list) => {
+            SequencedCommand::AllowCompaction(list) => {
                 for (name, frontier) in list {
                     self.traces.allow_compaction(&name, &frontier[..]);
                 }
             }
 
-            coordinator::SequencedCommand::AppendLog(event) => {
+            SequencedCommand::AppendLog(event) => {
                 if self.inner.index() == 0 {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(event);
@@ -356,7 +392,14 @@ where
                 }
             }
 
-            coordinator::SequencedCommand::Shutdown => {
+            SequencedCommand::EnableFeedback(tx) => {
+                self.feedback_tx =
+                    Some(Box::new(tx.connect().wait().unwrap().sink_map_err(|err| {
+                        panic!("error sending worker feedback: {}", err)
+                    })));
+            }
+
+            SequencedCommand::Shutdown => {
                 // this should lead timely to wind down eventually
                 self.traces.del_all_traces();
                 self.shutdown_logging();

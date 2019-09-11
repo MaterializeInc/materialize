@@ -222,12 +222,13 @@ impl Planner {
     }
 
     fn handle_show_objects(&mut self, object_type: ObjectType) -> Result<Plan, failure::Error> {
-        let rows: Vec<Vec<Datum>> = self
+        let mut rows: Vec<Vec<Datum>> = self
             .dataflows
             .iter()
             .filter(|(_k, v)| object_type_matches(object_type, &v))
             .map(|(k, _v)| vec![Datum::from(k.to_owned())])
             .collect();
+        rows.sort_unstable();
         Ok(Plan::SendRows {
             typ: RelationType {
                 column_types: vec![ColumnType::new(ScalarType::String)

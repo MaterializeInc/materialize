@@ -58,6 +58,7 @@ pub enum DifferentialLog {
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub enum MaterializedLog {
     DataflowCurrent,
+    DataflowDependency,
     FrontierCurrent,
     PeekCurrent,
     PeekDuration,
@@ -76,6 +77,7 @@ impl LogVariant {
             LogVariant::Differential(DifferentialLog::Arrangement),
             LogVariant::Differential(DifferentialLog::Sharing),
             LogVariant::Materialized(MaterializedLog::DataflowCurrent),
+            LogVariant::Materialized(MaterializedLog::DataflowDependency),
             LogVariant::Materialized(MaterializedLog::FrontierCurrent),
             LogVariant::Materialized(MaterializedLog::PeekCurrent),
             LogVariant::Materialized(MaterializedLog::PeekDuration),
@@ -95,6 +97,9 @@ impl LogVariant {
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
             LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
+                "logs_dataflow_dependency"
+            }
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers",
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks",
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations",
@@ -173,6 +178,13 @@ impl LogVariant {
                     ColumnType::new(ScalarType::Int64).name("worker"),
                 ],
             },
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationType {
+                column_types: vec![
+                    ColumnType::new(ScalarType::String).name("dataflow"),
+                    ColumnType::new(ScalarType::String).name("source"),
+                    ColumnType::new(ScalarType::Int64).name("worker"),
+                ],
+            },
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationType {
                 column_types: vec![
                     ColumnType::new(ScalarType::String).name("name"),
@@ -194,6 +206,25 @@ impl LogVariant {
                     ColumnType::new(ScalarType::Int64).name("count"),
                 ],
             },
+        }
+    }
+    /// Reports the primary keys for each logged collection.
+    pub fn primary_key(&self) -> Option<Vec<usize>> {
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => Some(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Channels) => Some(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Messages) => Some(vec![0]),
+            LogVariant::Timely(TimelyLog::Shutdown) => Some(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Text) => None,
+            LogVariant::Timely(TimelyLog::Elapsed) => Some(vec![0]),
+            LogVariant::Timely(TimelyLog::Histogram) => Some(vec![0]),
+            LogVariant::Differential(DifferentialLog::Arrangement) => Some(vec![0, 1]),
+            LogVariant::Differential(DifferentialLog::Sharing) => Some(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => Some(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => None,
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => None,
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => Some(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => Some(vec![0, 1]),
         }
     }
 }

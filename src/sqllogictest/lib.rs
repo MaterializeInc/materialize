@@ -15,20 +15,18 @@ use std::path::Path;
 use std::str::FromStr;
 
 use failure::{bail, format_err, ResultExt};
-use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Stream};
 use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
-use dataflow::{self, DataflowCommand};
+use dataflow;
 use dataflow_types::{
-    self, Dataflow, Exfiltration, LocalInput, LocalSourceConnector, PeekWhen, Source,
-    SourceConnector, Update,
+    self, Dataflow, Exfiltration, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
 };
-use materialize::queue::{translate_plan, SqlResponse, WaitFor};
-use ore::collections::CollectionExt;
+use materialize::queue::{coordinator::Coordinator, SqlResponse, WaitFor};
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
@@ -661,18 +659,22 @@ trait RecordRunner {
 const NUM_TIMELY_WORKERS: usize = 3;
 
 struct FullState {
+    // Hold a reference to the dataflow workers threads to avoid dropping them
+    // too early. Order is important here! They must appear before the runtime,
+    // so that the runtime is *dropped* after the workers. We rely on the
+    // runtime to send the shutdown signal to the workers; if the runtime goes
+    // away first, the workers won't ever get the shutdown signal.
+    _dataflow_workers: Box<dyn Drop>,
+    _runtime: tokio::runtime::Runtime,
     postgres: Postgres,
     planner: Planner,
     session: Session,
+    coord: Coordinator<tokio::net::TcpStream>,
     conn_id: u32,
-    dataflow_command_sender: UnboundedSender<DataflowCommand>,
-    worker0_thread: std::thread::Thread,
-    // this is only here to avoid dropping it too early
-    _dataflow_workers: Box<dyn Drop>,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    dataflow_results_mux: Mux<u32, Exfiltration>,
+    peek_receiver: UnboundedReceiver<Exfiltration>,
 }
 
 fn format_row(
@@ -741,55 +743,53 @@ impl FullState {
         let logging_config = None;
         let planner = Planner::new(logging_config);
         let session = Session::default();
-        let (dataflow_command_sender, dataflow_command_receiver) = mpsc::unbounded();
         let local_input_mux = Mux::default();
         let dataflow_results_mux = Mux::default();
         let process_id = 0;
+        let (switchboard, runtime) = comm::Switchboard::local()?;
+        let exfiltrator_config = dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone());
         let dataflow_workers = dataflow::serve(
             vec![None],
             NUM_TIMELY_WORKERS,
             process_id,
-            dataflow_command_receiver,
+            switchboard.clone(),
+            runtime.executor(),
             local_input_mux.clone(),
-            dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone()),
+            exfiltrator_config.clone(),
             None, // disable logging
         )
         .unwrap();
 
-        let worker0_thread = dataflow_workers.guards().into_first().thread().clone();
+        let coord = Coordinator::new(
+            switchboard,
+            None, // disable logging
+        );
+
+        let conn_id = 1;
+        let peek_receiver = {
+            let mut mux = dataflow_results_mux.write().unwrap();
+            mux.channel(conn_id).unwrap();
+            mux.receiver(&conn_id).unwrap()
+        };
+
         Ok(FullState {
+            _runtime: runtime,
             postgres,
             planner,
             session,
-            conn_id: 1,
-            dataflow_command_sender,
+            coord,
+            conn_id,
             _dataflow_workers: Box::new(dataflow_workers),
             current_timestamp: 1,
             local_input_uuids: HashMap::new(),
             local_input_mux,
-            dataflow_results_mux,
-            worker0_thread,
+            peek_receiver,
         })
     }
 
-    fn send_dataflow_command(
-        &self,
-        dataflow_command: DataflowCommand,
-    ) -> UnboundedReceiver<Exfiltration> {
-        let receiver = {
-            let mut mux = self.dataflow_results_mux.write().unwrap();
-            mux.channel(self.conn_id).unwrap();
-            mux.receiver(&self.conn_id).unwrap()
-        };
-        self.dataflow_command_sender
-            .unbounded_send(dataflow_command.clone())
-            .unwrap();
-        self.worker0_thread.unpark();
-        receiver
-    }
-
-    fn receive_peek_results(&self, receiver: UnboundedReceiver<Exfiltration>) -> Vec<Vec<Datum>> {
-        receiver
+    fn receive_peek_results(&mut self) -> Vec<Vec<Datum>> {
+        self.peek_receiver
+            .by_ref()
             .take(NUM_TIMELY_WORKERS as u64)
             .map(|ex| match ex {
                 Exfiltration::Peek(results) => results,
@@ -876,9 +876,7 @@ impl RecordRunner for FullState {
                                     pkey_indices: Vec::new(),
                                 });
                                 self.planner.dataflows.insert(dataflow.clone())?;
-                                let _receiver = self.send_dataflow_command(
-                                    DataflowCommand::CreateDataflows(vec![dataflow]),
-                                );
+                                self.coord.create_dataflows(vec![dataflow]);
                                 {
                                     self.local_input_mux
                                         .read()
@@ -903,8 +901,7 @@ impl RecordRunner for FullState {
                                         &mut dataflows,
                                     )?;
                                 }
-                                let _receiver = self
-                                    .send_dataflow_command(DataflowCommand::DropDataflows(names));
+                                self.coord.drop_dataflows(names);
                                 rows_inserted = None;
                             }
                             postgres::Outcome::Changed(name, _typ, updates) => {
@@ -978,29 +975,19 @@ impl RecordRunner for FullState {
                     | Statement::CreateSource { .. }
                     | Statement::CreateSink { .. }
                     | Statement::Drop { .. } => {
-                        let dataflow_command = match self
+                        match self
                             .planner
                             .handle_command(&mut self.session, sql.to_owned())
                         {
-                            Ok(plan) => translate_plan(plan, self.conn_id).1,
+                            Ok(plan) => {
+                                self.coord.sequence_plan(
+                                    plan,
+                                    self.conn_id,
+                                    Some(self.current_timestamp - 1),
+                                );
+                            }
                             Err(error) => return Ok(Outcome::PlanFailure { error }),
                         };
-                        // make sure we peek at the correct time
-                        let dataflow_command = match dataflow_command {
-                            Some(DataflowCommand::Peek {
-                                source,
-                                conn_id,
-                                when: _,
-                                transform,
-                            }) => Some(DataflowCommand::Peek {
-                                source,
-                                conn_id,
-                                when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
-                                transform,
-                            }),
-                            other => other,
-                        };
-                        let _receiver = self.send_dataflow_command(dataflow_command.unwrap());
                         Ok(Outcome::Success)
                     }
 
@@ -1033,30 +1020,28 @@ impl RecordRunner for FullState {
                     }
                 }
 
-                let (typ, dataflow_command, immediate_rows) = match self
+                let (typ, immediate_rows) = match self
                     .planner
                     .handle_command(&mut self.session, sql.to_string())
                 {
-                    Ok(plan) => match translate_plan(plan, self.conn_id) {
-                        (
-                            SqlResponse::SendRows {
-                                typ,
-                                rows: _,
-                                wait_for: WaitFor::Workers,
-                                transform: _,
-                            },
-                            dataflow_command,
-                        ) => (typ, dataflow_command, None),
+                    Ok(plan) => match self.coord.sequence_plan(
+                        plan,
+                        self.conn_id,
+                        Some(self.current_timestamp - 1),
+                    ) {
+                        SqlResponse::SendRows {
+                            typ,
+                            rows: _,
+                            wait_for: WaitFor::Workers,
+                            transform: _,
+                        } => (typ, None),
                         // impossible for there to be a dataflow command
-                        (
-                            SqlResponse::SendRows {
-                                typ,
-                                rows,
-                                wait_for: WaitFor::NoOne,
-                                transform: _,
-                            },
-                            None,
-                        ) => (typ, None, Some(rows)),
+                        SqlResponse::SendRows {
+                            typ,
+                            rows,
+                            wait_for: WaitFor::NoOne,
+                            transform: _,
+                        } => (typ, Some(rows)),
                         other => {
                             return Ok(Outcome::PlanFailure {
                                 error: failure::format_err!(
@@ -1126,7 +1111,6 @@ impl RecordRunner for FullState {
                             }
                         }
 
-                        // make sure we peek at the correct time
                         let (mut formatted_rows, raw_output) = match immediate_rows {
                             Some(rows) => (
                                 rows.iter()
@@ -1143,24 +1127,7 @@ impl RecordRunner for FullState {
                                 rows,
                             ),
                             None => {
-                                let dataflow_command = match dataflow_command {
-                                    Some(DataflowCommand::Peek {
-                                        source,
-                                        conn_id,
-                                        when: _,
-                                        transform,
-                                    }) => Some(DataflowCommand::Peek {
-                                        source,
-                                        conn_id,
-                                        when: PeekWhen::AtTimestamp(self.current_timestamp - 1),
-                                        transform,
-                                    }),
-                                    other => other,
-                                };
-                                let receiver =
-                                    self.send_dataflow_command(dataflow_command.unwrap());
-                                let results = self.receive_peek_results(receiver);
-
+                                let results = self.receive_peek_results();
                                 (
                                     results
                                         .iter()
@@ -1234,12 +1201,7 @@ impl RecordRunner for FullState {
 
 impl Drop for FullState {
     fn drop(&mut self) {
-        drop(
-            self.dataflow_command_sender
-                .unbounded_send(DataflowCommand::Shutdown),
-        );
-
-        self.worker0_thread.unpark();
+        self.coord.shutdown();
     }
 }
 
@@ -1386,21 +1348,18 @@ pub fn fuzz(sqls: &str) {
             .planner
             .handle_command(&mut state.session, sql.to_owned())
         {
-            let (sql_response, dataflow_command) = translate_plan(plan, state.conn_id);
-            if let Some(dataflow_command) = dataflow_command {
-                let receiver = state.send_dataflow_command(dataflow_command);
-                if let SqlResponse::SendRows {
-                    typ,
-                    rows,
-                    wait_for: WaitFor::Workers,
-                    ..
-                } = sql_response
-                {
-                    assert!(rows.is_empty());
-                    for row in state.receive_peek_results(receiver) {
-                        for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
-                            assert!(datum.is_instance_of(typ));
-                        }
+            let sql_response = state.coord.sequence_plan(plan, state.conn_id, None);
+            if let SqlResponse::SendRows {
+                typ,
+                rows,
+                wait_for: WaitFor::Workers,
+                ..
+            } = sql_response
+            {
+                assert!(rows.is_empty());
+                for row in state.receive_peek_results() {
+                    for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
+                        assert!(datum.is_instance_of(typ));
                     }
                 }
             }
