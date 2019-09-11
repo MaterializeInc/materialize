@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 
 pub mod func;
 
@@ -706,6 +706,7 @@ impl RelationExpr {
         format!("{}", self.to_doc().pretty(70))
     }
 
+    /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` in it's place
     pub fn take(&mut self) -> RelationExpr {
         std::mem::replace(
             self,
