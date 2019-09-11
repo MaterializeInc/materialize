@@ -1182,10 +1182,17 @@ impl Planner {
         let both = RelationExpr::Join {
             left: Box::new(left),
             right: Box::new(right),
-            on: ScalarExpr::Literal(Datum::True),
+            on: join_exprs
+                .into_iter()
+                .fold(ScalarExpr::Literal(Datum::True), |expr1, expr2| {
+                    ScalarExpr::CallBinary {
+                        func: BinaryFunc::And,
+                        expr1: Box::new(expr1),
+                        expr2: Box::new(expr2),
+                    }
+                }),
             kind,
         }
-        .filter(join_exprs)
         .map(map_exprs)
         .project(project_key);
         Ok((both, both_scope))
