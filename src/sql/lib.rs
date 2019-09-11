@@ -1446,7 +1446,8 @@ impl Planner {
         let is_arithmetic = op == &BinaryOperator::Plus
             || op == &BinaryOperator::Minus
             || op == &BinaryOperator::Multiply
-            || op == &BinaryOperator::Divide;
+            || op == &BinaryOperator::Divide
+            || op == &BinaryOperator::Modulus;
 
         // For arithmetic there are two type categories where we skip coalescing:
         //
@@ -1474,15 +1475,19 @@ impl Planner {
         // [0]: https://docs.snowflake.net/manuals/sql-reference/operators-arithmetic.html
         match (&op, &ltype.scalar_type, &rtype.scalar_type) {
             (BinaryOperator::Plus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2))
-            | (BinaryOperator::Minus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) => {
+            | (BinaryOperator::Minus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2))
+            | (BinaryOperator::Modulus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) =>
+            {
                 let p = cmp::max(p1, p2) + 1;
                 let so = cmp::max(s1, s2);
                 let lexpr = rescale_decimal(lexpr, *s1, *so);
                 let rexpr = rescale_decimal(rexpr, *s2, *so);
                 let func = if op == &BinaryOperator::Plus {
                     BinaryFunc::AddDecimal
-                } else {
+                } else if op == &BinaryOperator::Minus {
                     BinaryFunc::SubDecimal
+                } else {
+                    BinaryFunc::ModDecimal
                 };
                 let expr = lexpr.call_binary(rexpr, func);
                 let typ = ColumnType::new(ScalarType::Decimal(p, *so))

@@ -456,6 +456,13 @@ pub fn mod_float64(a: Datum, b: Datum) -> Datum {
     Datum::from(a.unwrap_float64() % b.unwrap_float64())
 }
 
+pub fn mod_decimal(a: Datum, b: Datum) -> Datum {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_decimal() % b.unwrap_decimal())
+}
+
 pub fn neg_int32(a: Datum) -> Datum {
     if a.is_null() {
         return Datum::Null;
@@ -580,6 +587,7 @@ pub enum BinaryFunc {
     ModInt64,
     ModFloat32,
     ModFloat64,
+    ModDecimal,
     Eq,
     NotEq,
     Lt,
@@ -620,6 +628,7 @@ impl BinaryFunc {
             BinaryFunc::ModInt64 => mod_int64,
             BinaryFunc::ModFloat32 => mod_float32,
             BinaryFunc::ModFloat64 => mod_float64,
+            BinaryFunc::ModDecimal => mod_decimal,
             BinaryFunc::Eq => eq,
             BinaryFunc::NotEq => not_eq,
             BinaryFunc::Lt => lt,

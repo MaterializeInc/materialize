@@ -1,0 +1,42 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+statement ok
+CREATE TABLE t (a float, b int)
+
+statement ok
+INSERT INTO t VALUES (4.7, 2)
+
+# Test that all arithmetic and comparison operators coalesce their arguments.
+# The goal is not to test every possible combination of arguments, but just a
+# basic sanity check. An old version of the code forgot to include modulus in
+# list of operators that should coalesce their inputs.
+
+query RRRRRBBBBBB
+SELECT
+    a + b,
+    a - b,
+    a * b,
+    a / b,
+    a % b,
+    a < b,
+    a <= b,
+    a > b,
+    a >= b,
+    a = b,
+    a <> b
+FROM t
+----
+6.700
+2.700
+9.400
+2.350
+0.700
+false
+false
+true
+true
+false
+true
