@@ -15,7 +15,6 @@ dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.5"
 interchange = { path = "../interchange" }
-num-bigint = "0.2.2"
 ore = { path = "../ore" }
 repr = { path = "../repr" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
