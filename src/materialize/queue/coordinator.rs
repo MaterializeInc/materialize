@@ -225,7 +225,7 @@ where
             Plan::ExplainPlan { typ, relation_expr } => SqlResponse::SendRows {
                 typ,
                 rows: vec![vec![Datum::from(relation_expr.pretty())]],
-                wait_for: WaitFor::Optimizer,
+                wait_for: WaitFor::NoOne,
                 transform: Default::default(),
             },
         }
