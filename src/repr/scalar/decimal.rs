@@ -51,7 +51,7 @@ use std::fmt;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::iter::Sum;
-use std::ops::{Add, AddAssign, Div, Mul, Sub};
+use std::ops::{Add, AddAssign, Div, Mul, Rem, Sub};
 
 /// The significand of a decimal number with up to 38 digits of precision.
 ///
@@ -219,6 +219,25 @@ where
 
     fn div(self, other: T) -> Self {
         Self(self.0 / other)
+    }
+}
+
+impl Rem<Significand> for Significand {
+    type Output = Self;
+
+    fn rem(self, other: Self) -> Self {
+        Self(self.0 % other.0)
+    }
+}
+
+impl<T> Rem<T> for Significand
+where
+    i128: Rem<T, Output = i128>,
+{
+    type Output = Self;
+
+    fn rem(self, other: T) -> Self {
+        Self(self.0 % other)
     }
 }
 
