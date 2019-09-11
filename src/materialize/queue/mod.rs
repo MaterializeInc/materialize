@@ -9,9 +9,11 @@
 //! provide distribution, replication, and durability. At the moment,
 //! only a simple, transient, single-node queue is provided.
 
-use dataflow_types::RowSetFinishing;
+use dataflow_types::Update;
+use futures::Future;
 use repr::{Datum, RelationType};
 use sql::Session;
+use std::fmt;
 
 pub mod coordinator;
 pub mod transient;
@@ -30,16 +32,9 @@ pub struct Response {
     pub session: Session,
 }
 
-/// Flag for whether optimizer or workers will chime in as well.
-#[derive(Debug)]
-pub enum WaitFor {
-    NoOne,
-    Optimizer,
-    Workers,
-}
+pub type RowsFuture = Box<dyn Future<Item = Vec<Vec<Datum>>, Error = failure::Error> + Send>;
 
-#[derive(Debug)]
-/// Responses from the planner to SQL commands.
+/// The SQL portition of [`Response`].
 pub enum SqlResponse {
     CreatedSink,
     CreatedSource,
@@ -49,10 +44,26 @@ pub enum SqlResponse {
     EmptyQuery,
     SendRows {
         typ: RelationType,
-        rows: Vec<Vec<Datum>>,
-        wait_for: WaitFor,
-        transform: RowSetFinishing,
+        rx: RowsFuture,
     },
     SetVariable,
-    Tailing,
+    Tailing {
+        rx: comm::mpsc::Receiver<Vec<Update>>,
+    },
+}
+
+impl fmt::Debug for SqlResponse {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SqlResponse::CreatedSink => f.write_str("SqlResponse::CreatedSink"),
+            SqlResponse::CreatedSource => f.write_str("SqlResponse::CreatedSource"),
+            SqlResponse::CreatedView => f.write_str("SqlResponse::CreatedView"),
+            SqlResponse::DroppedSource => f.write_str("SqlResponse::DroppedSource"),
+            SqlResponse::DroppedView => f.write_str("SqlResposne::DroppedView"),
+            SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
+            SqlResponse::SendRows { typ, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", typ),
+            SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
+            SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),
+        }
+    }
 }

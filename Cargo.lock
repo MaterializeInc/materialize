@@ -608,6 +608,7 @@ dependencies = [
 name = "dataflow-types"
 version = "0.1.0"
 dependencies = [
+ "comm 0.1.0",
  "expr 0.1.0",
  "pretty_assertions 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "repr 0.1.0",

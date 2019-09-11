@@ -9,6 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+comm = { path = "../comm" }
 expr = { path = "../expr" }
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }

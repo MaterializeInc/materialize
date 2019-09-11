@@ -20,12 +20,14 @@ enum Message {
 
 pub fn serve<C>(
     switchboard: comm::Switchboard<C>,
+    num_timely_workers: usize,
     logging_config: Option<&LoggingConfig>,
     cmd_rx: UnboundedReceiver<Command>,
 ) where
     C: comm::Connection,
 {
-    let mut coord = coordinator::Coordinator::new(switchboard.clone(), logging_config);
+    let mut coord =
+        coordinator::Coordinator::new(switchboard.clone(), num_timely_workers, logging_config);
     let feedback_rx = coord.enable_feedback();
 
     let mut planner = sql::Planner::new(logging_config);

@@ -15,8 +15,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use failure::{bail, format_err, ResultExt};
-use futures::sync::mpsc::UnboundedReceiver;
-use futures::{Future, Stream};
+use futures::Future;
 use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -24,9 +23,9 @@ use uuid::Uuid;
 
 use dataflow;
 use dataflow_types::{
-    self, Dataflow, Exfiltration, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
+    self, Dataflow, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
 };
-use materialize::queue::{coordinator::Coordinator, SqlResponse, WaitFor};
+use materialize::queue::{coordinator::Coordinator, SqlResponse};
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
@@ -674,7 +673,6 @@ struct FullState {
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    peek_receiver: UnboundedReceiver<Exfiltration>,
 }
 
 fn format_row(
@@ -744,10 +742,8 @@ impl FullState {
         let planner = Planner::new(logging_config);
         let session = Session::default();
         let local_input_mux = Mux::default();
-        let dataflow_results_mux = Mux::default();
         let process_id = 0;
         let (switchboard, runtime) = comm::Switchboard::local()?;
-        let exfiltrator_config = dataflow::ExfiltratorConfig::Local(dataflow_results_mux.clone());
         let dataflow_workers = dataflow::serve(
             vec![None],
             NUM_TIMELY_WORKERS,
@@ -755,22 +751,15 @@ impl FullState {
             switchboard.clone(),
             runtime.executor(),
             local_input_mux.clone(),
-            exfiltrator_config.clone(),
             None, // disable logging
         )
         .unwrap();
 
         let coord = Coordinator::new(
             switchboard,
+            NUM_TIMELY_WORKERS,
             None, // disable logging
         );
-
-        let conn_id = 1;
-        let peek_receiver = {
-            let mut mux = dataflow_results_mux.write().unwrap();
-            mux.channel(conn_id).unwrap();
-            mux.receiver(&conn_id).unwrap()
-        };
 
         Ok(FullState {
             _runtime: runtime,
@@ -778,26 +767,12 @@ impl FullState {
             planner,
             session,
             coord,
-            conn_id,
+            conn_id: 1,
             _dataflow_workers: Box::new(dataflow_workers),
             current_timestamp: 1,
             local_input_uuids: HashMap::new(),
             local_input_mux,
-            peek_receiver,
         })
-    }
-
-    fn receive_peek_results(&mut self) -> Vec<Vec<Datum>> {
-        self.peek_receiver
-            .by_ref()
-            .take(NUM_TIMELY_WORKERS as u64)
-            .map(|ex| match ex {
-                Exfiltration::Peek(results) => results,
-                _ => panic!("expected Exfiltration::Peek, but got {:?}", ex),
-            })
-            .concat2()
-            .wait()
-            .unwrap()
     }
 }
 
@@ -1046,30 +1021,19 @@ impl RecordRunner for FullState {
                 };
 
                 // send plan, read response
-                let (typ, raw_output) = match self.coord.sequence_plan(
+                let (typ, rows_rx) = match self.coord.sequence_plan(
                     plan,
                     self.conn_id,
                     Some(self.current_timestamp - 1),
                 ) {
-                    SqlResponse::SendRows {
-                        typ,
-                        rows: _,
-                        wait_for: WaitFor::Workers,
-                        transform: _,
-                    } => (typ, self.receive_peek_results()),
-                    SqlResponse::SendRows {
-                        typ,
-                        rows,
-                        wait_for: WaitFor::NoOne,
-                        transform: _,
-                    } => (typ, rows),
+                    SqlResponse::SendRows { typ, rx } => (typ, rx),
                     other => {
                         return Ok(Outcome::PlanFailure {
-                                error: failure::format_err!(
-                                    "Query did not result in SendRows modulo WaitFor::Optimizer, instead got {:?}",
-                                    other
-                                ),
-                            });
+                            error: failure::format_err!(
+                                "Query did not result in SendRows, instead got {:?}",
+                                other
+                            ),
+                        });
                     }
                 };
 
@@ -1123,6 +1087,7 @@ impl RecordRunner for FullState {
                 }
 
                 // format output
+                let raw_output = rows_rx.wait()?;
                 let mut formatted_rows = raw_output
                     .iter()
                     .map(|row| format_row(row, &typ.column_types, &**expected_types, *mode, sort))
@@ -1331,15 +1296,8 @@ pub fn fuzz(sqls: &str) {
             .handle_command(&mut state.session, sql.to_owned())
         {
             let sql_response = state.coord.sequence_plan(plan, state.conn_id, None);
-            if let SqlResponse::SendRows {
-                typ,
-                rows,
-                wait_for: WaitFor::Workers,
-                ..
-            } = sql_response
-            {
-                assert!(rows.is_empty());
-                for row in state.receive_peek_results() {
+            if let SqlResponse::SendRows { typ, rx } = sql_response {
+                for row in rx.wait().unwrap() {
                     for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
                         assert!(datum.is_instance_of(typ));
                     }

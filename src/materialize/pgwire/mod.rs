@@ -25,9 +25,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::queue;
-use dataflow_types::Exfiltration;
 use ore::future::FutureExt;
-use ore::mpmc::Mux;
 
 mod codec;
 mod id_alloc;
@@ -41,8 +39,6 @@ pub use protocol::match_handshake;
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
     cmdq_tx: UnboundedSender<queue::Command>,
-    dataflow_results_mux: Mux<u32, Exfiltration>,
-    num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = failure::Error> {
     lazy_static! {
         static ref CONN_ID_ALLOCATOR: id_alloc::IdAllocator = IdAllocator::new(1, 1 << 16);
@@ -54,20 +50,10 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
         }
     };
     let stream = Framed::new(a, codec::Codec::new());
-    let dataflow_results_receiver = {
-        let mut mux = dataflow_results_mux.write().unwrap();
-        mux.channel(conn_id).unwrap();
-        mux.receiver(&conn_id).unwrap()
-    };
     protocol::StateMachine::start(
         stream,
         sql::Session::default(),
-        protocol::Context {
-            conn_id,
-            cmdq_tx,
-            dataflow_results_receiver,
-            num_timely_workers,
-        },
+        protocol::Context { conn_id, cmdq_tx },
     )
     .then(move |res| {
         CONN_ID_ALLOCATOR.free(conn_id);

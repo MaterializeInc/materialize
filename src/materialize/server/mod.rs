@@ -18,9 +18,7 @@ use tokio::prelude::*;
 use crate::pgwire;
 use crate::queue;
 use comm::Switchboard;
-use dataflow::{self, ExfiltratorConfig};
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::Exfiltration;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use ore::netio;
@@ -49,8 +47,6 @@ fn handle_connection(
     conn: TcpStream,
     switchboard: Switchboard<SniffedStream<TcpStream>>,
     cmdq_tx: UnboundedSender<queue::Command>,
-    dataflow_results_mux: Mux<u32, Exfiltration>,
-    num_timely_workers: usize,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
@@ -64,15 +60,9 @@ fn handle_connection(
         .and_then(move |(ss, buf, nread)| {
             let buf = &buf[..nread];
             if pgwire::match_handshake(buf) {
-                pgwire::serve(
-                    ss.into_sniffed(),
-                    cmdq_tx,
-                    dataflow_results_mux,
-                    num_timely_workers,
-                )
-                .boxed()
+                pgwire::serve(ss.into_sniffed(), cmdq_tx).boxed()
             } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed(), dataflow_results_mux).boxed()
+                http::handle_connection(ss.into_sniffed()).boxed()
             } else if comm::protocol::match_handshake(buf) {
                 switchboard
                     .handle_connection(ss.into_sniffed())
@@ -94,15 +84,10 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
     let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<queue::Command>();
-    let dataflow_results_mux = Mux::default();
 
     // Extract timely dataflow parameters.
-    let num_timely_workers = config.num_timely_workers();
     let is_primary = config.process == 0;
-    let exfiltrator_config = ExfiltratorConfig::Remote(format!(
-        "http://{}/api/dataflow-results",
-        config.addresses[0]
-    ));
+    let num_timely_workers = config.num_timely_workers();
 
     // Initialize pgwire / http listener.
     let listen_addr = SocketAddr::new(
@@ -157,8 +142,6 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
                         conn,
                         switchboard.clone(),
                         cmdq_tx.clone(),
-                        dataflow_results_mux.clone(),
-                        num_timely_workers,
                     ));
                 } else {
                     // When not the primary, we only need to route switchboard
@@ -195,14 +178,18 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         switchboard.clone(),
         runtime.executor(),
         local_input_mux.clone(),
-        exfiltrator_config.clone(),
         logging_config.clone(),
     )
     .map_err(|s| format_err!("{}", s))?;
 
     // Initialize command queue and sql planner, but only on the primary.
     if is_primary {
-        queue::transient::serve(switchboard, logging_config.as_ref(), cmdq_rx);
+        queue::transient::serve(
+            switchboard,
+            num_timely_workers,
+            logging_config.as_ref(),
+            cmdq_rx,
+        );
     }
 
     runtime

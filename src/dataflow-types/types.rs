@@ -70,15 +70,6 @@ pub struct RowSetFinishing {
     pub limit: Option<usize>,
 }
 
-/// A batch of data exfiltrated from the dataflow layer.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Exfiltration {
-    /// The complete result of a `DataflowCommand::Peek` from one worker.
-    Peek(Vec<Vec<Datum>>),
-    /// A chunk of updates from a tail sink.
-    Tail(Vec<Update>),
-}
-
 #[derive(Debug, Clone)]
 pub enum LocalInput {
     /// Send a batch of updates to the input
@@ -184,7 +175,7 @@ pub struct KafkaSinkConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
-    pub conn_id: u32,
+    pub tx: comm::mpsc::Sender<Vec<Update>>,
 }
 
 /// A view transforms one dataflow into another.

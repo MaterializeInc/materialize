@@ -20,10 +20,10 @@ use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
+use repr::Datum;
 use serde::{Deserialize, Serialize};
 use std::mem;
 use std::net::TcpStream;
-use std::rc::Rc;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -32,7 +32,6 @@ use crate::arrangement::{
     manager::{KeysOnlyHandle, WithDrop},
     TraceManager,
 };
-use crate::exfiltrate::{Exfiltrator, ExfiltratorConfig};
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
@@ -65,8 +64,9 @@ pub enum SequencedCommand {
     /// Peek at a materialized view.
     Peek {
         name: String,
-        timestamp: Timestamp,
         conn_id: u32,
+        tx: comm::mpsc::Sender<Vec<Vec<Datum>>>,
+        timestamp: Timestamp,
         transform: RowSetFinishing,
     },
     /// Enable compaction in views.
@@ -107,7 +107,6 @@ pub fn serve<C>(
     switchboard: comm::Switchboard<C>,
     mut executor: impl tokio::executor::Executor + Clone + Send + Sync + 'static,
     local_input_mux: Mux<Uuid, LocalInput>,
-    exfiltrator_config: ExfiltratorConfig,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
@@ -150,7 +149,6 @@ where
         Worker {
             inner: timely_worker,
             local_input_mux: local_input_mux.clone(),
-            exfiltrator: Rc::new(exfiltrator_config.clone().into()),
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             logging_config: logging_config.clone(),
@@ -166,10 +164,14 @@ where
 struct PendingPeek {
     /// The name of the dataflow to peek.
     name: String,
-    /// Identifies intended recipient of the peek.
+    /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
+    /// A transmitter connected to the intended recipient of the peek.
+    tx: comm::mpsc::Sender<Vec<Vec<Datum>>>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
+    /// Finishing operations to perform on the peek, like an ordering and a
+    /// limit.
     transform: RowSetFinishing,
 }
 
@@ -179,7 +181,6 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    exfiltrator: Rc<Exfiltrator>,
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
@@ -331,7 +332,6 @@ where
                         &mut self.traces,
                         self.inner,
                         &mut self.local_input_mux,
-                        self.exfiltrator.clone(),
                         &mut self.materialized_logger,
                     );
                 }
@@ -350,6 +350,7 @@ where
                 name,
                 timestamp,
                 conn_id,
+                tx,
                 transform,
             } => {
                 let mut trace = self
@@ -362,6 +363,7 @@ where
                 let pending_peek = PendingPeek {
                     name,
                     conn_id,
+                    tx,
                     timestamp,
                     transform,
                 };
@@ -465,7 +467,16 @@ where
                     results.truncate(limit);
                 }
             }
-            self.exfiltrator.send_peek(peek.conn_id, results);
+            // TODO(benesch): investigate connection pooling for PEEK results,
+            // or multiplexing across one TCP stream. At the moment, every PEEK
+            // opens a new network connection.
+            peek.tx
+                .connect()
+                .wait()
+                .unwrap()
+                .send(results)
+                .wait()
+                .unwrap();
             if let Some(logger) = self.materialized_logger.as_mut() {
                 logger.log(MaterializedEvent::Peek(
                     crate::logging::materialized::Peek::new(
