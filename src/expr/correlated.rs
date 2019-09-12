@@ -612,6 +612,7 @@ impl super::RelationExpr {
         default: Vec<(Datum, ColumnType)>,
     ) -> super::RelationExpr {
         let keys = self;
+        assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
         keys_and_values
             .let_(|get_keys_and_values| {
                 let keys_and_defaults = get_keys_and_values
