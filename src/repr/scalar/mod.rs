@@ -54,7 +54,7 @@ pub enum Datum {
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(String),
     /// A compiled regular expression.
-    Regex(Regex),
+    Regex(Box<Regex>),
 }
 
 impl Datum {
@@ -221,7 +221,7 @@ impl Datum {
 
     pub fn unwrap_regex(self) -> Regex {
         match self {
-            Datum::Regex(r) => r,
+            Datum::Regex(r) => *r,
             _ => panic!("Datum::unwrap_regex calloed on {:?}", self),
         }
     }
@@ -351,7 +351,7 @@ impl From<&str> for Datum {
 
 impl From<::regex::Regex> for Datum {
     fn from(r: ::regex::Regex) -> Datum {
-        Datum::Regex(Regex(r))
+        Datum::Regex(Box::new(Regex(r)))
     }
 }
 
@@ -406,8 +406,10 @@ impl fmt::Display for Datum {
                 }
                 f.write_str("\"")
             }
-            // A Regex<Regex<Regex>>? Oh my!
-            Datum::Regex(Regex(rex)) => write!(f, "/{}/", rex),
+            Datum::Regex(b) => {
+                let Regex(rex) = b.as_ref();
+                write!(f, "/{}/", rex)
+            },
         }
     }
 }
