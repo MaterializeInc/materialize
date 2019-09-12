@@ -212,10 +212,7 @@ impl RelationExpr {
                             let ra = get_right.arity();
                             if let JoinKind::LeftOuter | JoinKind::FullOuter = kind {
                                 let left_outer = get_left.clone().anti_lookup(
-                                    get_join
-                                        .clone()
-                                        // just want outer and left from join
-                                        .project((0..oa + la).collect()),
+                                    get_join.clone(),
                                     (0..ra)
                                         .map(|_| (Datum::Null, ColumnType::new(ScalarType::Null)))
                                         .collect(),
@@ -228,9 +225,12 @@ impl RelationExpr {
                                     .anti_lookup(
                                         get_join
                                             .clone()
-                                            // just want outer and right from join
+                                            // need to swap left and right to make the anti_lookup work
                                             .project(
-                                                (0..oa).chain((oa + la)..(oa + la + ra)).collect(),
+                                                (0..oa)
+                                                    .chain((oa + la)..(oa + la + ra))
+                                                    .chain((oa)..(oa + la))
+                                                    .collect(),
                                             ),
                                         (0..la)
                                             .map(|_| {
@@ -238,7 +238,7 @@ impl RelationExpr {
                                             })
                                             .collect(),
                                     )
-                                    // nulls got added to the right, so need to swap them back onto the left
+                                    // swap left and right back again
                                     .project(
                                         (0..oa)
                                             .chain((oa + ra)..(oa + ra + la))
