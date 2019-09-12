@@ -124,7 +124,7 @@ impl RelationExpr {
                 column_types: vec![],
             },
         }
-        .let_(|get_outer| self.applied_to(get_outer))
+        .let_in(|get_outer| self.applied_to(get_outer))
     }
 
     /// Evaluate `self` for each row in `outer`.
@@ -187,9 +187,9 @@ impl RelationExpr {
                 kind,
             } => {
                 let left = left.applied_to(get_outer.clone())?;
-                left.let_(|get_left| {
+                left.let_in(|get_left| {
                     let right = right.applied_to(get_outer.clone())?;
-                    right.let_(|get_right| {
+                    right.let_in(|get_right| {
                         let mut product = SR::Join {
                             inputs: vec![get_left.clone(), get_right.clone()],
                             variables: (0..get_outer.arity())
@@ -204,13 +204,13 @@ impl RelationExpr {
                             // this means we added some columns to handle subqueries, and now we need to get rid of them
                             join = join.project((0..old_arity).collect());
                         }
-                        join.let_(|get_join| {
+                        join.let_in(|get_join| {
                             let mut result = get_join.clone();
                             let oa = get_outer.arity();
                             let la = get_left.arity();
                             let ra = get_right.arity();
                             if let JoinKind::LeftOuter | JoinKind::FullOuter = kind {
-                                let left_outer = get_left.clone().lookup(
+                                let left_outer = get_left.clone().anti_lookup(
                                     get_join
                                         .clone()
                                         // just want outer and left from join
@@ -224,7 +224,7 @@ impl RelationExpr {
                             if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                                 let right_outer = get_right
                                     .clone()
-                                    .lookup(
+                                    .anti_lookup(
                                         get_join
                                             .clone()
                                             // just want outer and right from join
@@ -602,9 +602,9 @@ impl super::RelationExpr {
         }
     }
 
-    /// Left-join `self` against the first columns of `keys_and_values`, using `default` to fill in any missing rows
-    /// (Assumes `keys_and_values` doesn't contain any keys that are not in `self`)
-    fn lookup(
+    /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
+    /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
+    fn anti_lookup(
         self,
         keys_and_values: super::RelationExpr,
         default: Vec<(Datum, ColumnType)>,
@@ -613,7 +613,7 @@ impl super::RelationExpr {
         assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
         keys_and_values
             .let_in(|get_keys_and_values| {
-                let keys_and_defaults = get_keys_and_values
+                Ok(get_keys_and_values
                     .clone()
                     .project((0..keys.arity()).collect())
                     .distinct()
@@ -626,8 +626,25 @@ impl super::RelationExpr {
                                 (super::ScalarExpr::Literal(datum.clone()), typ.clone())
                             })
                             .collect(),
-                    );
-                Ok(get_keys_and_values.union(keys_and_defaults))
+                    ))
+            })
+            .unwrap()
+    }
+
+    /// Return:
+    /// * every row in keys_and_values
+    /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
+    /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
+    fn lookup(
+        self,
+        keys_and_values: super::RelationExpr,
+        default: Vec<(Datum, ColumnType)>,
+    ) -> super::RelationExpr {
+        keys_and_values
+            .let_in(|get_keys_and_values| {
+                Ok(get_keys_and_values
+                    .clone()
+                    .union(self.anti_lookup(get_keys_and_values, default)))
             })
             .unwrap()
     }
