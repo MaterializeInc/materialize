@@ -409,7 +409,7 @@ impl fmt::Display for Datum {
             Datum::Regex(b) => {
                 let Regex(rex) = b.as_ref();
                 write!(f, "/{}/", rex)
-            },
+            }
         }
     }
 }
