@@ -13,7 +13,7 @@ chrono = "0.4"
 failure = "0.1.5"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 regex = "1.2.1"
-regex-syntax = "0.6.8"
+regex-syntax = "0.6.12"
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
 # TODO(grimmr): upgrade to 0.5.3 after release, when `space_()` becomes officially available.

@@ -16,7 +16,7 @@ lazy_static = "1.4.0"
 linked-hash-map = "0.5.2"
 log = "0.4"
 ore = { path = "../ore" }
-serde = { version = "1.0.99", features = ["derive"] }
+serde = { version = "1.0.100", features = ["derive"] }
 slog = "2.5.2"
 slog-stdlog = "4.0.0"
 tokio = "0.1.22"

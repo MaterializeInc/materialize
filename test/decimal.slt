@@ -68,6 +68,16 @@ SELECT a * 2 FROM basic
 ----
 0.20
 
+query R
+SELECT a / 2 FROM basic
+----
+0.0500000
+
+query R
+SELECT a % 2 FROM basic
+----
+0.1
+
 # Arithmetic that involves simple rescaling.
 
 query RR
