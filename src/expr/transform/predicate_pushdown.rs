@@ -75,156 +75,190 @@ impl PredicatePushdown {
             self.action(e, &e.typ());
         });
     }
+
     pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         if let RelationExpr::Filter { input, predicates } = relation {
-            if let RelationExpr::Join { inputs, variables } = &mut **input {
-                // We want to scan `predicates` for any that can apply
-                // to individual elements of `inputs`.
+            match &mut **input {
+                RelationExpr::Join { inputs, variables } => {
+                    // We want to scan `predicates` for any that can apply
+                    // to individual elements of `inputs`.
 
-                let input_arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+                    let input_arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
 
-                let mut offset = 0;
-                let mut prior_arities = Vec::new();
-                for input in 0..inputs.len() {
-                    prior_arities.push(offset);
-                    offset += input_arities[input];
-                }
+                    let mut offset = 0;
+                    let mut prior_arities = Vec::new();
+                    for input in 0..inputs.len() {
+                        prior_arities.push(offset);
+                        offset += input_arities[input];
+                    }
 
-                let input_relation = input_arities
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                    .collect::<Vec<_>>();
+                    let input_relation = input_arities
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
+                        .collect::<Vec<_>>();
 
-                // Predicates to push at each input, and to retain.
-                let mut push_downs = vec![Vec::new(); inputs.len()];
-                let mut retain = Vec::new();
+                    // Predicates to push at each input, and to retain.
+                    let mut push_downs = vec![Vec::new(); inputs.len()];
+                    let mut retain = Vec::new();
 
-                for mut predicate in predicates.drain(..) {
-                    // Determine the relation support of each predicate.
-                    let mut support = Vec::new();
-                    predicate.visit(&mut |e| {
-                        if let ScalarExpr::Column(i) = e {
-                            support.push(input_relation[*i]);
-                        }
-                    });
-                    support.sort();
-                    support.dedup();
-
-                    match support.len() {
-                        0 => {
-                            for push_down in push_downs.iter_mut() {
-                                // no support, so nothing to rewrite.
-                                push_down.push(predicate.clone());
+                    for mut predicate in predicates.drain(..) {
+                        // Determine the relation support of each predicate.
+                        let mut support = Vec::new();
+                        predicate.visit(&mut |e| {
+                            if let ScalarExpr::Column(i) = e {
+                                support.push(input_relation[*i]);
                             }
-                        }
-                        1 => {
-                            let relation = support[0];
-                            predicate.visit_mut(&mut |e| {
-                                // subtract
-                                if let ScalarExpr::Column(i) = e {
-                                    *i -= prior_arities[relation];
+                        });
+                        support.sort();
+                        support.dedup();
+
+                        match support.len() {
+                            0 => {
+                                for push_down in push_downs.iter_mut() {
+                                    // no support, so nothing to rewrite.
+                                    push_down.push(predicate.clone());
                                 }
-                            });
-                            push_downs[relation].push(predicate);
-                        }
-                        _ => {
-                            use crate::BinaryFunc;
-                            use crate::UnaryFunc;
-                            if let ScalarExpr::CallBinary {
-                                func: BinaryFunc::Eq,
-                                expr1,
-                                expr2,
-                            } = &predicate
-                            {
-                                if let (ScalarExpr::Column(c1), ScalarExpr::Column(c2)) =
-                                    (&**expr1, &**expr2)
+                            }
+                            1 => {
+                                let relation = support[0];
+                                predicate.visit_mut(&mut |e| {
+                                    // subtract
+                                    if let ScalarExpr::Column(i) = e {
+                                        *i -= prior_arities[relation];
+                                    }
+                                });
+                                push_downs[relation].push(predicate);
+                            }
+                            _ => {
+                                use crate::BinaryFunc;
+                                use crate::UnaryFunc;
+                                if let ScalarExpr::CallBinary {
+                                    func: BinaryFunc::Eq,
+                                    expr1,
+                                    expr2,
+                                } = &predicate
                                 {
-                                    let relation1 = input_relation[*c1];
-                                    let relation2 = input_relation[*c2];
-                                    assert!(relation1 != relation2);
-                                    let key1 = (relation1, *c1 - prior_arities[relation1]);
-                                    let key2 = (relation2, *c2 - prior_arities[relation2]);
-                                    let pos1 = variables.iter().position(|l| l.contains(&key1));
-                                    let pos2 = variables.iter().position(|l| l.contains(&key2));
-                                    match (pos1, pos2) {
-                                        (None, None) => {
-                                            variables.push(vec![key1, key2]);
-                                        }
-                                        (Some(idx1), None) => {
-                                            variables[idx1].push(key2);
-                                        }
-                                        (None, Some(idx2)) => {
-                                            variables[idx2].push(key1);
-                                        }
-                                        (Some(idx1), Some(idx2)) => {
-                                            // assert!(idx1 != idx2);
-                                            if idx1 != idx2 {
-                                                let temp = variables[idx2].clone();
-                                                variables[idx1].extend(temp);
-                                                variables[idx1].sort();
-                                                variables[idx1].dedup();
-                                                variables.remove(idx2);
+                                    if let (ScalarExpr::Column(c1), ScalarExpr::Column(c2)) =
+                                        (&**expr1, &**expr2)
+                                    {
+                                        let relation1 = input_relation[*c1];
+                                        let relation2 = input_relation[*c2];
+                                        assert!(relation1 != relation2);
+                                        let key1 = (relation1, *c1 - prior_arities[relation1]);
+                                        let key2 = (relation2, *c2 - prior_arities[relation2]);
+                                        let pos1 = variables.iter().position(|l| l.contains(&key1));
+                                        let pos2 = variables.iter().position(|l| l.contains(&key2));
+                                        match (pos1, pos2) {
+                                            (None, None) => {
+                                                variables.push(vec![key1, key2]);
+                                            }
+                                            (Some(idx1), None) => {
+                                                variables[idx1].push(key2);
+                                            }
+                                            (None, Some(idx2)) => {
+                                                variables[idx2].push(key1);
+                                            }
+                                            (Some(idx1), Some(idx2)) => {
+                                                // assert!(idx1 != idx2);
+                                                if idx1 != idx2 {
+                                                    let temp = variables[idx2].clone();
+                                                    variables[idx1].extend(temp);
+                                                    variables[idx1].sort();
+                                                    variables[idx1].dedup();
+                                                    variables.remove(idx2);
+                                                }
                                             }
                                         }
+                                        // null != anything, so joined columns musn't be null
+                                        push_downs[relation1].push(
+                                            ScalarExpr::Column(*c1 - prior_arities[relation1])
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
+                                        push_downs[relation2].push(
+                                            ScalarExpr::Column(*c2 - prior_arities[relation2])
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
+                                    } else {
+                                        retain.push(predicate);
                                     }
-                                    // null != anything, so joined columns musn't be null
-                                    push_downs[relation1].push(
-                                        ScalarExpr::Column(*c1 - prior_arities[relation1])
-                                            .call_unary(UnaryFunc::IsNull)
-                                            .call_unary(UnaryFunc::Not),
-                                    );
-                                    push_downs[relation2].push(
-                                        ScalarExpr::Column(*c2 - prior_arities[relation2])
-                                            .call_unary(UnaryFunc::IsNull)
-                                            .call_unary(UnaryFunc::Not),
-                                    );
                                 } else {
                                     retain.push(predicate);
                                 }
-                            } else {
-                                retain.push(predicate);
                             }
                         }
                     }
-                }
 
-                // promote same-relation constraints.
-                for variable in variables.iter_mut() {
-                    variable.sort();
-                    variable.dedup(); // <-- not obviously necessary.
+                    // promote same-relation constraints.
+                    for variable in variables.iter_mut() {
+                        variable.sort();
+                        variable.dedup(); // <-- not obviously necessary.
 
-                    let mut pos = 0;
-                    while pos + 1 < variable.len() {
-                        if variable[pos].0 == variable[pos + 1].0 {
-                            use crate::BinaryFunc;
-                            push_downs[variable[pos].0].push(ScalarExpr::CallBinary {
-                                func: BinaryFunc::Eq,
-                                expr1: Box::new(ScalarExpr::Column(variable[pos].1)),
-                                expr2: Box::new(ScalarExpr::Column(variable[pos + 1].1)),
-                            });
-                            variable.remove(pos + 1);
-                        } else {
-                            pos += 1;
+                        let mut pos = 0;
+                        while pos + 1 < variable.len() {
+                            if variable[pos].0 == variable[pos + 1].0 {
+                                use crate::BinaryFunc;
+                                push_downs[variable[pos].0].push(ScalarExpr::CallBinary {
+                                    func: BinaryFunc::Eq,
+                                    expr1: Box::new(ScalarExpr::Column(variable[pos].1)),
+                                    expr2: Box::new(ScalarExpr::Column(variable[pos + 1].1)),
+                                });
+                                variable.remove(pos + 1);
+                            } else {
+                                pos += 1;
+                            }
                         }
                     }
+
+                    let new_inputs = inputs
+                        .drain(..)
+                        .zip(push_downs)
+                        .enumerate()
+                        .map(|(_index, (input, push_down))| {
+                            if !push_down.is_empty() {
+                                input.filter(push_down)
+                            } else {
+                                input
+                            }
+                        })
+                        .collect();
+
+                    *inputs = new_inputs;
+                    if retain.is_empty() {
+                        *relation = (**input).clone();
+                    } else {
+                        *predicates = retain;
+                    }
                 }
-
-                let new_inputs = inputs
-                    .drain(..)
-                    .zip(push_downs)
-                    .enumerate()
-                    .map(|(_index, (input, push_down))| {
-                        if !push_down.is_empty() {
-                            input.filter(push_down)
-                        } else {
-                            input
-                        }
-                    })
-                    .collect();
-
-                *inputs = new_inputs;
-                *predicates = retain;
+                RelationExpr::Project { input, outputs } => {
+                    let predicates = predicates
+                        .drain(..)
+                        .map(|mut predicate| {
+                            predicate.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(i) = e {
+                                    *i = outputs[*i];
+                                }
+                            });
+                            predicate
+                        })
+                        .collect();
+                    *relation = input.take().filter(predicates).project(outputs.clone());
+                }
+                RelationExpr::Filter {
+                    input,
+                    predicates: predicates2,
+                } => {
+                    *relation = input.take().filter(
+                        predicates
+                            .clone()
+                            .into_iter()
+                            .chain(predicates2.clone().into_iter())
+                            .collect(),
+                    );
+                }
+                _ => (),
             }
         }
     }

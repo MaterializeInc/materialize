@@ -1,0 +1,61 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+mode cockroach
+
+statement ok
+CREATE TABLE peeps (
+  peep text
+)
+
+statement ok
+INSERT INTO peeps VALUES ('alice'), ('bob'), ('eve');
+
+statement ok
+CREATE TABLE likes (
+  liker text,
+  likee text
+)
+
+statement ok
+INSERT INTO likes VALUES ('alice', 'bob'), ('bob', 'eve'), ('alice', 'eve');
+
+query TB rowsort
+SELECT peep, EXISTS(
+  SELECT * FROM likes WHERE peep = liker
+) FROM peeps
+----
+alice true
+bob true
+eve false
+
+query TTB rowsort
+SELECT *, EXISTS(
+  SELECT * FROM likes as likes2 WHERE likes.likee = likes2.liker
+) FROM likes
+----
+alice bob true
+alice eve false
+bob eve false
+
+# inner scope shadows outer scope, so `likee` without qualification refers to `likes2.likee`
+query TTB rowsort
+SELECT *, EXISTS(
+  SELECT * FROM likes as likes2 WHERE likee = likes2.liker
+) FROM likes
+----
+alice bob false
+alice eve false
+bob eve false
+
+# similarly, without `as likes2`, `likes.liker` refers to the inner scope
+query TTB rowsort
+SELECT *, EXISTS(
+  SELECT * FROM likes WHERE likee = likes.liker
+) FROM likes
+----
+alice bob false
+alice eve false
+bob eve false

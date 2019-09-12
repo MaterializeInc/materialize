@@ -9,7 +9,18 @@
 
 use std::convert::TryInto;
 
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{
+    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
+    Sink, SinkConnector, Source, SourceConnector, View,
+};
 use failure::{bail, ensure, format_err, ResultExt};
+use interchange::avro;
+use ore::collections::CollectionExt;
+use ore::iter::{FallibleIteratorExt, IteratorExt};
+use ore::option::OptionExt;
+use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, Expr, Function, Ident, JoinConstraint, JoinOperator, ObjectName,
@@ -24,31 +35,20 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
-use url::Url;
-use uuid::Uuid;
-
-use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{
-    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
-    Sink, SinkConnector, Source, SourceConnector, View,
-};
-use expr::like::build_like_regex_from_string;
-use expr::{
-    AggregateExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc, VariadicFunc,
-};
-use interchange::avro;
-use ore::collections::CollectionExt;
-use ore::iter::{FallibleIteratorExt, IteratorExt};
-use ore::option::OptionExt;
-use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
 use store::{DataflowStore, RemoveMode};
+use url::Url;
 
-pub use session::Session;
-
+mod expr;
 mod session;
 pub mod store;
 mod transform;
+
+use self::expr::like::build_like_regex_from_string;
+use self::expr::{
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, JoinKind, RelationExpr, ScalarExpr,
+    UnaryFunc, VariadicFunc,
+};
+pub use session::Session;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
@@ -62,7 +62,7 @@ pub enum Plan {
     EmptyQuery,
     DidSetVariable,
     Peek {
-        source: RelationExpr,
+        source: ::expr::RelationExpr,
         when: PeekWhen,
         transform: RowSetFinishing,
     },
@@ -73,7 +73,7 @@ pub enum Plan {
     },
     ExplainPlan {
         typ: RelationType,
-        relation_expr: RelationExpr,
+        relation_expr: ::expr::RelationExpr,
     },
 }
 
@@ -292,10 +292,11 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, transform) = self.plan_query(query)?;
+                let (relation_expr, transform) = self.plan_query(query, &Scope::empty(None))?;
                 if transform != Default::default() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
+                let relation_expr = relation_expr.decorrelate()?;
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -459,7 +460,7 @@ impl Planner {
         let dataflow = self.dataflows.get(&name)?.clone();
         let typ = dataflow.typ();
         Ok(Plan::Peek {
-            source: RelationExpr::Get {
+            source: ::expr::RelationExpr::Get {
                 name: dataflow.name().to_owned(),
                 typ: typ.clone(),
             },
@@ -481,7 +482,8 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, transform) = self.plan_query(&query)?;
+        let (relation_expr, transform) = self.plan_query(&query, &Scope::empty(None))?;
+        let relation_expr = relation_expr.decorrelate()?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
@@ -490,7 +492,8 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, transform) = self.plan_query(&query)?;
+        let (relation_expr, transform) = self.plan_query(&query, &Scope::empty(None))?;
+        let relation_expr = relation_expr.decorrelate()?;
         if transform != Default::default() {
             bail!("Explaining ORDER BY and LIMIT queries is not yet supported.");
         }
@@ -511,7 +514,11 @@ impl Planner {
         }
     }
 
-    fn plan_query(&self, q: &Query) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
+    fn plan_query(
+        &self,
+        q: &Query,
+        outer_scope: &Scope,
+    ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -520,7 +527,7 @@ impl Planner {
             Some(Expr::Value(Value::Long(x))) => Some(x as usize),
             _ => bail!("LIMIT must be an integer constant"),
         };
-        let expr = self.plan_set_expr(&q.body)?;
+        let expr = self.plan_set_expr(&q.body, outer_scope)?;
         let output_typ = expr.typ();
         // This is O(m*n) where m is the number of columns and n is the number of order keys.
         // If this ever becomes a bottleneck (which I doubt) it is easy enough to make faster...
@@ -553,17 +560,21 @@ impl Planner {
         Ok((expr, transform))
     }
 
-    fn plan_set_expr(&self, q: &SetExpr) -> Result<RelationExpr, failure::Error> {
+    fn plan_set_expr(
+        &self,
+        q: &SetExpr,
+        outer_scope: &Scope,
+    ) -> Result<RelationExpr, failure::Error> {
         match q {
-            SetExpr::Select(select) => self.plan_view_select(select),
+            SetExpr::Select(select) => self.plan_view_select(select, outer_scope),
             SetExpr::SetOperation {
                 op,
                 all,
                 left,
                 right,
             } => {
-                let left_expr = self.plan_set_expr(left)?;
-                let right_expr = self.plan_set_expr(right)?;
+                let left_expr = self.plan_set_expr(left, outer_scope)?;
+                let right_expr = self.plan_set_expr(right, outer_scope)?;
 
                 // TODO(jamii) this type-checking is redundant with RelationExpr::typ, but currently it seems that we need both because RelationExpr::typ is not allowed to return errors
                 let left_types = &left_expr.typ().column_types;
@@ -624,7 +635,7 @@ impl Planner {
                 );
                 let ctx = &ExprContext {
                     name: "values",
-                    scope: &Scope::empty(),
+                    scope: &Scope::empty(Some(outer_scope.clone())),
                     aggregate_context: None,
                 };
                 let mut expr: Option<RelationExpr> = None;
@@ -672,16 +683,26 @@ impl Planner {
                 }
                 Ok(expr.unwrap())
             }
-            SetExpr::Query { .. } => bail!("subqueries are not yet supported"),
+            SetExpr::Query(query) => {
+                let (expr, transform) = self.plan_query(query, outer_scope)?;
+                if transform != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                }
+                Ok(expr)
+            }
         }
     }
 
-    fn plan_view_select(&self, s: &Select) -> Result<RelationExpr, failure::Error> {
+    fn plan_view_select(
+        &self,
+        s: &Select,
+        outer_scope: &Scope,
+    ) -> Result<RelationExpr, failure::Error> {
         // Step 1. Handle FROM clause, including joins.
         let (mut relation_expr, from_scope) = s
             .from
             .iter()
-            .map(|twj| self.plan_table_with_joins(twj))
+            .map(|twj| self.plan_table_with_joins(twj, outer_scope))
             .fallible()
             .fold1(|(left, left_scope), (right, right_scope)| {
                 self.plan_join_operator(
@@ -699,7 +720,7 @@ impl Planner {
                         rows: vec![vec![Datum::String("X".into())]],
                         typ: typ.clone(),
                     },
-                    Scope::from_source("dual", typ),
+                    Scope::from_source("dual", typ, Some(outer_scope.clone())),
                 ))
             })?;
 
@@ -730,12 +751,12 @@ impl Planner {
             };
             let mut group_key = vec![];
             let mut group_exprs = vec![];
-            let mut group_scope = Scope { items: vec![] };
+            let mut group_scope = Scope::empty(Some(outer_scope.clone()));
             let mut select_all_mapping = HashMap::new();
             for expr in &s.group_by {
                 let (expr, typ) = self.plan_expr(ctx, &expr)?;
                 match &expr {
-                    ScalarExpr::Column(i) => {
+                    ScalarExpr::Column(ColumnRef::Inner(i)) => {
                         // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
                         if !group_key.contains(i) {
                             group_key.push(*i);
@@ -779,15 +800,6 @@ impl Planner {
                 relation_expr = relation_expr
                     .map(group_exprs)
                     .reduce(group_key.clone(), aggregates.clone());
-                if group_key.is_empty() {
-                    relation_expr = RelationExpr::OrDefault {
-                        input: Box::new(relation_expr),
-                        default: aggregates
-                            .iter()
-                            .map(|(agg, _)| agg.func.default())
-                            .collect(),
-                    }
-                }
                 (group_scope, aggregate_context, select_all_mapping)
             } else {
                 // if no GROUP BY, aggregates or having then all columns remain in scope
@@ -831,7 +843,7 @@ impl Planner {
                     self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
                 {
                     match &expr {
-                        ScalarExpr::Column(i)
+                        ScalarExpr::Column(ColumnRef::Inner(i))
                             if typ.name == relation_type.column_types[*i].name =>
                         {
                             // Note that if the column name changed (i.e.,
@@ -841,7 +853,7 @@ impl Planner {
                             //
                             // TODO(benesch): this is a dumb restriction. If
                             // this optimization is actually important, perhaps
-                            // it should be come a proper query transformation
+                            // it should become a proper query transformation
                             // and we shouldn't bother trying to do it here.
                             project_key.push(*i);
                         }
@@ -866,10 +878,12 @@ impl Planner {
     fn plan_table_with_joins<'a>(
         &self,
         table_with_joins: &'a TableWithJoins,
+        outer_scope: &Scope,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
-        let (mut left, mut left_scope) = self.plan_table_factor(&table_with_joins.relation)?;
+        let (mut left, mut left_scope) =
+            self.plan_table_factor(&table_with_joins.relation, outer_scope)?;
         for join in &table_with_joins.joins {
-            let (right, right_scope) = self.plan_table_factor(&join.relation)?;
+            let (right, right_scope) = self.plan_table_factor(&join.relation, outer_scope)?;
             let (new_left, new_left_scope) =
                 self.plan_join_operator(&join.join_operator, left, left_scope, right, right_scope)?;
             left = new_left;
@@ -878,57 +892,10 @@ impl Planner {
         Ok((left, left_scope))
     }
 
-    fn plan_select_item<'a>(
-        &self,
-        ctx: &ExprContext,
-        s: &'a SelectItem,
-        select_all_scope: &Scope,
-        select_all_mapping: &HashMap<usize, usize>,
-    ) -> Result<Vec<(ScalarExpr, ColumnType)>, failure::Error> {
-        match s {
-            SelectItem::UnnamedExpr(e) => Ok(vec![self.plan_expr(ctx, e)?]),
-            SelectItem::ExprWithAlias { expr, alias } => {
-                let (expr, mut typ) = self.plan_expr(ctx, expr)?;
-                typ.name = Some(alias.clone());
-                Ok(vec![(expr, typ)])
-            }
-            SelectItem::Wildcard => select_all_scope
-                .items
-                .iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    let j = select_all_mapping.get(&i).ok_or_else(|| {
-                        format_err!("internal error: unable to resolve scope item {:?}", item)
-                    })?;
-                    Ok((ScalarExpr::Column(*j), item.typ.clone()))
-                })
-                .collect::<Result<Vec<_>, _>>(),
-            SelectItem::QualifiedWildcard(table_name) => {
-                let table_name = extract_sql_object_name(table_name)?;
-                select_all_scope
-                    .items
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, item)| {
-                        item.names
-                            .iter()
-                            .find(|name| name.table_name == table_name)
-                            .map(|_name| (i, item))
-                    })
-                    .map(|(i, item)| {
-                        let j = select_all_mapping.get(&i).ok_or_else(|| {
-                            format_err!("internal error: unable to resolve scope item {:?}", item)
-                        })?;
-                        Ok((ScalarExpr::Column(*j), item.typ.clone()))
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            }
-        }
-    }
-
     fn plan_table_factor<'a>(
         &self,
         table_factor: &'a TableFactor,
+        outer_scope: &Scope,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match table_factor {
             TableFactor::Table {
@@ -957,14 +924,62 @@ impl Planner {
                 } else {
                     name
                 };
-                let scope = Scope::from_source(&alias, typ.clone());
+                let scope = Scope::from_source(&alias, typ.clone(), Some(outer_scope.clone()));
                 Ok((expr, scope))
             }
             TableFactor::Derived { .. } => {
                 bail!("subqueries are not yet supported");
             }
             TableFactor::NestedJoin(table_with_joins) => {
-                self.plan_table_with_joins(table_with_joins)
+                self.plan_table_with_joins(table_with_joins, outer_scope)
+            }
+        }
+    }
+
+    fn plan_select_item<'a>(
+        &self,
+        ctx: &ExprContext,
+        s: &'a SelectItem,
+        select_all_scope: &Scope,
+        select_all_mapping: &HashMap<usize, usize>,
+    ) -> Result<Vec<(ScalarExpr, ColumnType)>, failure::Error> {
+        match s {
+            SelectItem::UnnamedExpr(e) => Ok(vec![self.plan_expr(ctx, e)?]),
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let (expr, mut typ) = self.plan_expr(ctx, expr)?;
+                typ.name = Some(alias.clone());
+                Ok(vec![(expr, typ)])
+            }
+            SelectItem::Wildcard => select_all_scope
+                .items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    let j = select_all_mapping.get(&i).ok_or_else(|| {
+                        format_err!("internal error: unable to resolve scope item {:?}", item)
+                    })?;
+                    Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), item.typ.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>(),
+            SelectItem::QualifiedWildcard(table_name) => {
+                let table_name = extract_sql_object_name(table_name)?;
+                select_all_scope
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, item)| {
+                        item.names
+                            .iter()
+                            .find(|name| name.table_name == table_name)
+                            .map(|_name| (i, item))
+                    })
+                    .map(|(i, item)| {
+                        let j = select_all_mapping.get(&i).ok_or_else(|| {
+                            format_err!("internal error: unable to resolve scope item {:?}", item)
+                        })?;
+                        Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), item.typ.clone()))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
             }
         }
     }
@@ -984,57 +999,32 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                |both, both_scope| Ok((both, both_scope)),
+                JoinKind::Inner,
             ),
-            JoinOperator::LeftOuter(constraint) => left.let_(|left| {
-                self.plan_join_constraint(
-                    &constraint,
-                    left.clone(),
-                    left_scope,
-                    right,
-                    right_scope,
-                    |both, both_scope| {
-                        both.let_(|both| {
-                            Ok((both.clone().union(both.left_outer(left)), both_scope))
-                        })
-                    },
-                )
-            }),
-            JoinOperator::RightOuter(constraint) => right.let_(|right| {
-                self.plan_join_constraint(
-                    &constraint,
-                    left,
-                    left_scope,
-                    right.clone(),
-                    right_scope,
-                    |both, both_scope| {
-                        both.let_(|both| {
-                            Ok((both.clone().union(both.right_outer(right)), both_scope))
-                        })
-                    },
-                )
-            }),
-            JoinOperator::FullOuter(constraint) => left.let_(|left| {
-                right.let_(|right| {
-                    self.plan_join_constraint(
-                        &constraint,
-                        left.clone(),
-                        left_scope,
-                        right.clone(),
-                        right_scope,
-                        |both, both_scope| {
-                            both.let_(|both| {
-                                Ok((
-                                    both.clone()
-                                        .union(both.clone().left_outer(left))
-                                        .union(both.clone().right_outer(right)),
-                                    both_scope,
-                                ))
-                            })
-                        },
-                    )
-                })
-            }),
+            JoinOperator::LeftOuter(constraint) => self.plan_join_constraint(
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                JoinKind::LeftOuter,
+            ),
+            JoinOperator::RightOuter(constraint) => self.plan_join_constraint(
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                JoinKind::RightOuter,
+            ),
+            JoinOperator::FullOuter(constraint) => self.plan_join_constraint(
+                &constraint,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                JoinKind::FullOuter,
+            ),
             JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
             // The remaining join types are MSSQL-specific. We are unlikely to
             // ever support them. The standard SQL equivalent is LATERAL, which
@@ -1044,29 +1034,26 @@ impl Planner {
         }
     }
 
-    fn plan_join_constraint<'a, F>(
+    #[allow(clippy::too_many_arguments)]
+    fn plan_join_constraint<'a>(
         &self,
         constraint: &'a JoinConstraint,
         left: RelationExpr,
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-        with_both: F,
-    ) -> Result<(RelationExpr, Scope), failure::Error>
-    where
-        F: FnOnce(RelationExpr, Scope) -> Result<(RelationExpr, Scope), failure::Error>,
-    {
+        kind: JoinKind,
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
         match constraint {
             JoinConstraint::On(expr) => {
-                let product = left.product(right);
                 let mut product_scope = left_scope.product(right_scope);
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
                     aggregate_context: None,
                 };
-                let (predicate, _) = self.plan_expr(ctx, expr)?;
-                for (l, r) in find_trivial_column_equivalences(&predicate) {
+                let (on, _) = self.plan_expr(ctx, expr)?;
+                for (l, r) in find_trivial_column_equivalences(&on) {
                     // When we can statically prove that two columns are
                     // equivalent after a join, the right column becomes
                     // unnamable and the left column assumes both names. This
@@ -1084,7 +1071,13 @@ impl Planner {
                         std::mem::replace(&mut product_scope.items[r].names, Vec::new());
                     product_scope.items[l].names.extend(right_names);
                 }
-                with_both(product.filter(vec![predicate]), product_scope)
+                let joined = RelationExpr::Join {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    on,
+                    kind,
+                };
+                Ok((joined, product_scope))
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
                 &column_names,
@@ -1092,7 +1085,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                with_both,
+                kind,
             ),
             JoinConstraint::Natural => {
                 let mut column_names = vec![];
@@ -1114,25 +1107,23 @@ impl Planner {
                     left_scope,
                     right,
                     right_scope,
-                    with_both,
+                    kind,
                 )
             }
         }
     }
 
     // See page 440 of ANSI SQL 2016 spec for details on scoping of using/natural joins
-    fn plan_using_constraint<F>(
+    #[allow(clippy::too_many_arguments)]
+    fn plan_using_constraint(
         &self,
         column_names: &[String],
         left: RelationExpr,
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
-        with_both: F,
-    ) -> Result<(RelationExpr, Scope), failure::Error>
-    where
-        F: FnOnce(RelationExpr, Scope) -> Result<(RelationExpr, Scope), failure::Error>,
-    {
+        kind: JoinKind,
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
         let mut join_exprs = vec![];
         let mut map_exprs = vec![];
         let mut new_items = vec![];
@@ -1140,18 +1131,32 @@ impl Planner {
         for column_name in column_names {
             let (l, l_item) = left_scope.resolve_column(column_name)?;
             let (r, r_item) = right_scope.resolve_column(column_name)?;
+            let l = match l {
+                ColumnRef::Inner(l) => l,
+                ColumnRef::Outer(_) => bail!(
+                    "Internal error: name {} in USING resolved to outer column",
+                    column_name
+                ),
+            };
+            let r = match r {
+                ColumnRef::Inner(r) => r,
+                ColumnRef::Outer(_) => bail!(
+                    "Internal error: name {} in USING resolved to outer column",
+                    column_name
+                ),
+            };
             let typ = l_item.typ.union(&r_item.typ)?;
             join_exprs.push(ScalarExpr::CallBinary {
                 func: BinaryFunc::Eq,
-                expr1: Box::new(ScalarExpr::Column(l)),
-                expr2: Box::new(ScalarExpr::Column(left_scope.len() + r)),
+                expr1: Box::new(ScalarExpr::Column(ColumnRef::Inner(l))),
+                expr2: Box::new(ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r))),
             });
             map_exprs.push((
                 ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs: vec![
-                        ScalarExpr::Column(l),
-                        ScalarExpr::Column(left_scope.len() + r),
+                        ScalarExpr::Column(ColumnRef::Inner(l)),
+                        ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
                     ],
                 },
                 typ.clone(),
@@ -1165,19 +1170,32 @@ impl Planner {
         let project_key =
             // coalesced join columns
             (0..map_exprs.len())
-                .map(|i| left_scope.len() + right_scope.len() + i)
-                // other columns that weren't joined
-                .chain(
-                    (0..(left_scope.len() + right_scope.len()))
-                        .filter(|i| !dropped_columns.contains(i)),
-                )
-                .collect::<Vec<_>>();
-        let both = left.product(right).filter(join_exprs);
-        let both_scope = left_scope.product(right_scope);
-        let (both, mut both_scope) = with_both(both, both_scope)?;
+            .map(|i| left_scope.len() + right_scope.len() + i)
+            // other columns that weren't joined
+            .chain(
+                (0..(left_scope.len() + right_scope.len()))
+                    .filter(|i| !dropped_columns.contains(i)),
+            )
+            .collect::<Vec<_>>();
+        let mut both_scope = left_scope.product(right_scope);
         both_scope.items.extend(new_items);
         let both_scope = both_scope.project(&project_key);
-        let both = both.map(map_exprs).project(project_key);
+        let both = RelationExpr::Join {
+            left: Box::new(left),
+            right: Box::new(right),
+            on: join_exprs
+                .into_iter()
+                .fold(ScalarExpr::Literal(Datum::True), |expr1, expr2| {
+                    ScalarExpr::CallBinary {
+                        func: BinaryFunc::And,
+                        expr1: Box::new(expr1),
+                        expr2: Box::new(expr2),
+                    }
+                }),
+            kind,
+        }
+        .map(map_exprs)
+        .project(project_key);
         Ok((both, both_scope))
     }
 
@@ -1223,6 +1241,16 @@ impl Planner {
             Expr::Nested(expr) => self.plan_expr(ctx, expr),
             Expr::Cast { expr, data_type } => self.plan_cast(ctx, expr, data_type),
             Expr::Function(func) => self.plan_function(ctx, func),
+            Expr::Exists(query) => {
+                let (expr, transform) = self.plan_query(query, &ctx.scope)?;
+                if transform != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                }
+                Ok((
+                    ScalarExpr::Exists(Box::new(expr)),
+                    ColumnType::new(ScalarType::Bool),
+                ))
+            }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
@@ -1277,7 +1305,7 @@ impl Planner {
         Ok((
             AggregateExpr {
                 func,
-                expr,
+                expr: Box::new(expr),
                 distinct: sql_func.distinct,
             },
             typ,
@@ -1298,7 +1326,7 @@ impl Planner {
                         sql_func,
                     )
                 })?;
-                Ok((ScalarExpr::Column(*i), typ.clone()))
+                Ok((ScalarExpr::Column(ColumnRef::Inner(*i)), typ.clone()))
             } else {
                 bail!("aggregate functions are not allowed in {}", ctx.name);
             }
@@ -1927,7 +1955,9 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
                 expr1,
                 expr2,
             } => {
-                if let (Column(l), Column(r)) = (&**expr1, &**expr2) {
+                if let (Column(ColumnRef::Inner(l)), Column(ColumnRef::Inner(r))) =
+                    (&**expr1, &**expr2)
+                {
                     equivalences.push((*l, *r));
                 }
             }
@@ -2275,7 +2305,7 @@ struct ScopeItemName {
     column_name: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeItem {
     names: Vec<ScopeItemName>,
     typ: ColumnType,
@@ -2283,92 +2313,131 @@ struct ScopeItem {
 
 #[derive(Debug, Clone)]
 struct Scope {
+    // items in this query
     items: Vec<ScopeItem>,
+    // items inherited from an enclosing query
+    outer_items: Vec<ScopeItem>,
+}
+
+#[derive(Debug)]
+enum Resolution<'a> {
+    NotFound,
+    Found((usize, &'a ScopeItem)),
+    Ambiguous,
 }
 
 impl Scope {
-    fn empty() -> Self {
-        Scope { items: vec![] }
+    fn empty(outer_scope: Option<Scope>) -> Self {
+        Scope {
+            items: vec![],
+            outer_items: if let Some(outer_scope) = outer_scope {
+                outer_scope
+                    .outer_items
+                    .into_iter()
+                    .chain(outer_scope.items.into_iter())
+                    .collect()
+            } else {
+                vec![]
+            },
+        }
     }
 
-    fn from_source(table_name: &str, typ: RelationType) -> Self {
-        Scope {
-            items: typ
-                .column_types
-                .into_iter()
-                .map(|typ| ScopeItem {
-                    names: vec![ScopeItemName {
-                        table_name: table_name.to_owned(),
-                        column_name: typ.name.clone(),
-                    }],
-                    typ,
-                })
-                .collect(),
-        }
+    fn from_source(table_name: &str, typ: RelationType, outer_scope: Option<Scope>) -> Self {
+        let mut scope = Scope::empty(outer_scope);
+        scope.items = typ
+            .column_types
+            .into_iter()
+            .map(|typ| ScopeItem {
+                names: vec![ScopeItemName {
+                    table_name: table_name.to_owned(),
+                    column_name: typ.name.clone(),
+                }],
+                typ,
+            })
+            .collect();
+        scope
     }
 
     fn len(&self) -> usize {
         self.items.len()
     }
 
-    fn iter_names(&self) -> impl Iterator<Item = (usize, &ScopeItem, &ScopeItemName)> {
-        self.items
-            .iter()
-            .enumerate()
-            .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
-            .flatten()
+    fn resolve<'a, Matches>(
+        &'a self,
+        matches: Matches,
+        name_in_error: &str,
+    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error>
+    where
+        Matches: Fn(&ScopeItemName) -> bool,
+    {
+        let resolve_over = |items: &'a [ScopeItem]| {
+            let mut results = items
+                .iter()
+                .enumerate()
+                .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
+                .flatten()
+                .filter(|(_, _, name)| (matches)(name));
+            match results.next() {
+                None => Resolution::NotFound,
+                Some((pos, item, _name)) => {
+                    if results.find(|(pos2, _item, _name)| pos != *pos2).is_none() {
+                        Resolution::Found((pos, item))
+                    } else {
+                        Resolution::Ambiguous
+                    }
+                }
+            }
+        };
+        match resolve_over(&self.items) {
+            Resolution::NotFound => match resolve_over(&self.outer_items) {
+                Resolution::NotFound => bail!("No column named {} in scope", name_in_error),
+                Resolution::Found((pos, item)) => Ok((ColumnRef::Outer(pos), item)),
+                Resolution::Ambiguous => bail!("Column name {} is ambiguous", name_in_error),
+            },
+            Resolution::Found((pos, item)) => Ok((ColumnRef::Inner(pos), item)),
+            Resolution::Ambiguous => bail!("Column name {} is ambiguous", name_in_error),
+        }
     }
 
     fn resolve_column<'a>(
         &'a self,
         column_name: &str,
-    ) -> Result<(usize, &'a ScopeItem), failure::Error> {
-        let mut results = self
-            .iter_names()
-            .filter(|(_pos, _item, name)| name.column_name.as_deref() == Some(column_name));
-        if let Some((pos, item, _name)) = results.next() {
-            if results.find(|(i, _item, _name)| pos != *i).is_none() {
-                Ok((pos, item))
-            } else {
-                bail!("column name {} is ambiguous", column_name)
-            }
-        } else {
-            bail!("no column named {} in scope", column_name)
-        }
+    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
+        self.resolve(
+            |item: &ScopeItemName| item.column_name.as_deref() == Some(column_name),
+            column_name,
+        )
     }
 
     fn resolve_table_column<'a>(
         &'a self,
         table_name: &str,
         column_name: &str,
-    ) -> Result<(usize, &'a ScopeItem), failure::Error> {
-        let mut results = self.iter_names().filter(|(_pos, _item, name)| {
-            name.table_name == table_name && name.column_name.as_deref() == Some(column_name)
-        });
-        if let Some((pos, item, _name)) = results.next() {
-            if results.find(|(i, _item, _name)| pos != *i).is_none() {
-                Ok((pos, item))
-            } else {
-                bail!("column name {}.{} is ambiguous", table_name, column_name)
-            }
-        } else {
-            bail!("no column named {}.{} in scope", table_name, column_name)
-        }
+    ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
+        self.resolve(
+            |item: &ScopeItemName| {
+                item.table_name == table_name && item.column_name.as_deref() == Some(column_name)
+            },
+            &format!("{}.{}", table_name, column_name),
+        )
     }
 
     fn product(self, right: Self) -> Self {
+        assert!(self.outer_items == right.outer_items);
         Scope {
             items: self
                 .items
                 .into_iter()
                 .chain(right.items.into_iter())
                 .collect(),
+            outer_items: self.outer_items,
         }
     }
 
     fn project(&self, columns: &[usize]) -> Self {
         Scope {
             items: columns.iter().map(|&i| self.items[i].clone()).collect(),
+            outer_items: self.outer_items.clone(),
         }
     }
 }
@@ -2415,33 +2484,6 @@ fn find_agg_func(
         other => bail!("Unknown aggregate function: {:?}", other),
     };
     Ok((func, scalar_type))
-}
-
-trait RelationExprExt {
-    fn let_<F>(self, f: F) -> Result<(Self, Scope), failure::Error>
-    where
-        F: FnOnce(Self) -> Result<(Self, Scope), failure::Error>,
-        Self: Sized;
-}
-
-impl RelationExprExt for RelationExpr {
-    fn let_<F>(self: RelationExpr, f: F) -> Result<(Self, Scope), failure::Error>
-    where
-        F: FnOnce(Self) -> Result<(Self, Scope), failure::Error>,
-    {
-        let name = format!("tmp_{}", Uuid::new_v4());
-        let typ = self.typ();
-        let (body, scope) = f(RelationExpr::Get {
-            name: name.clone(),
-            typ,
-        })?;
-        let expr = RelationExpr::Let {
-            name: name.clone(),
-            value: Box::new(self),
-            body: Box::new(body),
-        };
-        Ok((expr, scope))
-    }
 }
 
 #[cfg(test)]

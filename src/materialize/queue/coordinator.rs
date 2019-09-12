@@ -146,6 +146,7 @@ where
                 // for the peek is not a base relation.
 
                 let typ = source.typ();
+                self.optimizer.optimize(&mut source, &typ);
 
                 // Choose a timestamp for all workers to use in the peek.
                 // We minimize over all participating views, to ensure that the query will not
@@ -171,8 +172,6 @@ where
                     // peek completes.
                     let name = format!("<temp_{}>", Uuid::new_v4());
                     let typ = source.typ();
-
-                    self.optimizer.optimize(&mut source, &typ);
 
                     self.create_dataflows(vec![Dataflow::View(View {
                         name: name.clone(),
