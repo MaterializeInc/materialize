@@ -91,8 +91,18 @@ pub enum ScalarExpr {
         then: Box<ScalarExpr>,
         els: Box<ScalarExpr>,
     },
-    /// Returns true if the `RelationExpr` returns any rows
+    /// Returns true if `expr` returns any rows
     Exists(Box<RelationExpr>),
+    /// Given `expr` with arity 1. If expr returns:
+    /// * 0 rows, return NULL
+    /// * 1 row, return the value of that row
+    /// * >1 rows, the sql spec says we should throw an error but we can't
+    ///   (see https://github.com/MaterializeInc/materialize/issues/489)
+    ///   so instead we return all the rows.
+    ///   If there are multiple `Select` expressions in a single SQL query, the result is that we take the product of all of them.
+    ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
+    ///   (see https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/).
+    Select(Box<RelationExpr>),
 }
 
 #[derive(Debug, Clone)]
@@ -284,15 +294,7 @@ impl RelationExpr {
                         .iter()
                         .map(|(aggregate, _)| {
                             let (datum, scalar_type) = aggregate.func.default();
-                            let nullable = datum == Datum::Null;
-                            (
-                                datum,
-                                ColumnType {
-                                    name: None,
-                                    nullable,
-                                    scalar_type,
-                                },
-                            )
+                            (datum, ColumnType::new(scalar_type))
                         })
                         .collect();
                     reduced = get_outer.lookup(reduced, default);
@@ -377,22 +379,23 @@ impl ScalarExpr {
                         // append True to anything that returned any rows
                         .map(vec![(
                             SS::Literal(Datum::True),
-                            ColumnType {
-                                name: None,
-                                scalar_type: ScalarType::Bool,
-                                nullable: false,
-                            },
+                            ColumnType::new(ScalarType::Bool),
                         )]);
                     // append False to anything that didn't return any rows
-                    let default = vec![(
-                        Datum::False,
-                        ColumnType {
-                            name: None,
-                            nullable: false,
-                            scalar_type: ScalarType::Bool,
-                        },
-                    )];
+                    let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
                     Ok(get_inner.lookup(exists, default))
+                })?;
+                SS::Column(inner.arity() - 1)
+            }
+            Select(expr) => {
+                assert_eq!(expr.arity(), 1);
+                *inner = inner.take().branch(|get_inner| {
+                    let select = expr
+                        // compute for every row in get_inner
+                        .applied_to(get_inner.clone())?;
+                    // append Null to anything that didn't return any rows
+                    let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
+                    Ok(get_inner.lookup(select, default))
                 })?;
                 SS::Column(inner.arity() - 1)
             }

@@ -31,7 +31,11 @@ impl ColumnType {
     pub fn new(scalar_type: ScalarType) -> Self {
         ColumnType {
             name: None,
-            nullable: false,
+            nullable: if let ScalarType::Null = scalar_type {
+                true
+            } else {
+                false
+            },
             scalar_type,
         }
     }

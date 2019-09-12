@@ -59,3 +59,13 @@ SELECT *, EXISTS(
 alice bob false
 alice eve false
 bob eve false
+
+query TT rowsort
+SELECT peep, (
+  SELECT likee FROM likes WHERE liker = peep
+) FROM peeps
+----
+alice bob
+alice eve
+bob eve
+eve NULL
