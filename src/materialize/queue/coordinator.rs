@@ -289,30 +289,33 @@ where
             // `source` depends on transitively, ignoring the accepted times of
             // intermediate views.
             PeekWhen::EarliestSource | PeekWhen::Immediately => {
-                let mut bound = Antichain::new(); // lower bound on available data.
+                // Collect unbound names in `source`.
+                let mut names = Vec::new();
+                source.unbound_uses(&mut names);
+                names.sort();
+                names.dedup();
 
-                // TODO : RelationExpr has a `uses_inner` method, but it wasn't
-                // clear what it does (it suppresses let bound names, for example).
-                // Dataflow not yet installed, so we should visit the RelationExpr
-                // manually and then call `self.sources_frontier`
-                source.visit(&mut |e| {
-                    if let RelationExpr::Get { name, typ: _ } = e {
-                        match when {
-                            PeekWhen::EarliestSource => {
-                                self.sources_frontier(name, &mut bound);
-                            }
-                            PeekWhen::Immediately => {
-                                if let Some(upper) = self.upper_of(name) {
-                                    bound.extend(upper.elements().iter().cloned());
-                                } else {
-                                    eprintln!("Alarming! Absent relation in view");
-                                    bound.insert(0);
-                                }
-                            }
-                            _ => unreachable!(),
-                        };
+                // Form lower bound on available times.
+                let mut bound = Antichain::new();
+                match when {
+                    PeekWhen::EarliestSource => {
+                        for name in names {
+                            self.sources_frontier(name, &mut bound);
+                        }
                     }
-                });
+                    PeekWhen::Immediately => {
+                        for name in names {
+                            let upper = self
+                                .upper_of(name)
+                                .expect("Absent relation in view")
+                                .elements()
+                                .iter()
+                                .cloned();
+                            bound.extend(upper);
+                        }
+                    }
+                    _ => unreachable!(),
+                }
 
                 // Pick the first time strictly less than `bound` to ensure that the
                 // peek can respond without further input advances.

@@ -124,7 +124,7 @@ impl Dataflow {
         match self {
             Dataflow::Source(_) => (),
             Dataflow::Sink(sink) => out.push(sink.from.0.as_str()),
-            Dataflow::View(view) => view.relation_expr.uses_inner(&mut out),
+            Dataflow::View(view) => view.relation_expr.unbound_uses(&mut out),
         }
         out
     }
