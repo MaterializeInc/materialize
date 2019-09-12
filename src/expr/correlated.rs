@@ -135,7 +135,6 @@ impl RelationExpr {
     ) -> Result<super::RelationExpr, failure::Error> {
         use self::RelationExpr::*;
         use super::RelationExpr as SR;
-        use super::ScalarExpr as SS;
         if let super::RelationExpr::Get { .. } = &get_outer {
         } else {
             panic!(
@@ -297,7 +296,6 @@ impl RelationExpr {
             }
             Distinct { input } => Ok(input.applied_to(get_outer)?.distinct()),
             Negate { input } => Ok(input.applied_to(get_outer)?.negate()),
-            // assumes outer doesn't have any negative counts, which is probably safe?
             Threshold { input } => Ok(input.applied_to(get_outer)?.threshold()),
         }
     }
@@ -582,7 +580,7 @@ impl ScalarExpr {
 
 impl super::RelationExpr {
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    fn let_<Body>(self, body: Body) -> Result<super::RelationExpr, failure::Error>
+    fn let_in<Body>(self, body: Body) -> Result<super::RelationExpr, failure::Error>
     where
         Body: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
     {
@@ -604,7 +602,7 @@ impl super::RelationExpr {
         }
     }
 
-    /// Left-join `self` against the first columns of `keys_and_values`, using `default` for any missing rows
+    /// Left-join `self` against the first columns of `keys_and_values`, using `default` to fill in any missing rows
     /// (Assumes `keys_and_values` doesn't contain any keys that are not in `self`)
     fn lookup(
         self,
@@ -614,7 +612,7 @@ impl super::RelationExpr {
         let keys = self;
         assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
         keys_and_values
-            .let_(|get_keys_and_values| {
+            .let_in(|get_keys_and_values| {
                 let keys_and_defaults = get_keys_and_values
                     .clone()
                     .project((0..keys.arity()).collect())
@@ -629,10 +627,7 @@ impl super::RelationExpr {
                             })
                             .collect(),
                     );
-                Ok(super::RelationExpr::Union {
-                    left: Box::new(get_keys_and_values),
-                    right: Box::new(keys_and_defaults),
-                })
+                Ok(get_keys_and_values.union(keys_and_defaults))
             })
             .unwrap()
     }
@@ -643,13 +638,13 @@ impl super::RelationExpr {
     where
         Branch: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
     {
-        self.let_(|get_outer| {
-            // TODO(jamii) can optimize this by looking at what columns `branch` actually uses
+        self.let_in(|get_outer| {
+            // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
             let key = (0..get_outer.arity()).collect::<Vec<_>>();
             let keyed_outer = get_outer.clone().project(key.clone()).distinct();
-            keyed_outer.let_(|get_keyed_outer| {
+            keyed_outer.let_in(|get_keyed_outer| {
                 let branch = branch(get_keyed_outer.clone())?;
-                branch.let_(|get_branch| {
+                branch.let_in(|get_branch| {
                     let joined = super::RelationExpr::Join {
                         inputs: vec![get_outer.clone(), get_branch.clone()],
                         variables: key
