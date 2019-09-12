@@ -9,7 +9,7 @@ use failure::format_err;
 use futures::sync::mpsc::{self, UnboundedSender};
 use futures::Future;
 use log::error;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
@@ -119,7 +119,21 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         config.version, listen_addr
     );
 
-    let switchboard = Switchboard::new(config.addresses, config.process);
+    let socket_addrs = config
+        .addresses
+        .iter()
+        .map(|addr| match addr.to_socket_addrs() {
+            // TODO(benesch): we should try all possible addresses, not just the
+            // first (#502).
+            Ok(mut addrs) => match addrs.next() {
+                Some(addr) => Ok(addr),
+                None => Err(format_err!("{} did not resolve to any addresses", addr)),
+            },
+            Err(err) => Err(format_err!("error resolving {}: {}", addr, err)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let switchboard = Switchboard::new(socket_addrs, config.process);
     let mut runtime = tokio::runtime::Runtime::new()?;
     runtime.spawn({
         let switchboard = switchboard.clone();

@@ -21,7 +21,6 @@ use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use serde::{Deserialize, Serialize};
-use std::marker::PhantomData;
 use std::mem;
 use std::net::TcpStream;
 use std::rc::Rc;
@@ -158,7 +157,6 @@ where
             feedback_tx: None,
             command_rx,
             materialized_logger: None,
-            _conn: PhantomData::<C>,
         }
         .run()
     })
@@ -175,7 +173,7 @@ struct PendingPeek {
     transform: RowSetFinishing,
 }
 
-struct Worker<'w, A, C>
+struct Worker<'w, A>
 where
     A: Allocate,
 {
@@ -188,13 +186,11 @@ where
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
-    _conn: PhantomData<C>,
 }
 
-impl<'w, A, C> Worker<'w, A, C>
+impl<'w, A> Worker<'w, A>
 where
     A: Allocate,
-    C: comm::Connection,
 {
     /// Initializes timely dataflow logging and publishes as a view.
     ///
@@ -398,9 +394,9 @@ where
 
             SequencedCommand::EnableFeedback(tx) => {
                 self.feedback_tx =
-                    Some(Box::new(tx.connect::<C>().wait().unwrap().sink_map_err(
-                        |err| panic!("error sending worker feedback: {}", err),
-                    )));
+                    Some(Box::new(tx.connect().wait().unwrap().sink_map_err(|err| {
+                        panic!("error sending worker feedback: {}", err)
+                    })));
             }
 
             SequencedCommand::Shutdown => {

@@ -19,8 +19,11 @@ use crate::protocol;
 ///
 /// Under the hood, the future repeatedly opens new TCP connections, with
 /// exponential backoff between each attempt, until a TCP connection succeeds.
-pub struct TryConnectFuture<C> {
-    addr: String,
+pub struct TryConnectFuture<C>
+where
+    C: protocol::Connection,
+{
+    addr: C::Addr,
     deadline: Instant,
     backoff: Duration,
     state: TryConnectFutureState<C>,
@@ -32,7 +35,7 @@ where
 {
     /// Constructs a new `TryConnectFuture` that will attempt to connect to
     /// `addr` until the connection succeeds or the timeout elapses.
-    pub fn new(addr: String, timeout: impl Into<Option<Duration>>) -> TryConnectFuture<C> {
+    pub fn new(addr: C::Addr, timeout: impl Into<Option<Duration>>) -> TryConnectFuture<C> {
         let deadline = match timeout.into() {
             None => Instant::now() + Duration::from_secs(60 * 60 * 24 * 365 * 100), // approximately forever
             Some(timeout) => Instant::now() + timeout,
@@ -96,7 +99,7 @@ impl<C> TryConnectFutureState<C>
 where
     C: protocol::Connection,
 {
-    fn connect(addr: &str, deadline: Instant) -> TryConnectFutureState<C> {
+    fn connect(addr: &C::Addr, deadline: Instant) -> TryConnectFutureState<C> {
         let future = Timeout::new_at(C::connect(addr), deadline);
         TryConnectFutureState::Connecting(future)
     }
@@ -121,7 +124,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         let mut runtime = Runtime::new()?;
-        runtime.block_on(TryConnectFuture::<TcpStream>::new(addr.to_string(), None))?;
+        runtime.block_on(TryConnectFuture::<TcpStream>::new(addr, None))?;
         Ok(())
     }
 
@@ -133,7 +136,7 @@ mod tests {
         // Hope that no one else will be listening on this port now.
         let mut runtime = Runtime::new()?;
         match runtime.block_on(TryConnectFuture::<TcpStream>::new(
-            addr.to_string(),
+            addr,
             Duration::from_millis(800),
         )) {
             Ok(_) => panic!("try connect future unexpectedly succeeded"),

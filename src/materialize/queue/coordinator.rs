@@ -33,7 +33,10 @@ use sql::Plan;
 use crate::queue::{SqlResponse, WaitFor};
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<C> {
+pub struct Coordinator<C>
+where
+    C: comm::Connection,
+{
     switchboard: comm::Switchboard<C>,
     broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
     optimizer: expr::transform::Optimizer,

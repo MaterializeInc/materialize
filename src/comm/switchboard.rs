@@ -38,17 +38,25 @@ use crate::util::TryConnectFuture;
 ///
 /// Switchboards are both [`Send`] and [`Sync`], and so may be freely shared
 /// and sent between threads.
-pub struct Switchboard<C>(Arc<SwitchboardInner<C>>);
+pub struct Switchboard<C>(Arc<SwitchboardInner<C>>)
+where
+    C: protocol::Connection;
 
-impl<C> Clone for Switchboard<C> {
+impl<C> Clone for Switchboard<C>
+where
+    C: protocol::Connection,
+{
     fn clone(&self) -> Switchboard<C> {
         Switchboard(self.0.clone())
     }
 }
 
-struct SwitchboardInner<C> {
+struct SwitchboardInner<C>
+where
+    C: protocol::Connection,
+{
     /// Addresses of all the nodes in the cluster, including of this node.
-    nodes: Vec<String>,
+    nodes: Vec<C::Addr>,
     /// The index of this node's address in `nodes`.
     id: usize,
     /// The mapping from connection ID to its state.
@@ -121,7 +129,7 @@ where
     pub fn new<I>(nodes: I, id: usize) -> Switchboard<C>
     where
         I: IntoIterator,
-        I::Item: Into<String>,
+        I::Item: Into<C::Addr>,
     {
         Switchboard(Arc::new(SwitchboardInner {
             nodes: nodes.into_iter().map(Into::into).collect(),
@@ -168,7 +176,7 @@ where
                 // Later node. Attempt to initiate connection.
                 let uuid = (self.0.id as u128).into();
                 futures.push(Box::new(
-                    TryConnectFuture::new(addr.to_owned(), timeout)
+                    TryConnectFuture::new(addr.clone(), timeout)
                         .and_then(move |conn| protocol::send_handshake(conn, uuid))
                         .map(|conn| Some(conn)),
                 ));
@@ -320,7 +328,7 @@ where
         conn_rx
     }
 
-    fn peers(&self) -> impl Iterator<Item = &String> {
+    fn peers(&self) -> impl Iterator<Item = &C::Addr> {
         let id = self.0.id;
         self.0
             .nodes

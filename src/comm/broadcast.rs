@@ -53,7 +53,7 @@ use std::fmt;
 use tokio::io;
 use uuid::Uuid;
 
-use crate::mpsc;
+use crate::mpsc::{self, SendSink};
 use crate::protocol;
 
 /// The capability to construct a particular broadcast sender or receiver.
@@ -96,8 +96,6 @@ pub struct Sender<D> {
     state: SenderState<D>,
 }
 
-type SendSink<D> = Box<dyn Sink<SinkItem = D, SinkError = bincode::Error> + Send>;
-
 enum SenderState<D> {
     Connecting {
         future: Box<dyn Future<Item = SendSink<D>, Error = bincode::Error> + Send>,
@@ -120,14 +118,13 @@ where
     D: Serialize + Send + Clone + 'static,
     for<'de> D: Deserialize<'de>,
 {
-    pub(crate) fn new<C, I>(uuid: Uuid, addrs: I) -> Sender<D>
+    pub(crate) fn new<'a, C, I>(uuid: Uuid, addrs: I) -> Sender<D>
     where
         C: protocol::Connection,
-        I: IntoIterator,
-        I::Item: AsRef<str>,
+        I: IntoIterator<Item = &'a C::Addr>,
     {
         let conns = stream::futures_unordered(addrs.into_iter().map(|addr| {
-            C::connect(addr.as_ref())
+            C::connect(addr)
                 .and_then(move |conn| protocol::send_handshake(conn, uuid))
                 .map(|conn| protocol::encoder(conn))
         }))

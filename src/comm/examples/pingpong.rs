@@ -8,7 +8,7 @@ use futures::{Future, Sink, Stream};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::error::Error;
-use std::net::SocketAddr;
+use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::net::TcpListener;
 
@@ -24,9 +24,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let id = popts.opt_get_default("p", 0)?;
     let magic_number = popts.free.get(0).unwrap_or(&"42".into()).parse()?;
 
-    let nodes: Vec<_> = (0..n).map(|i| format!("127.0.0.1:{}", 6876 + i)).collect();
-    let addr: SocketAddr = nodes[id].parse()?;
-    let listener = TcpListener::bind(&addr)?;
+    let nodes: Vec<_> = (0..n).map(|i| (Ipv4Addr::LOCALHOST, 6876 + i)).collect();
+    let listener = TcpListener::bind(&nodes[id].into())?;
     println!("listening on {}...", listener.local_addr()?);
 
     let switchboard = Switchboard::new(nodes, id);
@@ -100,7 +99,7 @@ where
     // Step 2. Receive the receive half of an MPSC channel.
     if let Some(BroadcastMessage::ResponseChannel(tx)) = recv() {
         // Step 3. Send acknowledgement of MPSC channel.
-        tx.connect::<C>().wait()?.send(()).wait()?;
+        tx.connect().wait()?.send(()).wait()?;
     } else {
         panic!("did not receive response channel");
     }
