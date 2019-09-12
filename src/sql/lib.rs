@@ -522,9 +522,9 @@ impl Planner {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
-        let limit = match q.limit {
+        let limit = match &q.limit {
             None => None,
-            Some(Expr::Value(Value::Long(x))) => Some(x as usize),
+            Some(Expr::Value(Value::Number(x))) => Some(x.parse()?),
             _ => bail!("LIMIT must be an integer constant"),
         };
         let expr = self.plan_set_expr(&q.body, outer_scope)?;
@@ -1868,28 +1868,51 @@ impl Planner {
 
     fn plan_literal<'a>(&self, l: &'a Value) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let (datum, scalar_type) = match l {
-            Value::Long(i) => (Datum::Int64(*i as i64), ScalarType::Int64), // TODO(benesch): safe conversion
-            Value::Decimal(d) => {
-                // Our SQL parser parses negative numbers as a unary negation
-                // of a positive literal, so we don't need to worry about
-                // negative numbers here.
-                assert_ne!(d.sign(), num_bigint::Sign::Minus);
-                let (bigint, scale) = d.as_bigint_and_exponent();
-                let precision = cmp::max(d.digits(), scale as u64);
-                if precision > 38 {
-                    bail!(
-                        "decimal literal has precision {}, which exceeds maximum precision of 38",
-                        precision
-                    );
-                }
+            Value::Number(s) => {
                 let mut significand: i128 = 0;
-                for digit in bigint.to_radix_be(2).1 {
-                    significand = (significand << 1) + i128::from(digit);
+                let mut precision = 0;
+                let mut scale = 0;
+                let mut seen_decimal = false;
+                for c in s.chars() {
+                    if c == '.' {
+                        if seen_decimal {
+                            bail!("more than one decimal point in numeric literal: {}", s)
+                        }
+                        seen_decimal = true;
+                        continue;
+                    }
+
+                    precision += 1;
+                    if seen_decimal {
+                        scale += 1;
+                    }
+
+                    let digit = c
+                        .to_digit(10)
+                        .ok_or_else(|| format_err!("invalid digit in numeric literal: {}", s))?;
+                    significand = significand
+                        .checked_mul(10)
+                        .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+                    significand = significand
+                        .checked_add(i128::from(digit))
+                        .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
                 }
-                (
-                    Datum::from(significand),
-                    ScalarType::Decimal(precision as u8, scale as u8),
-                )
+                if precision > MAX_DECIMAL_PRECISION {
+                    bail!("numeric literal exceeds maximum precision: {}", s)
+                } else if scale == 0 {
+                    match significand.try_into() {
+                        Ok(n) => (Datum::Int64(n), ScalarType::Int64),
+                        Err(_) => (
+                            Datum::from(significand),
+                            ScalarType::Decimal(precision as u8, scale as u8),
+                        ),
+                    }
+                } else {
+                    (
+                        Datum::from(significand),
+                        ScalarType::Decimal(precision as u8, scale as u8),
+                    )
+                }
             }
             Value::SingleQuotedString(s) => (Datum::String(s.clone()), ScalarType::String),
             Value::NationalStringLiteral(_) => {

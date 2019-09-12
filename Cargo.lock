@@ -142,16 +142,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bigdecimal"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "num-bigint 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "num-integer 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)",
- "num-traits 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "bincode"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2327,7 +2317,6 @@ dependencies = [
  "expr 0.1.0",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "interchange 0.1.0",
- "num-bigint 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ore 0.1.0",
  "pretty_assertions 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "repr 0.1.0",
@@ -2371,9 +2360,8 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#e4bf2622d0ef90772c098dd8ab317b4ab20b4e7f"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#2e53850be01cff4bd63fa674410bbab7c49e6b78"
 dependencies = [
- "bigdecimal 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -3158,7 +3146,6 @@ dependencies = [
 "checksum backtrace 0.3.37 (registry+https://github.com/rust-lang/crates.io-index)" = "5180c5a20655b14a819b652fd2378fa5f1697b6c9ddad3e695c2f9cedf6df4e2"
 "checksum backtrace-sys 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)" = "797c830ac25ccc92a7f8a7b9862bde440715531514594a6154e3d4a54dd769b6"
 "checksum base64 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
-"checksum bigdecimal 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "460825c9e21708024d67c07057cd5560e5acdccac85de0de624a81d3de51bacb"
 "checksum bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "9f04a5e50dc80b3d5d35320889053637d15011aed5e66b66b37ae798c65da6f7"
 "checksum bindgen 0.49.2 (registry+https://github.com/rust-lang/crates.io-index)" = "846a1fba6535362a01487ef6b10f0275faa12e5c5d835c5c1c627aabc46ccbd6"
 "checksum bitflags 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d155346769a6855b86399e9bc3814ab343cd3d62c7e985113d46a0ec3c281fd"
