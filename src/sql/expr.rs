@@ -11,6 +11,7 @@ pub use dataflow_expr::like;
 pub use dataflow_expr::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 
 #[derive(Debug, Clone)]
+/// Just like dataflow_expr::RelationExpr, except where otherwise noted below
 pub enum RelationExpr {
     Constant {
         rows: Vec<Vec<Datum>>,
@@ -38,14 +39,14 @@ pub enum RelationExpr {
         input: Box<RelationExpr>,
         predicates: Vec<ScalarExpr>,
     },
+    /// Unlike dataflow_expr::RelationExpr, we haven't yet compiled LeftOuter/RightOuter/FullOuter joins away into more primitive exprs
     Join {
         left: Box<RelationExpr>,
         right: Box<RelationExpr>,
         on: ScalarExpr,
         kind: JoinKind,
     },
-    /// Group input by key
-    /// SPECIAL CASE: when key is empty and input is empty, return a single row with aggregates over empty groups
+    /// Unlike dataflow_expr::RelationExpr, when `key` is empty AND `input` is empty this returns a single row with the aggregates evalauted over empty groups, rather than returning zero rows
     Reduce {
         input: Box<RelationExpr>,
         group_key: Vec<usize>,
@@ -67,7 +68,9 @@ pub enum RelationExpr {
 }
 
 #[derive(Debug, Clone)]
+/// Just like dataflow::ScalarExpr, except where otherwise noted below.
 pub enum ScalarExpr {
+    /// Unlike dataflow::ScalarExpr, we can nest RelationExprs via eg Exists. This means that a variable could refer to a column of the current input, or to a column of an outer relation. We use ColumnRef to denote the difference.
     Column(ColumnRef),
     Literal(Datum),
     CallUnary {
@@ -117,7 +120,8 @@ pub struct AggregateExpr {
 
 impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
-    /// Rewrite `self` into a `dataflow_expr::RelationExpr` which has no correlated subqueries
+    /// Rewrite `self` into a `dataflow_expr::RelationExpr`.
+    /// This requires rewriting all correlated subqueries (nested `RelationExpr`s) into flat queries
     pub fn decorrelate(self) -> Result<dataflow_expr::RelationExpr, failure::Error> {
         dataflow_expr::RelationExpr::Constant {
             rows: vec![vec![]],
@@ -128,8 +132,8 @@ impl RelationExpr {
         .let_in(|get_outer| self.applied_to(get_outer))
     }
 
-    /// Evaluate `self` for each row in `outer`.
-    /// (`get_outer` should be a `Get` with no duplicate rows)
+    /// Return a `dataflow_expr::RelationExpr` which evaluates `self` once for each row returned by `get_outer`.
+    /// (Where `get_outer` should be a `Get` with no duplicate rows)
     fn applied_to(
         self,
         get_outer: dataflow_expr::RelationExpr,
@@ -303,9 +307,11 @@ impl RelationExpr {
 }
 
 impl ScalarExpr {
-    /// Evaluate `self` for every row in `inner`
-    /// The first `outer_arity` columns of `inner` hold values from the outer query
-    /// The remaining columns of `inner` hold values from the current query
+    /// Rewrite `self` into a `dataflow_expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `inner`.
+    /// This requires removing all nested subqueries, which we can do moving them into `inner` using `RelationExpr::applied_to`.
+    /// We expect that `inner` has already been decorrelated, so that:
+    /// * the first `outer_arity` columns of `inner` hold values from the outer scope
+    /// * the remaining columns of `inner` hold values from the direct input to `self`
     fn applied_to(
         self,
         outer_arity: usize,
@@ -342,19 +348,33 @@ impl ScalarExpr {
             },
             If { cond, then, els } => {
                 // TODO(jamii) would be nice to only run subqueries in `then` when `cond` is true
-                // (if subqueries can throw errors, this impacts correctness too)
+                // (if subqueries later gain the ability to throw errors, this impacts correctness too)
                 SS::If {
                     cond: Box::new(cond.applied_to(outer_arity, inner)?),
                     then: Box::new(then.applied_to(outer_arity, inner)?),
                     els: Box::new(els.applied_to(outer_arity, inner)?),
                 }
             }
+
+            // Subqueries!
+            // These are surprisingly subtle. Things to be careful of:
+
+            // Anything in the subquery that cares about row counts (Reduce/Distinct/Negate/Threshold) must not:
+            // * change the row counts of the outer query
+            // * accidentally compute its own value using the row counts of the outer query
+            // Use `branch` to calculate the subquery once for each __distinct__ row of the outer query and then join the answers back on to the original rows of the outer query
+
+            // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
+            // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
                 *inner = inner.take().branch(|get_inner| {
                     let exists = expr
+                        // compute for every row in get_inner
                         .applied_to(get_inner.clone())?
+                        // throw away actual values and just remember whether or not there where __any__ rows
                         .project((0..get_inner.arity()).collect())
                         .distinct()
+                        // append True to anything that returned any rows
                         .map(vec![(
                             SS::Literal(Datum::True),
                             ColumnType {
@@ -363,6 +383,7 @@ impl ScalarExpr {
                                 nullable: false,
                             },
                         )]);
+                    // append False to anything that didn't return any rows
                     let default = vec![(
                         Datum::False,
                         ColumnType {
