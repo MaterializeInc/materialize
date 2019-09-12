@@ -432,17 +432,32 @@ impl RelationExpr {
         }
     }
 
-    /// Collects the names of the dataflows that this relation_expr depends upon.
-    pub fn uses_inner<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
-        self.visit(&mut |e| match e {
+    /// Appends unbound names on which this expression depends.
+    ///
+    /// This method is complicated only by the need to handle potential shadowing of let bindings,
+    /// whose binding becomes visible only in their body.
+    pub fn unbound_uses<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
+        match self {
+            RelationExpr::Let { name, value, body } => {
+                // Append names from `value` but discard `name` from uses in `body`.
+                // TODO: We could avoid the additional allocation by noting the length
+                // of `out` after the `value` call, and only discarding occurrences from
+                // `out` after this length. `Vec::retain()` makes this hard.
+                value.unbound_uses(out);
+                let mut temp = Vec::new();
+                body.unbound_uses(&mut temp);
+                temp.retain(|n| n != name);
+                out.extend(temp.drain(..));
+            }
             RelationExpr::Get { name, .. } => {
+                // Stash the name for others to see.
                 out.push(&name);
             }
-            RelationExpr::Let { name, .. } => {
-                out.retain(|n| n != name);
+            e => {
+                // Continue recursively on members.
+                e.visit1(|e| e.unbound_uses(out))
             }
-            _ => (),
-        });
+        }
     }
 
     /// Applies `f` to each child `RelationExpr`.
