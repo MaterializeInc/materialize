@@ -30,11 +30,9 @@ futures = "0.1"
 getopts = "0.2"
 hyper = "0.12"
 interchange = { path = "../interchange" }
-itertools = "0.8.0"
 jemallocator = "0.3.0"
 lazy_static = "1.4.0"
 log = "0.4"
-metastore = { path = "../metastore" }
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 parse_duration = "1.0.3"
@@ -43,7 +41,6 @@ rand = "0.7"
 regex = "1.2.1"
 regex-syntax = "0.6.12"
 repr = { path = "../repr" }
-simplelog = "0.7"
 smallvec = "0.6"
 sql = { path = "../sql" }
 state_machine_future = { git = "https://github.com/benesch/state_machine_future.git", branch = "context-generic-bounds" }

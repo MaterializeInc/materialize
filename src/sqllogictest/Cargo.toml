@@ -29,7 +29,6 @@ ore = { path = "../ore" }
 postgres = { version = "0.16.0-rc.2", features = ["with-chrono-0_4"] }
 regex = "1"
 repr = { path = "../repr" }
-rusqlite = { version = "0.20", features = ["bundled"] }
 serde_json = "1"
 sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
