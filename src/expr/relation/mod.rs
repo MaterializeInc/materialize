@@ -15,6 +15,7 @@ use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -717,6 +718,109 @@ impl RelationExpr {
                 },
             },
         )
+    }
+    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
+    pub fn let_in<Body>(self, body: Body) -> Result<RelationExpr, failure::Error>
+    where
+        Body: FnOnce(RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+    {
+        if let RelationExpr::Get { .. } = self {
+            // already done
+            body(self)
+        } else {
+            let name = format!("tmp_{}", Uuid::new_v4());
+            let get = RelationExpr::Get {
+                name: name.clone(),
+                typ: self.typ(),
+            };
+            let body = (body)(get)?;
+            Ok(RelationExpr::Let {
+                name,
+                value: Box::new(self),
+                body: Box::new(body),
+            })
+        }
+    }
+
+    /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
+    /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
+    pub fn anti_lookup(
+        self,
+        keys_and_values: RelationExpr,
+        default: Vec<(Datum, ColumnType)>,
+    ) -> RelationExpr {
+        let keys = self;
+        assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
+        keys_and_values
+            .let_in(|get_keys_and_values| {
+                Ok(get_keys_and_values
+                    .clone()
+                    .project((0..keys.arity()).collect())
+                    .distinct()
+                    .negate()
+                    .union(keys)
+                    .map(
+                        default
+                            .iter()
+                            .map(|(datum, typ)| (ScalarExpr::Literal(datum.clone()), typ.clone()))
+                            .collect(),
+                    ))
+            })
+            .unwrap()
+    }
+
+    /// Return:
+    /// * every row in keys_and_values
+    /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
+    /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
+    pub fn lookup(
+        self,
+        keys_and_values: RelationExpr,
+        default: Vec<(Datum, ColumnType)>,
+    ) -> RelationExpr {
+        keys_and_values
+            .let_in(|get_keys_and_values| {
+                Ok(get_keys_and_values
+                    .clone()
+                    .union(self.anti_lookup(get_keys_and_values, default)))
+            })
+            .unwrap()
+    }
+
+    /// Perform some operation using `self` and then inner-join the results with `self`.
+    /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
+    pub fn branch<Branch>(self, branch: Branch) -> Result<RelationExpr, failure::Error>
+    where
+        Branch: FnOnce(RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+    {
+        self.let_in(|get_outer| {
+            // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
+            let key = (0..get_outer.arity()).collect::<Vec<_>>();
+            let keyed_outer = get_outer.clone().project(key.clone()).distinct();
+            keyed_outer.let_in(|get_keyed_outer| {
+                let branch = branch(get_keyed_outer.clone())?;
+                branch.let_in(|get_branch| {
+                    let joined = RelationExpr::Join {
+                        inputs: vec![get_outer.clone(), get_branch.clone()],
+                        variables: key
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &k)| vec![(0, k), (1, i)])
+                            .collect(),
+                    }
+                    // throw away the right-hand copy of the key we just joined on
+                    .project(
+                        (0..get_outer.arity())
+                            .chain(
+                                get_outer.arity() + get_keyed_outer.arity()
+                                    ..get_outer.arity() + get_branch.arity(),
+                            )
+                            .collect(),
+                    );
+                    Ok(joined)
+                })
+            })
+        })
     }
 }
 

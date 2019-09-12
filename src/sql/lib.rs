@@ -14,11 +14,6 @@ use dataflow_types::{
     ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
     Sink, SinkConnector, Source, SourceConnector, View,
 };
-use expr::correlated::{
-    AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, JoinKind, RelationExpr, ScalarExpr,
-    UnaryFunc, VariadicFunc,
-};
-use expr::like::build_like_regex_from_string;
 use failure::{bail, ensure, format_err, ResultExt};
 use interchange::avro;
 use ore::collections::CollectionExt;
@@ -43,11 +38,17 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use store::{DataflowStore, RemoveMode};
 use url::Url;
 
-pub use session::Session;
-
+mod expr;
 mod session;
 pub mod store;
 mod transform;
+
+use self::expr::like::build_like_regex_from_string;
+use self::expr::{
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, JoinKind, RelationExpr, ScalarExpr,
+    UnaryFunc, VariadicFunc,
+};
+pub use session::Session;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
@@ -61,7 +62,7 @@ pub enum Plan {
     EmptyQuery,
     DidSetVariable,
     Peek {
-        source: expr::RelationExpr,
+        source: ::expr::RelationExpr,
         when: PeekWhen,
         transform: RowSetFinishing,
     },
@@ -72,7 +73,7 @@ pub enum Plan {
     },
     ExplainPlan {
         typ: RelationType,
-        relation_expr: expr::RelationExpr,
+        relation_expr: ::expr::RelationExpr,
     },
 }
 
@@ -459,7 +460,7 @@ impl Planner {
         let dataflow = self.dataflows.get(&name)?.clone();
         let typ = dataflow.typ();
         Ok(Plan::Peek {
-            source: expr::RelationExpr::Get {
+            source: ::expr::RelationExpr::Get {
                 name: dataflow.name().to_owned(),
                 typ: typ.clone(),
             },

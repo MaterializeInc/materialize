@@ -3,11 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use expr as dataflow_expr;
 use repr::*;
-use uuid::Uuid;
 
 // these happen to be unchanged at the moment, but there might be additions later
-pub use super::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
+pub use dataflow_expr::like;
+pub use dataflow_expr::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 
 #[derive(Debug, Clone)]
 pub enum RelationExpr {
@@ -116,9 +117,9 @@ pub struct AggregateExpr {
 
 impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
-    /// Rewrite `self` into a `super::RelationExpr` which has no correlated subqueries
-    pub fn decorrelate(self) -> Result<super::RelationExpr, failure::Error> {
-        super::RelationExpr::Constant {
+    /// Rewrite `self` into a `dataflow_expr::RelationExpr` which has no correlated subqueries
+    pub fn decorrelate(self) -> Result<dataflow_expr::RelationExpr, failure::Error> {
+        dataflow_expr::RelationExpr::Constant {
             rows: vec![vec![]],
             typ: RelationType {
                 column_types: vec![],
@@ -131,11 +132,11 @@ impl RelationExpr {
     /// (`get_outer` should be a `Get` with no duplicate rows)
     fn applied_to(
         self,
-        get_outer: super::RelationExpr,
-    ) -> Result<super::RelationExpr, failure::Error> {
+        get_outer: dataflow_expr::RelationExpr,
+    ) -> Result<dataflow_expr::RelationExpr, failure::Error> {
         use self::RelationExpr::*;
-        use super::RelationExpr as SR;
-        if let super::RelationExpr::Get { .. } = &get_outer {
+        use dataflow_expr::RelationExpr as SR;
+        if let dataflow_expr::RelationExpr::Get { .. } = &get_outer {
         } else {
             panic!(
                 "get_outer: expected a RelationExpr::Get, found {:?}",
@@ -308,10 +309,10 @@ impl ScalarExpr {
     fn applied_to(
         self,
         outer_arity: usize,
-        inner: &mut super::RelationExpr,
-    ) -> Result<super::ScalarExpr, failure::Error> {
+        inner: &mut dataflow_expr::RelationExpr,
+    ) -> Result<dataflow_expr::ScalarExpr, failure::Error> {
         use self::ScalarExpr::*;
-        use super::ScalarExpr as SS;
+        use dataflow_expr::ScalarExpr as SS;
 
         Ok(match self {
             Column(ColumnRef::Inner(column)) => {
@@ -382,15 +383,15 @@ impl AggregateExpr {
     fn applied_to(
         self,
         outer_arity: usize,
-        inner: &mut super::RelationExpr,
-    ) -> Result<super::AggregateExpr, failure::Error> {
+        inner: &mut dataflow_expr::RelationExpr,
+    ) -> Result<dataflow_expr::AggregateExpr, failure::Error> {
         let AggregateExpr {
             func,
             expr,
             distinct,
         } = self;
 
-        Ok(super::AggregateExpr {
+        Ok(dataflow_expr::AggregateExpr {
             func,
             expr: expr.applied_to(outer_arity, inner)?,
             distinct,
@@ -463,12 +464,9 @@ impl RelationExpr {
         }
     }
 
+    #[allow(dead_code)]
     pub fn arity(&self) -> usize {
         self.typ().column_types.len()
-    }
-
-    pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        RelationExpr::Constant { rows, typ }
     }
 
     pub fn project(self, outputs: Vec<usize>) -> Self {
@@ -540,20 +538,6 @@ impl RelationExpr {
 }
 
 impl ScalarExpr {
-    pub fn columns(is: &[usize]) -> Vec<ScalarExpr> {
-        is.iter()
-            .map(|i| ScalarExpr::Column(ColumnRef::Inner(*i)))
-            .collect()
-    }
-
-    pub fn column(column: usize) -> Self {
-        ScalarExpr::Column(ColumnRef::Inner(column))
-    }
-
-    pub fn literal(datum: Datum) -> Self {
-        ScalarExpr::Literal(datum)
-    }
-
     pub fn call_unary(self, func: UnaryFunc) -> Self {
         ScalarExpr::CallUnary {
             func,
@@ -567,121 +551,5 @@ impl ScalarExpr {
             expr1: Box::new(self),
             expr2: Box::new(other),
         }
-    }
-
-    pub fn if_then_else(self, t: Self, f: Self) -> Self {
-        ScalarExpr::If {
-            cond: Box::new(self),
-            then: Box::new(t),
-            els: Box::new(f),
-        }
-    }
-}
-
-impl super::RelationExpr {
-    /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    fn let_in<Body>(self, body: Body) -> Result<super::RelationExpr, failure::Error>
-    where
-        Body: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
-    {
-        if let super::RelationExpr::Get { .. } = self {
-            // already done
-            body(self)
-        } else {
-            let name = format!("tmp_{}", Uuid::new_v4());
-            let get = super::RelationExpr::Get {
-                name: name.clone(),
-                typ: self.typ(),
-            };
-            let body = (body)(get)?;
-            Ok(super::RelationExpr::Let {
-                name,
-                value: Box::new(self),
-                body: Box::new(body),
-            })
-        }
-    }
-
-    /// Return every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
-    /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
-    fn anti_lookup(
-        self,
-        keys_and_values: super::RelationExpr,
-        default: Vec<(Datum, ColumnType)>,
-    ) -> super::RelationExpr {
-        let keys = self;
-        assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
-        keys_and_values
-            .let_in(|get_keys_and_values| {
-                Ok(get_keys_and_values
-                    .clone()
-                    .project((0..keys.arity()).collect())
-                    .distinct()
-                    .negate()
-                    .union(keys)
-                    .map(
-                        default
-                            .iter()
-                            .map(|(datum, typ)| {
-                                (super::ScalarExpr::Literal(datum.clone()), typ.clone())
-                            })
-                            .collect(),
-                    ))
-            })
-            .unwrap()
-    }
-
-    /// Return:
-    /// * every row in keys_and_values
-    /// * every row in `self` that does not have a matching row in the first columns of `keys_and_values`, using `default` to fill in the remaining columns
-    /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
-    fn lookup(
-        self,
-        keys_and_values: super::RelationExpr,
-        default: Vec<(Datum, ColumnType)>,
-    ) -> super::RelationExpr {
-        keys_and_values
-            .let_in(|get_keys_and_values| {
-                Ok(get_keys_and_values
-                    .clone()
-                    .union(self.anti_lookup(get_keys_and_values, default)))
-            })
-            .unwrap()
-    }
-
-    /// Perform some operation using `self` and then inner-join the results with `self`.
-    /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
-    fn branch<Branch>(self, branch: Branch) -> Result<super::RelationExpr, failure::Error>
-    where
-        Branch: FnOnce(super::RelationExpr) -> Result<super::RelationExpr, failure::Error>,
-    {
-        self.let_in(|get_outer| {
-            // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
-            let key = (0..get_outer.arity()).collect::<Vec<_>>();
-            let keyed_outer = get_outer.clone().project(key.clone()).distinct();
-            keyed_outer.let_in(|get_keyed_outer| {
-                let branch = branch(get_keyed_outer.clone())?;
-                branch.let_in(|get_branch| {
-                    let joined = super::RelationExpr::Join {
-                        inputs: vec![get_outer.clone(), get_branch.clone()],
-                        variables: key
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &k)| vec![(0, k), (1, i)])
-                            .collect(),
-                    }
-                    // throw away the right-hand copy of the key we just joined on
-                    .project(
-                        (0..get_outer.arity())
-                            .chain(
-                                get_outer.arity() + get_keyed_outer.arity()
-                                    ..get_outer.arity() + get_branch.arity(),
-                            )
-                            .collect(),
-                    );
-                    Ok(joined)
-                })
-            })
-        })
     }
 }

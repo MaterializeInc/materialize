@@ -12,7 +12,6 @@ pub mod like;
 #[macro_use]
 pub mod pretty_pretty;
 
-pub mod correlated;
 mod relation;
 mod scalar;
 pub mod transform;
