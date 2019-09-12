@@ -8,9 +8,10 @@
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use ore::netio::{SniffedStream, SniffingStream};
 use serde::{Deserialize, Serialize};
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use tokio::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::net::unix::UnixStream;
 use tokio::net::TcpStream;
 use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use uuid::Uuid;
@@ -39,12 +40,14 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 /// and [`AsyncWrite`] can be added trivially, i.e., by implementing this trait.
 pub trait Connection: AsyncRead + AsyncWrite + Send + Sized + 'static {
     /// Connects to the specified `addr`.
-    fn connect(addr: &SocketAddr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send>;
+    fn connect(addr: &str) -> Box<dyn Future<Item = Self, Error = io::Error> + Send>;
 }
 
 impl Connection for TcpStream {
-    fn connect(addr: &SocketAddr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
-        Box::new(TcpStream::connect(addr).map(|conn| {
+    fn connect(addr: &str) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
+        // TODO(benesch): don't panic if DNS resolution fails.
+        let addr = addr.to_socket_addrs().unwrap().next().unwrap();
+        Box::new(TcpStream::connect(&addr).map(|conn| {
             conn.set_nodelay(true).expect("set_nodelay call failed");
             conn
         }))
@@ -55,23 +58,14 @@ impl<C> Connection for SniffedStream<C>
 where
     C: Connection,
 {
-    fn connect(addr: &SocketAddr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
+    fn connect(addr: &str) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
         Box::new(C::connect(addr).map(|conn| SniffingStream::new(conn).into_sniffed()))
     }
 }
 
-pub(crate) fn resolve_addr(addr: &str) -> Result<SocketAddr, io::Error> {
-    match addr.to_socket_addrs() {
-        // TODO(benesch): we should try connecting to all resolved
-        // addresses, not just the first.
-        Ok(mut addrs) => match addrs.next() {
-            None => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "dns resolution failed",
-            )),
-            Some(addr) => Ok(addr),
-        },
-        Err(err) => Err(err),
+impl Connection for UnixStream {
+    fn connect(addr: &str) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
+        Box::new(UnixStream::connect(addr))
     }
 }
 

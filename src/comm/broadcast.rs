@@ -49,9 +49,8 @@ use futures::{stream, try_ready, AsyncSink, Future, Poll, Sink, StartSend, Strea
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
-use std::net::ToSocketAddrs;
+
 use tokio::io;
-use tokio::net::TcpStream;
 use uuid::Uuid;
 
 use crate::mpsc;
@@ -121,15 +120,14 @@ where
     D: Serialize + Send + Clone + 'static,
     for<'de> D: Deserialize<'de>,
 {
-    pub(crate) fn new<I>(uuid: Uuid, addrs: I) -> Sender<D>
+    pub(crate) fn new<C, I>(uuid: Uuid, addrs: I) -> Sender<D>
     where
+        C: protocol::Connection,
         I: IntoIterator,
-        I::Item: ToSocketAddrs,
+        I::Item: AsRef<str>,
     {
         let conns = stream::futures_unordered(addrs.into_iter().map(|addr| {
-            // TODO(benesch): don't panic if DNS resolution fails.
-            let addr = addr.to_socket_addrs().unwrap().next().unwrap();
-            TcpStream::connect(&addr)
+            C::connect(addr.as_ref())
                 .and_then(move |conn| protocol::send_handshake(conn, uuid))
                 .map(|conn| protocol::encoder(conn))
         }))

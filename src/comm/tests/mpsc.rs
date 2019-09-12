@@ -6,6 +6,7 @@
 use comm::Switchboard;
 use futures::{Future, Sink, Stream};
 use std::error::Error;
+use tokio::net::UnixStream;
 
 /// Verifies that MPSC channels receive messages from all streams
 /// simultaneously. The original implementation had a bug in which streams were
@@ -16,8 +17,8 @@ fn test_mpsc_select() -> Result<(), Box<dyn Error>> {
     let (switchboard, _runtime) = Switchboard::local()?;
 
     let (tx, mut rx) = switchboard.mpsc();
-    let mut tx1 = tx.clone().connect().wait()?;
-    let mut tx2 = tx.connect().wait()?;
+    let mut tx1 = tx.clone().connect::<UnixStream>().wait()?;
+    let mut tx2 = tx.connect::<UnixStream>().wait()?;
 
     tx1 = tx1.send(1).wait()?;
     tx2 = tx2.send(2).wait()?;

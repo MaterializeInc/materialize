@@ -100,7 +100,7 @@ where
     // Step 2. Receive the receive half of an MPSC channel.
     if let Some(BroadcastMessage::ResponseChannel(tx)) = recv() {
         // Step 3. Send acknowledgement of MPSC channel.
-        tx.connect().wait()?.send(()).wait()?;
+        tx.connect::<C>().wait()?.send(()).wait()?;
     } else {
         panic!("did not receive response channel");
     }

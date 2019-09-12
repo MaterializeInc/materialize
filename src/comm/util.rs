@@ -7,7 +7,7 @@
 
 use futures::{Async, Future, Poll};
 use std::cmp;
-use std::net::SocketAddr;
+
 use std::time::{Duration, Instant};
 use tokio::io;
 use tokio::timer::{Delay, Timeout};
@@ -20,7 +20,7 @@ use crate::protocol;
 /// Under the hood, the future repeatedly opens new TCP connections, with
 /// exponential backoff between each attempt, until a TCP connection succeeds.
 pub struct TryConnectFuture<C> {
-    addr: SocketAddr,
+    addr: String,
     deadline: Instant,
     backoff: Duration,
     state: TryConnectFutureState<C>,
@@ -32,16 +32,17 @@ where
 {
     /// Constructs a new `TryConnectFuture` that will attempt to connect to
     /// `addr` until the connection succeeds or the timeout elapses.
-    pub fn new(addr: SocketAddr, timeout: impl Into<Option<Duration>>) -> TryConnectFuture<C> {
+    pub fn new(addr: String, timeout: impl Into<Option<Duration>>) -> TryConnectFuture<C> {
         let deadline = match timeout.into() {
             None => Instant::now() + Duration::from_secs(60 * 60 * 24 * 365 * 100), // approximately forever
             Some(timeout) => Instant::now() + timeout,
         };
+        let state = TryConnectFutureState::connect(&addr, deadline);
         TryConnectFuture {
             addr,
             deadline,
             backoff: Duration::from_millis(100),
-            state: TryConnectFutureState::connect(&addr, deadline),
+            state,
         }
     }
 }
@@ -95,7 +96,7 @@ impl<C> TryConnectFutureState<C>
 where
     C: protocol::Connection,
 {
-    fn connect(addr: &SocketAddr, deadline: Instant) -> TryConnectFutureState<C> {
+    fn connect(addr: &str, deadline: Instant) -> TryConnectFutureState<C> {
         let future = Timeout::new_at(C::connect(addr), deadline);
         TryConnectFutureState::Connecting(future)
     }
@@ -110,31 +111,29 @@ where
 mod tests {
     use super::*;
     use std::io;
-    use std::net::{IpAddr, Ipv4Addr, TcpListener};
+    use std::net::TcpListener;
     use std::time::Duration;
     use tokio::net::TcpStream;
     use tokio::runtime::Runtime;
 
     #[test]
     fn test_try_connect_success() -> Result<(), io::Error> {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let listener = TcpListener::bind(&addr)?;
+        let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         let mut runtime = Runtime::new()?;
-        runtime.block_on(TryConnectFuture::<TcpStream>::new(addr, None))?;
+        runtime.block_on(TryConnectFuture::<TcpStream>::new(addr.to_string(), None))?;
         Ok(())
     }
 
     #[test]
     fn test_try_connect_fail() -> Result<(), io::Error> {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let listener = TcpListener::bind(&addr)?;
+        let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         drop(listener);
         // Hope that no one else will be listening on this port now.
         let mut runtime = Runtime::new()?;
         match runtime.block_on(TryConnectFuture::<TcpStream>::new(
-            addr,
+            addr.to_string(),
             Duration::from_millis(800),
         )) {
             Ok(_) => panic!("try connect future unexpectedly succeeded"),

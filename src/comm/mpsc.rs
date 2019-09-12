@@ -10,13 +10,14 @@
 //! ```
 //! use comm::Switchboard;
 //! use futures::{Future, Sink, Stream};
+//! use tokio::net::UnixStream;
 //!
 //! let (switchboard, _runtime) = Switchboard::local()?;
 //! let (tx, rx) = switchboard.mpsc();
 //! std::thread::spawn(move || -> Result<(), bincode::Error> {
 //!     // Do work.
 //!     let answer = 42;
-//!     tx.connect().wait()?.send(answer).wait()?;
+//!     tx.connect::<UnixStream>().wait()?.send(answer).wait()?;
 //!     Ok(())
 //! });
 //! assert_eq!(rx.wait().next().transpose()?, Some(42));
@@ -36,9 +37,8 @@ use ore::future::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
-use std::net::ToSocketAddrs;
+
 use tokio::io;
-use tokio::net::TcpStream;
 use uuid::Uuid;
 
 use crate::protocol;
@@ -71,17 +71,16 @@ impl<D> Sender<D> {
     /// will be delivered to the receiving end of this channel, potentially on
     /// another process. See the [`futures::Sink`] documentation for details
     /// about the API for sending messages to a sink.
-    pub fn connect(
+    pub fn connect<C>(
         &self,
     ) -> impl Future<Item = impl Sink<SinkItem = D, SinkError = bincode::Error>, Error = io::Error>
     where
+        C: protocol::Connection,
         D: Serialize + Send,
         for<'de> D: Deserialize<'de>,
     {
-        // TODO(benesch): don't panic if DNS resolution fails.
-        let addr = self.addr.to_socket_addrs().unwrap().next().unwrap();
         let uuid = self.uuid;
-        TcpStream::connect(&addr)
+        C::connect(&self.addr)
             .and_then(move |conn| protocol::send_handshake(conn, uuid))
             .map(protocol::encoder)
     }
