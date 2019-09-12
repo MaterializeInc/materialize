@@ -207,71 +207,42 @@ impl RelationExpr {
                         }
                         join.let_(|get_join| {
                             let mut result = get_join.clone();
+                            let oa = get_outer.arity();
+                            let la = get_left.arity();
+                            let ra = get_right.arity();
                             if let JoinKind::LeftOuter | JoinKind::FullOuter = kind {
-                                let left_outer = get_left
-                                    .clone()
-                                    .union(
-                                        get_join
-                                            .clone()
-                                            .project(
-                                                (0..get_outer.arity() + get_left.arity()).collect(),
-                                            )
-                                            .distinct()
-                                            .negate(),
-                                    )
-                                    .map(
-                                        (0..get_right.arity())
-                                            .map(|_| {
-                                                (
-                                                    SS::Literal(Datum::Null),
-                                                    ColumnType::new(ScalarType::Null),
-                                                )
-                                            })
-                                            .collect(),
-                                    );
+                                let left_outer = get_left.clone().lookup(
+                                    get_join
+                                        .clone()
+                                        // just want outer and left from join
+                                        .project((0..oa + la).collect()),
+                                    (0..ra)
+                                        .map(|_| (Datum::Null, ColumnType::new(ScalarType::Null)))
+                                        .collect(),
+                                );
                                 result = result.union(left_outer);
                             }
                             if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                                 let right_outer = get_right
                                     .clone()
-                                    .union(
+                                    .lookup(
                                         get_join
                                             .clone()
+                                            // just want outer and right from join
                                             .project(
-                                                (0..get_outer.arity())
-                                                    .chain(
-                                                        get_outer.arity() + get_left.arity()
-                                                            ..get_outer.arity()
-                                                                + get_left.arity()
-                                                                + get_right.arity(),
-                                                    )
-                                                    .collect(),
-                                            )
-                                            .distinct()
-                                            .negate(),
-                                    )
-                                    .map(
-                                        (0..get_left.arity())
+                                                (0..oa).chain((oa + la)..(oa + la + ra)).collect(),
+                                            ),
+                                        (0..la)
                                             .map(|_| {
-                                                (
-                                                    SS::Literal(Datum::Null),
-                                                    ColumnType::new(ScalarType::Null),
-                                                )
+                                                (Datum::Null, ColumnType::new(ScalarType::Null))
                                             })
                                             .collect(),
                                     )
+                                    // nulls got added to the right, so need to swap them back onto the left
                                     .project(
-                                        (0..get_outer.arity())
-                                            .chain(
-                                                get_outer.arity() + get_right.arity()
-                                                    ..get_outer.arity()
-                                                        + get_right.arity()
-                                                        + get_left.arity(),
-                                            )
-                                            .chain(
-                                                get_outer.arity()
-                                                    ..get_outer.arity() + get_right.arity(),
-                                            )
+                                        (0..oa)
+                                            .chain((oa + ra)..(oa + ra + la))
+                                            .chain((oa)..(oa + ra))
                                             .collect(),
                                     );
                                 result = result.union(right_outer);
