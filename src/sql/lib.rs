@@ -1251,6 +1251,22 @@ impl Planner {
                     ColumnType::new(ScalarType::Bool),
                 ))
             }
+            Expr::Subquery(query) => {
+                let (expr, transform) = self.plan_query(query, &ctx.scope)?;
+                if transform != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                }
+                let column_types = expr.typ().column_types;
+                if column_types.len() != 1 {
+                    bail!(
+                        "Expected subselect to return 1 column, got {} columns",
+                        column_types.len()
+                    );
+                }
+                let mut column_type = column_types.into_iter().next().unwrap();
+                column_type.nullable = true;
+                Ok((ScalarExpr::Select(Box::new(expr)), column_type))
+            }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
                 e.to_string()
