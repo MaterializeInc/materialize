@@ -143,19 +143,16 @@ pub fn build_dataflow<A: Allocate>(
 
                             tokens.push((button.press_on_drop(), token));
                         }
-                         if let Some(traces) = manager.get_all_keyed(&name) {
-                             for (key, trace) in traces {
-                                 let token = trace.to_drop().clone();
-                                 let (arranged, button) =
-                                     trace.import_frontier_core(scope, name, as_of.clone());
-                                 let arranged = arranged.enter(region);
-                                 context
-                                     .collections
-                                     .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
-                                 context.set_trace(e, key, arranged);
-                                 tokens.push((button.press_on_drop(), token));
-                             }
-                         }
+                        if let Some(traces) = manager.get_all_keyed(&name) {
+                            for (key, trace) in traces {
+                                let token = trace.to_drop().clone();
+                                let (arranged, button) =
+                                    trace.import_frontier_core(scope, name, as_of.clone());
+                                let arranged = arranged.enter(region);
+                                context.set_trace(e, key, arranged);
+                                tokens.push((button.press_on_drop(), token));
+                            }
+                        }
                     }
                 });
 
