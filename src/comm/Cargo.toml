@@ -22,4 +22,3 @@ ore = { path = "../ore" }
 assert_cmd = "0.11"
 getopts = "0.2"
 predicates = "1.0.1"
-rand = "0.7"
