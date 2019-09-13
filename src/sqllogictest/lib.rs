@@ -995,6 +995,7 @@ impl RecordRunner for FullState {
                 }
             }
             Record::Query { sql, output } => {
+                // get statement
                 let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
                     Ok(statements) => statements,
                     Err(error) => {
@@ -1020,37 +1021,12 @@ impl RecordRunner for FullState {
                     }
                 }
 
-                let (typ, immediate_rows) = match self
+                // get plan
+                let plan = match self
                     .planner
                     .handle_command(&mut self.session, sql.to_string())
                 {
-                    Ok(plan) => match self.coord.sequence_plan(
-                        plan,
-                        self.conn_id,
-                        Some(self.current_timestamp - 1),
-                    ) {
-                        SqlResponse::SendRows {
-                            typ,
-                            rows: _,
-                            wait_for: WaitFor::Workers,
-                            transform: _,
-                        } => (typ, None),
-                        // impossible for there to be a dataflow command
-                        SqlResponse::SendRows {
-                            typ,
-                            rows,
-                            wait_for: WaitFor::NoOne,
-                            transform: _,
-                        } => (typ, Some(rows)),
-                        other => {
-                            return Ok(Outcome::PlanFailure {
-                                error: failure::format_err!(
-                                    "Query did not result in SendRows modulo WaitFor::Optimizer, instead got {:?}",
-                                    other
-                                ),
-                            });
-                        }
-                    },
+                    Ok(plan) => plan,
                     Err(error) => {
                         // TODO(jamii) check error messages, once ours stabilize
                         if output.is_err() {
@@ -1069,130 +1045,136 @@ impl RecordRunner for FullState {
                     }
                 };
 
-                match output {
-                    Err(expected_error) => Ok(Outcome::UnexpectedPlanSuccess { expected_error }),
-                    Ok(QueryOutput {
-                        sort,
-                        types: expected_types,
-                        column_names: expected_column_names,
-                        output: expected_output,
-                        mode,
-                        ..
-                    }) => {
-                        let inferred_types = &typ.column_types;
-                        // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
-                        // but at least it will be the correct length
-                        if inferred_types.len() != expected_types.len() {
-                            return Ok(Outcome::InferenceFailure {
-                                expected_types,
-                                inferred_types: inferred_types.to_vec(),
+                // send plan, read response
+                let (typ, raw_output) = match self.coord.sequence_plan(
+                    plan,
+                    self.conn_id,
+                    Some(self.current_timestamp - 1),
+                ) {
+                    SqlResponse::SendRows {
+                        typ,
+                        rows: _,
+                        wait_for: WaitFor::Workers,
+                        transform: _,
+                    } => (typ, self.receive_peek_results()),
+                    SqlResponse::SendRows {
+                        typ,
+                        rows,
+                        wait_for: WaitFor::NoOne,
+                        transform: _,
+                    } => (typ, rows),
+                    other => {
+                        return Ok(Outcome::PlanFailure {
+                                error: failure::format_err!(
+                                    "Query did not result in SendRows modulo WaitFor::Optimizer, instead got {:?}",
+                                    other
+                                ),
                             });
-                        }
+                    }
+                };
 
-                        if let Some(expected_column_names) = expected_column_names {
-                            let inferred_column_names = typ
-                                .column_types
-                                .iter()
-                                .map(|t| t.name.clone())
-                                .collect::<Vec<_>>();
-                            if expected_column_names
-                                .iter()
-                                .map(|s| Some(&**s))
-                                .collect::<Vec<_>>()
-                                != inferred_column_names
-                                    .iter()
-                                    .map(|n| n.as_ref().map(|s| &**s))
-                                    .collect::<Vec<_>>()
-                            {
-                                return Ok(Outcome::WrongColumnNames {
-                                    expected_column_names,
-                                    inferred_column_names,
-                                });
-                            }
-                        }
+                // unpack expected output
+                let QueryOutput {
+                    sort,
+                    types: expected_types,
+                    column_names: expected_column_names,
+                    output: expected_output,
+                    mode,
+                    ..
+                } = match output {
+                    Err(expected_error) => {
+                        return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
+                    }
+                    Ok(query_output) => query_output,
+                };
 
-                        let (mut formatted_rows, raw_output) = match immediate_rows {
-                            Some(rows) => (
-                                rows.iter()
-                                    .map(|row| {
-                                        format_row(
-                                            row,
-                                            &typ.column_types,
-                                            &**expected_types,
-                                            *mode,
-                                            sort,
-                                        )
-                                    })
-                                    .collect::<Vec<_>>(),
-                                rows,
-                            ),
-                            None => {
-                                let results = self.receive_peek_results();
-                                (
-                                    results
-                                        .iter()
-                                        .map(|row| {
-                                            format_row(
-                                                row,
-                                                &typ.column_types,
-                                                &**expected_types,
-                                                *mode,
-                                                sort,
-                                            )
-                                        })
-                                        .collect::<Vec<_>>(),
-                                    results,
-                                )
-                            }
-                        };
+                // check inferred types
+                // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
+                // but at least it will be the correct length
+                let inferred_types = &typ.column_types;
+                if inferred_types.len() != expected_types.len() {
+                    return Ok(Outcome::InferenceFailure {
+                        expected_types,
+                        inferred_types: inferred_types.to_vec(),
+                    });
+                }
 
-                        if let Sort::Row = sort {
-                            formatted_rows.sort();
-                        }
-                        let mut values = formatted_rows
-                            .into_iter()
-                            .flat_map(|row| row)
-                            .collect::<Vec<_>>();
-                        if let Sort::Value = sort {
-                            values.sort();
-                        }
-
-                        match expected_output {
-                            Output::Values(expected_values) => {
-                                if values != *expected_values {
-                                    return Ok(Outcome::OutputFailure {
-                                        expected_output,
-                                        actual_raw_output: raw_output,
-                                        actual_output: OwnedOutput::Values(values),
-                                    });
-                                }
-                            }
-                            Output::Hashed {
-                                num_values,
-                                md5: expected_md5,
-                            } => {
-                                let mut md5_context = md5::Context::new();
-                                for value in &values {
-                                    md5_context.consume(value);
-                                    md5_context.consume("\n");
-                                }
-                                let md5 = format!("{:x}", md5_context.compute());
-                                if values.len() != *num_values || md5 != *expected_md5 {
-                                    return Ok(Outcome::OutputFailure {
-                                        expected_output,
-                                        actual_raw_output: raw_output,
-                                        actual_output: OwnedOutput::Hashed {
-                                            num_values: values.len(),
-                                            md5,
-                                        },
-                                    });
-                                }
-                            }
-                        }
-
-                        Ok(Outcome::Success)
+                // check column names
+                if let Some(expected_column_names) = expected_column_names {
+                    let inferred_column_names = typ
+                        .column_types
+                        .iter()
+                        .map(|t| t.name.clone())
+                        .collect::<Vec<_>>();
+                    if expected_column_names
+                        .iter()
+                        .map(|s| Some(&**s))
+                        .collect::<Vec<_>>()
+                        != inferred_column_names
+                            .iter()
+                            .map(|n| n.as_ref().map(|s| &**s))
+                            .collect::<Vec<_>>()
+                    {
+                        return Ok(Outcome::WrongColumnNames {
+                            expected_column_names,
+                            inferred_column_names,
+                        });
                     }
                 }
+
+                // format output
+                let mut formatted_rows = raw_output
+                    .iter()
+                    .map(|row| format_row(row, &typ.column_types, &**expected_types, *mode, sort))
+                    .collect::<Vec<_>>();
+
+                // sort formatted output
+                if let Sort::Row = sort {
+                    formatted_rows.sort();
+                }
+                let mut values = formatted_rows
+                    .into_iter()
+                    .flat_map(|row| row)
+                    .collect::<Vec<_>>();
+                if let Sort::Value = sort {
+                    values.sort();
+                }
+
+                // check output
+                match expected_output {
+                    Output::Values(expected_values) => {
+                        if values != *expected_values {
+                            return Ok(Outcome::OutputFailure {
+                                expected_output,
+                                actual_raw_output: raw_output,
+                                actual_output: OwnedOutput::Values(values),
+                            });
+                        }
+                    }
+                    Output::Hashed {
+                        num_values,
+                        md5: expected_md5,
+                    } => {
+                        let mut md5_context = md5::Context::new();
+                        for value in &values {
+                            md5_context.consume(value);
+                            md5_context.consume("\n");
+                        }
+                        let md5 = format!("{:x}", md5_context.compute());
+                        if values.len() != *num_values || md5 != *expected_md5 {
+                            return Ok(Outcome::OutputFailure {
+                                expected_output,
+                                actual_raw_output: raw_output,
+                                actual_output: OwnedOutput::Hashed {
+                                    num_values: values.len(),
+                                    md5,
+                                },
+                            });
+                        }
+                    }
+                }
+
+                Ok(Outcome::Success)
             }
             _ => Ok(Outcome::Success),
         }
