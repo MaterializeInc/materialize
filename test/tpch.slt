@@ -114,13 +114,14 @@ SELECT
 FROM
 	lineitem
 WHERE
-    l_shipdate <= date '1998-12-01' -- - interval ':1' day (3)
+	l_shipdate <= date '1998-12-01' -- - interval '60' day (fails with an error)
 GROUP BY
 	l_returnflag,
 	l_linestatus
--- ORDER BY
--- 	l_returnflag,
--- 	l_linestatus
+ORDER BY
+	l_returnflag,
+	l_linestatus
+
 
 query IITI valuesort
 -- Query 03
@@ -143,9 +144,35 @@ group by
     l_orderkey,
     o_orderdate,
     o_shippriority
--- order by
---     revenue desc,
---     o_orderdate;
+order by
+    revenue desc,
+    o_orderdate;
+
+
+query II valuesort
+-- Query 04
+select
+    o_orderpriority,
+    count(*) as order_count
+from
+    orders
+where
+    o_orderdate >= date '1993-07-01'
+    and o_orderdate < date '1993-07-01' + interval '3' month
+    and exists (
+        select
+            *
+        from
+            lineitem
+        where
+            l_orderkey = o_orderkey
+            and l_commitdate < l_receiptdate
+    )
+group by
+    o_orderpriority
+order by
+    o_orderpriority;
+
 
 query TI valuesort
 -- Query 05
@@ -171,8 +198,24 @@ where
     and o_orderdate < date '1995-01-01'
 group by
     n_name
--- order by
---     revenue desc;
+order by
+    revenue desc;
+
+query I valuesort
+-- Query 06
+select
+    sum(l_extendedprice * l_discount) as revenue
+from
+    lineitem
+where
+    l_quantity < 24
+    and l_shipdate >= date '1994-01-01'
+    and l_shipdate < date '1994-01-01' + interval '1' year
+    and l_discount between 0.06 - 0.01 and 0.07
+    ;
+----
+NULL
+
 
 query ITIITTTT valuesort
 -- Query 10
@@ -195,7 +238,7 @@ where
     and l_orderkey = o_orderkey
     and o_orderdate >= date '1993-10-01'
     and o_orderdate < date '1994-01-01'
---    and o_orderdate < date '1993-10-01' -- + interval '3' month
+    and o_orderdate < date '1993-10-01' + interval '3' month
     and l_returnflag = 'R'
     and c_nationkey = n_nationkey
 group by
@@ -206,211 +249,11 @@ group by
     n_name,
     c_address,
     c_comment
--- order by
---     revenue desc;
-
-#----------------------------------------------------------------------
-#-- TODO(benesch): remove when these queries actually pass.
-halt
-#----------------------------------------------------------------------
-
-query TTT valuesort
--- Query 02
-SELECT
-    s_acctbal,
-    s_name,
-    n_name,
-    p_partkey,
-    p_mfgr,
-    s_address,
-    s_phone,
-    s_comment
-FROM
-    part, supplier, partsupp, nation, region
-WHERE
-    p_partkey = ps_partkey
-    AND s_suppkey = ps_suppkey
-    AND p_size = cast(15 as smallint)
-    AND p_type LIKE '%BRASS'
-    AND s_nationkey = n_nationkey
-    AND n_regionkey = r_regionkey
-    AND r_name = 'EUROPE'
-    AND ps_supplycost
-        = (
-                SELECT
-                    min(ps_supplycost)
-                FROM
-                    partsupp, supplier, nation, region
-                WHERE
-                    p_partkey = ps_partkey
-                    AND s_suppkey = ps_suppkey
-                    AND s_nationkey = n_nationkey
-                    AND n_regionkey = r_regionkey
-                    AND r_name = 'EUROPE'
-            )
--- ORDER BY
---     s_acctbal DESC, n_name, s_name, p_partkey;
+order by
+    revenue desc;
 
 
-query TTT valuesort
--- Query 04
-select
-    o_orderpriority,
-    count(*) as order_count
-from
-    orders
-where
-    o_orderdate >= date '1993-07-01'
-    and o_orderdate < cast(749433600/86400 as smallint)
-    -- and o_orderdate < date '1993-07-01' + interval '3' month
-    and exists (
-        select
-            *
-        from
-            lineitem
-        where
-            l_orderkey = o_orderkey
-            and l_commitdate < l_receiptdate
-    )
-group by
-    o_orderpriority
--- order by
---     o_orderpriority;
-
-query I valuesort
--- Query 06
-select
-    sum(l_extendedprice * l_discount) as revenue
-from
-    lineitem
-where
-    l_quantity < 24
-    and l_shipdate >= date '1994-01-01'
-    and l_shipdate < date '1994-01-01' -- + interval '1' year
-    and l_discount between 0.06 - 0.01 and 0.07
-    ;
-
-
-query TTT valuesort
--- Query 07
-select
-    supp_nation,
-    cust_nation,
-    l_year,
-    sum(volume) as revenue
-from
-    (
-        select
-            n1.n_name as supp_nation,
-            n2.n_name as cust_nation,
-            extract(year from l_shipdate) as l_year,
-            l_extendedprice * (1 - l_discount) as volume
-        from
-            supplier,
-            lineitem,
-            orders,
-            customer,
-            nation n1,
-            nation n2
-        where
-            s_suppkey = l_suppkey
-            and o_orderkey = l_orderkey
-            and c_custkey = o_custkey
-            and s_nationkey = n1.n_nationkey
-            and c_nationkey = n2.n_nationkey
-            and (
-                (n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY')
-                or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE')
-            )
-            and l_shipdate between cast(757382400/86400 as smallint) and cast(851990400/86400 as smallint)
-    ) as shipping
-group by
-    supp_nation,
-    cust_nation,
-    l_year
--- order by
---     supp_nation,
---     cust_nation,
---     l_year;
-
-
-query TTT valuesort
--- Query 08
-select
-    o_year,
-    sum(case
-        when nation = 'BRAZIL' then volume
-        else 0
-    end) / sum(volume) as mkt_share
-from
-    (
-        select
-            extract(year from o_orderdate) as o_year,
-            l_extendedprice * (1 - l_discount) as volume,
-            n2.n_name as nation
-        from
-            part,
-            supplier,
-            lineitem,
-            orders,
-            customer,
-            nation n1,
-            nation n2,
-            region
-        where
-            p_partkey = l_partkey
-            and s_suppkey = l_suppkey
-            and l_orderkey = o_orderkey
-            and o_custkey = c_custkey
-            and c_nationkey = n1.n_nationkey
-            and n1.n_regionkey = r_regionkey
-            and r_name = 'AMERICA'
-            and s_nationkey = n2.n_nationkey
-            and o_orderdate between cast(757382400/86400 as smallint) and cast(851990400/86400 as smallint)
-            and p_type = 'ECONOMY ANODIZED STEEL'
-    ) as all_nations
-group by
-    o_year
--- order by
---     o_year;
-
-
-query TTT valuesort
--- Query 09
-select
-    nation,
-    o_year,
-    sum(amount) as sum_profit
-from
-    (
-        select
-            n_name as nation,
-            extract(year from o_orderdate) as o_year,
-            l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
-        from
-            part,
-            supplier,
-            lineitem,
-            partsupp,
-            orders,
-            nation
-        where
-            s_suppkey = l_suppkey
-            and ps_suppkey = l_suppkey
-            and ps_partkey = l_partkey
-            and p_partkey = l_partkey
-            and o_orderkey = l_orderkey
-            and s_nationkey = n_nationkey
-            and p_name like 'green'
-    ) as profit
-group by
-    nation,
-    o_year
--- order by
---     nation,
---     o_year desc;
-
-query TTT valuesort
+query TT valuesort
 -- Query 11
 select
     ps_partkey,
@@ -437,8 +280,9 @@ group by
                 and s_nationkey = n_nationkey
                 and n_name = 'GERMANY'
         )
--- order by
---     value desc;
+order by
+    value desc;
+
 
 query TTT valuesort
 -- Query 12
@@ -464,15 +308,15 @@ where
     and l_shipmode in ('MAIL', 'SHIP')
     and l_commitdate < l_receiptdate
     and l_shipdate < l_commitdate
-    and l_receiptdate >= cast(8765 as smallint)
-    and l_receiptdate < cast(9130 as smallint)
+    and l_receiptdate >= date '1994-01-01'
+    and l_receiptdate < date '1994-01-01' + interval '1' year
 group by
     l_shipmode
--- order by
---     l_shipmode;
+order by
+    l_shipmode;
 
 
-query TTT valuesort
+query II valuesort
 -- Query 13
 select
     c_count,
@@ -481,22 +325,22 @@ from
     (
         select
             c_custkey,
-            count(o_orderkey)
+            count(o_orderkey) c_count -- workaround for no column aliases
         from
             customer left outer join orders on
                 c_custkey = o_custkey
                 and o_comment not like '%special%requests%'
         group by
             c_custkey
-    ) as c_orders (c_custkey, c_count)
+    ) as c_orders -- (c_custkey, c_count) -- no column aliases yet
 group by
     c_count
--- order by
---     custdist desc,
---     c_count desc;
+order by
+    custdist desc,
+    c_count desc;
 
 
-query TTT valuesort
+query T valuesort
 -- Query 14
 select
     100.00 * sum(case
@@ -509,52 +353,13 @@ from
     part
 where
     l_partkey = p_partkey
-    and l_shipdate >= cast(809913600/86400 as smallint)
-    and l_shipdate < cast(812505600/86400 as smallint);
+    and l_shipdate >= date '1996-01-01'
+    and l_shipdate < date '1996-01-01' + interval '1' month
+----
+NULL
 
 
-
-query TTT valuesort
--- Query 15
-create view revenue (supplier_no, total_revenue) as
-    select
-        l_suppkey,
-        sum(l_extendedprice * (1 - l_discount))
-    from
-        lineitem
-    where
-        l_shipdate >= date '1996-01-01'
-        and l_shipdate < date '1996-04-01'
---      and l_shipdate < date '1996-01-01' + interval '3' month
-    group by
-        l_suppkey;
-
-query TTT valuesort
-select
-    s_suppkey,
-    s_name,
-    s_address,
-    s_phone,
-    total_revenue
-from
-    supplier,
-    revenue
-where
-    s_suppkey = supplier_no
-    and total_revenue = (
-        select
-            max(total_revenue)
-        from
-            revenue
-    )
--- order by
---     s_suppkey;
-
-query TTT valuesort
-drop view revenue;
-
-
-query TTT valuesort
+query TTTI valuesort
 -- Query 16
 select
     p_brand,
@@ -581,14 +386,14 @@ group by
     p_brand,
     p_type,
     p_size
--- order by
---     supplier_cnt desc,
---     p_brand,
---     p_type,
---     p_size;
+order by
+    supplier_cnt desc,
+    p_brand,
+    p_type,
+    p_size;
 
 
-query TTT valuesort
+query I valuesort
 -- Query 17
 select
   sum(l_extendedprice) / 7.0 as avg_yearly
@@ -607,9 +412,11 @@ where
     where
       l_partkey = p_partkey
   );
+----
+NULL
 
 
-query TTT valuesort
+query TTTTTI valuesort
 -- Query 18
 select
     c_name,
@@ -640,12 +447,12 @@ group by
     o_orderkey,
     o_orderdate,
     o_totalprice
--- order by
---     o_totalprice desc,
---     o_orderdate;
+order by
+    o_totalprice desc,
+    o_orderdate;
 
 
-query TTT valuesort
+query I valuesort
 -- Query 19
 select
     sum(l_extendedprice* (1 - l_discount)) as revenue
@@ -682,9 +489,11 @@ where
         and l_shipmode in ('AIR', 'AIR REG')
         and l_shipinstruct = 'DELIVER IN PERSON'
     );
+----
+NULL
 
 
-query TTT valuesort
+query TT valuesort
 -- Query 20
 select
     s_name,
@@ -715,17 +524,17 @@ where
                 where
                     l_partkey = ps_partkey
                     and l_suppkey = ps_suppkey
-                    and l_shipdate >= cast(757382400/86400 as smallint)
-                    and l_shipdate < cast(788918400/86400 as smallint)
+                    and l_shipdate >= date '1995-01-01'
+                    and l_shipdate < date '1995-01-01' + interval '1' year
             )
     )
     and s_nationkey = n_nationkey
     and n_name = 'CANADA'
--- order by
---     s_name;
+order by
+    s_name;
 
 
-query TTT valuesort
+query TI valuesort
 -- Query 21
 select
     s_name,
@@ -763,9 +572,215 @@ where
     and n_name = 'SAUDI ARABIA'
 group by
     s_name
--- order by
---     numwait desc,
---     s_name;
+order by
+    numwait desc,
+    s_name;
+
+
+#----------------------------------------------------------------------
+#-- TODO(benesch): remove when these queries actually pass.
+halt
+#----------------------------------------------------------------------
+
+-- PlanFailure: Unimplemented function/type combo: ("min", Decimal(15, 2)) (ErrorMessage { msg: "Unimplemented function/type combo: (\"min\", Decimal(15, 2))" })
+query TTT valuesort
+-- Query 02
+SELECT
+    s_acctbal,
+    s_name,
+    n_name,
+    p_partkey,
+    p_mfgr,
+    s_address,
+    s_phone,
+    s_comment
+FROM
+    part, supplier, partsupp, nation, region
+WHERE
+    p_partkey = ps_partkey
+    AND s_suppkey = ps_suppkey
+    AND p_size = cast(15 as smallint)
+    AND p_type LIKE '%BRASS'
+    AND s_nationkey = n_nationkey
+    AND n_regionkey = r_regionkey
+    AND r_name = 'EUROPE'
+    AND ps_supplycost
+        = (
+                SELECT
+                    min(ps_supplycost)
+                FROM
+                    partsupp, supplier, nation, region
+                WHERE
+                    p_partkey = ps_partkey
+                    AND s_suppkey = ps_suppkey
+                    AND s_nationkey = n_nationkey
+                    AND n_regionkey = r_regionkey
+                    AND r_name = 'EUROPE'
+            )
+ORDER BY
+    s_acctbal DESC, n_name, s_name, p_partkey;
+
+
+query TTT valuesort
+-- Query 07
+select
+    supp_nation,
+    cust_nation,
+    l_year,
+    sum(volume) as revenue
+from
+    (
+        select
+            n1.n_name as supp_nation,
+            n2.n_name as cust_nation,
+            -- extract(year from l_shipdate) as l_year,
+            l_extendedprice * (1 - l_discount) as volume
+        from
+            supplier,
+            lineitem,
+            orders,
+            customer,
+            nation n1,
+            nation n2
+        where
+            s_suppkey = l_suppkey
+            and o_orderkey = l_orderkey
+            and c_custkey = o_custkey
+            and s_nationkey = n1.n_nationkey
+            and c_nationkey = n2.n_nationkey
+            and (
+                (n1.n_name = 'FRANCE' and n2.n_name = 'GERMANY')
+                or (n1.n_name = 'GERMANY' and n2.n_name = 'FRANCE')
+            )
+            and l_shipdate between date '1995-01-01' and date '1996-12-31'
+    ) as shipping
+group by
+    supp_nation,
+    cust_nation,
+    l_year
+order by
+    supp_nation,
+    cust_nation,
+    l_year;
+
+
+query TTT valuesort
+-- Query 08
+select
+    o_year,
+    sum(case
+        when nation = 'BRAZIL' then volume
+        else 0
+    end) / sum(volume) as mkt_share
+from
+    (
+        select
+            --extract(year from o_orderdate) as o_year,
+            l_extendedprice * (1 - l_discount) as volume,
+            n2.n_name as nation
+        from
+            part,
+            supplier,
+            lineitem,
+            orders,
+            customer,
+            nation n1,
+            nation n2,
+            region
+        where
+            p_partkey = l_partkey
+            and s_suppkey = l_suppkey
+            and l_orderkey = o_orderkey
+            and o_custkey = c_custkey
+            and c_nationkey = n1.n_nationkey
+            and n1.n_regionkey = r_regionkey
+            and r_name = 'AMERICA'
+            and s_nationkey = n2.n_nationkey
+            and o_orderdate between date '1995-01-01' and date '1996-12-31'
+            and p_type = 'ECONOMY ANODIZED STEEL'
+    ) as all_nations
+group by
+    o_year
+order by
+    o_year;
+
+
+query TTT valuesort
+-- Query 09
+select
+    nation,
+    o_year,
+    sum(amount) as sum_profit
+from
+    (
+        select
+            n_name as nation,
+            --extract(year from o_orderdate) as o_year,
+            l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+        from
+            part,
+            supplier,
+            lineitem,
+            partsupp,
+            orders,
+            nation
+        where
+            s_suppkey = l_suppkey
+            and ps_suppkey = l_suppkey
+            and ps_partkey = l_partkey
+            and p_partkey = l_partkey
+            and o_orderkey = l_orderkey
+            and s_nationkey = n_nationkey
+            and p_name like 'green'
+    ) as profit
+group by
+    nation,
+    o_year
+order by
+    nation,
+    o_year desc;
+
+
+-- SELECT fails with:
+-- PlanFailure: Unimplemented function/type combo: ("max", Decimal(31, 4)) (ErrorMessage { msg: "Unimplemented function/type combo: (\"max\", Decimal(31, 4))" })
+statement ok
+-- Query 15
+create view revenue (supplier_no, total_revenue) as
+    select
+        l_suppkey,
+        sum(l_extendedprice * (1 - l_discount))
+    from
+        lineitem
+    where
+        l_shipdate >= date '1996-01-01'
+        and l_shipdate < date '1996-04-01'
+        and l_shipdate < date '1996-01-01' + interval '3' month
+    group by
+        l_suppkey;
+
+query TTT valuesort
+select
+    s_suppkey,
+    s_name,
+    s_address,
+    s_phone,
+    total_revenue
+from
+    supplier,
+    revenue
+where
+    s_suppkey = supplier_no
+    and total_revenue = (
+        select
+            max(total_revenue)
+        from
+            revenue
+    )
+order by
+    s_suppkey;
+
+statement ok
+drop view revenue;
 
 
 query TTT valuesort
