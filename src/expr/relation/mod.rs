@@ -739,16 +739,10 @@ impl RelationExpr {
 
     /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` in it's place
     pub fn take(&mut self) -> RelationExpr {
-        std::mem::replace(
-            self,
-            RelationExpr::Constant {
-                rows: vec![],
-                typ: RelationType {
-                    column_types: vec![],
-                },
-            },
-        )
+        let typ = self.typ();
+        std::mem::replace(self, RelationExpr::Constant { rows: vec![], typ })
     }
+
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
     pub fn let_in<Body>(self, body: Body) -> Result<RelationExpr, failure::Error>
     where
