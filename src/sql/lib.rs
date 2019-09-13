@@ -642,8 +642,10 @@ impl Planner {
                 let mut types: Option<Vec<ColumnType>> = None;
                 for row in values {
                     let mut value_exprs = vec![];
-                    for value in row.iter() {
-                        value_exprs.push(self.plan_expr(ctx, value)?);
+                    for (i, value) in row.iter().enumerate() {
+                        let (expr, mut typ) = self.plan_expr(ctx, value)?;
+                        typ.name = Some(format!("column{}", i + 1));
+                        value_exprs.push((expr, typ));
                     }
                     types = if let Some(types) = types {
                         if types.len() != value_exprs.len() {
