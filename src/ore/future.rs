@@ -170,6 +170,14 @@ where
 
 /// Extension methods for streams.
 pub trait StreamExt: Stream {
+    /// Boxes this stream.
+    fn boxed(self) -> Box<dyn Stream<Item = Self::Item, Error = Self::Error> + Send>
+    where
+        Self: Sized + Send + 'static,
+    {
+        Box::new(self)
+    }
+
     /// Discards all items produced by the stream.
     ///
     /// The returned future will resolve successfully when the entire stream is
@@ -346,6 +354,19 @@ where
         }
     }
 }
+
+/// Extension methods for sinks.
+pub trait SinkExt: Sink {
+    /// Boxes this sink.
+    fn boxed(self) -> Box<dyn Sink<SinkItem = Self::SinkItem, SinkError = Self::SinkError> + Send>
+    where
+        Self: Sized + Send + 'static,
+    {
+        Box::new(self)
+    }
+}
+
+impl<S: Sink> SinkExt for S {}
 
 /// Constructs a sink that consumes its input and sends it nowhere.
 pub fn dev_null<T, E>() -> DevNull<T, E> {
