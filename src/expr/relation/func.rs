@@ -260,6 +260,24 @@ where
     Datum::from(x)
 }
 
+pub fn any<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    datums
+        .into_iter()
+        .fold(Datum::False, crate::scalar::func::or)
+}
+
+pub fn all<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    datums
+        .into_iter()
+        .fold(Datum::True, crate::scalar::func::and)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum AggregateFunc {
     MaxInt32,
@@ -284,6 +302,8 @@ pub enum AggregateFunc {
     SumNull,
     Count,
     CountAll, // COUNT(*) counts nulls too
+    Any,
+    All,
 }
 
 impl AggregateFunc {
@@ -314,6 +334,8 @@ impl AggregateFunc {
             AggregateFunc::SumNull => sum_null,
             AggregateFunc::Count => count,
             AggregateFunc::CountAll => count_all,
+            AggregateFunc::Any => any,
+            AggregateFunc::All => all,
         }
     }
 
@@ -328,6 +350,8 @@ impl AggregateFunc {
     pub fn default(self) -> (Datum, ScalarType) {
         match self {
             AggregateFunc::Count | AggregateFunc::CountAll => (Datum::Int64(0), ScalarType::Int64),
+            AggregateFunc::Any => (Datum::False, ScalarType::Bool),
+            AggregateFunc::All => (Datum::True, ScalarType::Bool),
             _ => (Datum::Null, ScalarType::Null),
         }
     }

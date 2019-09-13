@@ -37,6 +37,7 @@ use std::iter::FromIterator;
 use std::net::{SocketAddr, ToSocketAddrs};
 use store::{DataflowStore, RemoveMode};
 use url::Url;
+use uuid::Uuid;
 
 mod expr;
 mod session;
@@ -1246,10 +1247,7 @@ impl Planner {
                 if transform != Default::default() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
-                Ok((
-                    ScalarExpr::Exists(Box::new(expr)),
-                    ColumnType::new(ScalarType::Bool),
-                ))
+                Ok((expr.exists(), ColumnType::new(ScalarType::Bool)))
             }
             Expr::Subquery(query) => {
                 let (expr, transform) = self.plan_query(query, &ctx.scope)?;
@@ -1263,9 +1261,76 @@ impl Planner {
                         column_types.len()
                     );
                 }
-                let mut column_type = column_types.into_iter().next().unwrap();
+                let mut column_type = column_types.into_element();
                 column_type.nullable = true;
-                Ok((ScalarExpr::Select(Box::new(expr)), column_type))
+                Ok((expr.select(), column_type))
+            }
+            Expr::Any {
+                left, op, right, ..
+            }
+            | Expr::All { left, op, right } => {
+                // plan right
+                let (right, transform) = self.plan_query(right, &ctx.scope)?;
+                if transform != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                }
+                let column_types = right.typ().column_types;
+                if column_types.len() != 1 {
+                    bail!(
+                        "Expected subquery of ANY to return 1 column, got {} columns",
+                        column_types.len()
+                    );
+                }
+                let right_type = column_types.into_element();
+
+                // plan left and op
+                // this is a bit of a hack - we want to plan `op` as if the original expr was `(SELECT ANY/ALL(left op right[1]) FROM right)`
+                let mut scope = Scope::empty(Some(ctx.scope.clone()));
+                let right_name = format!("right_{}", Uuid::new_v4());
+                scope.items.push(ScopeItem {
+                    names: vec![ScopeItemName {
+                        table_name: right_name.clone(),
+                        column_name: Some(right_name.clone()),
+                    }],
+                    typ: right_type,
+                });
+                let any_ctx = ExprContext {
+                    name: "WHERE clause",
+                    scope: &scope,
+                    aggregate_context: None,
+                };
+                let (op_expr, op_type) =
+                    self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
+
+                // plan subquery
+                let func = match e {
+                    Expr::Any { .. } => AggregateFunc::Any,
+                    Expr::All { .. } => AggregateFunc::All,
+                    _ => unreachable!(),
+                };
+                let right_arity = right.arity();
+                let expr = right
+                    .map(vec![(op_expr, op_type.clone())])
+                    .reduce(
+                        vec![],
+                        vec![(
+                            AggregateExpr {
+                                func,
+                                expr: Box::new(ScalarExpr::Column(ColumnRef::Inner(right_arity))),
+                                distinct: true,
+                            },
+                            op_type.clone(),
+                        )],
+                    )
+                    .select();
+                Ok((
+                    expr,
+                    ColumnType {
+                        name: None,
+                        nullable: op_type.nullable,
+                        scalar_type: ScalarType::Bool,
+                    },
+                ))
             }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",

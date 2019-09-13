@@ -77,6 +77,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),
+                    Box::new(crate::transform::fusion::project::Project),
                     Box::new(crate::transform::empty_map::EmptyMap),
                 ],
             }),
