@@ -335,6 +335,21 @@ impl RelationExpr {
         }
     }
 
+    /// Perform a key-wise reduction order by and limit.
+    ///
+    /// The `group_key` argument indicates columns in the input collection that should
+    /// be grouped, the `order_key` argument indicates columns that should be further
+    /// used to order records within groups, and the `limit` argument constrains the
+    /// total number of records that should be produced in each group.
+    pub fn top_k(self, group_key: Vec<usize>, order_key: Vec<usize>, limit: usize) -> Self {
+        RelationExpr::TopK {
+            input: Box::new(self),
+            group_key,
+            order_key,
+            limit,
+        }
+    }
+
     /// Substitutes `default` if `self` is empty.
     pub fn or_default(self, default: Vec<Datum>) -> Self {
         RelationExpr::OrDefault {
