@@ -752,19 +752,13 @@ where
                 .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
                     "TopK",
                     move |_key, source, target| {
-                        let mut output = 0;
-                        let mut cursor = 0;
-                        while output < limit {
-                            if cursor < source.len() {
-                                let current = &(source[cursor].0).0;
-                                while cursor < source.len() && &(source[cursor].0).0 == current {
-                                    if source[0].1 > 0 {
-                                        target.push(((source[0].0).1.clone(), source[0].1));
-                                        output += source[0].1 as usize;
-                                    }
-                                }
-                                cursor += 1;
-                            }
+                        let mut output = 0; // Number of produced output records.
+                        let mut cursor = 0; // Position of current input record.
+                        while output < limit && cursor < source.len() {
+                            let to_emit = std::cmp::min(limit - output, source[cursor].1 as usize);
+                            target.push(((source[cursor].0).1.clone(), to_emit as isize));
+                            output += to_emit;
+                            cursor += 1;
                         }
                     },
                 );
