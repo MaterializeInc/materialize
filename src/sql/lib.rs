@@ -1372,7 +1372,7 @@ impl Planner {
         let right_name = format!("right_{}", Uuid::new_v4());
         scope.items.push(ScopeItem {
             names: vec![ScopeItemName {
-                table_name: right_name.clone(),
+                table_name: Some(right_name.clone()),
                 column_name: Some(right_name.clone()),
             }],
             typ: right_type,
