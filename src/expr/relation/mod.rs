@@ -11,7 +11,7 @@ use self::func::AggregateFunc;
 use crate::pretty_pretty::{to_braced_doc, to_tightly_braced_doc};
 use crate::ScalarExpr;
 use failure::ResultExt;
-use pretty::Doc::Space;
+use pretty::Doc::{Newline, Space};
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub enum RelationExpr {
     Get {
         /// The name of the collection to load.
         name: String,
-        /// Schema of the colleciton.
+        /// Schema of the collection.
         typ: RelationType,
     },
     /// Introduce a temporary dataflow
@@ -638,11 +638,10 @@ impl RelationExpr {
                 }
             }
             RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
-            RelationExpr::Let { name, value, body } => to_braced_doc(
-                "Let {",
-                to_doc!(name, " = ", value.to_doc().nest(2), ",", Space, body),
-                "}",
-            ),
+            RelationExpr::Let { name, value, body } => {
+                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "};").group();
+                to_doc!(binding, Newline, body)
+            }
             RelationExpr::Project { input, outputs } => {
                 let outputs =
                     Doc::intersperse(outputs.iter().map(Doc::as_string), to_doc!(",", Space));
