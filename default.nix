@@ -22,12 +22,8 @@ in pkgs.stdenv.mkDerivation rec {
     llvmPackages.libclang
     pkgconfig
     rustup
-
+    lsof # for mtrlz-shell
     curl # for testing
-
-    postgresql # only for psql
-    less # for psql
-
     confluent
     ] ++
     (if stdenv.isDarwin then [
@@ -37,6 +33,7 @@ in pkgs.stdenv.mkDerivation rec {
   shellHook = ''
     export LIBCLANG_PATH=${pkgs.llvmPackages.clang-unwrapped.lib}/lib
     export PATH=$(pwd)/bin/:$PATH
+    source doc/demo-utils.sh
     ulimit -m $((8*1024*1024))
     ulimit -v $((8*1024*1024))
    '';
