@@ -18,7 +18,7 @@
 use std::ops::Deref;
 
 /// Extension methods for [`std::option::Option`].
-pub trait OptionExt<T: Deref> {
+pub trait OptionExt<T> {
     /// Converts from `Option<T>` (or `&Option<T>`) to `Option<&T::Target>`.
     ///
     /// Leaves the original `Option` in-place, creating a new one containing a
@@ -27,11 +27,36 @@ pub trait OptionExt<T: Deref> {
     /// This method is awaiting stabilization upstream ([#50264]).
     ///
     /// [#50264]: https://github.com/rust-lang/rust/issues/50264
-    fn as_deref(&self) -> Option<&T::Target>;
+    fn as_deref(&self) -> Option<&T::Target>
+    where
+        T: Deref;
+
+    /// Converts from `Option<&T>` to `Option<T::Owned>` when `T` implements
+    /// [`ToOwned`].
+    ///
+    /// The canonical use case is converting from an `Option<&str>` to an
+    /// `Option<String>`.
+    ///
+    /// The name is symmetric with [`Option::cloned`].
+    fn owned(&self) -> Option<<<T as Deref>::Target as ToOwned>::Owned>
+    where
+        T: Deref,
+        T::Target: ToOwned;
 }
 
-impl<T: Deref> OptionExt<T> for Option<T> {
-    fn as_deref(&self) -> Option<&T::Target> {
+impl<T> OptionExt<T> for Option<T> {
+    fn as_deref(&self) -> Option<&T::Target>
+    where
+        T: Deref,
+    {
         self.as_ref().map(Deref::deref)
+    }
+
+    fn owned(&self) -> Option<<<T as Deref>::Target as ToOwned>::Owned>
+    where
+        T: Deref,
+        T::Target: ToOwned,
+    {
+        self.as_ref().map(|x| x.deref().to_owned())
     }
 }
