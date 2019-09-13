@@ -27,6 +27,8 @@
 
 #![forbid(missing_docs)]
 
+use std::collections::HashMap;
+
 use failure::bail;
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
@@ -65,27 +67,47 @@ const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
 };
 
 /// A `Session` holds SQL state that is attached to a session.
-#[derive(Debug)]
 pub struct Session {
     client_encoding: ServerVar<&'static str>,
     database: ServerVar<&'static str>,
     date_style: ServerVar<&'static str>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
+    /// A map from statement names to SQL queries
+    pub prepared_statements: HashMap<String, String>,
 }
 
-impl Session {
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("client_encoding", &self.client_encoding)
+            .field("database", &self.database)
+            .field("date_style", &self.date_style)
+            .field("server_version", &self.server_version)
+            .field("sql_safe_updates", &self.sql_safe_updates)
+            .field(
+                "prepared_statements(count)",
+                &self.prepared_statements.len(),
+            )
+            .finish()
+    }
+}
+
+impl std::default::Default for Session {
     /// Constructs a new `Session` with default values.
-    pub fn default() -> Session {
+    fn default() -> Session {
         Session {
             client_encoding: CLIENT_ENCODING,
             database: DATABASE,
             date_style: DATE_STYLE,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            prepared_statements: HashMap::new(),
         }
     }
+}
 
+impl Session {
     /// Returns all configuration parameters and their current values for this
     /// session.
     pub fn vars(&self) -> Vec<&dyn Var> {

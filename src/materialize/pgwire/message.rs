@@ -52,6 +52,9 @@ pub enum FrontendMessage {
         parameter_data_type_count: u16,
         parameter_data_types: Vec<u32>,
     },
+    DescribeStatement {
+        name: String,
+    },
     Terminate,
 }
 

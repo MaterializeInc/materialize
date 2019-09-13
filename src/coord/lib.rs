@@ -19,11 +19,13 @@ pub mod coordinator;
 pub mod transient;
 
 /// Incoming raw SQL from users.
-pub struct Command {
-    pub conn_id: u32,
-    pub sql: String,
-    pub session: sql::Session,
-    pub tx: futures::sync::oneshot::Sender<Response>,
+pub enum Command {
+    Command {
+        conn_id: u32,
+        sql: String,
+        session: sql::Session,
+        tx: futures::sync::oneshot::Sender<Response>,
+    },
 }
 
 /// Responses from the queue to SQL commands.
