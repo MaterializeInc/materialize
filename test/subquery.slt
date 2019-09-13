@@ -71,6 +71,34 @@ bob eve
 eve NULL
 
 statement ok
+CREATE TABLE favorites (peep text, other text)
+
+statement ok
+INSERT INTO favorites VALUES ('alice', 'eve'), ('alice', 'alice'), ('bob', 'bob')
+
+query TTB rowsort
+SELECT
+    liker,
+    likee,
+    likee IN (SELECT other FROM favorites WHERE peep = liker) AS is_favorite
+FROM likes
+----
+alice  bob  false
+bob    eve  false
+alice  eve  true
+
+query TTB rowsort
+SELECT
+    liker,
+    likee,
+    likee NOT IN (SELECT other FROM favorites WHERE peep = liker) AS is_favorite
+FROM likes
+----
+alice  bob  true
+bob    eve  true
+alice  eve  false
+
+statement ok
 CREATE TABLE age (peep text, age int)
 
 statement ok

@@ -1289,11 +1289,30 @@ impl Planner {
                 column_type.nullable = true;
                 Ok((expr.select(), column_type))
             }
-            Expr::Any { left, op, right, some: _ } => {
-                self.plan_any_or_all(ctx, left, op, right, AggregateFunc::Any)
-            }
+            Expr::Any {
+                left,
+                op,
+                right,
+                some: _,
+            } => self.plan_any_or_all(ctx, left, op, right, AggregateFunc::Any),
             Expr::All { left, op, right } => {
                 self.plan_any_or_all(ctx, left, op, right, AggregateFunc::All)
+            }
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => {
+                use BinaryOperator::{Eq, NotEq};
+                if *negated {
+                    // `<expr> NOT IN (<subquery>)` is equivalent to
+                    // `<expr> <> ALL (<subquery>)`.
+                    self.plan_any_or_all(ctx, expr, &NotEq, subquery, AggregateFunc::All)
+                } else {
+                    // `<expr> IN (<subquery>)` is equivalent to
+                    // `<expr> = ANY (<subquery>)`.
+                    self.plan_any_or_all(ctx, expr, &Eq, subquery, AggregateFunc::Any)
+                }
             }
             _ => bail!(
                 "complicated expressions are not yet supported: {}",
