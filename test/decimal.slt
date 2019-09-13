@@ -160,6 +160,16 @@ select avg(a) from agg
 ----
 0.2333333
 
+query R
+select min(a) from agg
+----
+0.1
+
+query R
+select max(a) from agg
+----
+0.4
+
 statement ok
 CREATE TABLE regression (
     a decimal(15, 2)

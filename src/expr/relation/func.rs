@@ -62,6 +62,18 @@ where
     Datum::from(x)
 }
 
+pub fn max_decimal<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<Significand> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_decimal())
+        .max();
+    Datum::from(x)
+}
+
 pub fn max_bool<I>(datums: I) -> Datum
 where
     I: IntoIterator<Item = Datum>,
@@ -137,6 +149,18 @@ where
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_ordered_float64())
+        .min();
+    Datum::from(x)
+}
+
+pub fn min_decimal<I>(datums: I) -> Datum
+where
+    I: IntoIterator<Item = Datum>,
+{
+    let x: Option<Significand> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_decimal())
         .min();
     Datum::from(x)
 }
@@ -284,6 +308,7 @@ pub enum AggregateFunc {
     MaxInt64,
     MaxFloat32,
     MaxFloat64,
+    MaxDecimal,
     MaxBool,
     MaxString,
     MaxNull,
@@ -291,6 +316,7 @@ pub enum AggregateFunc {
     MinInt64,
     MinFloat32,
     MinFloat64,
+    MinDecimal,
     MinBool,
     MinString,
     MinNull,
@@ -316,6 +342,7 @@ impl AggregateFunc {
             AggregateFunc::MaxInt64 => max_int64,
             AggregateFunc::MaxFloat32 => max_float32,
             AggregateFunc::MaxFloat64 => max_float64,
+            AggregateFunc::MaxDecimal => max_decimal,
             AggregateFunc::MaxBool => max_bool,
             AggregateFunc::MaxString => max_string,
             AggregateFunc::MaxNull => max_null,
@@ -323,6 +350,7 @@ impl AggregateFunc {
             AggregateFunc::MinInt64 => min_int64,
             AggregateFunc::MinFloat32 => min_float32,
             AggregateFunc::MinFloat64 => min_float64,
+            AggregateFunc::MinDecimal => min_decimal,
             AggregateFunc::MinBool => min_bool,
             AggregateFunc::MinString => min_string,
             AggregateFunc::MinNull => min_null,
