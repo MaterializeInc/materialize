@@ -20,7 +20,7 @@ export RUST_BACKTRACE=full
 mkdir -p target
 
 sqllogictest \
-    -v --json-summary-file=target/slt-summary.json "$@" \
+    -vv --json-summary-file=target/slt-summary.json "$@" \
     test/*.slt \
     test/cockroach/*.slt \
     test/sqlite/test \
