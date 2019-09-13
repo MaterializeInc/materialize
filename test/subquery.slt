@@ -69,3 +69,39 @@ alice bob
 alice eve
 bob eve
 eve NULL
+
+statement ok
+CREATE TABLE age (peep text, age int)
+
+statement ok
+INSERT INTO age VALUES ('alice', 103), ('bob', 100), ('eve', 104);
+
+query TI rowsort
+SELECT peeps.peep, (
+  SELECT age FROM likes, age WHERE peeps.peep = liker AND likee = age.peep
+) FROM peeps
+----
+alice 100
+alice 104
+bob 104
+eve NULL
+
+query TB rowsort
+SELECT peeps.peep, age < ANY (
+  SELECT age FROM likes, age WHERE peeps.peep = liker AND likee = age.peep
+) FROM peeps, age
+WHERE peeps.peep = age.peep
+----
+alice true
+bob true
+eve false
+
+query TB rowsort
+SELECT peeps.peep, age < ALL (
+  SELECT age FROM likes, age WHERE peeps.peep = liker AND likee = age.peep
+) FROM peeps, age
+WHERE peeps.peep = age.peep
+----
+alice false
+bob true
+eve true
