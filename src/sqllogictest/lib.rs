@@ -400,7 +400,7 @@ pub fn parse_record<'a>(
 /// single-column values that cockroach relies on
 fn split_cols(line: &str, expected_columns: usize) -> Vec<&str> {
     if expected_columns == 1 {
-        vec![line]
+        vec![line.trim()]
     } else {
         line.split_whitespace().collect()
     }
