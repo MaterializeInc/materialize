@@ -19,7 +19,7 @@ impl InlineLet {
     pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         let mut lets = vec![];
         relation.visit_mut_pre(&mut |e| {
-            self.action(e, &e.typ(), &mut lets);
+            self.action(e, &mut lets);
         });
         for (name, value) in lets.into_iter().rev() {
             *relation = RelationExpr::Let {
@@ -30,14 +30,12 @@ impl InlineLet {
         }
     }
 
-    pub fn action(
-        &self,
-        relation: &mut RelationExpr,
-        metadata: &RelationType,
-        lets: &mut Vec<(String, RelationExpr)>,
-    ) {
+    pub fn action(&self, relation: &mut RelationExpr, lets: &mut Vec<(String, RelationExpr)>) {
         if let RelationExpr::Let { name, value, body } = relation {
             let mut num_gets = 0;
+            value.visit_mut_pre(&mut |relation| {
+                self.action(relation, lets);
+            });
             body.visit_mut_pre(&mut |relation| match relation {
                 RelationExpr::Get { name: get_name, .. } if name == get_name => {
                     num_gets += 1;
@@ -58,7 +56,7 @@ impl InlineLet {
             }
             *relation = body.take();
             // might be another Let in the body so have to recur explicitly here
-            self.action(relation, metadata, lets);
+            self.action(relation, lets);
         }
     }
 }
