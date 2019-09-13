@@ -548,6 +548,30 @@ impl Planner {
                         },
                     })
                     .ok_or_else(|| format_err!("ORDER BY key must be an output column name.")),
+                Expr::Value(Value::Number(n)) => {
+                    let n = n.parse::<usize>().with_context(|err| {
+                        format_err!(
+                            "unable to parse column reference in ORDER BY: {}: {}",
+                            err,
+                            n
+                        )
+                    })?;
+                    let max = output_typ.column_types.len();
+                    if n < 1 || n > max {
+                        bail!(
+                            "column reference {} in ORDER BY is out of range (1 - {})",
+                            n,
+                            max
+                        );
+                    }
+                    Ok(ColumnOrder {
+                        column: n - 1,
+                        desc: match obe.asc {
+                            None => false,
+                            Some(asc) => !asc,
+                        },
+                    })
+                }
                 _ => Err(format_err!(
                     "Arbitrary expressions for ORDER BY keys are not yet supported."
                 )),
