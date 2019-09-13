@@ -10,6 +10,7 @@
 //! ```
 //! use comm::Switchboard;
 //! use futures::{Future, Sink, Stream};
+//! use tokio::net::UnixStream;
 //!
 //! let (switchboard, _runtime) = Switchboard::local()?;
 //! let (tx, rx) = switchboard.mpsc();
@@ -32,16 +33,17 @@
 //! [`Send`] and so can be freely sent between threads.
 
 use futures::{Future, Poll, Sink, Stream};
-use ore::future::StreamExt;
+use ore::future::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
-use std::net::ToSocketAddrs;
-use tokio::io;
+use tokio::net::unix::UnixStream;
 use tokio::net::TcpStream;
+
+use tokio::io;
 use uuid::Uuid;
 
-use crate::protocol;
+use crate::protocol::{self, Addr, Connection};
 
 /// The transmission end of an MPSC channel.
 ///
@@ -49,17 +51,19 @@ use crate::protocol;
 /// connected via [`connect`][Sender::connect] before it can be used. The
 /// unconnected sender is more flexible, however, and implements [`Serialize`]
 /// and [`Deserialize`] so that it can be sent to another process.
-#[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sender<D> {
-    addr: String,
+    addr: Addr,
     uuid: Uuid,
     _data: std::marker::PhantomData<D>,
 }
 
+pub(crate) type SendSink<D> = Box<dyn Sink<SinkItem = D, SinkError = bincode::Error> + Send>;
+
 impl<D> Sender<D> {
-    pub(crate) fn new(addr: String, uuid: Uuid) -> Sender<D> {
+    pub(crate) fn new(addr: impl Into<Addr>, uuid: Uuid) -> Sender<D> {
         Sender {
-            addr,
+            addr: addr.into(),
             uuid,
             _data: PhantomData,
         }
@@ -71,19 +75,27 @@ impl<D> Sender<D> {
     /// will be delivered to the receiving end of this channel, potentially on
     /// another process. See the [`futures::Sink`] documentation for details
     /// about the API for sending messages to a sink.
-    pub fn connect(
-        &self,
-    ) -> impl Future<Item = impl Sink<SinkItem = D, SinkError = bincode::Error>, Error = io::Error>
+    pub fn connect(&self) -> impl Future<Item = SendSink<D>, Error = io::Error>
     where
-        D: Serialize + Send,
+        D: Serialize + Send + 'static,
         for<'de> D: Deserialize<'de>,
     {
-        // TODO(benesch): don't panic if DNS resolution fails.
-        let addr = self.addr.to_socket_addrs().unwrap().next().unwrap();
+        match &self.addr {
+            Addr::Tcp(addr) => self.connect_core::<TcpStream>(addr).left(),
+            Addr::Unix(addr) => self.connect_core::<UnixStream>(addr).right(),
+        }
+    }
+
+    fn connect_core<C>(&self, addr: &C::Addr) -> impl Future<Item = SendSink<D>, Error = io::Error>
+    where
+        C: Connection,
+        D: Serialize + Send + 'static,
+        for<'de> D: Deserialize<'de>,
+    {
         let uuid = self.uuid;
-        TcpStream::connect(&addr)
+        C::connect(addr)
             .and_then(move |conn| protocol::send_handshake(conn, uuid))
-            .map(protocol::encoder)
+            .map(|conn| protocol::encoder(conn).boxed())
     }
 }
 

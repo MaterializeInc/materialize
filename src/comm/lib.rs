@@ -23,13 +23,17 @@
 //! ```no_run
 //! use comm::Switchboard;
 //! use futures::{Future, Stream};
+//! use std::net::Ipv4Addr;
 //! use std::time::Duration;
 //! use tokio::net::TcpListener;
 //!
-//! let nodes = vec!["host1:1234", "host2:1234"];
+//! let nodes = vec![
+//!     (Ipv4Addr::new(192, 168, 1, 1), 1234),
+//!     (Ipv4Addr::new(192, 168, 1, 2), 1234),
+//! ];
 //! let node_id = 0;
 //! let switchboard = Switchboard::new(nodes, node_id);
-//! let listener = TcpListener::bind(&"127.0.0.1:1234".parse()?)?;
+//! let listener = TcpListener::bind(&"0.0.0.0:1234".parse()?)?;
 //! let mut runtime = tokio::runtime::Runtime::new()?;
 //! runtime.spawn({
 //!     let switchboard = switchboard.clone();

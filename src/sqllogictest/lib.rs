@@ -669,7 +669,7 @@ struct FullState {
     postgres: Postgres,
     planner: Planner,
     session: Session,
-    coord: Coordinator<tokio::net::TcpStream>,
+    coord: Coordinator<tokio::net::UnixStream>,
     conn_id: u32,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,

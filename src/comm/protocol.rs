@@ -8,9 +8,11 @@
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use ore::netio::{SniffedStream, SniffingStream};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::net::{SocketAddr, ToSocketAddrs};
 use tokio::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::net::unix::UnixStream;
 use tokio::net::TcpStream;
 use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use uuid::Uuid;
@@ -37,14 +39,30 @@ pub fn match_handshake(buf: &[u8]) -> bool {
 /// Only [`TcpStream`] and [`SniffedStream`] support is provided at the moment,
 /// but support for any owned, thread-safe type which implements [`AsyncRead`]
 /// and [`AsyncWrite`] can be added trivially, i.e., by implementing this trait.
-pub trait Connection: AsyncRead + AsyncWrite + Send + Sized + 'static {
+pub trait Connection: AsyncRead + AsyncWrite + Send + 'static {
+    /// The type that identifies the endpoint when establishing a connection of
+    /// this type.
+    type Addr: fmt::Debug
+        + Eq
+        + PartialEq
+        + Send
+        + Sync
+        + Clone
+        + Serialize
+        + for<'de> Deserialize<'de>
+        + Into<Addr>;
+
     /// Connects to the specified `addr`.
-    fn connect(addr: &SocketAddr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send>;
+    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send>;
 }
 
 impl Connection for TcpStream {
-    fn connect(addr: &SocketAddr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
-        Box::new(TcpStream::connect(addr).map(|conn| {
+    type Addr = SocketAddr;
+
+    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
+        // TODO(benesch): don't panic if DNS resolution fails.
+        let addr = addr.to_socket_addrs().unwrap().next().unwrap();
+        Box::new(TcpStream::connect(&addr).map(|conn| {
             conn.set_nodelay(true).expect("set_nodelay call failed");
             conn
         }))
@@ -55,23 +73,46 @@ impl<C> Connection for SniffedStream<C>
 where
     C: Connection,
 {
-    fn connect(addr: &SocketAddr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
+    type Addr = C::Addr;
+
+    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
         Box::new(C::connect(addr).map(|conn| SniffingStream::new(conn).into_sniffed()))
     }
 }
 
-pub(crate) fn resolve_addr(addr: &str) -> Result<SocketAddr, io::Error> {
-    match addr.to_socket_addrs() {
-        // TODO(benesch): we should try connecting to all resolved
-        // addresses, not just the first.
-        Ok(mut addrs) => match addrs.next() {
-            None => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "dns resolution failed",
-            )),
-            Some(addr) => Ok(addr),
-        },
-        Err(err) => Err(err),
+impl Connection for UnixStream {
+    type Addr = std::path::PathBuf;
+
+    fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
+        Box::new(UnixStream::connect(addr))
+    }
+}
+
+/// All known address types for [`Connection`]s.
+///
+/// The existence of this type is a bit unfortunate. It exists so that
+/// [`mpsc::Sender`] does not need to be generic over [`Connection`], as
+/// MPSC transmitters are meant to be lightweight and easy to stash in places
+/// where a generic parameter might be a hassle. Ideally we'd make an `Addr`
+/// trait and store a `Box<dyn Addr>`, but Rust does not currently permit
+/// serializing and deserializing trait objects.
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug)]
+pub enum Addr {
+    /// The address type for [`TcpStream`].
+    Tcp(<TcpStream as Connection>::Addr),
+    /// The address type for [`UnixStream`].
+    Unix(<UnixStream as Connection>::Addr),
+}
+
+impl From<<TcpStream as Connection>::Addr> for Addr {
+    fn from(addr: <TcpStream as Connection>::Addr) -> Addr {
+        Addr::Tcp(addr)
+    }
+}
+
+impl From<<UnixStream as Connection>::Addr> for Addr {
+    fn from(addr: <UnixStream as Connection>::Addr) -> Addr {
+        Addr::Unix(addr)
     }
 }
 

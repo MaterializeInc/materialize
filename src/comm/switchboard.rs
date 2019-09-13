@@ -7,14 +7,16 @@
 
 use futures::stream::FuturesOrdered;
 use futures::{future, Future, Stream};
-use ore::future::{FutureExt, StreamExt};
+use ore::future::StreamExt;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{hash_map, HashMap};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::unix::{UnixListener, UnixStream};
+
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -36,17 +38,25 @@ use crate::util::TryConnectFuture;
 ///
 /// Switchboards are both [`Send`] and [`Sync`], and so may be freely shared
 /// and sent between threads.
-pub struct Switchboard<C>(Arc<SwitchboardInner<C>>);
+pub struct Switchboard<C>(Arc<SwitchboardInner<C>>)
+where
+    C: protocol::Connection;
 
-impl<C> Clone for Switchboard<C> {
+impl<C> Clone for Switchboard<C>
+where
+    C: protocol::Connection,
+{
     fn clone(&self) -> Switchboard<C> {
         Switchboard(self.0.clone())
     }
 }
 
-struct SwitchboardInner<C> {
+struct SwitchboardInner<C>
+where
+    C: protocol::Connection,
+{
     /// Addresses of all the nodes in the cluster, including of this node.
-    nodes: Vec<String>,
+    nodes: Vec<C::Addr>,
     /// The index of this node's address in `nodes`.
     id: usize,
     /// The mapping from connection ID to its state.
@@ -73,7 +83,7 @@ impl<C> Default for RoutingTableEntry<C> {
     }
 }
 
-impl Switchboard<TcpStream> {
+impl Switchboard<UnixStream> {
     /// Constructs a new `Switchboard` for a single-process cluster. A Tokio
     /// [`Runtime`] that manages traffic for the switchboard is also returned;
     /// this runtime must live at least as long as the switchboard for correct
@@ -82,10 +92,15 @@ impl Switchboard<TcpStream> {
     /// This function is intended for test and example programs. Production code
     /// will likely want to configure its own Tokio runtime and handle its own
     /// network binding.
-    pub fn local() -> Result<(Switchboard<TcpStream>, Runtime), io::Error> {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let listener = TcpListener::bind(&addr)?;
-        let switchboard = Switchboard::new(vec![listener.local_addr()?.to_string()], 0);
+    pub fn local() -> Result<(Switchboard<UnixStream>, Runtime), io::Error> {
+        let mut rng = rand::thread_rng();
+        let suffix: String = (0..6)
+            .map(|_| rng.sample(rand::distributions::Alphanumeric))
+            .collect();
+        let mut path = std::env::temp_dir();
+        path.push(format!("comm.switchboard.{}", suffix));
+        let listener = UnixListener::bind(&path)?;
+        let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0);
         let mut runtime = Runtime::new()?;
         runtime.spawn({
             let switchboard = switchboard.clone();
@@ -114,7 +129,7 @@ where
     pub fn new<I>(nodes: I, id: usize) -> Switchboard<C>
     where
         I: IntoIterator,
-        I::Item: Into<String>,
+        I::Item: Into<C::Addr>,
     {
         Switchboard(Arc::new(SwitchboardInner {
             nodes: nodes.into_iter().map(Into::into).collect(),
@@ -159,19 +174,15 @@ where
                 futures.push(Box::new(future::ok(None)));
             } else {
                 // Later node. Attempt to initiate connection.
-                let addr = match protocol::resolve_addr(addr) {
-                    Ok(addr) => addr,
-                    Err(err) => return future::err(err).left(),
-                };
                 let uuid = (self.0.id as u128).into();
                 futures.push(Box::new(
-                    TryConnectFuture::new(addr, timeout)
+                    TryConnectFuture::new(addr.clone(), timeout)
                         .and_then(move |conn| protocol::send_handshake(conn, uuid))
                         .map(|conn| Some(conn)),
                 ));
             }
         }
-        futures.collect().right()
+        futures.collect()
     }
 
     /// Routes an incoming connection to the appropriate channel receiver. This
@@ -250,9 +261,9 @@ where
     {
         let uuid = broadcast::token_uuid::<T>();
         if T::loopback() {
-            broadcast::Sender::new(uuid, self.0.nodes.iter())
+            broadcast::Sender::new::<C, _>(uuid, self.0.nodes.iter())
         } else {
-            broadcast::Sender::new(uuid, self.peers())
+            broadcast::Sender::new::<C, _>(uuid, self.peers())
         }
     }
 
@@ -317,7 +328,7 @@ where
         conn_rx
     }
 
-    fn peers(&self) -> impl Iterator<Item = &String> {
+    fn peers(&self) -> impl Iterator<Item = &C::Addr> {
         let id = self.0.id;
         self.0
             .nodes
