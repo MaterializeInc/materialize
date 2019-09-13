@@ -739,13 +739,12 @@ impl RelationExpr {
 
     /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` in it's place
     pub fn take(&mut self) -> RelationExpr {
+        let typ = self.typ();
         std::mem::replace(
             self,
             RelationExpr::Constant {
                 rows: vec![],
-                typ: RelationType {
-                    column_types: vec![],
-                },
+                typ,
             },
         )
     }

@@ -18,26 +18,18 @@ impl super::Transform for DistinctUnion {
 
 impl DistinctUnion {
     pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-        relation.visit_mut_pre(&mut |e| {
+        relation.visit_mut(&mut |e| {
             self.action(e, &e.typ());
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         if let RelationExpr::Distinct { input } = relation {
             if let RelationExpr::Union { left, right } = &mut **input {
                 if let RelationExpr::Distinct { input } = &mut **left {
-                    let empty = Box::new(RelationExpr::Constant {
-                        rows: vec![],
-                        typ: metadata.to_owned(),
-                    });
-                    *left = std::mem::replace(input, empty);
+                    *left = Box::new(input.take());
                 }
                 if let RelationExpr::Distinct { input } = &mut **right {
-                    let empty = Box::new(RelationExpr::Constant {
-                        rows: vec![],
-                        typ: metadata.to_owned(),
-                    });
-                    *right = std::mem::replace(input, empty);
+                    *right = Box::new(input.take());
                 }
             }
         }
