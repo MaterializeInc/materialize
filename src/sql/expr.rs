@@ -201,16 +201,23 @@ impl RelationExpr {
                 on,
                 kind,
             } => {
+                let oa = get_outer.arity();
+                let la = left.arity();
+                let ra = right.arity();
                 let left = left.applied_to(get_outer.clone())?;
                 left.let_in(|get_left| {
                     let right = right.applied_to(get_outer.clone())?;
                     right.let_in(|get_right| {
                         let mut product = SR::Join {
                             inputs: vec![get_left.clone(), get_right.clone()],
-                            variables: (0..get_outer.arity())
-                                .map(|i| vec![(0, i), (1, i)])
+                            variables: (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
+                        }
+                        // project away the repeated copy of get_outer
+                        .project(
+                            (0..(oa + la))
+                                .chain((oa + la + oa)..(oa + la + oa + ra))
                                 .collect(),
-                        };
+                        );
                         let old_arity = product.arity();
                         let on = on.applied_to(get_outer.arity(), &mut product)?;
                         let mut join = product.filter(vec![on]);
@@ -221,9 +228,6 @@ impl RelationExpr {
                         }
                         join.let_in(|get_join| {
                             let mut result = get_join.clone();
-                            let oa = get_outer.arity();
-                            let la = get_left.arity();
-                            let ra = get_right.arity();
                             if let JoinKind::LeftOuter | JoinKind::FullOuter = kind {
                                 let left_outer = get_left.clone().anti_lookup(
                                     get_join.clone(),
@@ -558,6 +562,14 @@ impl RelationExpr {
             left: Box::new(self),
             right: Box::new(other),
         }
+    }
+
+    pub fn exists(self) -> ScalarExpr {
+        ScalarExpr::Exists(Box::new(self))
+    }
+
+    pub fn select(self) -> ScalarExpr {
+        ScalarExpr::Select(Box::new(self))
     }
 }
 
