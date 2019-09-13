@@ -722,7 +722,7 @@ impl Planner {
                         rows: vec![vec![Datum::String("X".into())]],
                         typ: typ.clone(),
                     },
-                    Scope::from_source("dual", typ, Some(outer_scope.clone())),
+                    Scope::from_source(Some("dual"), typ, Some(outer_scope.clone())),
                 ))
             })?;
 
@@ -926,11 +926,32 @@ impl Planner {
                 } else {
                     name
                 };
-                let scope = Scope::from_source(&alias, typ.clone(), Some(outer_scope.clone()));
+                let scope =
+                    Scope::from_source(Some(&alias), typ.clone(), Some(outer_scope.clone()));
                 Ok((expr, scope))
             }
-            TableFactor::Derived { .. } => {
-                bail!("subqueries are not yet supported");
+            TableFactor::Derived {
+                lateral,
+                subquery,
+                alias,
+            } => {
+                if *lateral {
+                    bail!("LATERAL derived tables are not yet supported");
+                }
+                let (expr, finishing) = self.plan_query(&subquery, &Scope::empty(None))?;
+                if finishing != Default::default() {
+                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                }
+                let alias = if let Some(TableAlias { name, columns }) = alias {
+                    if !columns.is_empty() {
+                        bail!("aliasing columns is not yet supported");
+                    }
+                    Some(name.as_str())
+                } else {
+                    None
+                };
+                let scope = Scope::from_source(alias, expr.typ(), Some(outer_scope.clone()));
+                Ok((expr, scope))
             }
             TableFactor::NestedJoin(table_with_joins) => {
                 self.plan_table_with_joins(table_with_joins, outer_scope)
@@ -964,7 +985,7 @@ impl Planner {
                 })
                 .collect::<Result<Vec<_>, _>>(),
             SelectItem::QualifiedWildcard(table_name) => {
-                let table_name = extract_sql_object_name(table_name)?;
+                let table_name = Some(extract_sql_object_name(table_name)?);
                 select_all_scope
                     .items
                     .iter()
@@ -2342,7 +2363,7 @@ struct ExprContext<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ScopeItemName {
-    table_name: String,
+    table_name: Option<String>,
     column_name: Option<String>,
 }
 
@@ -2383,14 +2404,18 @@ impl Scope {
         }
     }
 
-    fn from_source(table_name: &str, typ: RelationType, outer_scope: Option<Scope>) -> Self {
+    fn from_source(
+        table_name: Option<&str>,
+        typ: RelationType,
+        outer_scope: Option<Scope>,
+    ) -> Self {
         let mut scope = Scope::empty(outer_scope);
         scope.items = typ
             .column_types
             .into_iter()
             .map(|typ| ScopeItem {
                 names: vec![ScopeItemName {
-                    table_name: table_name.to_owned(),
+                    table_name: table_name.owned(),
                     column_name: typ.name.clone(),
                 }],
                 typ,
@@ -2457,7 +2482,8 @@ impl Scope {
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
         self.resolve(
             |item: &ScopeItemName| {
-                item.table_name == table_name && item.column_name.as_deref() == Some(column_name)
+                item.table_name.as_deref() == Some(table_name)
+                    && item.column_name.as_deref() == Some(column_name)
             },
             &format!("{}.{}", table_name, column_name),
         )
