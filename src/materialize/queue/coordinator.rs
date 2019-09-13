@@ -18,19 +18,22 @@
 
 use timely::progress::frontier::Antichain;
 
-use futures::{sink, Sink as FuturesSink};
+use futures::{sink, Future, Sink as FuturesSink, Stream};
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Dataflow, PeekWhen, Sink, SinkConnector, TailSinkConnector, Timestamp, View};
+use dataflow_types::{
+    compare_columns, Dataflow, PeekWhen, Sink, SinkConnector, TailSinkConnector, Timestamp, View,
+};
 use expr::RelationExpr;
+use ore::future::FutureExt;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sql::Plan;
 
-use crate::queue::{SqlResponse, WaitFor};
+use crate::queue::SqlResponse;
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<C>
@@ -39,6 +42,7 @@ where
 {
     switchboard: comm::Switchboard<C>,
     broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
+    num_timely_workers: usize,
     optimizer: expr::transform::Optimizer,
     views: HashMap<String, ViewState>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
@@ -49,7 +53,11 @@ impl<C> Coordinator<C>
 where
     C: comm::Connection,
 {
-    pub fn new(switchboard: comm::Switchboard<C>, logging_config: Option<&LoggingConfig>) -> Self {
+    pub fn new(
+        switchboard: comm::Switchboard<C>,
+        num_timely_workers: usize,
+        logging_config: Option<&LoggingConfig>,
+    ) -> Self {
         let broadcast_tx = switchboard
             .broadcast_tx::<dataflow::BroadcastToken>()
             .wait();
@@ -57,6 +65,7 @@ where
         let mut coordinator = Self {
             switchboard,
             broadcast_tx,
+            num_timely_workers,
             optimizer: Default::default(),
             views: HashMap::new(),
             since_updates: Vec::new(),
@@ -94,15 +103,13 @@ where
                         .map(|s| Dataflow::Source(s.clone()))
                         .collect(),
                 );
-                SqlResponse::SendRows {
-                    typ: RelationType::new(vec![ColumnType::new(ScalarType::String).name("Topic")]),
-                    rows: sources
+                send_immediate_rows(
+                    RelationType::new(vec![ColumnType::new(ScalarType::String).name("Topic")]),
+                    sources
                         .iter()
                         .map(|s| vec![Datum::from(s.name.to_owned())])
                         .collect(),
-                    wait_for: WaitFor::NoOne,
-                    transform: Default::default(),
-                }
+                )
             }
 
             Plan::CreateSink(sink) => {
@@ -151,6 +158,8 @@ where
                 let typ = source.typ();
                 self.optimizer.optimize(&mut source, &typ);
 
+                let (rows_tx, rows_rx) = self.switchboard.mpsc();
+
                 // Choose a timestamp for all workers to use in the peek.
                 // We minimize over all participating views, to ensure that the query will not
                 // need to block on the arrival of further input data.
@@ -164,8 +173,9 @@ where
                         &mut self.broadcast_tx,
                         SequencedCommand::Peek {
                             name,
-                            timestamp,
                             conn_id,
+                            tx: rows_tx,
+                            timestamp,
                             transform: transform.clone(),
                         },
                     );
@@ -186,8 +196,9 @@ where
                         &mut self.broadcast_tx,
                         SequencedCommand::Peek {
                             name: name.clone(),
-                            timestamp,
                             conn_id,
+                            tx: rows_tx,
+                            timestamp,
                             transform: transform.clone(),
                         },
                     );
@@ -197,39 +208,49 @@ where
                     );
                 }
 
-                SqlResponse::SendRows {
-                    typ,
-                    rows: vec![],
-                    wait_for: WaitFor::Workers,
-                    transform,
-                }
+                let rows_rx = rows_rx
+                    .take(self.num_timely_workers as u64)
+                    .concat2()
+                    .map(move |mut rows| {
+                        let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
+                            compare_columns(&transform.order_by, left, right)
+                        };
+                        if let Some(limit) = transform.limit {
+                            pdqselect::select_by(&mut rows, limit, sort_by);
+                            rows.truncate(limit);
+                        }
+                        rows.sort_by(sort_by);
+                        rows
+                    })
+                    .from_err()
+                    .boxed();
+
+                SqlResponse::SendRows { typ, rx: rows_rx }
             }
 
             Plan::Tail(source) => {
+                let (tx, rx) = self.switchboard.mpsc();
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
                         name: format!("<temp_{}>", Uuid::new_v4()),
                         from: (source.name().to_owned(), source.typ().clone()),
-                        connector: SinkConnector::Tail(TailSinkConnector { conn_id }),
+                        connector: SinkConnector::Tail(TailSinkConnector { tx }),
                     })]),
                 );
-                SqlResponse::Tailing
+                SqlResponse::Tailing { rx }
             }
 
-            Plan::SendRows { typ, rows } => SqlResponse::SendRows {
-                typ,
-                rows,
-                wait_for: WaitFor::NoOne,
-                transform: Default::default(),
-            },
+            Plan::SendRows { typ, rows } => send_immediate_rows(typ, rows),
 
-            Plan::ExplainPlan { typ, relation_expr } => SqlResponse::SendRows {
+            Plan::ExplainPlan {
                 typ,
-                rows: vec![vec![Datum::from(relation_expr.pretty())]],
-                wait_for: WaitFor::NoOne,
-                transform: Default::default(),
-            },
+                mut relation_expr,
+            } => {
+                self.optimizer.optimize(&mut relation_expr, &typ);
+                let rows = vec![vec![Datum::from(relation_expr.pretty())]];
+                send_immediate_rows(typ, rows)
+            }
         }
     }
 
@@ -490,6 +511,18 @@ fn broadcast(
     // gets stuck.
     tx.send(cmd).unwrap();
     tx.flush().unwrap();
+}
+
+/// Constructs a [`SqlResponse`] that that will send some rows to the client
+/// immediately, as opposed to asking the dataflow layer to send along the rows
+/// after some computation.
+fn send_immediate_rows(typ: RelationType, rows: Vec<Vec<Datum>>) -> SqlResponse {
+    let (tx, rx) = futures::sync::oneshot::channel();
+    tx.send(rows).unwrap();
+    SqlResponse::SendRows {
+        typ,
+        rx: Box::new(rx.from_err()),
+    }
 }
 
 /// Per-view state.

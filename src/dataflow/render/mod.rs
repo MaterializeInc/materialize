@@ -24,7 +24,6 @@ use repr::Datum;
 use super::sink;
 use super::source;
 use crate::arrangement::{manager::WithDrop, TraceManager};
-use crate::exfiltrate::Exfiltrator;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 
 mod context;
@@ -35,7 +34,6 @@ pub fn build_dataflow<A: Allocate>(
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
-    exfiltrator: Rc<Exfiltrator>,
     logger: &mut Option<Logger>,
 ) {
     let worker_timer = worker.timer();
@@ -102,9 +100,7 @@ pub fn build_dataflow<A: Allocate>(
                     let done = Rc::new(Cell::new(false));
                     sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
                 }
-                SinkConnector::Tail(c) => {
-                    sink::tail(&arrangement.stream, &sink.name, c, exfiltrator)
-                }
+                SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
             }
         }
         Dataflow::View(view) => {
