@@ -31,6 +31,9 @@ impl Project {
                 *outputs = outputs.iter().map(|i| outputs2[*i]).collect();
                 **input = inner.take();
             }
+            if *outputs == (0..input.arity()).collect::<Vec<_>>() {
+                *relation = input.take();
+            }
         }
     }
 }
