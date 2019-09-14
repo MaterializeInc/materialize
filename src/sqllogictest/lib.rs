@@ -798,9 +798,6 @@ impl RecordRunner for FullState {
                     return Ok(Outcome::Success);
                 }
 
-                // we don't support non-materialized views
-                let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
-
                 // parse statement
                 let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
                     Ok(statements) => statements,
@@ -952,7 +949,7 @@ impl RecordRunner for FullState {
                     | Statement::Drop { .. } => {
                         match self
                             .planner
-                            .handle_command(&mut self.session, sql.to_owned())
+                            .handle_command(&mut self.session, sql.to_string())
                         {
                             Ok(plan) => {
                                 self.coord.sequence_plan(
