@@ -60,11 +60,9 @@ pub struct Optimizer {
 impl Optimizer {
     /// Optimizes the supplied relation expression.
     pub fn optimize(&mut self, relation: &mut RelationExpr, metadata: &RelationType) {
-        let pre_opt = relation.pretty();
         for transform in self.transforms.iter() {
             transform.transform(relation, metadata);
         }
-        println!("OPTIMIZED\nold:\t{}\nnew:\t{}", pre_opt, relation.pretty());
     }
 }
 
