@@ -30,6 +30,8 @@ RUN curl -fsSL https://shellcheck.storage.googleapis.com/shellcheck-v0.7.0.linux
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.7.0/shellcheck \
     && rm shellcheck.tar.xz
 
+# TODO(benesch): If we're still not using sccache in a few months (say, by
+# January 2020), remove it from the image.
 COPY --from=materialize/sccache:0.2.8 /usr/local/bin/sccache /usr/local/bin/sccache
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts

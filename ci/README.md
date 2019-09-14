@@ -38,12 +38,13 @@ At the time of writing, we use EC2's c5.2xlarge instances, which have 8 vCPUs
 per month, so the stack is configured to downscale aggressively.
 
 We run two CloudFormation stacks, "buildkite" and "buildkite-builders." At the
-time of writing, the builders stack is configured to always run exactly one
-agent, though we may need to bump this in the future. Pipelines are written so
-that the builders stack is used to run `cargo build`, then immediately farm the
-resulting binaries out to agents on the other stack. That way agents in the
-builder stack have a warm Cargo and Docker cache, and will typically build
-much faster because they don't need to recompile all dependencies.
+time of writing, the builders stack is configured to run a minimum of one agent
+and a maximum of two agents, though we may need to adjust this in the future.
+Pipelines are written so that the builders stack is used to run `cargo build`,
+then immediately farm the resulting binaries out to agents on the other stack.
+That way agents in the builder stack have a warm Cargo and Docker cache, and
+will typically build much faster because they don't need to recompile all
+dependencies.
 
 ## Buildkite configuration
 
@@ -114,13 +115,19 @@ interactive/deployed scenarios.
 
 ## Build caching
 
-Rust compilation is slow enough that we use [sccache], a distributed build cache
-from Mozilla, to share a build cache between agents. This dramatically speeds up
-the first build on a new builder agent.
+We once used [sccache], a distributed build cache from Mozilla, to share built
+artifacts between agents. Unfortunately, for reasons Nikhil never fully tracked
+down, setting `RUSTC_WRAPPER=sccache` was causing Cargo to always build from
+scratch, a process that was taking 7m+ at the time sccache was removed. Even
+back when things were configured correctly, sccache was unable to cache a
+number of crates, e.g., crates with a build script could not be cached. The
+trouble doesn't seem worth it, unless sccache becomes far more mature.
 
-At the time of writing, the build cache is stored in a memcached instance
-managed by ElastiCache. From a Buildkite agent, the memcached instance is
-available at `buildcache.internal.mtrlz.dev:11211`.
+The current approach is to limit the number of agents that actually build
+Rust to the minimum possible. These agents thus wind up with a warm local Cargo
+cache (i.e., the cache in the `target` directory, which is quite a bit more
+reliable than sccache), and typically only need to rebuild the first-party
+crates that have changed.
 
 ## DNS
 
