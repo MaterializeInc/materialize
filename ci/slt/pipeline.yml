@@ -6,7 +6,7 @@
 steps:
   - block: ":vertical_traffic_light: Go"
   - command: ci/slt/slt.sh
-    timeout_in_minutes: 180
+    timeout_in_minutes: 300
     artifact_paths: target/slt-summary.json
     plugins:
       - MaterializeInc/uid#master: ~
