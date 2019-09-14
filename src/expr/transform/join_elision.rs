@@ -52,7 +52,7 @@ impl JoinElision {
 
             // If `new_inputs` is empty or a singleton (without constraints) we can remove the join.
             *inputs = new_inputs;
-            match new_inputs.len() {
+            match inputs.len() {
                 0 => {
                     *relation = RelationExpr::Constant {
                         rows: vec![vec![]],
@@ -64,7 +64,7 @@ impl JoinElision {
                     // been pushed down by predicate pushdown, but .. let's
                     // not re-write that code here.
                     if variables.is_empty() {
-                        *relation = new_inputs.pop().unwrap();
+                        *relation = inputs.pop().unwrap();
                     }
                 }
                 _ => {}
