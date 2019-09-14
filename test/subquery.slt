@@ -135,6 +135,31 @@ bob true
 eve true
 
 statement ok
+CREATE TABLE s1 (a int NOT NULL)
+
+statement ok
+CREATE TABLE s2 (a int NOT NULL)
+
+statement ok
+CREATE TABLE s3 (b int NOT NULL)
+
+statement ok
+INSERT INTO s1 VALUES (0)
+
+statement ok
+INSERT INTO s2 VALUES (1)
+
+statement ok
+INSERT INTO s3 VALUES (1)
+
+# Verify that scope resolution prefers the closer scope when a name occurs in
+# multiple outer levels.
+query B
+SELECT true FROM s1 WHERE EXISTS (SELECT true FROM s2 WHERE EXISTS (SELECT true FROM s3 WHERE a = s3.b))
+----
+true
+
+statement ok
 CREATE TABLE t1 (a int NOT NULL)
 
 statement ok
