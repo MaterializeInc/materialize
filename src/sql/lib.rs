@@ -2487,30 +2487,46 @@ struct ScopeItem {
     typ: ColumnType,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OuterScopeItem {
+    /// The actual scope item.
+    scope_item: ScopeItem,
+    /// The "outerness" of this scope item. An item from the parent scope is
+    /// level 0. An item from the parent's parent scope is level 1. And so on.
+    level: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeLevel {
+    /// The inner scope.
+    Inner,
+    /// The outer scope with the specified level.
+    Outer(usize),
+}
+
 #[derive(Debug, Clone)]
 struct Scope {
     // items in this query
     items: Vec<ScopeItem>,
     // items inherited from an enclosing query
-    outer_items: Vec<ScopeItem>,
-}
-
-#[derive(Debug)]
-enum Resolution<'a> {
-    NotFound,
-    Found((usize, &'a ScopeItem)),
-    Ambiguous,
+    outer_items: Vec<OuterScopeItem>,
 }
 
 impl Scope {
     fn empty(outer_scope: Option<Scope>) -> Self {
         Scope {
             items: vec![],
-            outer_items: if let Some(outer_scope) = outer_scope {
+            outer_items: if let Some(mut outer_scope) = outer_scope {
+                for mut item in &mut outer_scope.outer_items {
+                    item.level += 1;
+                }
                 outer_scope
                     .outer_items
                     .into_iter()
-                    .chain(outer_scope.items.into_iter())
+                    .chain(outer_scope.items.into_iter().map(|item| OuterScopeItem {
+                        scope_item: item,
+                        level: 0,
+                    }))
                     .collect()
             } else {
                 vec![]
@@ -2542,6 +2558,20 @@ impl Scope {
         self.items.len()
     }
 
+    fn iter_items(&self) -> impl Iterator<Item = (usize, &ScopeItem, ScopeLevel)> {
+        self.items
+            .iter()
+            .enumerate()
+            .map(|(pos, item)| (pos, item, ScopeLevel::Inner))
+    }
+
+    fn iter_outer_items(&self) -> impl Iterator<Item = (usize, &ScopeItem, ScopeLevel)> {
+        self.outer_items
+            .iter()
+            .enumerate()
+            .map(|(pos, oitem)| (pos, &oitem.scope_item, ScopeLevel::Outer(oitem.level)))
+    }
+
     fn resolve<'a, Matches>(
         &'a self,
         matches: Matches,
@@ -2550,32 +2580,27 @@ impl Scope {
     where
         Matches: Fn(&ScopeItemName) -> bool,
     {
-        let resolve_over = |items: &'a [ScopeItem]| {
-            let mut results = items
-                .iter()
-                .enumerate()
-                .map(|(pos, item)| item.names.iter().map(move |name| (pos, item, name)))
-                .flatten()
-                .filter(|(_, _, name)| (matches)(name));
-            match results.next() {
-                None => Resolution::NotFound,
-                Some((pos, item, _name)) => {
-                    if results.find(|(pos2, _item, _name)| pos != *pos2).is_none() {
-                        Resolution::Found((pos, item))
-                    } else {
-                        Resolution::Ambiguous
+        let mut results = self
+            .iter_items()
+            .chain(self.iter_outer_items())
+            .map(|(pos, item, level)| item.names.iter().map(move |name| (pos, item, level, name)))
+            .flatten()
+            .filter(|(_pos, _item, _level, name)| (matches)(name));
+        match results.next() {
+            None => bail!("No column named {} in scope", name_in_error),
+            Some((pos, item, level, _name)) => {
+                if results
+                    .find(|(pos2, _item, level2, _name)| pos != *pos2 && level == *level2)
+                    .is_none()
+                {
+                    match level {
+                        ScopeLevel::Inner => Ok((ColumnRef::Inner(pos), item)),
+                        ScopeLevel::Outer(_) => Ok((ColumnRef::Outer(pos), item)),
                     }
+                } else {
+                    bail!("Column name {} is ambiguous", name_in_error)
                 }
             }
-        };
-        match resolve_over(&self.items) {
-            Resolution::NotFound => match resolve_over(&self.outer_items) {
-                Resolution::NotFound => bail!("No column named {} in scope", name_in_error),
-                Resolution::Found((pos, item)) => Ok((ColumnRef::Outer(pos), item)),
-                Resolution::Ambiguous => bail!("Column name {} is ambiguous", name_in_error),
-            },
-            Resolution::Found((pos, item)) => Ok((ColumnRef::Inner(pos), item)),
-            Resolution::Ambiguous => bail!("Column name {} is ambiguous", name_in_error),
         }
     }
 
