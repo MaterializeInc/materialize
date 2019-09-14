@@ -13,6 +13,7 @@ pub mod distinct_union;
 pub mod empty_map;
 pub mod fusion;
 pub mod inline_let;
+pub mod join_elision;
 pub mod join_order;
 pub mod predicate_pushdown;
 pub mod reduction;
@@ -59,9 +60,11 @@ pub struct Optimizer {
 impl Optimizer {
     /// Optimizes the supplied relation expression.
     pub fn optimize(&mut self, relation: &mut RelationExpr, metadata: &RelationType) {
+        let pre_opt = relation.pretty();
         for transform in self.transforms.iter() {
             transform.transform(relation, metadata);
         }
+        println!("OPTIMIZED\nold:\t{}\nnew:\t{}", pre_opt, relation.pretty());
     }
 }
 
@@ -81,6 +84,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::fusion::filter::Filter),
                     Box::new(crate::transform::fusion::project::Project),
                     Box::new(crate::transform::empty_map::EmptyMap),
+                    Box::new(crate::transform::join_elision::JoinElision),
                 ],
             }),
             Box::new(crate::transform::join_order::JoinOrder),
