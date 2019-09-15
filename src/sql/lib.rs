@@ -1592,7 +1592,6 @@ impl Planner {
         Ok((expr, typ))
     }
 
-    /// Figure out what the Expression should be, and the value of the result
     fn plan_binary_op<'a>(
         &self,
         ctx: &ExprContext,
@@ -2153,6 +2152,12 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
     equivalences
 }
 
+// Takes a list of (expression, type), where the type can be different for every
+// expression, and attempts to find a uniform type to which all expressions can
+// be cast. If successful, returns a new list of expressions in the same order
+// as the input, where each expression has the appropriate casts, as well as the
+// selected type for all the expressions.
+//
 // When types don't match exactly, SQL has some poorly-documented type promotion
 // rules. For now, just promote integers into decimals or floats, decimals into
 // floats, and small Xs into bigger Xs.
@@ -2164,7 +2169,23 @@ where
     C: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
-    let out_typ = find_output_type(&exprs.iter().map(|(_, typ)| typ).collect::<Vec<_>>())?;
+    let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
+        ScalarType::Null => 0,
+        ScalarType::Int32 => 1,
+        ScalarType::Int64 => 2,
+        ScalarType::Decimal(_, _) => 3,
+        ScalarType::Float32 => 4,
+        ScalarType::Float64 => 5,
+        _ => 6,
+    };
+    let max_scalar_type = exprs
+        .iter()
+        .map(|(_expr, typ)| &typ.scalar_type)
+        .max_by_key(|scalar_type| scalar_type_prec(scalar_type))
+        .unwrap()
+        .clone();
+    let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
+    let out_typ = ColumnType::new(max_scalar_type).nullable(nullable);
     let mut out = Vec::new();
     for (expr, typ) in exprs {
         match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
@@ -2180,34 +2201,11 @@ where
     Ok((out, out_typ))
 }
 
-/// Find a type that we can expect the output of a sequence of expressions to be
+/// Plans a cast between two `RelationExpr`s of different types. If it is
+/// impossible to cast between the two types, an error is returned.
 ///
-/// There aren't any real guarantees about what we output, except that it's
-/// possible that we'll be able to build this result.
-///
-/// # Examples
-///
-/// - `1i32 + 2i64` -> `i64`
-/// - `1i64 + Decimal(2)` -> `Decimal`
-fn find_output_type(col_typs: &[&ColumnType]) -> Result<ColumnType, failure::Error> {
-    let scalar_type_prec = |scalar_type: &&ScalarType| match scalar_type {
-        ScalarType::Null => 0,
-        ScalarType::Int32 => 1,
-        ScalarType::Int64 => 2,
-        ScalarType::Decimal(_, _) => 3,
-        ScalarType::Float32 => 4,
-        ScalarType::Float64 => 5,
-        _ => 6,
-    };
-    let nullable = col_typs.iter().any(|typ| typ.nullable);
-    let max = col_typs
-        .iter()
-        .map(|typ| &typ.scalar_type)
-        .max_by_key(scalar_type_prec);
-    Ok(ColumnType::new(max.unwrap().clone()).nullable(nullable))
-}
-
-/// Figure out whether we need to cast a value in order for an operation to succeed
+/// Note that `plan_cast_internal` only understands [`ScalarType`]s. If you need
+/// to cast between SQL [`DataType`]s, see [`Planner::plan_cast`].
 fn plan_cast_internal<C>(
     context: C,
     expr: ScalarExpr,
@@ -2679,19 +2677,52 @@ mod test {
         ColumnType::new(s)
     }
 
+    fn int32() -> (ScalarExpr, ColumnType) {
+        (ScalarExpr::Literal(Datum::Int32(0)), ct(ScalarType::Int32))
+    }
+
+    fn int64() -> (ScalarExpr, ColumnType) {
+        (ScalarExpr::Literal(Datum::Int64(0)), ct(ScalarType::Int64))
+    }
+
+    fn float32() -> (ScalarExpr, ColumnType) {
+        (
+            ScalarExpr::Literal(Datum::Float32(0.0.into())),
+            ct(ScalarType::Float32),
+        )
+    }
+
+    fn float64() -> (ScalarExpr, ColumnType) {
+        (
+            ScalarExpr::Literal(Datum::Float64(0.0.into())),
+            ct(ScalarType::Float64),
+        )
+    }
+
+    fn decimal(precision: u8, scale: u8) -> (ScalarExpr, ColumnType) {
+        (
+            ScalarExpr::Literal(Datum::from(0 as i128)),
+            ct(ScalarType::Decimal(precision, scale)),
+        )
+    }
+
     #[test]
-    fn find_output_type_chooses_higher_precision() {
+    fn test_type_coalescing() -> Result<(), failure::Error> {
         use ScalarType::*;
-        let col_expected = &[
-            ([&ct(Int32), &ct(Int64)], ct(Int64)),
-            ([&ct(Int64), &ct(Int32)], ct(Int64)),
-            ([&ct(Int64), &ct(Decimal(10, 10))], ct(Decimal(10, 10))),
-            ([&ct(Int64), &ct(Float32)], ct(Float32)),
-            ([&ct(Float32), &ct(Float64)], ct(Float64)),
+
+        let test_cases = vec![
+            (vec![int32(), int64()], ct(Int64)),
+            (vec![int64(), int32()], ct(Int64)),
+            (vec![int64(), decimal(10, 10)], ct(Decimal(10, 10))),
+            (vec![int64(), float32()], ct(Float32)),
+            (vec![float32(), float64()], ct(Float64)),
         ];
 
-        for (cols, expected) in col_expected {
-            assert_eq!(find_output_type(cols).unwrap(), *expected);
+        for (exprs, expected) in test_cases {
+            let (_exprs, col_type) = try_coalesce_types(exprs, "test_type_coalescing")?;
+            assert_eq!(col_type, expected);
         }
+
+        Ok(())
     }
 }
