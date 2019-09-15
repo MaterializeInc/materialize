@@ -1735,10 +1735,10 @@ impl Planner {
                     (BinaryFunc::AddFloat64, ScalarType::Float64)
                 }
                 (ScalarType::Date, ScalarType::Interval) => {
-                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Timestamp)
                 }
                 (ScalarType::Timestamp, ScalarType::Interval) => {
-                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Date)
+                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Timestamp)
                 }
                 _ => bail!(
                     "no overload for {:?} + {:?}",
