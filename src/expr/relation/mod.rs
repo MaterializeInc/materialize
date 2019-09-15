@@ -454,8 +454,7 @@ impl RelationExpr {
     pub fn is_empty(&self) -> bool {
         if let RelationExpr::Constant { rows, .. } = self {
             rows.is_empty()
-        }
-        else {
+        } else {
             false
         }
     }
@@ -802,10 +801,9 @@ impl RelationExpr {
                     //         .collect(),
                     // )
                     .product(RelationExpr::constant(
-                        vec![default.iter().map(|(datum,_)| datum.clone()).collect()],
-                        RelationType::new(default.iter().map(|(_,typ)| typ.clone()).collect()),
-                    ))
-                )
+                        vec![default.iter().map(|(datum, _)| datum.clone()).collect()],
+                        RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
+                    )))
             })
             .unwrap()
     }

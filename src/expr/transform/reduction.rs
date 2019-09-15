@@ -33,22 +33,22 @@ impl FoldConstants {
                 }
 
                 if let RelationExpr::Constant { rows, .. } = &**input {
-                    let new_rows = rows.iter().cloned().map(|mut row| {
-                        let len = row.len();
-                        for (func,_typ) in scalars.iter() {
-                            let result = func.eval(&row[..len]);
-                            row.push(result);
-                        }
-                        row
-                    })
-                    .collect();
+                    let new_rows = rows
+                        .iter()
+                        .cloned()
+                        .map(|mut row| {
+                            let len = row.len();
+                            for (func, _typ) in scalars.iter() {
+                                let result = func.eval(&row[..len]);
+                                row.push(result);
+                            }
+                            row
+                        })
+                        .collect();
                     *relation = RelationExpr::constant(new_rows, _metadata.clone());
                 }
             }
-            RelationExpr::Filter {
-                input,
-                predicates,
-            } => {
+            RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
                     predicate.reduce();
                 }
@@ -60,23 +60,19 @@ impl FoldConstants {
                         || p == &ScalarExpr::Literal(Datum::Null)
                 }) {
                     relation.take();
-                }
-                else if let RelationExpr::Constant { rows, .. } = &**input {
-                    let new_rows =
-                    rows.iter()
+                } else if let RelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = rows
+                        .iter()
                         .cloned()
-                        .filter(|row| {
-                            predicates.iter().all(|p| p.eval(&row[..]) == Datum::True)
-                        })
+                        .filter(|row| predicates.iter().all(|p| p.eval(&row[..]) == Datum::True))
                         .collect();
                     *relation = RelationExpr::constant(new_rows, _metadata.clone());
                 }
-
             }
             RelationExpr::Project { input, outputs } => {
                 if let RelationExpr::Constant { rows, .. } = &**input {
-                    let new_rows =
-                    rows.iter()
+                    let new_rows = rows
+                        .iter()
                         .map(|row| outputs.iter().map(|i| row[*i].clone()).collect())
                         .collect();
                     *relation = RelationExpr::constant(new_rows, _metadata.clone());
@@ -87,14 +83,18 @@ impl FoldConstants {
                     relation.take();
                 }
             }
-            RelationExpr::Union { left, right } => {
-                match (left.is_empty(), right.is_empty()) {
-                    (true, true) => { relation.take(); }
-                    (true, false) => { *relation = right.take(); }
-                    (false, true) => { *relation = left.take(); }
-                    _ => { }
+            RelationExpr::Union { left, right } => match (left.is_empty(), right.is_empty()) {
+                (true, true) => {
+                    relation.take();
                 }
-            }
+                (true, false) => {
+                    *relation = right.take();
+                }
+                (false, true) => {
+                    *relation = left.take();
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
