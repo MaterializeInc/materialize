@@ -1599,21 +1599,21 @@ impl Planner {
         left: &'a Expr,
         right: &'a Expr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (mut lexpr, lty) = self.plan_expr(ctx, left)?;
-        let (mut rexpr, rty) = self.plan_expr(ctx, right)?;
+        let (mut lexpr, ltype) = self.plan_expr(ctx, left)?;
+        let (mut rexpr, rtype) = self.plan_expr(ctx, right)?;
 
-        let both_decimals = match (&lty.scalar_type, &rty.scalar_type) {
+        let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
             (ScalarType::Decimal(_, _), ScalarType::Decimal(_, _)) => true,
             _ => false,
         };
 
-        let (mut ltype, mut rtype, timelike) = match (&lty.scalar_type, &rty.scalar_type) {
-            (ScalarType::Date, ScalarType::Interval) => (lty, rty, true),
-            (ScalarType::Timestamp, ScalarType::Interval) => (lty, rty, true),
+        let (mut ltype, mut rtype, timelike) = match (&ltype.scalar_type, &rtype.scalar_type) {
+            (ScalarType::Date, ScalarType::Interval) => (ltype, rtype, true),
+            (ScalarType::Timestamp, ScalarType::Interval) => (ltype, rtype, true),
             // for intervals on the left, flip them around
-            (ScalarType::Interval, ScalarType::Date) => (rty, lty, true),
-            (ScalarType::Interval, ScalarType::Timestamp) => (rty, lty, true),
-            (_, _) => (lty, rty, false),
+            (ScalarType::Interval, ScalarType::Date) => (rtype, ltype, true),
+            (ScalarType::Interval, ScalarType::Timestamp) => (rtype, ltype, true),
+            (_, _) => (ltype, rtype, false),
         };
 
         let is_cmp = op == &BinaryOperator::Lt
@@ -1647,6 +1647,17 @@ impl Planner {
             lexpr = exprs.pop().unwrap();
             rtype = typ.clone();
             ltype = typ;
+        } else if is_arithmetic {
+            match (&ltype.scalar_type, &rtype.scalar_type) {
+                (ScalarType::Date, ScalarType::Interval) => {
+                    let ctx = op.to_string();
+                    let (expr, typ) =
+                        plan_cast_internal(&ctx, lexpr, &ltype, ScalarType::Timestamp)?;
+                    lexpr = expr;
+                    ltype = typ;
+                }
+                _ => (),
+            }
         }
 
         // Arithmetic operations follow Snowflake's rules for precision/scale
@@ -1733,11 +1744,8 @@ impl Planner {
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::AddFloat64, ScalarType::Float64)
                 }
-                (ScalarType::Date, ScalarType::Interval) => {
-                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Timestamp)
-                }
                 (ScalarType::Timestamp, ScalarType::Interval) => {
-                    (BinaryFunc::AddTimelikeWithInterval, ScalarType::Timestamp)
+                    (BinaryFunc::AddTimestampInterval, ScalarType::Timestamp)
                 }
                 _ => bail!(
                     "no overload for {:?} + {:?}",
@@ -1754,11 +1762,8 @@ impl Planner {
                 (ScalarType::Float64, ScalarType::Float64) => {
                     (BinaryFunc::SubFloat64, ScalarType::Float64)
                 }
-                (ScalarType::Date, ScalarType::Interval) => {
-                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
-                }
                 (ScalarType::Timestamp, ScalarType::Interval) => {
-                    (BinaryFunc::SubTimelikeWithInterval, ScalarType::Timestamp)
+                    (BinaryFunc::SubTimestampInterval, ScalarType::Timestamp)
                 }
                 _ => bail!(
                     "no overload for {:?} - {:?}",
@@ -2176,7 +2181,9 @@ where
         ScalarType::Decimal(_, _) => 3,
         ScalarType::Float32 => 4,
         ScalarType::Float64 => 5,
-        _ => 6,
+        ScalarType::Date => 6,
+        ScalarType::Timestamp => 7,
+        _ => 8,
     };
     let max_scalar_type = exprs
         .iter()
@@ -2245,6 +2252,7 @@ where
                 .call_binary(factor, BinaryFunc::DivFloat64)
         }
         (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
+        (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
         (Null, _) => expr,
         (from, to) if from == to => expr,
         (from, to) => {
