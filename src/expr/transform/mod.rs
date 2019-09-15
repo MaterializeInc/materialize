@@ -35,7 +35,7 @@ impl Transform for Fixpoint {
     fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         for _ in 0..100 {
             let original = relation.clone();
-            for transform in &self.transforms {
+            for transform in self.transforms.iter() {
                 transform.transform(relation, &relation.typ());
             }
             if *relation == original {
@@ -77,12 +77,14 @@ impl Default for Optimizer {
             Box::new(crate::transform::distinct_union::DistinctUnion),
             Box::new(crate::transform::Fixpoint {
                 transforms: vec![
+                    Box::new(crate::transform::reduction::FoldConstants),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),
                     Box::new(crate::transform::fusion::project::Project),
                     Box::new(crate::transform::empty_map::EmptyMap),
                     Box::new(crate::transform::join_elision::JoinElision),
+                    Box::new(crate::transform::inline_let::InlineLet),
                 ],
             }),
             Box::new(crate::transform::join_order::JoinOrder),

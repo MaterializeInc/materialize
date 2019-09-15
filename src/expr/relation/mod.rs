@@ -447,6 +447,19 @@ impl RelationExpr {
         }
     }
 
+    /// Indicates if this is a constant empty collection.
+    ///
+    /// A false value does not mean the collection is known to be non-empty,
+    /// only that we cannot currently determine that it is statically empty.
+    pub fn is_empty(&self) -> bool {
+        if let RelationExpr::Constant { rows, .. } = self {
+            rows.is_empty()
+        }
+        else {
+            false
+        }
+    }
+
     /// Appends unbound names on which this expression depends.
     ///
     /// This method is complicated only by the need to handle potential shadowing of let bindings,
