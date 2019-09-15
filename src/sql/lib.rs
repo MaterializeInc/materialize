@@ -1865,8 +1865,10 @@ impl Planner {
                             expr: Box::new(expr),
                         };
                     }
-                    let typ = ColumnType::new(ScalarType::Bool)
-                        .nullable(ltype.nullable || rtype.nullable);
+                    // `BinaryFunc::MatchRegexp` returns `NULL` if the like
+                    // pattern is invalid. Ideally this would return an error
+                    // instead, but we don't currently support runtime errors.
+                    let typ = ColumnType::new(ScalarType::Bool).nullable(true);
                     return Ok((expr, typ));
                 }
             }
