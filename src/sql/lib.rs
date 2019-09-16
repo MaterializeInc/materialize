@@ -1600,157 +1600,183 @@ impl Planner {
         left: &'a Expr,
         right: &'a Expr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        use BinaryOperator::*;
+        match op {
+            And => self.plan_boolean_op(ctx, BooleanOp::And, left, right),
+            Or => self.plan_boolean_op(ctx, BooleanOp::Or, left, right),
+
+            Plus => self.plan_arithmetic_op(ctx, ArithmeticOp::Plus, left, right),
+            Minus => self.plan_arithmetic_op(ctx, ArithmeticOp::Minus, left, right),
+            Multiply => self.plan_arithmetic_op(ctx, ArithmeticOp::Multiply, left, right),
+            Divide => self.plan_arithmetic_op(ctx, ArithmeticOp::Divide, left, right),
+            Modulus => self.plan_arithmetic_op(ctx, ArithmeticOp::Modulo, left, right),
+
+            Lt => self.plan_comparison_op(ctx, ComparisonOp::Lt, left, right),
+            LtEq => self.plan_comparison_op(ctx, ComparisonOp::LtEq, left, right),
+            Gt => self.plan_comparison_op(ctx, ComparisonOp::Gt, left, right),
+            GtEq => self.plan_comparison_op(ctx, ComparisonOp::GtEq, left, right),
+            Eq => self.plan_comparison_op(ctx, ComparisonOp::Eq, left, right),
+            NotEq => self.plan_comparison_op(ctx, ComparisonOp::NotEq, left, right),
+
+            Like => self.plan_like(ctx, left, right, false),
+            NotLike => self.plan_like(ctx, left, right, true),
+        }
+    }
+
+    fn plan_boolean_op<'a>(
+        &self,
+        ctx: &ExprContext,
+        op: BooleanOp,
+        left: &'a Expr,
+        right: &'a Expr,
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        let (lexpr, ltype) = self.plan_expr(ctx, left)?;
+        let (rexpr, rtype) = self.plan_expr(ctx, right)?;
+
+        if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Null {
+            bail!(
+                "Cannot apply operator {:?} to non-boolean type {:?}",
+                op,
+                ltype.scalar_type
+            )
+        }
+        if rtype.scalar_type != ScalarType::Bool && rtype.scalar_type != ScalarType::Null {
+            bail!(
+                "Cannot apply operator {:?} to non-boolean type {:?}",
+                op,
+                rtype.scalar_type
+            )
+        }
+        let func = match op {
+            BooleanOp::And => BinaryFunc::And,
+            BooleanOp::Or => BinaryFunc::Or,
+        };
+        let expr = lexpr.call_binary(rexpr, func);
+        let typ = ColumnType::new(ScalarType::Bool).nullable(ltype.nullable || rtype.nullable);
+        Ok((expr, typ))
+    }
+
+    fn plan_arithmetic_op<'a>(
+        &self,
+        ctx: &ExprContext,
+        op: ArithmeticOp,
+        left: &'a Expr,
+        right: &'a Expr,
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        use ArithmeticOp::*;
+        use BinaryFunc::*;
+        use ScalarType::*;
+
+        // Step 1. Plan inner expressions.
         let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
         let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
 
+        // Step 2. Infer whether any implicit type coercions are required.
         let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
-            (ScalarType::Decimal(_, _), ScalarType::Decimal(_, _)) => true,
+            (Decimal(_, _), Decimal(_, _)) => true,
             _ => false,
         };
-
         let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
-            (ScalarType::Date, ScalarType::Interval)
-            | (ScalarType::Timestamp, ScalarType::Interval)
-            | (ScalarType::Interval, ScalarType::Date)
-            | (ScalarType::Interval, ScalarType::Timestamp) => true,
+            (Date, Interval) | (Timestamp, Interval) | (Interval, Date) | (Interval, Timestamp) => {
+                true
+            }
             _ => false,
         };
-
-        let is_cmp = op == &BinaryOperator::Lt
-            || op == &BinaryOperator::LtEq
-            || op == &BinaryOperator::Gt
-            || op == &BinaryOperator::GtEq
-            || op == &BinaryOperator::Eq
-            || op == &BinaryOperator::NotEq;
-
-        let is_arithmetic = op == &BinaryOperator::Plus
-            || op == &BinaryOperator::Minus
-            || op == &BinaryOperator::Multiply
-            || op == &BinaryOperator::Divide
-            || op == &BinaryOperator::Modulus;
-
-        // For arithmetic there are two type categories where we skip coalescing:
-        //
-        // * both inputs are already decimals: it could result in a rescale
-        //   if the decimals have different precisions, because we tightly
-        //   control the rescale when planning the arithmetic operation (below).
-        //   E.g., decimal multiplication does not need to rescale its inputs,
-        //   even when the inputs have different scales.
-        // * inputs are timelike: math is non commutative, there are very
-        //   specific rules about what makes sense, defined in the specific
-        //   comparisons below
-        let ctx = op.to_string();
-        if is_cmp || (is_arithmetic && !(both_decimals || timelike_and_interval)) {
-            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
+        if both_decimals {
+            // When both inputs are already decimals, we skip coalescing, which
+            // could result in a rescale if the decimals have different
+            // precisions, because we tightly control the rescale when planning
+            // the arithmetic operation (below). E.g., decimal multiplication
+            // does not need to rescale its inputs, even when the inputs have
+            // different scales.
+        } else if timelike_and_interval {
+            // If the inputs are a timelike and an interval, we skip coalescing,
+            // because adding and subtracting intervals and timelikes is well
+            // defined. We will, however, promote any date inputs to timestamps.
+            // Adding an
+            if let Date = &ltype.scalar_type {
+                let (expr, typ) = plan_cast_internal(&op, lexpr, &ltype, Timestamp)?;
+                lexpr = expr;
+                ltype = typ;
+            }
+            if let Date = &rtype.scalar_type {
+                let (expr, typ) = plan_cast_internal(&op, rexpr, &rtype, Timestamp)?;
+                rexpr = expr;
+                rtype = typ;
+            }
+        } else {
+            // Otherwise, "coalesce" types by finding a common type that can
+            // represent both inputs.
+            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &op)?;
             assert_eq!(exprs.len(), 2);
             rexpr = exprs.pop().unwrap();
             lexpr = exprs.pop().unwrap();
             rtype = typ.clone();
             ltype = typ;
-        } else if is_arithmetic && timelike_and_interval {
-            if let ScalarType::Date = &ltype.scalar_type {
-                let (expr, typ) = plan_cast_internal(&ctx, lexpr, &ltype, ScalarType::Timestamp)?;
-                lexpr = expr;
-                ltype = typ;
-            }
-            if let ScalarType::Date = &rtype.scalar_type {
-                let (expr, typ) = plan_cast_internal(&ctx, rexpr, &rtype, ScalarType::Timestamp)?;
-                rexpr = expr;
-                rtype = typ;
-            }
         }
 
-        // Arithmetic operations follow Snowflake's rules for precision/scale
+        // Step 3a. Plan the arithmetic operation for decimals.
+        //
+        // Decimal arithmetic requires special support from the planner, because
+        // the precision and scale of the decimal is erased in the dataflow
+        // layer. Operations follow Snowflake's rules for precision/scale
         // conversions. [0]
         //
         // [0]: https://docs.snowflake.net/manuals/sql-reference/operators-arithmetic.html
         match (&op, &ltype.scalar_type, &rtype.scalar_type) {
-            (BinaryOperator::Plus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2))
-            | (BinaryOperator::Minus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2))
-            | (BinaryOperator::Modulus, ScalarType::Decimal(p1, s1), ScalarType::Decimal(p2, s2)) =>
-            {
+            (Plus, Decimal(p1, s1), Decimal(p2, s2))
+            | (Minus, Decimal(p1, s1), Decimal(p2, s2))
+            | (Modulo, Decimal(p1, s1), Decimal(p2, s2)) => {
                 let p = cmp::max(p1, p2) + 1;
                 let so = cmp::max(s1, s2);
                 let lexpr = rescale_decimal(lexpr, *s1, *so);
                 let rexpr = rescale_decimal(rexpr, *s2, *so);
-                let func = if op == &BinaryOperator::Plus {
-                    BinaryFunc::AddDecimal
-                } else if op == &BinaryOperator::Minus {
-                    BinaryFunc::SubDecimal
-                } else {
-                    BinaryFunc::ModDecimal
+                let func = match op {
+                    Plus => AddDecimal,
+                    Minus => SubDecimal,
+                    Modulo => ModDecimal,
+                    _ => unreachable!(),
                 };
                 let expr = lexpr.call_binary(rexpr, func);
-                let typ = ColumnType::new(ScalarType::Decimal(p, *so))
-                    .nullable(ltype.nullable || rtype.nullable);
+                let typ =
+                    ColumnType::new(Decimal(p, *so)).nullable(ltype.nullable || rtype.nullable);
                 return Ok((expr, typ));
             }
-            (
-                BinaryOperator::Multiply,
-                ScalarType::Decimal(p1, s1),
-                ScalarType::Decimal(p2, s2),
-            ) => {
+            (Multiply, Decimal(p1, s1), Decimal(p2, s2)) => {
                 let so = cmp::max(cmp::max(cmp::min(s1 + s2, 12), *s1), *s2);
                 let si = s1 + s2;
-                let expr = lexpr.call_binary(rexpr, BinaryFunc::MulDecimal);
+                let expr = lexpr.call_binary(rexpr, MulDecimal);
                 let expr = rescale_decimal(expr, si, so);
                 let p = (p1 - s1) + (p2 - s2) + so;
-                let typ = ColumnType::new(ScalarType::Decimal(p, so))
-                    .nullable(ltype.nullable || rtype.nullable);
+                let typ =
+                    ColumnType::new(Decimal(p, so)).nullable(ltype.nullable || rtype.nullable);
                 return Ok((expr, typ));
             }
-            (BinaryOperator::Divide, ScalarType::Decimal(p1, s1), ScalarType::Decimal(_, s2)) => {
+            (Divide, Decimal(p1, s1), Decimal(_, s2)) => {
                 let s = cmp::max(cmp::min(12, s1 + 6), *s1);
                 let si = cmp::max(s + 1, *s2);
                 lexpr = rescale_decimal(lexpr, *s1, si);
-                let expr = lexpr.call_binary(rexpr, BinaryFunc::DivDecimal);
+                let expr = lexpr.call_binary(rexpr, DivDecimal);
                 let expr = rescale_decimal(expr, si - *s2, s);
                 let p = (p1 - s1) + s2 + s;
-                let typ = ColumnType::new(ScalarType::Decimal(p, s)).nullable(true);
+                let typ = ColumnType::new(Decimal(p, s)).nullable(true);
                 return Ok((expr, typ));
             }
             _ => (),
         }
 
+        // Step 3b. Plan the arithmetic operation for all other types.
         let (func, scalar_type) = match op {
-            BinaryOperator::And | BinaryOperator::Or => {
-                if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Null {
-                    bail!(
-                        "Cannot apply operator {:?} to non-boolean type {:?}",
-                        op,
-                        ltype.scalar_type
-                    )
-                }
-                if rtype.scalar_type != ScalarType::Bool && rtype.scalar_type != ScalarType::Null {
-                    bail!(
-                        "Cannot apply operator {:?} to non-boolean type {:?}",
-                        op,
-                        rtype.scalar_type
-                    )
-                }
-                let func = match op {
-                    BinaryOperator::And => BinaryFunc::And,
-                    BinaryOperator::Or => BinaryFunc::Or,
-                    _ => unreachable!(),
-                };
-                (func, ScalarType::Bool)
-            }
-            BinaryOperator::Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::AddInt32, ScalarType::Int32),
-                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::AddInt64, ScalarType::Int64),
-                (ScalarType::Float32, ScalarType::Float32) => {
-                    (BinaryFunc::AddFloat32, ScalarType::Float32)
-                }
-                (ScalarType::Float64, ScalarType::Float64) => {
-                    (BinaryFunc::AddFloat64, ScalarType::Float64)
-                }
-                (ScalarType::Timestamp, ScalarType::Interval) => {
-                    (BinaryFunc::AddTimestampInterval, ScalarType::Timestamp)
-                }
-                (ScalarType::Interval, ScalarType::Timestamp) => {
+            Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Int32, Int32) => (AddInt32, Int32),
+                (Int64, Int64) => (AddInt64, Int64),
+                (Float32, Float32) => (AddFloat32, Float32),
+                (Float64, Float64) => (AddFloat64, Float64),
+                (Timestamp, Interval) => (AddTimestampInterval, Timestamp),
+                (Interval, Timestamp) => {
                     mem::swap(&mut lexpr, &mut rexpr);
                     mem::swap(&mut ltype, &mut rtype);
-                    (BinaryFunc::AddTimestampInterval, ScalarType::Timestamp)
+                    (AddTimestampInterval, Timestamp)
                 }
                 _ => bail!(
                     "no overload for {:?} + {:?}",
@@ -1758,141 +1784,141 @@ impl Planner {
                     rtype.scalar_type
                 ),
             },
-            BinaryOperator::Minus => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::SubInt32, ScalarType::Int32),
-                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::SubInt64, ScalarType::Int64),
-                (ScalarType::Float32, ScalarType::Float32) => {
-                    (BinaryFunc::SubFloat32, ScalarType::Float32)
-                }
-                (ScalarType::Float64, ScalarType::Float64) => {
-                    (BinaryFunc::SubFloat64, ScalarType::Float64)
-                }
-                (ScalarType::Timestamp, ScalarType::Interval) => {
-                    (BinaryFunc::SubTimestampInterval, ScalarType::Timestamp)
-                }
+            Minus => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Int32, Int32) => (SubInt32, Int32),
+                (Int64, Int64) => (SubInt64, Int64),
+                (Float32, Float32) => (SubFloat32, Float32),
+                (Float64, Float64) => (SubFloat64, Float64),
+                (Timestamp, Interval) => (SubTimestampInterval, Timestamp),
                 _ => bail!(
                     "no overload for {:?} - {:?}",
                     ltype.scalar_type,
                     rtype.scalar_type
                 ),
             },
-            BinaryOperator::Multiply => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::MulInt32, ScalarType::Int32),
-                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::MulInt64, ScalarType::Int64),
-                (ScalarType::Float32, ScalarType::Float32) => {
-                    (BinaryFunc::MulFloat32, ScalarType::Float32)
-                }
-                (ScalarType::Float64, ScalarType::Float64) => {
-                    (BinaryFunc::MulFloat64, ScalarType::Float64)
-                }
+            Multiply => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Int32, Int32) => (MulInt32, Int32),
+                (Int64, Int64) => (MulInt64, Int64),
+                (Float32, Float32) => (MulFloat32, Float32),
+                (Float64, Float64) => (MulFloat64, Float64),
                 _ => bail!(
                     "no overload for {:?} * {:?}",
                     ltype.scalar_type,
                     rtype.scalar_type
                 ),
             },
-            BinaryOperator::Divide => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::DivInt32, ScalarType::Int32),
-                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::DivInt64, ScalarType::Int64),
-                (ScalarType::Float32, ScalarType::Float32) => {
-                    (BinaryFunc::DivFloat32, ScalarType::Float32)
-                }
-                (ScalarType::Float64, ScalarType::Float64) => {
-                    (BinaryFunc::DivFloat64, ScalarType::Float64)
-                }
+            Divide => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Int32, Int32) => (DivInt32, Int32),
+                (Int64, Int64) => (DivInt64, Int64),
+                (Float32, Float32) => (DivFloat32, Float32),
+                (Float64, Float64) => (DivFloat64, Float64),
                 _ => bail!(
                     "no overload for {:?} / {:?}",
                     ltype.scalar_type,
                     rtype.scalar_type
                 ),
             },
-            BinaryOperator::Modulus => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (ScalarType::Int32, ScalarType::Int32) => (BinaryFunc::ModInt32, ScalarType::Int32),
-                (ScalarType::Int64, ScalarType::Int64) => (BinaryFunc::ModInt64, ScalarType::Int64),
-                (ScalarType::Float32, ScalarType::Float32) => {
-                    (BinaryFunc::ModFloat32, ScalarType::Float32)
-                }
-                (ScalarType::Float64, ScalarType::Float64) => {
-                    (BinaryFunc::ModFloat64, ScalarType::Float64)
-                }
+            Modulo => match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Int32, Int32) => (ModInt32, Int32),
+                (Int64, Int64) => (ModInt64, Int64),
+                (Float32, Float32) => (ModFloat32, Float32),
+                (Float64, Float64) => (ModFloat64, Float64),
                 _ => bail!(
                     "no overload for {:?} % {:?}",
                     ltype.scalar_type,
                     rtype.scalar_type
                 ),
             },
-            BinaryOperator::Lt
-            | BinaryOperator::LtEq
-            | BinaryOperator::Gt
-            | BinaryOperator::GtEq
-            | BinaryOperator::Eq
-            | BinaryOperator::NotEq => {
-                if ltype.scalar_type != rtype.scalar_type
-                    && ltype.scalar_type != ScalarType::Null
-                    && rtype.scalar_type != ScalarType::Null
-                {
-                    bail!(
-                        "{:?} and {:?} are not comparable",
-                        ltype.scalar_type,
-                        rtype.scalar_type
-                    )
-                }
-                let func = match op {
-                    BinaryOperator::Lt => BinaryFunc::Lt,
-                    BinaryOperator::LtEq => BinaryFunc::Lte,
-                    BinaryOperator::Gt => BinaryFunc::Gt,
-                    BinaryOperator::GtEq => BinaryFunc::Gte,
-                    BinaryOperator::Eq => BinaryFunc::Eq,
-                    BinaryOperator::NotEq => BinaryFunc::NotEq,
-                    _ => unreachable!(),
-                };
-                (func, ScalarType::Bool)
-            }
-            BinaryOperator::Like | BinaryOperator::NotLike => {
-                if (ltype.scalar_type != ScalarType::String
-                    && ltype.scalar_type != ScalarType::Null)
-                    || (rtype.scalar_type != ScalarType::String
-                        && rtype.scalar_type != ScalarType::Null)
-                {
-                    bail!(
-                        "LIKE operator requires two string operators, found: {:?} and {:?}",
-                        ltype,
-                        rtype
-                    );
-                } else {
-                    let mut expr = ScalarExpr::CallBinary {
-                        func: BinaryFunc::MatchRegex,
-                        expr1: Box::new(lexpr),
-                        expr2: Box::new(ScalarExpr::CallUnary {
-                            func: UnaryFunc::BuildLikeRegex,
-                            expr: Box::new(rexpr),
-                        }),
-                    };
-                    if let BinaryOperator::NotLike = op {
-                        expr = ScalarExpr::CallUnary {
-                            func: UnaryFunc::Not,
-                            expr: Box::new(expr),
-                        };
-                    }
-                    // `BinaryFunc::MatchRegexp` returns `NULL` if the like
-                    // pattern is invalid. Ideally this would return an error
-                    // instead, but we don't currently support runtime errors.
-                    let typ = ColumnType::new(ScalarType::Bool).nullable(true);
-                    return Ok((expr, typ));
-                }
-            }
         };
+        let expr = lexpr.call_binary(rexpr, func);
         let is_integer_div = match &func {
-            BinaryFunc::DivInt32 | BinaryFunc::DivInt64 => true,
+            DivInt32 | DivInt64 => true,
             _ => false,
-        };
-        let expr = ScalarExpr::CallBinary {
-            func,
-            expr1: Box::new(lexpr),
-            expr2: Box::new(rexpr),
         };
         let typ = ColumnType::new(scalar_type)
             .nullable(ltype.nullable || rtype.nullable || is_integer_div);
+        Ok((expr, typ))
+    }
+
+    fn plan_comparison_op<'a>(
+        &self,
+        ctx: &ExprContext,
+        op: ComparisonOp,
+        left: &'a Expr,
+        right: &'a Expr,
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
+        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
+
+        let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &op)?;
+        assert_eq!(exprs.len(), 2);
+        rexpr = exprs.pop().unwrap();
+        lexpr = exprs.pop().unwrap();
+        rtype = typ.clone();
+        ltype = typ;
+
+        if ltype.scalar_type != rtype.scalar_type
+            && ltype.scalar_type != ScalarType::Null
+            && rtype.scalar_type != ScalarType::Null
+        {
+            bail!(
+                "{:?} and {:?} are not comparable",
+                ltype.scalar_type,
+                rtype.scalar_type
+            )
+        }
+
+        let func = match op {
+            ComparisonOp::Lt => BinaryFunc::Lt,
+            ComparisonOp::LtEq => BinaryFunc::Lte,
+            ComparisonOp::Gt => BinaryFunc::Gt,
+            ComparisonOp::GtEq => BinaryFunc::Gte,
+            ComparisonOp::Eq => BinaryFunc::Eq,
+            ComparisonOp::NotEq => BinaryFunc::NotEq,
+        };
+        let expr = lexpr.call_binary(rexpr, func);
+        let typ = ColumnType::new(ScalarType::Bool).nullable(ltype.nullable || rtype.nullable);
+        Ok((expr, typ))
+    }
+
+    fn plan_like<'a>(
+        &self,
+        ctx: &ExprContext,
+        left: &'a Expr,
+        right: &'a Expr,
+        negate: bool,
+    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+        let (lexpr, ltype) = self.plan_expr(ctx, left)?;
+        let (rexpr, rtype) = self.plan_expr(ctx, right)?;
+
+        if (ltype.scalar_type != ScalarType::String && ltype.scalar_type != ScalarType::Null)
+            || (rtype.scalar_type != ScalarType::String && rtype.scalar_type != ScalarType::Null)
+        {
+            bail!(
+                "LIKE operator requires two string operators, found: {:?} and {:?}",
+                ltype,
+                rtype
+            );
+        }
+
+        let mut expr = ScalarExpr::CallBinary {
+            func: BinaryFunc::MatchRegex,
+            expr1: Box::new(lexpr),
+            expr2: Box::new(ScalarExpr::CallUnary {
+                func: UnaryFunc::BuildLikeRegex,
+                expr: Box::new(rexpr),
+            }),
+        };
+        if negate {
+            expr = ScalarExpr::CallUnary {
+                func: UnaryFunc::Not,
+                expr: Box::new(expr),
+            };
+        }
+        // `BinaryFunc::MatchRegexp` returns `NULL` if the like
+        // pattern is invalid. Ideally this would return an error
+        // instead, but we don't currently support runtime errors.
+        let typ = ColumnType::new(ScalarType::Bool).nullable(true);
         Ok((expr, typ))
     }
 
@@ -2120,6 +2146,56 @@ impl Planner {
         let expr = ScalarExpr::Literal(datum);
         let typ = ColumnType::new(scalar_type).nullable(nullable);
         Ok((expr, typ))
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum BooleanOp {
+    And,
+    Or,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum ComparisonOp {
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+    Eq,
+    NotEq,
+}
+
+impl fmt::Display for ComparisonOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ComparisonOp::Lt => f.write_str("<"),
+            ComparisonOp::LtEq => f.write_str("<="),
+            ComparisonOp::Gt => f.write_str(">"),
+            ComparisonOp::GtEq => f.write_str(">="),
+            ComparisonOp::Eq => f.write_str("="),
+            ComparisonOp::NotEq => f.write_str("<>"),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum ArithmeticOp {
+    Plus,
+    Minus,
+    Multiply,
+    Divide,
+    Modulo,
+}
+
+impl fmt::Display for ArithmeticOp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ArithmeticOp::Plus => f.write_str("+"),
+            ArithmeticOp::Minus => f.write_str("-"),
+            ArithmeticOp::Multiply => f.write_str("*"),
+            ArithmeticOp::Divide => f.write_str("/"),
+            ArithmeticOp::Modulo => f.write_str("%"),
+        }
     }
 }
 
