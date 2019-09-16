@@ -258,6 +258,24 @@ impl PredicatePushdown {
                             .collect(),
                     );
                 }
+                RelationExpr::Map { input, scalars } => {
+                    let input_arity = input.arity();
+                    let predicates = predicates
+                        .drain(..)
+                        .map(|mut predicate| {
+                            predicate.visit_mut(&mut |e| {
+                                if let ScalarExpr::Column(i) = e {
+                                    if *i >= input_arity {
+                                        *e = scalars[*i - input_arity].0.clone();
+                                    }
+                                }
+                            });
+                            predicate
+                        })
+                        .collect();
+                    let scalars = std::mem::replace(scalars, Vec::new());
+                    *relation = input.take().filter(predicates).map(scalars);
+                }
                 RelationExpr::Union { left, right } => {
                     let left = left.take().filter(predicates.clone());
                     let right = right.take().filter(predicates.clone());
