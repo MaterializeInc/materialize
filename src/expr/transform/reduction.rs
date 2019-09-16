@@ -27,8 +27,8 @@ impl FoldConstants {
     }
     pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         match relation {
-            RelationExpr::Constant { .. } => { }
-            RelationExpr::Get { .. } => { }
+            RelationExpr::Constant { .. } => {}
+            RelationExpr::Get { .. } => {}
             RelationExpr::Let { .. } => { /*constant prop done in InlineLet*/ }
             RelationExpr::Reduce { .. } => { /*too complicated*/ }
             RelationExpr::TopK { .. } => { /*too complicated*/ }
