@@ -188,6 +188,13 @@ pub fn cast_decimal_to_float64(a: Datum) -> Datum {
     Datum::from(a.unwrap_decimal().into_i128() as f64)
 }
 
+pub fn cast_date_to_timestamp(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
+}
+
 pub fn add_int32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -216,26 +223,23 @@ pub fn add_float64(a: Datum, b: Datum) -> Datum {
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
 }
 
-pub fn add_timelike_with_interval(a: Datum, b: Datum) -> Datum {
+pub fn add_timestamp_interval(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
 
-    let dt = a.unwrap_timestamp_with_promotion();
+    let dt = a.unwrap_timestamp();
     Datum::Timestamp(match b {
-        Datum::Interval(Interval::Months(months)) => add_timelike_months(dt, months),
+        Datum::Interval(Interval::Months(months)) => add_timestamp_months(dt, months),
         Datum::Interval(Interval::Duration {
             is_positive,
             duration,
-        }) => add_timelike_duration(dt, is_positive, duration),
-        _ => panic!(
-            "Tried to do timelike addition on something not timelike: {:?}",
-            b
-        ),
+        }) => add_timestamp_duration(dt, is_positive, duration),
+        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
     })
 }
 
-pub fn sub_timelike_with_interval(a: Datum, b: Datum) -> Datum {
+pub fn sub_timestamp_interval(a: Datum, b: Datum) -> Datum {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
         Datum::Interval(Interval::Duration {
@@ -246,14 +250,14 @@ pub fn sub_timelike_with_interval(a: Datum, b: Datum) -> Datum {
             duration,
         }),
         _ => panic!(
-            "Tried to do timelike subtraction on something not timelike: {:?}",
+            "Tried to do timestamp subtraction with non-interval: {:?}",
             b
         ),
     };
-    add_timelike_with_interval(a, inverse)
+    add_timestamp_interval(a, inverse)
 }
 
-fn add_timelike_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
+fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
     use chrono::{Datelike, Timelike};
     use std::convert::TryInto;
 
@@ -291,7 +295,7 @@ fn add_timelike_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
     new_d.and_hms_nano(dt.hour(), dt.minute(), dt.second(), dt.nanosecond())
 }
 
-fn add_timelike_duration(
+fn add_timestamp_duration(
     dt: NaiveDateTime,
     is_positive: bool,
     duration: std::time::Duration,
@@ -565,13 +569,13 @@ pub enum BinaryFunc {
     AddInt64,
     AddFloat32,
     AddFloat64,
-    AddTimelikeWithInterval,
+    AddTimestampInterval,
     AddDecimal,
     SubInt32,
     SubInt64,
     SubFloat32,
     SubFloat64,
-    SubTimelikeWithInterval,
+    SubTimestampInterval,
     SubDecimal,
     MulInt32,
     MulInt64,
@@ -606,13 +610,13 @@ impl BinaryFunc {
             BinaryFunc::AddInt64 => add_int64,
             BinaryFunc::AddFloat32 => add_float32,
             BinaryFunc::AddFloat64 => add_float64,
-            BinaryFunc::AddTimelikeWithInterval => add_timelike_with_interval,
+            BinaryFunc::AddTimestampInterval => add_timestamp_interval,
             BinaryFunc::AddDecimal => add_decimal,
             BinaryFunc::SubInt32 => sub_int32,
             BinaryFunc::SubInt64 => sub_int64,
             BinaryFunc::SubFloat32 => sub_float32,
             BinaryFunc::SubFloat64 => sub_float64,
-            BinaryFunc::SubTimelikeWithInterval => sub_timelike_with_interval,
+            BinaryFunc::SubTimestampInterval => sub_timestamp_interval,
             BinaryFunc::SubDecimal => sub_decimal,
             BinaryFunc::MulInt32 => mul_int32,
             BinaryFunc::MulInt64 => mul_int64,
@@ -671,6 +675,7 @@ pub enum UnaryFunc {
     CastDecimalToInt64,
     CastDecimalToFloat32,
     CastDecimalToFloat64,
+    CastDateToTimestamp,
     BuildLikeRegex,
 }
 
@@ -702,6 +707,7 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
             UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
             UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
+            UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
             UnaryFunc::BuildLikeRegex => build_like_regex,
         }
     }
@@ -737,19 +743,19 @@ mod test {
     fn add_interval_months() {
         let dt = ym(2000, 1);
 
-        assert_eq!(add_timelike_months(dt, 0), dt);
-        assert_eq!(add_timelike_months(dt, 1), ym(2000, 2));
-        assert_eq!(add_timelike_months(dt, 12), ym(2001, 1));
-        assert_eq!(add_timelike_months(dt, 13), ym(2001, 2));
-        assert_eq!(add_timelike_months(dt, 24), ym(2002, 1));
-        assert_eq!(add_timelike_months(dt, 30), ym(2002, 7));
+        assert_eq!(add_timestamp_months(dt, 0), dt);
+        assert_eq!(add_timestamp_months(dt, 1), ym(2000, 2));
+        assert_eq!(add_timestamp_months(dt, 12), ym(2001, 1));
+        assert_eq!(add_timestamp_months(dt, 13), ym(2001, 2));
+        assert_eq!(add_timestamp_months(dt, 24), ym(2002, 1));
+        assert_eq!(add_timestamp_months(dt, 30), ym(2002, 7));
 
         // and negatives
-        assert_eq!(add_timelike_months(dt, -1), ym(1999, 12));
-        assert_eq!(add_timelike_months(dt, -12), ym(1999, 1));
-        assert_eq!(add_timelike_months(dt, -13), ym(1998, 12));
-        assert_eq!(add_timelike_months(dt, -24), ym(1998, 1));
-        assert_eq!(add_timelike_months(dt, -30), ym(1997, 7));
+        assert_eq!(add_timestamp_months(dt, -1), ym(1999, 12));
+        assert_eq!(add_timestamp_months(dt, -12), ym(1999, 1));
+        assert_eq!(add_timestamp_months(dt, -13), ym(1998, 12));
+        assert_eq!(add_timestamp_months(dt, -24), ym(1998, 1));
+        assert_eq!(add_timestamp_months(dt, -30), ym(1997, 7));
     }
 
     fn ym(year: i32, month: u32) -> NaiveDateTime {

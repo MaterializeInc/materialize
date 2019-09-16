@@ -80,6 +80,12 @@ SELECT DATE '2000-01-01' + INTERVAL '1' MONTH
 ----
 2000-02-01 00:00:00
 
+# Test that DATE + INTERVAL addition works in both orders.
+query T
+SELECT INTERVAL '1' MONTH + DATE '2000-01-01'
+----
+2000-02-01 00:00:00
+
 query T
 SELECT DATE '2000-01-01' + INTERVAL '1' YEAR
 ----
@@ -105,6 +111,9 @@ SELECT DATE '2000-01-01' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
+statement error no overload for interval - date
+SELECT INTERVAL '1' YEAR - DATE '2000-01-01'
+
 # Timestamp arithmetic with month intervals. Should behave the same as DATE.
 
 query T
@@ -117,10 +126,19 @@ SELECT TIMESTAMP '2000-01-01 00:00:00' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
+statement error no overload for interval - timestamp
+SELECT INTERVAL '1' YEAR - TIMESTAMP '2000-01-01 00:00:00'
+
 # Date arithmetic with duration intervals.
 
 query T
 SELECT DATE '2000-01-01' + INTERVAL '7' DAY
+----
+2000-01-08 00:00:00
+
+# Test that DATE + INTERVAL addition works in both orders.
+query T
+SELECT INTERVAL '7' DAY + DATE '2000-01-01'
 ----
 2000-01-08 00:00:00
 

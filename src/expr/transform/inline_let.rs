@@ -42,11 +42,16 @@ impl InlineLet {
                 }
                 _ => (),
             });
-            if num_gets <= 1 {
+            let value_is_get = if let RelationExpr::Get { .. } = &**value {
+                true
+            } else {
+                false
+            };
+            if value_is_get || num_gets <= 1 {
                 // if only used once, just inline it
                 body.visit_mut_pre(&mut |relation| match relation {
                     RelationExpr::Get { name: get_name, .. } if name == get_name => {
-                        *relation = value.take();
+                        *relation = (**value).clone();
                     }
                     _ => (),
                 });

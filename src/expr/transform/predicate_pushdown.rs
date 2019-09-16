@@ -258,6 +258,11 @@ impl PredicatePushdown {
                             .collect(),
                     );
                 }
+                RelationExpr::Union { left, right } => {
+                    let left = left.take().filter(predicates.clone());
+                    let right = right.take().filter(predicates.clone());
+                    *relation = left.union(right);
+                }
                 _ => (),
             }
         }

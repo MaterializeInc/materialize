@@ -234,6 +234,16 @@ impl RelationExpr {
 
     /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
+        for row in rows.iter() {
+            for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
+                assert!(
+                    datum.is_instance_of(column_typ),
+                    "Expected datum of type {:?}, got value {:?}",
+                    column_typ,
+                    datum
+                );
+            }
+        }
         RelationExpr::Constant { rows, typ }
     }
 
@@ -444,6 +454,18 @@ impl RelationExpr {
                 ),
             ],
             variables: vec![],
+        }
+    }
+
+    /// Indicates if this is a constant empty collection.
+    ///
+    /// A false value does not mean the collection is known to be non-empty,
+    /// only that we cannot currently determine that it is statically empty.
+    pub fn is_empty(&self) -> bool {
+        if let RelationExpr::Constant { rows, .. } = self {
+            rows.is_empty()
+        } else {
+            false
         }
     }
 
@@ -782,12 +804,16 @@ impl RelationExpr {
                     .distinct()
                     .negate()
                     .union(keys)
-                    .map(
-                        default
-                            .iter()
-                            .map(|(datum, typ)| (ScalarExpr::Literal(datum.clone()), typ.clone()))
-                            .collect(),
-                    ))
+                    // .map(
+                    //     default
+                    //         .iter()
+                    //         .map(|(datum, typ)| (ScalarExpr::Literal(datum.clone()), typ.clone()))
+                    //         .collect(),
+                    // )
+                    .product(RelationExpr::constant(
+                        vec![default.iter().map(|(datum, _)| datum.clone()).collect()],
+                        RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
+                    )))
             })
             .unwrap()
     }

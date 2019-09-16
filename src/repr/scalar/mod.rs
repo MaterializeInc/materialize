@@ -168,18 +168,6 @@ impl Datum {
         }
     }
 
-    /// Get a NaiveDateTime, if we are a Date convert that into a DateTime
-    pub fn unwrap_timestamp_with_promotion(&self) -> chrono::NaiveDateTime {
-        match self {
-            Datum::Timestamp(ts) => *ts,
-            Datum::Date(d) => d.and_hms(0, 0, 0),
-            _ => panic!(
-                "Datum::unwrap_timestamp_with_promotion called on {:?}",
-                self
-            ),
-        }
-    }
-
     pub fn unwrap_interval_months(&self) -> i64 {
         match self {
             Datum::Interval(Interval::Months(count)) => *count,
