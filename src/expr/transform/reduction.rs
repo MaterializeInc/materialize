@@ -115,7 +115,6 @@ impl FoldConstants {
                 }
                 _ => {}
             },
-            // _ => {}
         }
     }
 }
