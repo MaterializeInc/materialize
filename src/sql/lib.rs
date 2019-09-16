@@ -34,6 +34,7 @@ use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::iter::FromIterator;
+use std::mem;
 use std::net::{SocketAddr, ToSocketAddrs};
 use store::{DataflowStore, RemoveMode};
 use url::Url;
@@ -1599,21 +1600,20 @@ impl Planner {
         left: &'a Expr,
         right: &'a Expr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (mut lexpr, ltype) = self.plan_expr(ctx, left)?;
-        let (mut rexpr, rtype) = self.plan_expr(ctx, right)?;
+        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
+        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
 
         let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
             (ScalarType::Decimal(_, _), ScalarType::Decimal(_, _)) => true,
             _ => false,
         };
 
-        let (mut ltype, mut rtype, timelike) = match (&ltype.scalar_type, &rtype.scalar_type) {
-            (ScalarType::Date, ScalarType::Interval) => (ltype, rtype, true),
-            (ScalarType::Timestamp, ScalarType::Interval) => (ltype, rtype, true),
-            // for intervals on the left, flip them around
-            (ScalarType::Interval, ScalarType::Date) => (rtype, ltype, true),
-            (ScalarType::Interval, ScalarType::Timestamp) => (rtype, ltype, true),
-            (_, _) => (ltype, rtype, false),
+        let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
+            (ScalarType::Date, ScalarType::Interval)
+            | (ScalarType::Timestamp, ScalarType::Interval)
+            | (ScalarType::Interval, ScalarType::Date)
+            | (ScalarType::Interval, ScalarType::Timestamp) => true,
+            _ => false,
         };
 
         let is_cmp = op == &BinaryOperator::Lt
@@ -1639,24 +1639,24 @@ impl Planner {
         // * inputs are timelike: math is non commutative, there are very
         //   specific rules about what makes sense, defined in the specific
         //   comparisons below
-        if is_cmp || (is_arithmetic && !(both_decimals || timelike)) {
-            let ctx = op.to_string();
+        let ctx = op.to_string();
+        if is_cmp || (is_arithmetic && !(both_decimals || timelike_and_interval)) {
             let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &ctx)?;
             assert_eq!(exprs.len(), 2);
             rexpr = exprs.pop().unwrap();
             lexpr = exprs.pop().unwrap();
             rtype = typ.clone();
             ltype = typ;
-        } else if is_arithmetic {
-            match (&ltype.scalar_type, &rtype.scalar_type) {
-                (ScalarType::Date, ScalarType::Interval) => {
-                    let ctx = op.to_string();
-                    let (expr, typ) =
-                        plan_cast_internal(&ctx, lexpr, &ltype, ScalarType::Timestamp)?;
-                    lexpr = expr;
-                    ltype = typ;
-                }
-                _ => (),
+        } else if is_arithmetic && timelike_and_interval {
+            if let ScalarType::Date = &ltype.scalar_type {
+                let (expr, typ) = plan_cast_internal(&ctx, lexpr, &ltype, ScalarType::Timestamp)?;
+                lexpr = expr;
+                ltype = typ;
+            }
+            if let ScalarType::Date = &rtype.scalar_type {
+                let (expr, typ) = plan_cast_internal(&ctx, rexpr, &rtype, ScalarType::Timestamp)?;
+                rexpr = expr;
+                rtype = typ;
             }
         }
 
@@ -1745,6 +1745,11 @@ impl Planner {
                     (BinaryFunc::AddFloat64, ScalarType::Float64)
                 }
                 (ScalarType::Timestamp, ScalarType::Interval) => {
+                    (BinaryFunc::AddTimestampInterval, ScalarType::Timestamp)
+                }
+                (ScalarType::Interval, ScalarType::Timestamp) => {
+                    mem::swap(&mut lexpr, &mut rexpr);
+                    mem::swap(&mut ltype, &mut rtype);
                     (BinaryFunc::AddTimestampInterval, ScalarType::Timestamp)
                 }
                 _ => bail!(
