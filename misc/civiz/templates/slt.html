@@ -8,93 +8,124 @@ distributed without the express permission of Materialize, Inc.
 <!DOCTYPE html>
 <html>
 <head>
-	<meta charset="utf-8">
-	<title>SQL Logic Test Results</title>
-	<style>
-	table, th, td {
-		border: 1px solid black;
-		border-collapse: collapse;
-	}
+    <meta charset="utf-8">
+    <title>SQL Logic Test Results</title>
+    <style>
+    table, th, td {
+        border: 1px solid black;
+        border-collapse: collapse;
+    }
 
-	th, td {
-		padding: 3px 2px;
-	}
+    th, td {
+        padding: 3px 2px;
+    }
 
-	.commit {
-		font-family: monospace;
-	}
-	</style>
-	<script src="https://www.gstatic.com/charts/loader.js"></script>
+    .commit {
+        font-family: monospace;
+    }
+    </style>
+    <script src="https://www.gstatic.com/charts/loader.js"></script>
 </head>
 <body>
-	<h1>SQL Logic Test Results</h1>
-	<table>
-		<tr>
-			<th>Commit</th>
-			<th>Time</th>
-			<th>Unsupported</th>
-			<th>Parse failure</th>
+    <h1>SQL Logic Test Results</h1>
+    <table>
+        <tr>
+            <th>Commit</th>
+            <th>Time</th>
+            <th>Unsupported</th>
+            <th>Parse failure</th>
             <th>Plan failure</th>
             <th>Unexpected plan success</th>
             <th>Wrong number of rows inserted</th>
             <th>Inference failure</th>
             <th>Wrong column names</th>
-			<th>Output failure</th>
-			<th>Bail</th>
-			<th>Success</th>
-			<th>Total</th>
-		</tr>
-		{% for r in results %}
-			<tr>
-				<td class="commit">
-					<a href="https://github.com/MaterializeInc/materialize/commit/{{ r.commit }}">
-						{{ r.commit | truncate(9, true, '') }}
-					</a>
-				</td>
-				<td>{{ r.timestamp.strftime("%Y-%m-%d %-I:%M %p") }} UTC</td>
-				<td>{{ r.unsupported }}</td>
-				<td>{{ r.parse_failure }}</td>
+            <th>Output failure</th>
+            <th>Bail</th>
+            <th>Success</th>
+            <th>Total</th>
+        </tr>
+        {% for r in results %}
+            <tr>
+                <td class="commit">
+                    <a href="https://github.com/MaterializeInc/materialize/commit/{{ r.commit }}">
+                        {{ r.commit | truncate(9, true, '') }}
+                    </a>
+                </td>
+                <td>{{ r.timestamp.strftime("%Y-%m-%d %-I:%M %p") }} UTC</td>
+                <td>{{ r.unsupported }}</td>
+                <td>{{ r.parse_failure }}</td>
                 <td>{{ r.plan_failure }}</td>
-                <td>{{ r.unexpected_plan_success or "?" }}</td>
-                <td>{{ r.wrong_number_of_rows_inserted or "?" }}</td>
-				<td>{{ r.inference_failure }}</td>
-                <td>{{ r.wrong_column_names or "?" }}</td>
+                <td>
+                    {% if r.unexpected_plan_success is none %}
+                        ?
+                    {% else %}
+                        {{ r.unexpected_plan_success }}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if r.wrong_number_of_rows_inserted is none %}
+                        ?
+                    {% else %}
+                        {{ r.wrong_number_of_rows_inserted }}
+                    {% endif %}
+                </td>
+                <td>{{ r.inference_failure }}</td>
+                <td>
+                    {% if r.wrong_column_names is none %}
+                        ?
+                    {% else %}
+                        {{ r.wrong_column_names }}
+                    {% endif %}
+                    </td>
                 <td>{{ r.output_failure }}</td>
-				<td>{{ r.bail }}</td>
-				<td>{{ r.success }}</td>
-				<td>{{ r.unsupported + r.parse_failure + r.plan_failure + r.inference_failure + r.output_failure + r.bail + r.success }}</td>
-			</tr>
-		{% endfor %}
-	</table>
+                <td>{{ r.bail }}</td>
+                <td>{{ r.success }}</td>
+                <td>
+                    {{ r.unsupported + r.parse_failure + r.plan_failure +
+                       r.unexpected_plan_success + r.wrong_number_of_rows_inserted +
+                       r.inference_failure + r.wrong_column_names + r.output_failure +
+                       r.bail + r.success }}
+                </td>
+            </tr>
+        {% endfor %}
+    </table>
 
+    <div>
+        <script>
+            const results = {{ results | tojson }};
+            const container = document.currentScript.parentNode;
 
-	<div>
-		<script>
-			const results = {{ results | tojson }};
-			const container = document.currentScript.parentNode;
+            google.charts.load("current", {"packages": ["corechart"]});
+            google.charts.setOnLoadCallback(() => {
+                const data = google.visualization.arrayToDataTable([
+                    [
+                        "Commit",
+                        {role: "none"},
+                        "Unsupported",
+                        "Parse failures",
+                        "Plan failures",
+                        "Inference failures",
+                        "Output failures",
+                        "Bails",
+                        "Successes",
+                        "Unexpected plan successes",
+                        "Wrong number of rows inserted",
+                        "Wrong column names"
+                    ],
+                    ...results.map(r => {
+                        r[0] = r[0].substring(0, 9);
+                        return r
+                    })
+                ]);
 
-			google.charts.load("current", {"packages": ["corechart"]});
-			google.charts.setOnLoadCallback(() => {
-				const data = google.visualization.arrayToDataTable([
-					["Commit", {role: "none"}, "Unsupported", "Parse failures", "Plan failures", "Unexpected plan successes", "Wrong number of rows inserted", "Inference failures", "Wrong column names", "Output failures", "Bail", "Success"],
-					...results.map(r => {
-						r[0] = r[0].substring(0, 9);
-						//const total = r.slice(2).reduce((sum, x) => sum + x);
-						//for (let i = 2; i < r.length; i++) {
-						//	r[i] /= total;
-						//}
-						return r
-					})
-				]);
-
-				const chart = new google.visualization.LineChart(container);
-				chart.draw(data, {
-					height: 600,
-					isStacked: true,
-					vAxis: {logScale: true}
-				});
-			});
-		</script>
-	</div>
+                const chart = new google.visualization.LineChart(container);
+                chart.draw(data, {
+                    height: 600,
+                    isStacked: true,
+                    vAxis: {logScale: true}
+                });
+            });
+        </script>
+    </div>
 </body>
 </html>
