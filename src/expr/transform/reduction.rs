@@ -27,6 +27,26 @@ impl FoldConstants {
     }
     pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         match relation {
+            RelationExpr::Constant { .. } => {}
+            RelationExpr::Get { .. } => {}
+            RelationExpr::Let { .. } => { /*constant prop done in InlineLet*/ }
+            RelationExpr::Reduce { .. } => { /*too complicated*/ }
+            RelationExpr::TopK { .. } => { /*too complicated*/ }
+            RelationExpr::OrDefault { .. } => { /*too complicated*/ }
+            RelationExpr::Negate { .. } => { /*cannot currently negate constants*/ }
+            RelationExpr::Distinct { input } => {
+                if let RelationExpr::Constant { rows, typ } = &**input {
+                    let mut rows = rows.clone();
+                    rows.sort();
+                    rows.dedup();
+                    *relation = RelationExpr::constant(rows, typ.clone());
+                }
+            }
+            RelationExpr::Threshold { input } => {
+                if let RelationExpr::Constant { .. } = &**input {
+                    *relation = input.take();
+                }
+            }
             RelationExpr::Map { input, scalars } => {
                 for (scalar, _typ) in scalars.iter_mut() {
                     scalar.reduce();
@@ -95,7 +115,6 @@ impl FoldConstants {
                 }
                 _ => {}
             },
-            _ => {}
         }
     }
 }
