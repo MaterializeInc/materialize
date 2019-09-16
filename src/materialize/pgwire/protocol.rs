@@ -120,7 +120,14 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(RecvQuery, SendError, Error))]
     SendReadyForQuery { send: SinkSend<A>, session: Session },
 
-    #[state_machine_future(transitions(HandleQuery, SendError, SendParseComplete, Error, Done))]
+    #[state_machine_future(transitions(
+        HandleQuery,
+        HandleExtendedQuery,
+        SendError,
+        SendParseComplete,
+        Error,
+        Done
+    ))]
     RecvQuery { recv: Recv<A>, session: Session },
 
     #[state_machine_future(transitions(
@@ -137,17 +144,18 @@ pub enum StateMachine<A: Conn + 'static> {
     },
 
     // Extended query flow
+    /// We enter the extended query by way of PARSE, then we spin in it until we exit
+    #[state_machine_future(transitions(SendParseComplete, SendError, Error, Done))]
+    HandleExtendedQuery {
+        conn: A,
+        rx: futures::sync::oneshot::Receiver<queue::Response>,
+    },
+
     #[state_machine_future(transitions(RecvExtendedQuery, Error))]
     SendParseComplete { send: SinkSend<A>, session: Session },
 
     #[state_machine_future(transitions(HandleExtendedQuery, SendError, Error, Done))]
     RecvExtendedQuery { recv: Recv<A>, session: Session },
-
-    #[state_machine_future(transitions(SendError, Error, Done))]
-    HandleExtendedQuery {
-        conn: A,
-        rx: futures::sync::oneshot::Receiver<queue::Response>,
-    },
 
     // Response flows
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
@@ -338,13 +346,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterRecvQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         trace!("recv query: {:?}", msg);
-        let mut state = state.take();
+        let state = state.take();
         match msg {
             FrontendMessage::Query { query } => {
                 let sql = String::from(String::from_utf8_lossy(&query));
                 let (tx, rx) = futures::sync::oneshot::channel();
                 context.cmdq_tx.unbounded_send(coord::Command {
-                    kind: queue::Kind::Query { sql },
+                    kind: queue::CmdKind::Query { sql },
                     session: state.session,
                     conn_id: context.conn_id,
                     tx,
@@ -353,13 +361,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             }
             FrontendMessage::Terminate => transition!(Done(())),
             FrontendMessage::Parse { name, sql, .. } => {
-                state.session.prepared_statements.insert(name.clone(), sql);
-
-                // TODO: we should really actually parse this here
-                transition!(SendParseComplete {
-                    send: conn.send(BackendMessage::ParseComplete),
+                let (tx, rx) = futures::sync::oneshot::channel();
+                context.cmdq_tx.unbounded_send(queue::Command {
+                    kind: queue::CmdKind::ParseStatement { name, sql },
                     session: state.session,
-                })
+                    conn_id: context.conn_id,
+                    tx,
+                })?;
+                transition!(HandleExtendedQuery { conn, rx })
             }
             _ => transition!(SendError {
                 send: conn.send(BackendMessage::ErrorResponse {
@@ -384,6 +393,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 sql_result: Ok(response),
                 session,
             })) => {
+                trace!("poll handle query");
                 let state = state.take();
 
                 macro_rules! command_complete {
@@ -396,7 +406,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         })
                     };
                 }
-                trace!("poll handle query");
 
                 match response {
                     SqlResponse::CreatedSource => command_complete!("CREATE SOURCE"),
@@ -416,16 +425,15 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         row_type: typ,
                         rows_rx: rx,
                     }),
-                    SqlResponse::ParseComplete => transition!(SendParseComplete {
-                        send: state.conn.send(BackendMessage::ParseComplete),
-                        session,
-                    }),
                     SqlResponse::SetVariable => command_complete!("SET"),
                     SqlResponse::Tailing { rx } => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
                         session,
                         rx,
                     }),
+                    SqlResponse::ParseComplete { .. } => {
+                        panic!("got parse complete in regular query")
+                    }
                 }
             }
             Ok(Async::Ready(coord::Response {
@@ -479,8 +487,41 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, HandleExtendedQuery<A>>,
         _context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleExtendedQuery<A>, failure::Error> {
-        let _resp = try_ready!(state.rx.poll());
-        panic!("nope not yet");
+        match state.rx.poll() {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Ok(Async::Ready(queue::Response {
+                sql_result: Ok(response),
+                session,
+            })) => {
+                let state = state.take();
+                match response {
+                    SqlResponse::ParseComplete { .. } => transition!(SendParseComplete {
+                        send: state.conn.send(BackendMessage::ParseComplete),
+                        session,
+                    }),
+                    _ => panic!("Got non parse complete in extended query: {:?}", response),
+                }
+            }
+            Ok(Async::Ready(queue::Response {
+                sql_result: Err(err),
+                session,
+            })) => {
+                let state = state.take();
+                transition!(SendError {
+                    send: state.conn.send(BackendMessage::ErrorResponse {
+                        severity: Severity::Error,
+                        code: "99999",
+                        message: err.to_string(),
+                        detail: None,
+                    }),
+                    session,
+                    fatal: false,
+                });
+            }
+            Err(futures::sync::oneshot::Canceled) => {
+                panic!("Connection to sql planner closed unexpectedly during extended")
+            }
+        }
     }
 
     fn poll_send_row_description<'s, 'c>(

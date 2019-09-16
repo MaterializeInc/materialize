@@ -38,6 +38,9 @@ pub enum Plan {
     DropViews(Vec<String>),
     EmptyQuery,
     DidSetVariable,
+    Parsed {
+        name: String,
+    },
     Peek {
         source: ::expr::RelationExpr,
         when: PeekWhen,
@@ -52,6 +55,12 @@ pub enum Plan {
         typ: RelationType,
         relation_expr: ::expr::RelationExpr,
     },
+}
+
+#[derive(Debug)]
+pub struct ParsedSelect {
+    source: ::expr::RelationExpr,
+    transform: RowSetFinishing,
 }
 
 fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {

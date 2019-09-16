@@ -10,7 +10,7 @@ use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::Stream;
 
-use super::{coordinator, Command, Kind, Response};
+use super::{coordinator, CmdKind, Command, Response};
 
 enum Message {
     Command(Command),
@@ -40,28 +40,24 @@ pub fn serve<C>(
         for msg in messages.wait() {
             match msg.unwrap() {
                 Message::Command(mut cmd) => {
-                    match cmd.kind {
-                        Kind::Query { sql } => {
-                            let conn_id = cmd.conn_id;
-                            let sql_result =
-                                planner.handle_command(&mut cmd.session, sql).map(|plan| {
-                                    coord.sequence_plan(plan, conn_id, None /* ts_override */)
-                                });
-
-                            // The client connection may disappear at any time, so the error
-                            // handling here is deliberately relaxed.
-                            let _ = cmd.tx.send(Response {
-                                sql_result,
-                                session: cmd.session,
-                            });
+                    let conn_id = cmd.conn_id;
+                    let sql_result = match cmd.kind {
+                        CmdKind::Query { sql } => planner.handle_command(&mut cmd.session, sql),
+                        CmdKind::ParseStatement { sql, name } => {
+                            planner.handle_parse_command(&mut cmd.session, sql, name)
                         }
-                        other => {
-                            let _ = cmd.tx.send(Response {
-                                sql_result: Err(failure::format_err!("Cannot handle {:?}", other)),
-                                session: cmd.session,
-                            });
-                        }
+                        other => Err(failure::format_err!("Cannot handle {:?}", other)),
                     }
+                    .map(|plan| {
+                        coord.sequence_plan(plan, conn_id, None /* ts_override */)
+                    });
+
+                    // The client connection may disappear at any time, so the error
+                    // handling here is deliberately relaxed.
+                    let _ = cmd.tx.send(Response {
+                        sql_result,
+                        session: cmd.session,
+                    });
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id,

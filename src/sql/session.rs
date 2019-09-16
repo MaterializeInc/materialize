@@ -74,7 +74,7 @@ pub struct Session {
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     /// A map from statement names to SQL queries
-    pub prepared_statements: HashMap<String, String>,
+    pub prepared_statements: HashMap<String, Prepared>,
 }
 
 impl std::fmt::Debug for Session {
@@ -294,4 +294,11 @@ impl Var for SessionVar<bool> {
     fn description(&self) -> &'static str {
         self.parent.description
     }
+}
+
+/// A prepared statement
+#[derive(Debug)]
+pub struct Prepared {
+    pub raw_sql: String,
+    pub parsed: crate::ParsedSelect,
 }

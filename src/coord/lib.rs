@@ -19,20 +19,31 @@ pub mod coordinator;
 pub mod transient;
 
 pub struct Command {
-    pub kind: Kind,
+    pub kind: CmdKind,
     pub conn_id: u32,
     pub session: sql::Session,
     pub tx: futures::sync::oneshot::Sender<Response>,
 }
 
+impl fmt::Debug for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Command")
+            .field("kind", &self.kind)
+            .field("conn_id", &self.conn_id)
+            .field("session", &self.session)
+            .field("tx", &"<>")
+            .finish()
+    }
+}
+
 /// Things a user could request
 #[derive(Debug)]
-pub enum Kind {
+pub enum CmdKind {
     /// Incomming raw sql from users
     Query {
         sql: String,
     },
-    ParsePreparedStatement {
+    ParseStatement {
         name: String,
         sql: String,
     },
@@ -61,7 +72,9 @@ pub enum SqlResponse {
         typ: RelationType,
         rx: RowsFuture,
     },
-    ParseComplete,
+    ParseComplete {
+        name: String,
+    },
     SetVariable,
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
@@ -77,7 +90,9 @@ impl fmt::Debug for SqlResponse {
             SqlResponse::DroppedSource => f.write_str("SqlResponse::DroppedSource"),
             SqlResponse::DroppedView => f.write_str("SqlResposne::DroppedView"),
             SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
-            SqlResponse::ParseComplete => f.write_str("SqlResponse::ParseComplete"),
+            SqlResponse::ParseComplete { name } => {
+                write!(f, "SqlResponse::ParseComplete(name: {})", name)
+            }
             SqlResponse::SendRows { typ, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", typ),
             SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
             SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),
