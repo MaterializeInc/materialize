@@ -47,7 +47,12 @@ impl InlineLet {
             } else {
                 false
             };
-            if value_is_get || num_gets <= 1 {
+            let value_is_constant = if let RelationExpr::Constant { .. } = &**value {
+                true
+            } else {
+                false
+            };
+            if value_is_get || value_is_constant || num_gets <= 1 {
                 // if only used once, just inline it
                 body.visit_mut_pre(&mut |relation| match relation {
                     RelationExpr::Get { name: get_name, .. } if name == get_name => {
