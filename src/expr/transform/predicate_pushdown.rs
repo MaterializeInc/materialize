@@ -57,6 +57,7 @@
 //! assert_eq!(expr, expected);
 //! ```
 
+use crate::transform::util::IndexTracker;
 use crate::{RelationExpr, ScalarExpr};
 use repr::RelationType;
 
@@ -83,20 +84,7 @@ impl PredicatePushdown {
                     // We want to scan `predicates` for any that can apply
                     // to individual elements of `inputs`.
 
-                    let input_arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
-
-                    let mut offset = 0;
-                    let mut prior_arities = Vec::new();
-                    for input in 0..inputs.len() {
-                        prior_arities.push(offset);
-                        offset += input_arities[input];
-                    }
-
-                    let input_relation = input_arities
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
-                        .collect::<Vec<_>>();
+                    let tracker = IndexTracker::for_inputs(&*inputs);
 
                     // Predicates to push at each input, and to retain.
                     let mut push_downs = vec![Vec::new(); inputs.len()];
@@ -107,7 +95,7 @@ impl PredicatePushdown {
                         let mut support = Vec::new();
                         predicate.visit(&mut |e| {
                             if let ScalarExpr::Column(i) = e {
-                                support.push(input_relation[*i]);
+                                support.push(tracker.relation_of(*i));
                             }
                         });
                         support.sort();
@@ -125,7 +113,7 @@ impl PredicatePushdown {
                                 predicate.visit_mut(&mut |e| {
                                     // subtract
                                     if let ScalarExpr::Column(i) = e {
-                                        *i -= prior_arities[relation];
+                                        *i = tracker.local_of(*i);
                                     }
                                 });
                                 push_downs[relation].push(predicate);
@@ -142,11 +130,11 @@ impl PredicatePushdown {
                                     if let (ScalarExpr::Column(c1), ScalarExpr::Column(c2)) =
                                         (&**expr1, &**expr2)
                                     {
-                                        let relation1 = input_relation[*c1];
-                                        let relation2 = input_relation[*c2];
+                                        let relation1 = tracker.relation_of(*c1);
+                                        let relation2 = tracker.relation_of(*c2);
                                         assert!(relation1 != relation2);
-                                        let key1 = (relation1, *c1 - prior_arities[relation1]);
-                                        let key2 = (relation2, *c2 - prior_arities[relation2]);
+                                        let key1 = (relation1, tracker.local_of(*c1));
+                                        let key2 = (relation2, tracker.local_of(*c2));
                                         let pos1 = variables.iter().position(|l| l.contains(&key1));
                                         let pos2 = variables.iter().position(|l| l.contains(&key2));
                                         match (pos1, pos2) {
@@ -172,12 +160,12 @@ impl PredicatePushdown {
                                         }
                                         // null != anything, so joined columns musn't be null
                                         push_downs[relation1].push(
-                                            ScalarExpr::Column(*c1 - prior_arities[relation1])
+                                            ScalarExpr::Column(tracker.local_of(*c1))
                                                 .call_unary(UnaryFunc::IsNull)
                                                 .call_unary(UnaryFunc::Not),
                                         );
                                         push_downs[relation2].push(
-                                            ScalarExpr::Column(*c2 - prior_arities[relation2])
+                                            ScalarExpr::Column(tracker.local_of(*c2))
                                                 .call_unary(UnaryFunc::IsNull)
                                                 .call_unary(UnaryFunc::Not),
                                         );

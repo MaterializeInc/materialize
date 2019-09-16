@@ -16,8 +16,10 @@ pub mod inline_let;
 pub mod join_elision;
 pub mod join_order;
 pub mod predicate_pushdown;
+pub mod projection_pushdown;
 pub mod reduction;
 pub mod split_predicates;
+pub mod util;
 
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
@@ -64,11 +66,15 @@ impl Optimizer {
             transform.transform(relation, metadata);
         }
     }
+
+    fn from_transforms(transforms: Vec<Box<dyn crate::transform::Transform + Send>>) -> Self {
+        Self { transforms }
+    }
 }
 
 impl Default for Optimizer {
     fn default() -> Self {
-        let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
+        Self::from_transforms(vec![
             Box::new(crate::transform::inline_let::InlineLet),
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),
@@ -79,6 +85,7 @@ impl Default for Optimizer {
                 transforms: vec![
                     Box::new(crate::transform::reduction::FoldConstants),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
+                    Box::new(crate::transform::projection_pushdown::ProjectionPushdown),
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),
                     Box::new(crate::transform::fusion::project::Project),
@@ -89,7 +96,6 @@ impl Default for Optimizer {
             }),
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::fusion::project::Project),
-        ];
-        Self { transforms }
+        ])
     }
 }
