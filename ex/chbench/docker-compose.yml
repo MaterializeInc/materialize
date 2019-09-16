@@ -22,6 +22,12 @@ services:
         source: chbench-gen
         target: /var/lib/mysql-files
         read_only: true
+  mysqlcli:
+    image: debezium/example-mysql:0.9
+    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium"]
+    init: true
+    depends_on:
+      - mysql
   zookeeper:
     image: confluentinc/cp-zookeeper:5.3.0
     environment:

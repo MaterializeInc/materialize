@@ -112,6 +112,18 @@ $ docker-compose run cli watch-sql "PEEK q01"
 [CH-benCHmark]: https://db.in.tum.de/research/projects/CHbenCHmark/index.shtml?lang=en
 [docker-compose]: https://docs.docker.com/compose/
 
+## Using the MySQL CLI
+
+If you want to access a MySQL shell, run the following in the
+`ex/chbench` directory:
+
+```
+docker-compose run mysqlcli
+```
+
+If you've just run `docker-compose up`, you might need to wait a few seconds
+before running this.
+
 ## Using Docker for Mac
 
 You should run this demo on an EC2 VM or Linux machine. Should you want to run
