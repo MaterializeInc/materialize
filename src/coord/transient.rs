@@ -10,7 +10,7 @@ use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::Stream;
 
-use super::{coordinator, Command, Response};
+use super::{coordinator, Command, Kind, Response};
 
 enum Message {
     Command(Command),
@@ -40,20 +40,28 @@ pub fn serve<C>(
         for msg in messages.wait() {
             match msg.unwrap() {
                 Message::Command(mut cmd) => {
-                    let conn_id = cmd.conn_id;
-                    let sql_result =
-                        planner
-                            .handle_command(&mut cmd.session, cmd.sql)
-                            .map(|plan| {
-                                coord.sequence_plan(plan, conn_id, None /* ts_override */)
-                            });
+                    match cmd.kind {
+                        Kind::Query { sql } => {
+                            let conn_id = cmd.conn_id;
+                            let sql_result =
+                                planner.handle_command(&mut cmd.session, sql).map(|plan| {
+                                    coord.sequence_plan(plan, conn_id, None /* ts_override */)
+                                });
 
-                    // The client connection may disappear at any time, so the error
-                    // handling here is deliberately relaxed.
-                    let _ = cmd.tx.send(Response {
-                        sql_result,
-                        session: cmd.session,
-                    });
+                            // The client connection may disappear at any time, so the error
+                            // handling here is deliberately relaxed.
+                            let _ = cmd.tx.send(Response {
+                                sql_result,
+                                session: cmd.session,
+                            });
+                        }
+                        other => {
+                            let _ = cmd.tx.send(Response {
+                                sql_result: Err(failure::format_err!("Cannot handle {:?}", other)),
+                                session: cmd.session,
+                            });
+                        }
+                    }
                 }
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id,

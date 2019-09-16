@@ -18,13 +18,26 @@ use std::fmt;
 pub mod coordinator;
 pub mod transient;
 
-/// Incoming raw SQL from users.
-pub enum Command {
-    Command {
-        conn_id: u32,
+pub struct Command {
+    pub kind: Kind,
+    pub conn_id: u32,
+    pub session: sql::Session,
+    pub tx: futures::sync::oneshot::Sender<Response>,
+}
+
+/// Things a user could request
+#[derive(Debug)]
+pub enum Kind {
+    /// Incomming raw sql from users
+    Query {
         sql: String,
-        session: sql::Session,
-        tx: futures::sync::oneshot::Sender<Response>,
+    },
+    ParsePreparedStatement {
+        name: String,
+        sql: String,
+    },
+    DescribePreparedStatement {
+        name: String,
     },
 }
 
@@ -64,6 +77,7 @@ impl fmt::Debug for SqlResponse {
             SqlResponse::DroppedSource => f.write_str("SqlResponse::DroppedSource"),
             SqlResponse::DroppedView => f.write_str("SqlResposne::DroppedView"),
             SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
+            SqlResponse::ParseComplete => f.write_str("SqlResponse::ParseComplete"),
             SqlResponse::SendRows { typ, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", typ),
             SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
             SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),

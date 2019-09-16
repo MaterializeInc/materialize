@@ -344,7 +344,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let sql = String::from(String::from_utf8_lossy(&query));
                 let (tx, rx) = futures::sync::oneshot::channel();
                 context.cmdq_tx.unbounded_send(coord::Command {
-                    sql,
+                    kind: queue::Kind::Query { sql },
                     session: state.session,
                     conn_id: context.conn_id,
                     tx,
@@ -353,9 +353,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             }
             FrontendMessage::Terminate => transition!(Done(())),
             FrontendMessage::Parse { name, sql, .. } => {
-                if let Some(old) = state.session.prepared_statements.insert(name, sql) {
-                    log::info!("replaced prepared statement: {}={}", name, old);
-                }
+                state.session.prepared_statements.insert(name.clone(), sql);
 
                 // TODO: we should really actually parse this here
                 transition!(SendParseComplete {
@@ -481,7 +479,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, HandleExtendedQuery<A>>,
         _context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleExtendedQuery<A>, failure::Error> {
-        let resp = try_ready!(state.rx.poll());
+        let _resp = try_ready!(state.rx.poll());
         panic!("nope not yet");
     }
 
@@ -529,6 +527,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterWaitForRows<A>, failure::Error> {
         let peek_results = try_ready!(state.rows_rx.poll());
         let state = state.take();
+        trace!("sending row descr row_count={:?}", peek_results.len(),);
         transition!(send_rows(
             state.conn,
             state.session,
