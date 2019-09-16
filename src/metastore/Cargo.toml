@@ -16,7 +16,7 @@ lazy_static = "1.4.0"
 linked-hash-map = "0.5.2"
 log = "0.4"
 ore = { path = "../ore" }
-serde = { version = "1.0.100", features = ["derive"] }
+serde = { version = "1.0.101", features = ["derive"] }
 slog = "2.5.2"
 tokio = "0.1.22"
 tokio-zookeeper = { git = "https://github.com/jonhoo/tokio-zookeeper.git" }
