@@ -380,11 +380,15 @@ impl ScalarExpr {
                         // throw away actual values and just remember whether or not there where __any__ rows
                         .project((0..get_inner.arity()).collect())
                         .distinct()
-                        // append True to anything that returned any rows
-                        .map(vec![(
-                            SS::Literal(Datum::True),
-                            ColumnType::new(ScalarType::Bool),
-                        )]);
+                        // Append true to anything that returned any rows. This
+                        // join is logically equivalent to
+                        // `.map(vec![Datum::True])`, but using a join allows
+                        // for potential predicate pushdown and elision in the
+                        // optimizer.
+                        .product(dataflow_expr::RelationExpr::constant(
+                            vec![vec![Datum::True]],
+                            RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
+                        ));
                     // append False to anything that didn't return any rows
                     let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
                     Ok(get_inner.lookup(exists, default))

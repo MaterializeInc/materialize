@@ -804,12 +804,10 @@ impl RelationExpr {
                     .distinct()
                     .negate()
                     .union(keys)
-                    // .map(
-                    //     default
-                    //         .iter()
-                    //         .map(|(datum, typ)| (ScalarExpr::Literal(datum.clone()), typ.clone()))
-                    //         .collect(),
-                    // )
+                    // This join is logically equivalent to
+                    // `.map(<default_expr>)`, but using a join allows for
+                    // potential predicate pushdown and elision in the
+                    // optimizer.
                     .product(RelationExpr::constant(
                         vec![default.iter().map(|(datum, _)| datum.clone()).collect()],
                         RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
