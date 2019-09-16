@@ -11,11 +11,12 @@ CREATE TABLE dateish (
 )
 
 statement ok
-INSERT INTO dateish VALUES (DATE '2019-12-31')
+INSERT INTO dateish VALUES (DATE '2000-01-01'), (DATE '2019-12-31')
 
-query T
+query T rowsort
 SELECT a FROM dateish
 ----
+2000-01-01
 2019-12-31
 
 statement ok
@@ -183,3 +184,136 @@ query T
 SELECT TIMESTAMP '2000-01-01 00:00:00' + INTERVAL '7' HOUR
 ----
 2000-01-01 07:00:00
+
+# date and time comparisons after interval math
+
+query B
+SELECT DATE '2000-01-01' < DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+true
+
+query B
+SELECT DATE '2000-01-01' > DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+false
+
+query B
+SELECT DATE '2000-01-01' <= DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+true
+
+query B
+SELECT DATE '2000-01-01' >= DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+false
+
+query T
+SELECT DATE '2001-01-01' + INTERVAL '3' YEAR
+----
+2004-01-01 00:00:00
+
+# Check Comparisons
+
+query T
+SELECT * FROM dateish WHERE a <= DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+2000-01-01
+
+query T
+SELECT * FROM dateish WHERE a < DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+2000-01-01
+
+query T
+SELECT * FROM dateish WHERE a <= DATE '1999-12-31' + INTERVAL '2' DAY
+----
+2000-01-01
+
+query T
+SELECT * FROM dateish WHERE a = DATE '1999-12-31' + INTERVAL '1' DAY
+----
+2000-01-01
+
+
+# same as above, but inverted
+
+query T
+SELECT * FROM dateish WHERE a >= DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+2019-12-31
+
+query T
+SELECT * FROM dateish WHERE a > DATE '1999-01-01' + INTERVAL '2' YEAR
+----
+2019-12-31
+
+query T
+SELECT * FROM dateish WHERE a >= DATE '1999-12-31' + INTERVAL '2' DAY
+----
+2019-12-31
+
+query T
+SELECT * FROM dateish WHERE a != DATE '1999-12-31' + INTERVAL '1' DAY
+----
+2019-12-31
+
+query T rowsort
+SELECT * FROM dateish WHERE a != DATE '1999-12-31' + INTERVAL '2' DAY
+----
+2000-01-01
+2019-12-31
+
+# Comparisons with timestamps
+
+statement ok
+CREATE TABLE timestamp_compares (
+    c TIMESTAMP
+)
+
+statement ok
+INSERT INTO timestamp_compares
+VALUES
+    (TIMESTAMP '1999-12-31 01:01:01'),
+    (TIMESTAMP '2009-01-01 09:09:09.9')
+
+query T
+SELECT c FROM timestamp_compares WHERE c = TIMESTAMP '2009-01-01 09:09:09.9'
+----
+2009-01-01 09:09:09.900
+
+query T
+SELECT c FROM timestamp_compares WHERE c = TIMESTAMP '2008-12-31 09:09:09.9' + INTERVAL '1' DAY
+----
+2009-01-01 09:09:09.900
+
+query T
+SELECT c FROM timestamp_compares WHERE c = TIMESTAMP '2008-12-01 09:09:09.9' + INTERVAL '1' MONTH
+----
+2009-01-01 09:09:09.900
+
+query T rowsort
+SELECT c FROM timestamp_compares WHERE c < TIMESTAMP '2008-12-31 09:09:09.9' + INTERVAL '2' MONTH
+----
+1999-12-31 01:01:01
+2009-01-01 09:09:09.900
+
+# some inverses
+
+query T
+SELECT c FROM timestamp_compares WHERE c != TIMESTAMP '2009-01-01 09:09:09.9'
+----
+1999-12-31 01:01:01
+
+query T
+SELECT c FROM timestamp_compares WHERE c != TIMESTAMP '2008-12-31 09:09:09.9' + INTERVAL '1' DAY
+----
+1999-12-31 01:01:01
+
+query T
+SELECT c FROM timestamp_compares WHERE c != TIMESTAMP '2008-12-01 09:09:09.9' + INTERVAL '1' MONTH
+----
+1999-12-31 01:01:01
+
+query T rowsort
+SELECT c FROM timestamp_compares WHERE c > TIMESTAMP '2008-12-31 09:09:09.9' + INTERVAL '2' MONTH
+----

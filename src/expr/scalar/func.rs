@@ -275,6 +275,7 @@ fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
         year -= 1;
         months += 12;
     }
+    year += (month + months) / 12;
     month = (month + months) % 12;
     // account for dt.month0
     month += 1;
@@ -756,9 +757,24 @@ mod test {
         assert_eq!(add_timestamp_months(dt, -13), ym(1998, 12));
         assert_eq!(add_timestamp_months(dt, -24), ym(1998, 1));
         assert_eq!(add_timestamp_months(dt, -30), ym(1997, 7));
+
+        // and going over a year boundary by less than a year
+        let dt = ym(1999, 12);
+        assert_eq!(add_timestamp_months(dt, 1), ym(2000, 1));
+        let end_of_month_dt = NaiveDate::from_ymd(1999, 12, 31).and_hms(9, 9, 9);
+        assert_eq!(
+            // leap year
+            add_timestamp_months(end_of_month_dt, 2),
+            NaiveDate::from_ymd(2000, 2, 29).and_hms(9, 9, 9),
+        );
+        assert_eq!(
+            // not leap year
+            add_timestamp_months(end_of_month_dt, 14),
+            NaiveDate::from_ymd(2001, 2, 28).and_hms(9, 9, 9),
+        );
     }
 
     fn ym(year: i32, month: u32) -> NaiveDateTime {
-        NaiveDate::from_ymd(year, month, 1).and_hms(0, 0, 0)
+        NaiveDate::from_ymd(year, month, 1).and_hms(9, 9, 9)
     }
 }
