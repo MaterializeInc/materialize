@@ -63,6 +63,12 @@ pub struct ParsedSelect {
     transform: RowSetFinishing,
 }
 
+impl ParsedSelect {
+    pub fn source(&self) -> &::expr::RelationExpr {
+        &self.source
+    }
+}
+
 fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
     if n.0.len() != 1 {
         bail!("qualified names are not yet supported: {}", n.to_string())

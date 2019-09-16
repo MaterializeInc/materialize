@@ -46,15 +46,21 @@ pub enum FrontendMessage {
     Query {
         query: Bytes,
     },
+    /// Start an extended query
     Parse {
         name: String,
         sql: String,
         parameter_data_type_count: u16,
         parameter_data_types: Vec<u32>,
     },
+    /// Describe a statement by name during an extended query
     DescribeStatement {
         name: String,
     },
+    /// Finish an extended query
+    Sync,
+
+    /// Terminate a connection
     Terminate,
 }
 
@@ -70,6 +76,7 @@ pub enum BackendMessage {
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<FieldValue>>),
     ParameterStatus(&'static str, String),
+    ParameterDescription,
     ParseComplete,
     ErrorResponse {
         severity: Severity,

@@ -151,11 +151,28 @@ pub enum StateMachine<A: Conn + 'static> {
         rx: futures::sync::oneshot::Receiver<queue::Response>,
     },
 
+    #[state_machine_future(transitions(
+        HandleExtendedQuery,
+        SendReadyForQuery,
+        SendDescribeResponse,
+        SendError,
+        Error,
+        Done
+    ))]
+    RecvExtendedQuery { recv: Recv<A>, session: Session },
+
     #[state_machine_future(transitions(RecvExtendedQuery, Error))]
     SendParseComplete { send: SinkSend<A>, session: Session },
 
-    #[state_machine_future(transitions(HandleExtendedQuery, SendError, Error, Done))]
-    RecvExtendedQuery { recv: Recv<A>, session: Session },
+    #[state_machine_future(transitions(SendDescribeResponseRowdesc, Error))]
+    SendDescribeResponse {
+        send: SinkSend<A>,
+        session: Session,
+        name: String,
+    },
+
+    #[state_machine_future(transitions(RecvExtendedQuery, Error))]
+    SendDescribeResponseRowdesc { send: SinkSend<A>, session: Session },
 
     // Response flows
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
@@ -463,13 +480,18 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvExtendedQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
-        trace!("recv extended query");
+        trace!("recv query extended: {:?}", msg);
         let state = state.take();
         match msg {
-            FrontendMessage::DescribeStatement { name: _name } => {
-                let (_tx, rx) = futures::sync::oneshot::channel();
-                transition!(HandleExtendedQuery { conn, rx });
-            }
+            FrontendMessage::DescribeStatement { name } => transition!(SendDescribeResponse {
+                send: conn.send(BackendMessage::ParameterDescription),
+                session: state.session,
+                name,
+            }),
+            FrontendMessage::Sync => transition!(SendReadyForQuery {
+                send: conn.send(BackendMessage::ReadyForQuery),
+                session: state.session,
+            }),
             _ => transition!(SendError {
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
@@ -522,6 +544,40 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 panic!("Connection to sql planner closed unexpectedly during extended")
             }
         }
+    }
+
+    fn poll_send_describe_response<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendDescribeResponse<A>>,
+        _context: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendDescribeResponse<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        trace!("sending describe response parameters for {}", state.name);
+        match state.session.prepared_statements.get(&state.name) {
+            Some(ps) => {
+                let typ = ps.parsed.source().typ();
+                transition!(SendDescribeResponseRowdesc {
+                    send: conn.send(BackendMessage::RowDescription(
+                        super::message::row_description_from_type(&typ)
+                    )),
+                    session: state.session,
+                })
+            }
+            None => failure::bail!("named statement does not exist"),
+        }
+    }
+
+    fn poll_send_describe_response_rowdesc<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendDescribeResponseRowdesc<A>>,
+        _context: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendDescribeResponseRowdesc<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        trace!("sent describe response row description");
+        transition!(RecvExtendedQuery {
+            recv: conn.recv(),
+            session: state.session,
+        })
     }
 
     fn poll_send_row_description<'s, 'c>(

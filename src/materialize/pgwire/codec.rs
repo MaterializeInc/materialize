@@ -89,6 +89,7 @@ impl Encoder for Codec {
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
             BackendMessage::ParameterStatus(_, _) => b'S',
+            BackendMessage::ParameterDescription => b't',
             BackendMessage::ParseComplete => b'1',
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse => b'H',
@@ -173,6 +174,12 @@ impl Encoder for Codec {
             BackendMessage::ParameterStatus(name, value) => {
                 buf.put_string(name);
                 buf.put_string(value);
+            }
+            BackendMessage::ParameterDescription => {
+                log::warn!("ignoring parameters in query");
+                // 7 bytes: b't', u32, 0 parameters
+                buf.put_u32_be(7);
+                buf.put_u16_be(0);
             }
             BackendMessage::ErrorResponse {
                 severity,
@@ -279,7 +286,7 @@ impl Decoder for Codec {
                         b'X' => FrontendMessage::Terminate,
                         b'P' => parse_parse_msg(&buf, frame_len)?,
                         b'D' => parse_describe(&buf, frame_len)?,
-                        b'S' => panic!("can't handle sync command"),
+                        b'S' => FrontendMessage::Sync,
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
