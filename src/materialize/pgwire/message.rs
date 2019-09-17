@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::convert::TryFrom;
+
 use bytes::Bytes;
 use chrono::{NaiveDate, NaiveDateTime};
 
@@ -57,6 +59,19 @@ pub enum FrontendMessage {
     DescribeStatement {
         name: String,
     },
+    /// Connect the Prepared statement from `Parse` to a `Portal`
+    ///
+    /// Note that we can't actually bind parameters yet (issue#609), but that is an
+    /// important part of this command.
+    Bind {
+        /// The portal being bound to
+        ///
+        /// All `Bind' commands are followed by an execute, which just names this portal
+        portal_name: String,
+        statement_name: String,
+        /// The format of each field, if the field is empty then it should be Text
+        return_field_formats: Vec<FieldFormat>,
+    },
     /// Finish an extended query
     Sync,
 
@@ -78,6 +93,7 @@ pub enum BackendMessage {
     ParameterStatus(&'static str, String),
     ParameterDescription,
     ParseComplete,
+    BindComplete,
     ErrorResponse {
         severity: Severity,
         code: &'static str,
@@ -100,11 +116,52 @@ pub struct FieldDescription {
     pub format: FieldFormat,
 }
 
-#[allow(dead_code)]
+/// A postgres input or output format
+///
+/// From [the docs]:
+///
+/// > Binary representations for integers use network byte order (most significant byte
+/// > first). For other data types consult the documentation or source code to learn about
+/// > the binary representation. Keep in mind that binary representations for complex data
+/// > types might change across server versions; the text format is usually the more
+/// > portable choice.
+///
+/// [the docs]: https://www.postgresql.org/docs/11/protocol-overview.html#PROTOCOL-FORMAT-CODES
 #[derive(Copy, Clone, Debug)]
 pub enum FieldFormat {
+    /// Text encoding, the default
     Text = 0,
     Binary = 1,
+}
+
+impl TryFrom<u16> for FieldFormat {
+    type Error = failure::Error;
+
+    fn try_from(source: u16) -> Result<FieldFormat, Self::Error> {
+        match source {
+            0 => Ok(FieldFormat::Text),
+            1 => Ok(FieldFormat::Binary),
+            _ => failure::bail!("Invalid FieldFormat source: {}", source),
+        }
+    }
+}
+
+impl From<&FieldFormat> for bool {
+    fn from(source: &FieldFormat) -> bool {
+        match source {
+            FieldFormat::Text => false,
+            FieldFormat::Binary => true,
+        }
+    }
+}
+
+impl From<bool> for FieldFormat {
+    fn from(source: bool) -> FieldFormat {
+        match source {
+            false => FieldFormat::Text,
+            true => FieldFormat::Binary,
+        }
+    }
 }
 
 /// PGWire-specific representations of Datums

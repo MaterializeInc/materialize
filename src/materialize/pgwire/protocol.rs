@@ -19,7 +19,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
-use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
+use crate::pgwire::message::{BackendMessage, FieldFormat, FrontendMessage, Severity};
 use coord::SqlResponse;
 use dataflow_types::Update;
 use ore::future::{Recv, StreamExt};
@@ -125,6 +125,7 @@ pub enum StateMachine<A: Conn + 'static> {
         HandleExtendedQuery,
         SendError,
         SendParseComplete,
+        HandleBind,
         Error,
         Done
     ))]
@@ -148,9 +149,8 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(SendParseComplete, SendError, Error, Done))]
     HandleExtendedQuery {
         conn: A,
-        rx: futures::sync::oneshot::Receiver<queue::Response>,
+        rx: futures::sync::oneshot::Receiver<coord::Response>,
     },
-
     #[state_machine_future(transitions(
         HandleExtendedQuery,
         SendReadyForQuery,
@@ -163,6 +163,18 @@ pub enum StateMachine<A: Conn + 'static> {
 
     #[state_machine_future(transitions(RecvExtendedQuery, Error))]
     SendParseComplete { send: SinkSend<A>, session: Session },
+
+    #[state_machine_future(transitions(SendBindComplete, SendError, Error, Done))]
+    HandleBind {
+        send: SinkSend<A>,
+        session: Session,
+        portal_name: String,
+        statement_name: String,
+        return_field_formats: Vec<FieldFormat>,
+    },
+
+    #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
+    SendBindComplete { send: SinkSend<A>, session: Session },
 
     #[state_machine_future(transitions(SendDescribeResponseRowdesc, Error))]
     SendDescribeResponse {
@@ -369,7 +381,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let sql = String::from(String::from_utf8_lossy(&query));
                 let (tx, rx) = futures::sync::oneshot::channel();
                 context.cmdq_tx.unbounded_send(coord::Command {
-                    kind: queue::CmdKind::Query { sql },
+                    kind: coord::CmdKind::Query { sql },
                     session: state.session,
                     conn_id: context.conn_id,
                     tx,
@@ -379,14 +391,26 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Terminate => transition!(Done(())),
             FrontendMessage::Parse { name, sql, .. } => {
                 let (tx, rx) = futures::sync::oneshot::channel();
-                context.cmdq_tx.unbounded_send(queue::Command {
-                    kind: queue::CmdKind::ParseStatement { name, sql },
+                context.cmdq_tx.unbounded_send(coord::Command {
+                    kind: coord::CmdKind::ParseStatement { name, sql },
                     session: state.session,
                     conn_id: context.conn_id,
                     tx,
                 })?;
                 transition!(HandleExtendedQuery { conn, rx })
             }
+
+            FrontendMessage::Bind {
+                portal_name,
+                statement_name,
+                return_field_formats,
+            } => transition!(HandleBind {
+                send: conn.send(BackendMessage::BindComplete),
+                session: state.session,
+                portal_name,
+                statement_name,
+                return_field_formats,
+            }),
             _ => transition!(SendError {
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
@@ -511,7 +535,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterHandleExtendedQuery<A>, failure::Error> {
         match state.rx.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(queue::Response {
+            Ok(Async::Ready(coord::Response {
                 sql_result: Ok(response),
                 session,
             })) => {
@@ -524,7 +548,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     _ => panic!("Got non parse complete in extended query: {:?}", response),
                 }
             }
-            Ok(Async::Ready(queue::Response {
+            Ok(Async::Ready(coord::Response {
                 sql_result: Err(err),
                 session,
             })) => {
@@ -668,6 +692,35 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let state = state.take();
         trace!("transition to recv extended");
         transition!(RecvExtendedQuery {
+            recv: conn.recv(),
+            session: state.session,
+        })
+    }
+
+    fn poll_handle_bind<'s, 'c>(
+        state: &'s mut RentToOwn<'s, HandleBind<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterHandleBind<A>, failure::Error> {
+        trace!("handle bind");
+        let mut state = state.take();
+        let (sn, pn) = (state.statement_name, state.portal_name);
+        let fmts = state.return_field_formats.iter().map(bool::from).collect();
+        trace!("handle bind statement={:?} portal={:?}", sn, pn);
+        state.session.set_portal(pn, sn, fmts)?;
+
+        transition!(SendBindComplete {
+            send: state.send,
+            session: state.session,
+        })
+    }
+
+    fn poll_send_bind_complete<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendBindComplete<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendBindComplete<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        transition!(RecvQuery {
             recv: conn.recv(),
             session: state.session,
         })

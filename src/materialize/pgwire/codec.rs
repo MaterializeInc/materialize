@@ -10,18 +10,19 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
+use std::borrow::Cow;
+use std::convert::TryFrom;
+
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
-use std::borrow::Cow;
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage};
+use crate::pgwire::message::{BackendMessage, FieldFormat, FieldValue, FrontendMessage};
 use ore::netio;
 
 #[derive(Debug)]
 enum CodecError {
-    StringTooLong,
     StringNoTerminator,
 }
 
@@ -29,7 +30,6 @@ impl std::error::Error for CodecError {}
 impl std::fmt::Display for CodecError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(match self {
-            CodecError::StringTooLong => "The string goes past the end of the frame",
             CodecError::StringNoTerminator => "The string does not have a terminator",
         })
     }
@@ -91,6 +91,7 @@ impl Encoder for Codec {
             BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::ParameterDescription => b't',
             BackendMessage::ParseComplete => b'1',
+            BackendMessage::BindComplete => b'2',
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse => b'H',
             BackendMessage::CopyData(_) => b'd',
@@ -167,6 +168,7 @@ impl Encoder for Codec {
                 buf.put_string(tag);
             }
             BackendMessage::ParseComplete => {}
+            BackendMessage::BindComplete => {}
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
                 buf.put(b'I'); // transaction indicator
@@ -284,9 +286,12 @@ impl Decoder for Codec {
                             query: buf.slice_to(frame_len - 1),
                         },
                         b'X' => FrontendMessage::Terminate,
-                        b'P' => parse_parse_msg(&buf, frame_len)?,
-                        b'D' => parse_describe(&buf, frame_len)?,
+                        // Extended query flow
+                        b'P' => parse_parse_msg(&buf)?,
+                        b'D' => parse_describe(&buf)?,
+                        b'B' => parse_bind(&buf)?,
                         b'S' => FrontendMessage::Sync,
+
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -317,9 +322,9 @@ impl<B: BufMut> Pgbuf for B {
     }
 }
 
-fn parse_parse_msg(buf: &[u8], frame_len: usize) -> Result<FrontendMessage, io::Error> {
-    let (name, buf) = read_cstr(&buf, frame_len)?;
-    let (sql, buf) = read_cstr(buf, frame_len - name.len() + 1)?;
+fn parse_parse_msg(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
+    let (name, buf) = read_cstr(&buf)?;
+    let (sql, buf) = read_cstr(buf)?;
 
     // A parameter data type can be left unspecified by setting it to zero, or by making
     // the array of parameter type OIDs shorter than the number of parameter symbols ($n)
@@ -347,56 +352,131 @@ fn parse_parse_msg(buf: &[u8], frame_len: usize) -> Result<FrontendMessage, io::
 
     if !&buf[offset..].is_empty() {
         log::warn!(
-            "remaining frame:\n\
-             str={:?}\n\
-             cod={:x?}\n\
-             len={}",
-            std::str::from_utf8(&buf[offset..]),
-            &buf[offset..],
+            "remaining {:03} bytes in frame: {:x?}",
             &buf[offset..].len(),
+            &buf[offset..],
         );
     }
 
-    Ok(FrontendMessage::Parse {
+    let msg = FrontendMessage::Parse {
         name: name.into(),
         sql: sql.into(),
         parameter_data_type_count,
         parameter_data_types: param_dts,
+    };
+
+    Ok(msg)
+}
+
+fn parse_describe(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
+    let first_char = buf[0];
+    let (name, _remain) = read_cstr(&buf[1..])?;
+    match first_char {
+        b'S' => Ok(FrontendMessage::DescribeStatement { name: name.into() }),
+        b'P' => Err(unsupported_err("Cannot handle Describe Portal")),
+        other => Err(input_err(format!("Invalid describe type: {:#x?}", other))),
+    }
+}
+
+/// Parse a `Byte1('B')`
+fn parse_bind(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
+    let buf = Cursor::new(buf);
+    log::info!("parsing bind from buf: {:x?}", buf);
+    log::info!("cur_buf: {:x?}", buf.cur_buf());
+
+    let portal_name = buf.read_cstr()?.to_string();
+    let statement_name = buf.read_cstr()?.to_string();
+
+    let parameter_format_code_count = buf.read_u16()?;
+    if parameter_format_code_count > 0 {
+        // Verify that we can skip parsing parameter format codes (C=Int16, Int16[C]),
+        return Err(unsupported_err("parameter format codes is not supported"));
+    }
+    if buf.read_u16()? > 0 {
+        return Err(unsupported_err("binding parameters is not supported"));
+    }
+
+    let return_format_code_count = buf.read_u16()?;
+    let mut fmt_codes = Vec::with_capacity(usize::from(return_format_code_count));
+    for _ in 0..return_format_code_count {
+        fmt_codes.push(FieldFormat::try_from(buf.read_u16()?).map_err(input_err)?);
+    }
+
+    Ok(FrontendMessage::Bind {
+        portal_name,
+        statement_name,
+        return_field_formats: fmt_codes,
     })
 }
 
-fn parse_describe(buf: &[u8], frame_len: usize) -> Result<FrontendMessage, io::Error> {
-    let first_char = buf[0];
-    let (name, _remain) = read_cstr(&buf[1..], frame_len)?;
-    match first_char {
-        b'S' => Ok(FrontendMessage::DescribeStatement { name: name.into() }),
-        b'P' => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Cannot handle Describe Portal"),
-        )),
-        other => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("Invalid describe type: {:#x?}", other),
-        )),
+use std::cell::RefCell;
+
+#[derive(Debug)]
+struct Cursor<'a> {
+    buf: &'a [u8],
+    offset: RefCell<usize>,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(buf: &'a [u8]) -> Cursor {
+        Cursor {
+            buf,
+            offset: RefCell::new(0),
+        }
+    }
+
+    fn read_cstr(&self) -> Result<&str, io::Error> {
+        if let Some(pos) = self.cur_buf().iter().position(|b| *b == 0) {
+            let val = std::str::from_utf8(&self.cur_buf()[..pos]).map_err(input_err)?;
+            *self.offset.borrow_mut() += pos + 1;
+            Ok(val)
+        } else {
+            Err(input_err(CodecError::StringNoTerminator))
+        }
+    }
+
+    fn read_u16(&self) -> Result<u16, io::Error> {
+        if self.cur_buf().len() < 2 {
+            return Err(input_err("not enough buffer for an Int16"));
+        }
+        let val = NetworkEndian::read_u16(self.cur_buf());
+        *self.offset.borrow_mut() += 2;
+        Ok(val)
+    }
+
+    fn read_u32(&self) -> Result<u32, io::Error> {
+        if self.buf.len() < 2 {
+            return Err(input_err("not enough buffer for an Int32"));
+        }
+        let val = NetworkEndian::read_u32(self.cur_buf());
+        *self.offset.borrow_mut() += 4;
+        Ok(val)
+    }
+
+    fn cur_buf(&self) -> &[u8] {
+        &self.buf[*self.offset.borrow()..]
     }
 }
 
 /// Read the first full null-terminated string in `slice`
 ///
 /// Returns the slice starting just after the string that was read
-fn read_cstr(slice: &[u8], max: usize) -> Result<(&str, &[u8]), io::Error> {
-    fn err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-        io::Error::new(io::ErrorKind::InvalidInput, source.into())
-    };
+fn read_cstr(slice: &[u8]) -> Result<(&str, &[u8]), io::Error> {
     if let Some(pos) = slice.iter().position(|b| *b == 0) {
-        if pos > max {
-            return Err(err(CodecError::StringTooLong));
-        }
         Ok((
-            std::str::from_utf8(&slice[..pos]).map_err(err)?,
+            std::str::from_utf8(&slice[..pos]).map_err(input_err)?,
             &slice[pos + 1..],
         ))
     } else {
-        Err(err(CodecError::StringNoTerminator))
+        Err(input_err(CodecError::StringNoTerminator))
     }
+}
+
+fn unsupported_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, source.into())
+}
+
+/// An actual error in the input
+fn input_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, source.into())
 }

@@ -75,6 +75,11 @@ pub struct Session {
     sql_safe_updates: SessionVar<bool>,
     /// A map from statement names to SQL queries
     pub prepared_statements: HashMap<String, Prepared>,
+    /// Portals associated with the current session
+    ///
+    /// Portals are primarily a way to retrieve the results for a query with all
+    /// parameters bound.
+    portals: HashMap<String, Portal>,
 }
 
 impl std::fmt::Debug for Session {
@@ -89,6 +94,7 @@ impl std::fmt::Debug for Session {
                 "prepared_statements(count)",
                 &self.prepared_statements.len(),
             )
+            .field("portals(count)", &self.portals.len())
             .finish()
     }
 }
@@ -103,6 +109,7 @@ impl std::default::Default for Session {
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             prepared_statements: HashMap::new(),
+            portals: HashMap::new(),
         }
     }
 }
@@ -204,6 +211,34 @@ impl Session {
     pub fn sql_safe_updates(&self) -> bool {
         *self.sql_safe_updates.value()
     }
+
+    /// Ensure that the given portal exists
+    ///
+    /// **Errors** if the statement name has not be set
+    pub fn set_portal(
+        &mut self,
+        portal_name: String,
+        statement_name: String,
+        return_field_formats: Vec<bool>,
+    ) -> Result<(), failure::Error> {
+        if self.prepared_statements.contains_key(&statement_name) {
+            self.portals.insert(
+                portal_name,
+                Portal {
+                    statement_name,
+                    return_field_formats,
+                },
+            );
+            Ok(())
+        } else {
+            failure::bail!(
+                "statement does not exist for portal creation: \
+                 statement={:?} portal={:?}",
+                statement_name,
+                portal_name
+            );
+        }
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
@@ -301,4 +336,11 @@ impl Var for SessionVar<bool> {
 pub struct Prepared {
     pub raw_sql: String,
     pub parsed: crate::ParsedSelect,
+}
+
+#[derive(Debug)]
+pub struct Portal {
+    statement_name: String,
+    /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
+    return_field_formats: Vec<bool>,
 }
