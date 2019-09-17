@@ -109,6 +109,13 @@ For maximum style points, use `watch-sql` for some live query monitoring:
 $ docker-compose run cli watch-sql "PEEK q01"
 ```
 
+To ensure that materialized reflects all changes to the source data, you can
+run:
+
+```bash session
+$ docker-compose run schema-registry flush-tables
+```
+
 [CH-benCHmark]: https://db.in.tum.de/research/projects/CHbenCHmark/index.shtml?lang=en
 [docker-compose]: https://docs.docker.com/compose/
 
