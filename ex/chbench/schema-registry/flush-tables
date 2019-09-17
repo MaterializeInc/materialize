@@ -1,0 +1,15 @@
+#! /usr/bin/env bash
+
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+set -exo pipefail
+
+TABLES="customer district history item nation neworder order orderline region stock supplier warehouse"
+for table in ${TABLES}; do
+  # shellcheck disable=SC2086
+  kafka-avro-console-producer --broker-list kafka:9092 --topic tpch.tpch.$table \
+    --property value.schema="$(curl schema-registry:8081/subjects/mysql.tpcch.${table}-value/versions/1 | jq -r .schema | jq .)" <<<'{"before":null,"after":null,"source":{"version":{"string":"0.9.5.Final"},"connector":{"string":"mysql"},"name":"tpch","server_id":0,"ts_sec":0,"gtid":null,"file":"binlog.000004","pos":951896181,"row":0,"snapshot":{"boolean":true},"thread":null,"db":{"string":"tpch"},"table":{"string":"lineitem"},"query":null},"op":"c","ts_ms":{"long":1560886948093}}'
+done
