@@ -742,13 +742,13 @@ impl Planner {
                 )
             })
             .unwrap_or_else(|| {
-                let typ = RelationType::new(vec![ColumnType::new(ScalarType::String).name("x")]);
+                let typ = RelationType::new(vec![]);
                 Ok((
                     RelationExpr::Constant {
-                        rows: vec![vec![Datum::String("X".into())]],
+                        rows: vec![vec![]],
                         typ: typ.clone(),
                     },
-                    Scope::from_source(Some("dual"), typ, Some(outer_scope.clone())),
+                    Scope::from_source(None, typ, Some(outer_scope.clone())),
                 ))
             })?;
 
