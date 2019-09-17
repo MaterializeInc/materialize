@@ -11,6 +11,7 @@
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::convert::TryFrom;
 
 use byteorder::{ByteOrder, NetworkEndian};
@@ -138,18 +139,17 @@ impl Encoder for Codec {
                 buf.put_u16_be(fields.len() as u16);
                 for (f, ff) in fields.iter().zip(formats) {
                     if let Some(f) = f {
-                        match ff {
-                            FieldFormat::Text => {
-                                let s: Cow<[u8]> = f.to_text();
-                                buf.put_u32_be(s.len() as u32);
-                                buf.put(&*s);
-                            }
-                            FieldFormat::Binary => buf.put(
-                                &*f.to_binary()
-                                    .map_err(unsupported_err)?),
-                        }
+                        let s: Cow<[u8]> = match ff {
+                            FieldFormat::Text => f.to_text(),
+                            FieldFormat::Binary => f.to_binary().map_err(|e| {
+                                log::error!("binary err: {}", e);
+                                unsupported_err(e)
+                            })?,
+                        };
+                        buf.put_u32_be(s.len() as u32);
+                        buf.put(&*s);
                     } else {
-                        buf.put_i32_be(-1)
+                        buf.put_i32_be(-1);
                     }
                 }
             }
@@ -282,6 +282,7 @@ impl Decoder for Codec {
                         b'D' => parse_describe(&buf)?,
                         b'B' => parse_bind(&buf)?,
                         b'S' => FrontendMessage::Sync,
+                        b'E' => parse_execute(&buf)?,
 
                         _ => {
                             return Err(io::Error::new(
@@ -400,8 +401,21 @@ fn parse_bind(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
     })
 }
 
-use std::cell::RefCell;
+fn parse_execute(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
+    let buf = Cursor::new(buf);
+    let portal_name = buf.read_cstr()?.to_string();
+    let max_rows = buf.read_u32()?;
+    if max_rows > 0 {
+        log::warn!(
+            "Ignoring maximum_rows={} for portal={:?}",
+            max_rows,
+            portal_name
+        );
+    }
+    Ok(FrontendMessage::Execute { portal_name })
+}
 
+/// A struct that moves its cursor forward as it reads items
 #[derive(Debug)]
 struct Cursor<'a> {
     buf: &'a [u8],

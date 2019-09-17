@@ -10,7 +10,7 @@ use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::Stream;
 
-use super::{coordinator, CmdKind, Command, Response};
+use super::{coordinator, Command, CommandKind, Response};
 
 enum Message {
     Command(Command),
@@ -42,9 +42,12 @@ pub fn serve<C>(
                 Message::Command(mut cmd) => {
                     let conn_id = cmd.conn_id;
                     let sql_result = match cmd.kind {
-                        CmdKind::Query { sql } => planner.handle_command(&mut cmd.session, sql),
-                        CmdKind::ParseStatement { sql, name } => {
+                        CommandKind::Query { sql } => planner.handle_command(&mut cmd.session, sql),
+                        CommandKind::Parse { sql, name } => {
                             planner.handle_parse_command(&mut cmd.session, sql, name)
+                        }
+                        CommandKind::Execute { portal_name } => {
+                            planner.handle_execute_command(&cmd.session, &portal_name)
                         }
                     }
                     .map(|plan| {

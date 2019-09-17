@@ -251,7 +251,7 @@ where
                 send_immediate_rows(typ, rows)
             }
 
-            Plan::Parsed { name } => SqlResponse::ParseComplete { name },
+            Plan::Parsed { name } => SqlResponse::Parsed { name },
         }
     }
 

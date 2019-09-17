@@ -74,6 +74,12 @@ pub enum FrontendMessage {
         /// The format of each field, if the field is empty then it should be Text
         return_field_formats: Vec<FieldFormat>,
     },
+
+    /// Execute a bound portal
+    Execute {
+        portal_name: String,
+    },
+
     /// Finish an extended query
     Sync,
 
