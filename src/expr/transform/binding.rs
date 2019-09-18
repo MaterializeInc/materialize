@@ -136,13 +136,9 @@ impl Hoist {
         pub fn extract(expr: &mut RelationExpr, env: &mut Environment) {
             // NB: visit1_mut() invokes the callback on the children of a RelationExpr.
             // That is not good enough for RelationExpr::Let since the value and body
-            // might just be another RelationExpr::Let. Hence we recurse on extract().
-            if let RelationExpr::Let { .. } = expr {
-                if let RelationExpr::Let { value, .. } = expr {
-                    extract(value, env);
-                } else {
-                    unreachable!();
-                }
+            // might just be RelationExpr::Let's, too. Hence we recurse on extract().
+            if let RelationExpr::Let { value, .. } = expr {
+                extract(value, env);
                 env.extract(expr);
                 // By the magic vested in env.extract(), expr now is let's body.
                 extract(expr, env);
