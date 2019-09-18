@@ -294,30 +294,6 @@ where
                     self.render_topk(relation_expr, scope, worker_index);
                 }
 
-                RelationExpr::OrDefault { input, default } => {
-                    use differential_dataflow::operators::reduce::Threshold;
-                    use differential_dataflow::operators::Join;
-                    use timely::dataflow::operators::to_stream::ToStream;
-
-                    self.ensure_rendered(input, scope, worker_index);
-                    let input = self.collection(input).unwrap();
-
-                    let present = input.map(|_| ()).distinct();
-                    let value = if worker_index == 0 {
-                        vec![(((), default.clone()), Default::default(), 1isize)]
-                    } else {
-                        vec![]
-                    };
-                    let default = value
-                        .to_stream(scope)
-                        .as_collection()
-                        .antijoin(&present)
-                        .map(|((), default)| default);
-
-                    self.collections
-                        .insert(relation_expr.clone(), input.concat(&default));
-                }
-
                 RelationExpr::Negate { input } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let collection = self.collection(input).unwrap().negate();

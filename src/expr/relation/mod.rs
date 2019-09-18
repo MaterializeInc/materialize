@@ -100,14 +100,6 @@ pub enum RelationExpr {
         /// Number of records to retain, where the limit may be exceeded in the case of ties.
         limit: usize,
     },
-    /// If the input is empty, return a default row
-    // Used only for some SQL aggregate edge cases
-    OrDefault {
-        /// The source collection.
-        input: Box<RelationExpr>,
-        /// A row to introduce should `input` be empty.
-        default: Vec<Datum>,
-    },
     /// Return a dataflow where the row counts are negated
     Negate {
         /// The source collection.
@@ -196,13 +188,6 @@ impl RelationExpr {
                 RelationType { column_types }
             }
             RelationExpr::TopK { input, .. } => input.typ(),
-            RelationExpr::OrDefault { input, default } => {
-                let typ = input.typ();
-                for (column_typ, datum) in typ.column_types.iter().zip(default.iter()) {
-                    assert!(datum.is_instance_of(column_typ));
-                }
-                typ
-            }
             RelationExpr::Negate { input } => input.typ(),
             RelationExpr::Distinct { input } => input.typ(),
             RelationExpr::Threshold { input } => input.typ(),
@@ -357,14 +342,6 @@ impl RelationExpr {
             group_key,
             order_key,
             limit,
-        }
-    }
-
-    /// Substitutes `default` if `self` is empty.
-    pub fn or_default(self, default: Vec<Datum>) -> Self {
-        RelationExpr::OrDefault {
-            input: Box::new(self),
-            default,
         }
     }
 
@@ -528,9 +505,6 @@ impl RelationExpr {
             RelationExpr::TopK { input, .. } => {
                 f(input);
             }
-            RelationExpr::OrDefault { input, .. } => {
-                f(input);
-            }
             RelationExpr::Negate { input } => f(input),
             RelationExpr::Distinct { input } => f(input),
             RelationExpr::Threshold { input } => f(input),
@@ -579,9 +553,6 @@ impl RelationExpr {
                 f(input);
             }
             RelationExpr::TopK { input, .. } => {
-                f(input);
-            }
-            RelationExpr::OrDefault { input, .. } => {
                 f(input);
             }
             RelationExpr::Negate { input } => f(input),
@@ -735,12 +706,6 @@ impl RelationExpr {
                 order_key: _,
                 limit: _,
             } => to_doc!("TopK { ", "\"Oops, TopK is not yet implemented!\"", " }").group(),
-            RelationExpr::OrDefault { input, default } => {
-                let default =
-                    Doc::intersperse(default.iter().map(Doc::as_string), to_doc!(",", Space));
-                let default = to_tightly_braced_doc("default: [", default.nest(2), "]").group();
-                to_braced_doc("OrDefault {", to_doc!(default, ",", Space, input), "}")
-            }
             RelationExpr::Negate { input } => to_braced_doc("Negate {", input, "}"),
             RelationExpr::Distinct { input } => to_braced_doc("Distinct {", input, "}"),
             RelationExpr::Threshold { input } => to_braced_doc("Threshold {", input, "}"),

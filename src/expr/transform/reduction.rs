@@ -32,7 +32,6 @@ impl FoldConstants {
             RelationExpr::Let { .. } => { /*constant prop done in InlineLet*/ }
             RelationExpr::Reduce { .. } => { /*too complicated*/ }
             RelationExpr::TopK { .. } => { /*too complicated*/ }
-            RelationExpr::OrDefault { .. } => { /*too complicated*/ }
             RelationExpr::Negate { .. } => { /*cannot currently negate constants*/ }
             RelationExpr::Distinct { input } => {
                 if let RelationExpr::Constant { rows, typ } = &**input {
