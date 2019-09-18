@@ -1050,7 +1050,12 @@ impl Planner {
                     if sql_func.args.len() != 2 {
                         bail!("mod requires exactly two arguments");
                     }
-                    self.plan_binary_op(ctx, &BinaryOperator::Modulus, &sql_func.args[0], &sql_func.args[1])
+                    self.plan_binary_op(
+                        ctx,
+                        &BinaryOperator::Modulus,
+                        &sql_func.args[0],
+                        &sql_func.args[1],
+                    )
                 }
 
                 "nullif" => {
