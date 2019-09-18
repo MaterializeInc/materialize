@@ -5,11 +5,13 @@
 
 pub mod func;
 
+use pretty::{BoxDoc, Doc};
 use repr::Datum;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use self::func::{BinaryFunc, UnaryFunc, VariadicFunc};
+use crate::pretty_pretty::to_tightly_braced_doc;
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -247,5 +249,164 @@ impl ScalarExpr {
                 d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
             },
         }
+    }
+
+    /// Converts this [`ScalarExpr`] to a [`Doc`] or document for pretty
+    /// printing. See [`RelationExpr::to_doc`] for details on the approach.
+    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
+        use ScalarExpr::*;
+
+        fn needs_wrap(expr: &ScalarExpr) -> bool {
+            match expr {
+                Column(_) | Literal(_) | CallUnary { .. } | CallVariadic { .. } => false,
+                CallBinary { .. } | If { .. } => true,
+            }
+        }
+
+        fn maybe_wrap(expr: &ScalarExpr) -> Doc<BoxDoc<()>> {
+            if needs_wrap(expr) {
+                to_tightly_braced_doc("(", expr, ")")
+            } else {
+                expr.to_doc()
+            }
+        };
+
+        match self {
+            Column(n) => to_doc!("#", n.to_string()),
+            Literal(d) => d.into(),
+            CallUnary { func, expr } => {
+                let mut doc = Doc::from(func);
+                if !func.display_is_symbolic() && !needs_wrap(expr) {
+                    doc = doc.append(" ");
+                }
+                doc.append(maybe_wrap(expr))
+            }
+            CallBinary { func, expr1, expr2 } => to_doc!(
+                maybe_wrap(expr1).group(),
+                Doc::space(),
+                func,
+                Doc::space(),
+                maybe_wrap(expr2).group()
+            ),
+            CallVariadic { func, exprs } => to_doc!(
+                func,
+                to_tightly_braced_doc(
+                    "(",
+                    Doc::intersperse(exprs, to_doc!(",", Doc::space())),
+                    ")"
+                )
+            ),
+            If { cond, then, els } => to_doc!(
+                "if",
+                to_doc!(Doc::space(), cond.to_doc()).nest(2),
+                Doc::space(),
+                "then",
+                to_doc!(Doc::space(), then.to_doc()).nest(2),
+                Doc::space(),
+                "else",
+                to_doc!(Doc::space(), els.to_doc()).nest(2)
+            ),
+        }
+        .group()
+    }
+}
+
+impl<'a> From<&'a ScalarExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(s: &'a ScalarExpr) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        s.to_doc()
+    }
+}
+
+impl<'a> From<&'a Box<ScalarExpr>> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(s: &'a Box<ScalarExpr>) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        s.to_doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pretty_scalar_expr() {
+        let plus_expr = ScalarExpr::literal(Datum::Int64(1))
+            .call_binary(ScalarExpr::literal(Datum::Int64(2)), BinaryFunc::AddInt64);
+        assert_eq!(plus_expr.to_doc().pretty(72).to_string(), "1 + 2");
+
+        let regex_expr = ScalarExpr::literal(Datum::String("foo".into())).call_binary(
+            ScalarExpr::literal(Datum::from(regex::Regex::new("f?oo").unwrap())),
+            BinaryFunc::MatchRegex,
+        );
+        assert_eq!(
+            regex_expr.to_doc().pretty(72).to_string(),
+            r#""foo" ~ /f?oo/"#
+        );
+
+        let neg_expr = ScalarExpr::literal(Datum::Int64(1)).call_unary(UnaryFunc::NegInt64);
+        assert_eq!(neg_expr.to_doc().pretty(72).to_string(), "-1");
+
+        let bool_expr = ScalarExpr::literal(Datum::True)
+            .call_binary(ScalarExpr::literal(Datum::False), BinaryFunc::And)
+            .call_unary(UnaryFunc::Not);
+        assert_eq!(
+            bool_expr.to_doc().pretty(72).to_string(),
+            "!(true && false)"
+        );
+
+        let cond_expr = ScalarExpr::if_then_else(
+            ScalarExpr::literal(Datum::True),
+            neg_expr.clone(),
+            plus_expr.clone(),
+        );
+        assert_eq!(
+            cond_expr.to_doc().pretty(72).to_string(),
+            "if true then -1 else 1 + 2"
+        );
+
+        let variadic_expr = ScalarExpr::CallVariadic {
+            func: VariadicFunc::Coalesce,
+            exprs: vec![ScalarExpr::Column(7), plus_expr, neg_expr.clone()],
+        };
+        assert_eq!(
+            variadic_expr.to_doc().pretty(72).to_string(),
+            "coalesce(#7, 1 + 2, -1)"
+        );
+
+        let mega_expr = ScalarExpr::CallVariadic {
+            func: VariadicFunc::Coalesce,
+            exprs: vec![cond_expr],
+        }
+        .call_binary(neg_expr, BinaryFunc::ModInt64)
+        .call_unary(UnaryFunc::IsNull)
+        .call_unary(UnaryFunc::Not)
+        .call_binary(bool_expr, BinaryFunc::Or);
+        assert_eq!(
+            mega_expr.to_doc().pretty(72).to_string(),
+            "!isnull(coalesce(if true then -1 else 1 + 2) % -1) || !(true && false)"
+        );
+        println!("{}", mega_expr.to_doc().pretty(64).to_string());
+        assert_eq!(
+            mega_expr.to_doc().pretty(64).to_string(),
+            "!isnull(coalesce(if true then -1 else 1 + 2) % -1)
+||
+!(true && false)"
+        );
+        assert_eq!(
+            mega_expr.to_doc().pretty(16).to_string(),
+            "!isnull(
+  coalesce(
+    if
+      true
+    then
+      -1
+    else
+      1 + 2
+  )
+  %
+  -1
+)
+||
+!(true && false)"
+        )
     }
 }

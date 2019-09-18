@@ -626,17 +626,6 @@ impl RelationExpr {
     /// identifies the outputs for `Project` and the scalars for `Map` by name, whereas the
     /// sole inputs are nameless.
     pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
-        // A woefully incomplete helper function to format ScalarExprs. Right now, it elides
-        // most of them and only shows column numbers and literals.
-        fn fmt_scalar(scalar_expr: &ScalarExpr) -> String {
-            match scalar_expr {
-                ScalarExpr::Column(n) => format!("#{}", n),
-                ScalarExpr::Literal(d) => format!("{}", d),
-                _ => String::from("..."),
-            }
-        }
-
-        // Do the actual conversion from RelationExpr to Doc.
         let doc = match self {
             RelationExpr::Constant { rows, typ: _ } => {
                 let rows = Doc::intersperse(
@@ -660,16 +649,13 @@ impl RelationExpr {
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
             RelationExpr::Map { input, scalars } => {
-                let scalars = Doc::intersperse(
-                    scalars.iter().map(|(s, _)| fmt_scalar(s)),
-                    to_doc!(",", Space),
-                );
+                let scalars =
+                    Doc::intersperse(scalars.iter().map(|(expr, _typ)| expr), to_doc!(",", Space));
                 let scalars = to_tightly_braced_doc("scalars: [", scalars.nest(2), "]").group();
                 to_braced_doc("Map {", to_doc!(scalars, ",", Space, input), "}")
             }
             RelationExpr::Filter { input, predicates } => {
-                let predicates =
-                    Doc::intersperse(predicates.iter().map(fmt_scalar), to_doc!(",", Space));
+                let predicates = Doc::intersperse(predicates, to_doc!(",", Space));
                 let predicates =
                     to_tightly_braced_doc("predicates: [", predicates.nest(2), "]").group();
                 to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
