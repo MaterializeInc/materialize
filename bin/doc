@@ -36,11 +36,7 @@ cargo() {
 
 # Use nightly until stable supports intra-Rustdoc links.
 # https://github.com/rust-lang/rust/issues/43466
-#
-# TODO(benesch): consider removing --no-deps when Cargo doesn't get thoroughly
-# confused by having multiple versions of the same crate.
-# https://github.com/rust-lang/rust/issues/56169
-cargo doc --no-deps
+cargo doc
 
 crates=$(cargo metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")
