@@ -29,9 +29,10 @@
 //!     ColumnType::new(ScalarType::Bool),
 //! ]);
 //!
+//! // .transform() will deduplicate any predicates
 //! Filter.transform(&mut expr, &typ);
 //!
-//! let correct = input.filter(vec![predicate0, predicate1, predicate2]);
+//! let correct = input.filter(vec![predicate0]);
 //!
 //! assert_eq!(expr, correct);
 //! ```
