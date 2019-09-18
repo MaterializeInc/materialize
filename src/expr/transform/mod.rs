@@ -9,6 +9,7 @@ use crate::RelationExpr;
 use repr::RelationType;
 
 pub mod aggregation;
+pub mod binding;
 pub mod distinct_union;
 pub mod empty_map;
 pub mod fusion;
@@ -87,8 +88,10 @@ impl Default for Optimizer {
                     Box::new(crate::transform::inline_let::InlineLet),
                 ],
             }),
+            // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::fusion::project::Project),
+            Box::new(crate::transform::binding::Hoist),
         ];
         Self { transforms }
     }
