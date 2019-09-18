@@ -33,14 +33,6 @@ impl FoldConstants {
             RelationExpr::Reduce { .. } => { /*too complicated*/ }
             RelationExpr::TopK { .. } => { /*too complicated*/ }
             RelationExpr::Negate { .. } => { /*cannot currently negate constants*/ }
-            RelationExpr::Distinct { input } => {
-                if let RelationExpr::Constant { rows, typ } = &**input {
-                    let mut rows = rows.clone();
-                    rows.sort();
-                    rows.dedup();
-                    *relation = RelationExpr::constant(rows, typ.clone());
-                }
-            }
             RelationExpr::Threshold { input } => {
                 if let RelationExpr::Constant { .. } = &**input {
                     *relation = input.take();

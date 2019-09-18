@@ -105,11 +105,6 @@ pub enum RelationExpr {
         /// The source collection.
         input: Box<RelationExpr>,
     },
-    /// Return a dataflow where the row counts are all set to 1
-    Distinct {
-        /// The source collection.
-        input: Box<RelationExpr>,
-    },
     /// Keep rows from a dataflow where the row counts are positive
     Threshold {
         /// The source collection.
@@ -189,7 +184,6 @@ impl RelationExpr {
             }
             RelationExpr::TopK { input, .. } => input.typ(),
             RelationExpr::Negate { input } => input.typ(),
-            RelationExpr::Distinct { input } => input.typ(),
             RelationExpr::Threshold { input } => input.typ(),
             RelationExpr::Union { left, right } => {
                 let left_typ = left.typ();
@@ -354,9 +348,14 @@ impl RelationExpr {
 
     /// Removes all but the first occurrence of each row.
     pub fn distinct(self) -> Self {
-        RelationExpr::Distinct {
-            input: Box::new(self),
-        }
+        let arity = self.arity();
+        self.distinct_by((0..arity).collect())
+    }
+
+    /// Removes all but the first occurrence of each key. Columns not included
+    /// in the `group_key` are discarded.
+    pub fn distinct_by(self, group_key: Vec<usize>) -> Self {
+        self.reduce(group_key, vec![])
     }
 
     /// Discards rows with a negative frequency.
@@ -506,7 +505,6 @@ impl RelationExpr {
                 f(input);
             }
             RelationExpr::Negate { input } => f(input),
-            RelationExpr::Distinct { input } => f(input),
             RelationExpr::Threshold { input } => f(input),
             RelationExpr::Union { left, right } => {
                 f(left);
@@ -556,7 +554,6 @@ impl RelationExpr {
                 f(input);
             }
             RelationExpr::Negate { input } => f(input),
-            RelationExpr::Distinct { input } => f(input),
             RelationExpr::Threshold { input } => f(input),
             RelationExpr::Union { left, right } => {
                 f(left);
@@ -661,18 +658,22 @@ impl RelationExpr {
                 );
                 let keys = to_tightly_braced_doc("group_key: [", keys.nest(2), "]").group();
 
-                let aggregates = Doc::intersperse(
-                    aggregates.iter().map(|(a, _)| format!("{:?}", a.func)),
-                    to_doc!(",", Space),
-                );
-                let aggregates =
-                    to_tightly_braced_doc("aggregates: [", aggregates.nest(2), "]").group();
+                if aggregates.is_empty() {
+                    to_braced_doc("Distinct {", to_doc!(keys, ",", Space, input), "}")
+                } else {
+                    let aggregates = Doc::intersperse(
+                        aggregates.iter().map(|(a, _)| format!("{:?}", a.func)),
+                        to_doc!(",", Space),
+                    );
+                    let aggregates =
+                        to_tightly_braced_doc("aggregates: [", aggregates.nest(2), "]").group();
 
-                to_braced_doc(
-                    "Reduce {",
-                    to_doc!(keys, ",", Space, aggregates, ",", Space, input),
-                    "}",
-                )
+                    to_braced_doc(
+                        "Reduce {",
+                        to_doc!(keys, ",", Space, aggregates, ",", Space, input),
+                        "}",
+                    )
+                }
             }
             RelationExpr::TopK {
                 input: _,
@@ -681,7 +682,6 @@ impl RelationExpr {
                 limit: _,
             } => to_doc!("TopK { ", "\"Oops, TopK is not yet implemented!\"", " }").group(),
             RelationExpr::Negate { input } => to_braced_doc("Negate {", input, "}"),
-            RelationExpr::Distinct { input } => to_braced_doc("Distinct {", input, "}"),
             RelationExpr::Threshold { input } => to_braced_doc("Threshold {", input, "}"),
             RelationExpr::Union { left, right } => {
                 to_braced_doc("Union {", to_doc!(left, ",", Space, right), "}")
