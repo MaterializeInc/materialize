@@ -4,8 +4,10 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::convert::TryFrom;
+use std::fmt;
 
 use chrono::NaiveDateTime;
+use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
 use crate::like::build_like_regex_from_string;
@@ -645,6 +647,55 @@ impl BinaryFunc {
     }
 }
 
+impl fmt::Display for BinaryFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            BinaryFunc::And => f.write_str("&&"),
+            BinaryFunc::Or => f.write_str("||"),
+            BinaryFunc::AddInt32 => f.write_str("+"),
+            BinaryFunc::AddInt64 => f.write_str("+"),
+            BinaryFunc::AddFloat32 => f.write_str("+"),
+            BinaryFunc::AddFloat64 => f.write_str("+"),
+            BinaryFunc::AddTimestampInterval => f.write_str("+"),
+            BinaryFunc::AddDecimal => f.write_str("+"),
+            BinaryFunc::SubInt32 => f.write_str("-"),
+            BinaryFunc::SubInt64 => f.write_str("-"),
+            BinaryFunc::SubFloat32 => f.write_str("-"),
+            BinaryFunc::SubFloat64 => f.write_str("-"),
+            BinaryFunc::SubTimestampInterval => f.write_str("-"),
+            BinaryFunc::SubDecimal => f.write_str("-"),
+            BinaryFunc::MulInt32 => f.write_str("*"),
+            BinaryFunc::MulInt64 => f.write_str("*"),
+            BinaryFunc::MulFloat32 => f.write_str("*"),
+            BinaryFunc::MulFloat64 => f.write_str("*"),
+            BinaryFunc::MulDecimal => f.write_str("*"),
+            BinaryFunc::DivInt32 => f.write_str("/"),
+            BinaryFunc::DivInt64 => f.write_str("/"),
+            BinaryFunc::DivFloat32 => f.write_str("/"),
+            BinaryFunc::DivFloat64 => f.write_str("/"),
+            BinaryFunc::DivDecimal => f.write_str("/"),
+            BinaryFunc::ModInt32 => f.write_str("%"),
+            BinaryFunc::ModInt64 => f.write_str("%"),
+            BinaryFunc::ModFloat32 => f.write_str("%"),
+            BinaryFunc::ModFloat64 => f.write_str("%"),
+            BinaryFunc::ModDecimal => f.write_str("%"),
+            BinaryFunc::Eq => f.write_str("="),
+            BinaryFunc::NotEq => f.write_str("!="),
+            BinaryFunc::Lt => f.write_str("<"),
+            BinaryFunc::Lte => f.write_str("<="),
+            BinaryFunc::Gt => f.write_str(">"),
+            BinaryFunc::Gte => f.write_str(">="),
+            BinaryFunc::MatchRegex => f.write_str("~"),
+        }
+    }
+}
+
+impl<'a> From<&'a BinaryFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(f: &'a BinaryFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        Doc::text(f.to_string())
+    }
+}
+
 pub fn is_null(a: Datum) -> Datum {
     Datum::from(a == Datum::Null)
 }
@@ -712,6 +763,62 @@ impl UnaryFunc {
             UnaryFunc::BuildLikeRegex => build_like_regex,
         }
     }
+
+    /// Reports whether this function has a symbolic string representation.
+    pub fn display_is_symbolic(self) -> bool {
+        let out = match self {
+            UnaryFunc::Not
+            | UnaryFunc::NegInt32
+            | UnaryFunc::NegInt64
+            | UnaryFunc::NegFloat32
+            | UnaryFunc::NegFloat64 => true,
+            _ => false,
+        };
+        // This debug assertion is an attempt to ensure that this function
+        // stays in sync when new `UnaryFunc` variants are added.
+        debug_assert_eq!(out, self.to_string().len() < 3);
+        out
+    }
+}
+
+impl fmt::Display for UnaryFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            UnaryFunc::Not => f.write_str("!"),
+            UnaryFunc::IsNull => f.write_str("isnull"),
+            UnaryFunc::NegInt32 => f.write_str("-"),
+            UnaryFunc::NegInt64 => f.write_str("-"),
+            UnaryFunc::NegFloat32 => f.write_str("-"),
+            UnaryFunc::NegFloat64 => f.write_str("-"),
+            UnaryFunc::AbsInt32 => f.write_str("abs"),
+            UnaryFunc::AbsInt64 => f.write_str("abs"),
+            UnaryFunc::AbsFloat32 => f.write_str("abs"),
+            UnaryFunc::AbsFloat64 => f.write_str("abs"),
+            UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
+            UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),
+            UnaryFunc::CastInt32ToInt64 => f.write_str("i32toi64"),
+            UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
+            UnaryFunc::CastInt32ToDecimal => f.write_str("i32todec"),
+            UnaryFunc::CastInt64ToDecimal => f.write_str("i64todec"),
+            UnaryFunc::CastInt64ToFloat32 => f.write_str("i64tof32"),
+            UnaryFunc::CastInt64ToFloat64 => f.write_str("i64tof64"),
+            UnaryFunc::CastFloat32ToInt64 => f.write_str("f32toi64"),
+            UnaryFunc::CastFloat32ToFloat64 => f.write_str("f32tof64"),
+            UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
+            UnaryFunc::CastDecimalToInt32 => f.write_str("dectoi32"),
+            UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
+            UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
+            UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
+            UnaryFunc::CastDateToTimestamp => f.write_str("datetotimestamp"),
+            UnaryFunc::BuildLikeRegex => f.write_str("compilelike"),
+        }
+    }
+}
+
+impl<'a> From<&'a UnaryFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(f: &'a UnaryFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        Doc::text(f.to_string())
+    }
 }
 
 pub fn coalesce(datums: Vec<Datum>) -> Datum {
@@ -731,6 +838,20 @@ impl VariadicFunc {
         match self {
             VariadicFunc::Coalesce => coalesce,
         }
+    }
+}
+
+impl fmt::Display for VariadicFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            VariadicFunc::Coalesce => f.write_str("coalesce"),
+        }
+    }
+}
+
+impl<'a> From<&'a VariadicFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(f: &'a VariadicFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        Doc::text(f.to_string())
     }
 }
 
