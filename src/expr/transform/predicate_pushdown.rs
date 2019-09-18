@@ -84,7 +84,10 @@ impl PredicatePushdown {
                     // to individual elements of `inputs`.
 
                     let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-                    let input_arities = input_types.iter().map(|i| i.column_types.len()).collect::<Vec<_>>();
+                    let input_arities = input_types
+                        .iter()
+                        .map(|i| i.column_types.len())
+                        .collect::<Vec<_>>();
 
                     let mut offset = 0;
                     let mut prior_arities = Vec::new();
