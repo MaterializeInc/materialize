@@ -886,13 +886,58 @@ pub struct AggregateExpr {
 mod tests {
     use super::*;
 
-    fn base() -> RelationExpr {
+    fn constant(rows: Vec<Vec<Datum>>) -> RelationExpr {
         RelationExpr::Constant {
-            rows: Vec::new(),
+            rows,
             typ: RelationType {
                 column_types: Vec::new(),
             },
         }
+    }
+
+    fn base() -> RelationExpr {
+        constant(vec![])
+    }
+
+    #[test]
+    fn test_pretty_constant() {
+        assert_eq!(constant(vec![]).to_doc().pretty(72).to_string(), "()");
+        assert_eq!(constant(vec![vec![]]).to_doc().pretty(72).to_string(), "()");
+
+        assert_eq!(
+            constant(vec![vec![Datum::from(1)]])
+                .to_doc()
+                .pretty(72)
+                .to_string(),
+            "1"
+        );
+
+        assert_eq!(
+            constant(vec![vec![Datum::from(1)], vec![Datum::from(2)]])
+                .to_doc()
+                .pretty(72)
+                .to_string(),
+            "((1), (2))"
+        );
+
+        assert_eq!(
+            constant(vec![vec![Datum::from(1), Datum::from(2)]])
+                .to_doc()
+                .pretty(72)
+                .to_string(),
+            "(1, 2)"
+        );
+
+        assert_eq!(
+            constant(vec![
+                vec![Datum::from(1), Datum::from(2)],
+                vec![Datum::from(1), Datum::from(2)]
+            ])
+            .to_doc()
+            .pretty(72)
+            .to_string(),
+            "((1, 2), (1, 2))"
+        );
     }
 
     #[test]
