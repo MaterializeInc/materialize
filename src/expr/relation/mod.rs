@@ -639,25 +639,14 @@ impl RelationExpr {
         // Do the actual conversion from RelationExpr to Doc.
         let doc = match self {
             RelationExpr::Constant { rows, typ: _ } => {
-                // Death to the demon Clippy! It would happily complicate the signature of this
-                // very local helper function beyond any recognition.
-                #[allow(clippy::ptr_arg)]
-                fn row_to_doc(row: &Vec<Datum>) -> Doc<BoxDoc<()>> {
-                    let row = Doc::intersperse(row.iter().map(Doc::as_string), to_doc!(",", Space));
-                    to_tightly_braced_doc("(", row, ")")
-                }
-
-                if rows.len() == 1 && rows[0].len() == 1 {
-                    Doc::as_string(&rows[0][0])
-                } else if rows.len() == 1 {
-                    row_to_doc(&rows[0])
-                } else {
-                    let rows = Doc::intersperse(
-                        rows.iter().map(|r| row_to_doc(r).group()),
-                        to_doc!(",", Space),
-                    );
-                    to_tightly_braced_doc("(", rows, ")")
-                }
+                let rows = Doc::intersperse(
+                    rows.iter().map(|row| {
+                        let row = Doc::intersperse(row, to_doc!(",", Space));
+                        to_tightly_braced_doc("[", row, "]").group()
+                    }),
+                    to_doc!(",", Space),
+                );
+                to_tightly_braced_doc("Constant [", rows, "]")
             }
             RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
             RelationExpr::Let { name, value, body } => {
@@ -901,15 +890,21 @@ mod tests {
 
     #[test]
     fn test_pretty_constant() {
-        assert_eq!(constant(vec![]).to_doc().pretty(72).to_string(), "()");
-        assert_eq!(constant(vec![vec![]]).to_doc().pretty(72).to_string(), "()");
+        assert_eq!(
+            constant(vec![]).to_doc().pretty(72).to_string(),
+            "Constant []"
+        );
+        assert_eq!(
+            constant(vec![vec![]]).to_doc().pretty(72).to_string(),
+            "Constant [[]]"
+        );
 
         assert_eq!(
             constant(vec![vec![Datum::from(1)]])
                 .to_doc()
                 .pretty(72)
                 .to_string(),
-            "1"
+            "Constant [[1]]"
         );
 
         assert_eq!(
@@ -917,7 +912,7 @@ mod tests {
                 .to_doc()
                 .pretty(72)
                 .to_string(),
-            "((1), (2))"
+            "Constant [[1], [2]]"
         );
 
         assert_eq!(
@@ -925,7 +920,7 @@ mod tests {
                 .to_doc()
                 .pretty(72)
                 .to_string(),
-            "(1, 2)"
+            "Constant [[1, 2]]"
         );
 
         assert_eq!(
@@ -936,7 +931,21 @@ mod tests {
             .to_doc()
             .pretty(72)
             .to_string(),
-            "((1, 2), (1, 2))"
+            "Constant [[1, 2], [1, 2]]"
+        );
+
+        assert_eq!(
+            constant(vec![
+                vec![Datum::from(1), Datum::from(2)],
+                vec![Datum::from(1), Datum::from(2)]
+            ])
+            .to_doc()
+            .pretty(16)
+            .to_string(),
+            "Constant [
+  [1, 2],
+  [1, 2]
+]"
         );
     }
 
@@ -948,8 +957,8 @@ mod tests {
         };
 
         assert_eq!(
-            join.to_doc().pretty(72).to_string(),
-            "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], (), () }",
+            join.to_doc().pretty(82).to_string(),
+            "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], Constant [], Constant [] }",
         );
 
         assert_eq!(
@@ -959,8 +968,8 @@ mod tests {
     [(0, 0), (1, 0)],
     [(0, 1), (1, 1)]
   ],
-  (),
-  ()
+  Constant [],
+  Constant []
 }",
         );
     }

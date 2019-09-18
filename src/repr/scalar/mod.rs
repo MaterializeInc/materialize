@@ -9,6 +9,7 @@ pub mod regex;
 use chrono::{NaiveDate, NaiveDateTime};
 use failure::format_err;
 use ordered_float::OrderedFloat;
+use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::Interval as SqlInterval;
 use std::fmt::{self, Write};
@@ -399,6 +400,12 @@ impl fmt::Display for Datum {
                 write!(f, "/{}/", rex)
             }
         }
+    }
+}
+
+impl<'a> From<&'a Datum> for Doc<'a, BoxDoc<'a, ()>> {
+    fn from(datum: &'a Datum) -> Doc<'a, BoxDoc<'a, ()>> {
+        Doc::text(datum.to_string())
     }
 }
 
