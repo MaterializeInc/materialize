@@ -35,15 +35,16 @@ impl ProjectionPushdown {
 
         if let RelationExpr::Project { input, outputs } = relation {
             match &mut **input {
-                // Handled by `FoldConstants`.
-                RelationExpr::Constant { .. } => (),
+                // Handled by other transformations.
+                RelationExpr::Constant { .. } => (), // `FoldConstants`
+                RelationExpr::Project { .. } => (), // `fusion::Project`
 
                 // Nothing to be done.
                 RelationExpr::Get { .. } => (),
                 RelationExpr::Let { .. } => (),
-
-                // Handled by `fusion::Project`.
-                RelationExpr::Project { .. } => (),
+                RelationExpr::Reduce { .. } => (),
+                RelationExpr::Distinct { .. } => (),
+                RelationExpr::TopK { .. } => (),
 
                 RelationExpr::Map { input, scalars } => {
                     let input_arity = input.arity();
@@ -144,24 +145,9 @@ impl ProjectionPushdown {
                     *outputs = new_outputs;
                 }
 
-                RelationExpr::Reduce { .. } => {
-                    // TODO.
-                }
-
-                RelationExpr::TopK { .. } => {
-                    // TODO.
-                }
-
-                RelationExpr::OrDefault { .. } => {
-                    // TODO.
-                }
-
                 RelationExpr::Negate { .. } => {
                     // TODO.
                 }
-
-                // Cannot push projection through a distinct.
-                RelationExpr::Distinct { .. } => (),
 
                 RelationExpr::Threshold { .. } => {
                     // TODO.
@@ -355,6 +341,11 @@ mod tests {
                     ],
                 ),
             ),
+            (
+                "push through union",
+                base().union(base()).project(vec![1]),
+                base().project(vec![1]).union(base().project(vec![1])),
+            )
         ];
 
         let mut optimizer = Optimizer::from_transforms(vec![

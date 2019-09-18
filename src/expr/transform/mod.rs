@@ -17,6 +17,7 @@ pub mod join_elision;
 pub mod join_order;
 pub mod predicate_pushdown;
 pub mod projection_pushdown;
+pub mod projection_extraction;
 pub mod reduction;
 pub mod split_predicates;
 pub mod util;
@@ -85,13 +86,15 @@ impl Default for Optimizer {
                 transforms: vec![
                     Box::new(crate::transform::reduction::FoldConstants),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
-                    Box::new(crate::transform::projection_pushdown::ProjectionPushdown),
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),
                     Box::new(crate::transform::fusion::project::Project),
+                    Box::new(crate::transform::fusion::map::Map),
                     Box::new(crate::transform::empty_map::EmptyMap),
                     Box::new(crate::transform::join_elision::JoinElision),
                     Box::new(crate::transform::inline_let::InlineLet),
+                    Box::new(crate::transform::projection_extraction::ProjectionExtraction),
+                    Box::new(crate::transform::projection_pushdown::ProjectionPushdown),
                 ],
             }),
             Box::new(crate::transform::join_order::JoinOrder),
