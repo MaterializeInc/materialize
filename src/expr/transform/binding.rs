@@ -96,17 +96,13 @@ impl Environment {
     /// [`RelationExpr::Let`], this method does nothing. Otherwise, it adds a binding for
     /// the name and value to this environment and leaves the body in the let's place.
     pub fn extract(&mut self, expr: &mut RelationExpr) -> &mut Self {
-        match expr {
-            RelationExpr::Let { .. } => match expr.take() {
-                RelationExpr::Let { name, value, body } => {
-                    self.bindings.push(Binding::new(name, *value));
-                    *expr = *body;
-                }
-                _ => panic!(
-                    "a dataflow graph curiously ceased to be itself for no discernible reason"
-                ),
-            },
-            _ => (),
+        if let RelationExpr::Let { .. } = expr {
+            if let RelationExpr::Let { name, value, body } = expr.take() {
+                self.bindings.push(Binding::new(name, *value));
+                *expr = *body;
+            } else {
+                unreachable!();
+            }
         }
         self
     }
@@ -148,6 +144,8 @@ impl Hoist {
             if let RelationExpr::Let { .. } = expr {
                 if let RelationExpr::Let { value, .. } = expr {
                     extract(value, env);
+                } else {
+                    unreachable!();
                 }
                 env.extract(expr);
                 extract(expr, env); // By the magic vested in env, expr now is body of let.
