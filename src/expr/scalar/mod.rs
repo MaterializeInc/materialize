@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use self::func::{BinaryFunc, UnaryFunc, VariadicFunc};
 
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum ScalarExpr {
     /// A column of the input row
     Column(usize),
