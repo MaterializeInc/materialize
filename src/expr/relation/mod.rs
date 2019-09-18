@@ -693,12 +693,11 @@ impl RelationExpr {
                 let variables = Doc::intersperse(
                     variables.iter().map(|ps| {
                         let ps = Doc::intersperse(ps.iter().map(pair_to_doc), to_doc!(",", Space));
-                        to_tightly_braced_doc("[", ps.nest(2), "]").group()
+                        to_tightly_braced_doc("[", ps, "]").group()
                     }),
                     to_doc!(",", Space),
                 );
-                let variables =
-                    to_tightly_braced_doc("variables: [", variables.nest(2), "]").group();
+                let variables = to_tightly_braced_doc("variables: [", variables, "]").group();
 
                 let inputs =
                     Doc::intersperse(inputs.iter().map(RelationExpr::to_doc), to_doc!(",", Space));
@@ -881,4 +880,43 @@ pub struct AggregateExpr {
     pub expr: ScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
     pub distinct: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> RelationExpr {
+        RelationExpr::Constant {
+            rows: Vec::new(),
+            typ: RelationType {
+                column_types: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn test_pretty_join() {
+        let join = RelationExpr::Join {
+            variables: vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]],
+            inputs: vec![base(), base()],
+        };
+
+        assert_eq!(
+            join.to_doc().pretty(72).to_string(),
+            "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], (), () }",
+        );
+
+        assert_eq!(
+            join.to_doc().pretty(48).to_string(),
+            "Join {
+  variables: [
+    [(0, 0), (1, 0)],
+    [(0, 1), (1, 1)]
+  ],
+  (),
+  ()
+}",
+        );
+    }
 }
