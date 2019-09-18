@@ -36,9 +36,9 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::RelationExpr;
-use bytes::Buf;
+use crate::{RelationExpr, ScalarExpr};
 use repr::RelationType;
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub struct Filter;
@@ -67,8 +67,8 @@ impl Filter {
                 *input = Box::new(inner.take());
             }
 
-            predicates.sort();
-            predicates.dedup();
+            let set: HashSet<ScalarExpr> = predicates.drain(..).collect();
+            predicates.extend(set.into_iter());
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {
