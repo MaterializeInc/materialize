@@ -73,19 +73,12 @@ impl Binding {
 }
 
 /// An environment, i.e., an ordered collection of bindings.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Environment {
     bindings: Vec<Binding>,
 }
 
 impl Environment {
-    /// Create a new, empty environment.
-    pub fn new() -> Self {
-        Self {
-            bindings: Vec::new(),
-        }
-    }
-
     /// Add a new binding for the given name and value to this environment.
     pub fn bind(&mut self, name: String, value: RelationExpr) -> &mut Self {
         self.bindings.push(Binding::new(name, value));
@@ -138,9 +131,12 @@ impl super::Transform for Hoist {
 impl Hoist {
     // Hoist all bindings to the top of a dataflow graph.
     fn hoist(expr: &mut RelationExpr) {
-        let mut env = Environment::new();
+        let mut env = Environment::default();
 
         pub fn extract(expr: &mut RelationExpr, env: &mut Environment) {
+            // NB: visit1_mut() invokes the callback on the children of a RelationExpr.
+            // That is not good enough for RelationExpr::Let since the value and body
+            // might just be another RelationExpr::Let. Hence we recurse on extract().
             if let RelationExpr::Let { .. } = expr {
                 if let RelationExpr::Let { value, .. } = expr {
                     extract(value, env);
@@ -148,7 +144,8 @@ impl Hoist {
                     unreachable!();
                 }
                 env.extract(expr);
-                extract(expr, env); // By the magic vested in env, expr now is body of let.
+                // By the magic vested in env.extract(), expr now is let's body.
+                extract(expr, env);
             } else {
                 expr.visit1_mut(|e| extract(e, env));
             }
