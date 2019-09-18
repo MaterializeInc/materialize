@@ -37,6 +37,7 @@
 //! ```
 
 use crate::RelationExpr;
+use bytes::Buf;
 use repr::RelationType;
 
 #[derive(Debug)]
@@ -63,12 +64,11 @@ impl Filter {
             } = &mut **input
             {
                 predicates.extend(p2.drain(..));
-                let empty = Box::new(RelationExpr::Constant {
-                    rows: vec![],
-                    typ: metadata.to_owned(),
-                });
-                *input = std::mem::replace(inner, empty);
+                *input = Box::new(inner.take());
             }
+
+            predicates.sort();
+            predicates.dedup();
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {
