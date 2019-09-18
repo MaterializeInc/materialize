@@ -10,6 +10,7 @@ use repr::RelationType;
 
 pub mod aggregation;
 pub mod binding;
+pub mod distinct_pushdown;
 pub mod distinct_union;
 pub mod empty_map;
 pub mod fusion;
@@ -79,6 +80,7 @@ impl Default for Optimizer {
             Box::new(crate::transform::Fixpoint {
                 transforms: vec![
                     Box::new(crate::transform::reduction::FoldConstants),
+                    Box::new(crate::transform::distinct_pushdown::DistinctPushdown),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),
