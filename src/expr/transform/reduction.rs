@@ -6,6 +6,7 @@
 use crate::{RelationExpr, ScalarExpr};
 use repr::Datum;
 use repr::RelationType;
+use std::collections::BTreeMap;
 
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
@@ -25,12 +26,58 @@ impl FoldConstants {
             self.action(e, &e.typ());
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
         match relation {
             RelationExpr::Constant { .. } => {}
             RelationExpr::Get { .. } => {}
             RelationExpr::Let { .. } => { /*constant prop done in InlineLet*/ }
-            RelationExpr::Reduce { .. } => { /*too complicated*/ }
+            RelationExpr::Reduce {
+                input,
+                group_key,
+                aggregates,
+            } => {
+                if let RelationExpr::Constant { rows, .. } = &mut **input {
+                    // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>`,
+                    // where `an` is the input to the nth aggregate function in
+                    // `aggregates`.
+                    let mut groups = BTreeMap::new();
+                    for row in rows.drain(..) {
+                        let key = group_key
+                            .iter()
+                            .map(|i| row[*i].clone())
+                            .collect::<Vec<_>>();
+                        let val = aggregates
+                            .iter()
+                            .rev()
+                            .map(|(agg, _typ)| agg.expr.eval(&row))
+                            .collect::<Vec<_>>();
+                        groups.entry(key).or_insert(Vec::new()).push(val);
+                    }
+
+                    // For each group, apply the aggregate function to the rows
+                    // in the group. The output is
+                    // `Vec<Vec<k1, ..., kn, r1, ..., rn>>`
+                    // where kn is the nth column of the key and rn is the
+                    // result of the nth aggregate function for that group.
+                    let new_rows = groups
+                        .into_iter()
+                        .map(|(mut key, mut vals)| {
+                            for (agg, _typ) in &*aggregates {
+                                // Aggregate inputs are in reverse order so that
+                                // the input for each aggregate function can be
+                                // efficiently popped off the end of each `val`
+                                // in `vals`.
+                                let input = vals.iter_mut().map(|val| val.pop().unwrap());
+                                let accumulated = (agg.func.func())(input);
+                                key.push(accumulated);
+                            }
+                            key
+                        })
+                        .collect();
+
+                    *relation = RelationExpr::constant(new_rows, metadata.clone());
+                }
+            }
             RelationExpr::TopK { .. } => { /*too complicated*/ }
             RelationExpr::Negate { .. } => { /*cannot currently negate constants*/ }
             RelationExpr::Threshold { input } => {
@@ -56,7 +103,7 @@ impl FoldConstants {
                             row
                         })
                         .collect();
-                    *relation = RelationExpr::constant(new_rows, _metadata.clone());
+                    *relation = RelationExpr::constant(new_rows, metadata.clone());
                 }
             }
             RelationExpr::Filter { input, predicates } => {
@@ -77,7 +124,7 @@ impl FoldConstants {
                         .cloned()
                         .filter(|row| predicates.iter().all(|p| p.eval(&row[..]) == Datum::True))
                         .collect();
-                    *relation = RelationExpr::constant(new_rows, _metadata.clone());
+                    *relation = RelationExpr::constant(new_rows, metadata.clone());
                 }
             }
             RelationExpr::Project { input, outputs } => {
@@ -86,7 +133,7 @@ impl FoldConstants {
                         .iter()
                         .map(|row| outputs.iter().map(|i| row[*i].clone()).collect())
                         .collect();
-                    *relation = RelationExpr::constant(new_rows, _metadata.clone());
+                    *relation = RelationExpr::constant(new_rows, metadata.clone());
                 }
             }
             RelationExpr::Join { inputs, .. } => {
