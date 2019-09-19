@@ -22,6 +22,7 @@ use futures::{sink, Future, Sink as FuturesSink, Stream};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::SqlResponse;
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -32,8 +33,6 @@ use expr::RelationExpr;
 use ore::future::FutureExt;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sql::Plan;
-
-use crate::queue::SqlResponse;
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<C>

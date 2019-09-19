@@ -11,7 +11,6 @@
 //! [timely dataflow]: ../timely/index.html
 
 pub mod pgwire;
-pub mod queue;
 pub mod server;
 
 #[global_allocator]

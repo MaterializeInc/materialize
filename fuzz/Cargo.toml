@@ -10,7 +10,6 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = { git = "https://github.com/rust-fuzz/libfuzzer-sys.git" }
-materialize = { path = "../src/materialize" }
 testdrive = { path = "../src/testdrive" }
 sqllogictest = { path = "../src/sqllogictest" }
 walkdir = "2"

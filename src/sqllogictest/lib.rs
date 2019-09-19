@@ -21,11 +21,11 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use uuid::Uuid;
 
+use coord::{coordinator::Coordinator, SqlResponse};
 use dataflow;
 use dataflow_types::{
     self, Dataflow, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
 };
-use materialize::queue::{coordinator::Coordinator, SqlResponse};
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};

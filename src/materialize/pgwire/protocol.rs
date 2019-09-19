@@ -19,7 +19,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::pgwire::codec::Codec;
 use crate::pgwire::message;
 use crate::pgwire::message::{BackendMessage, FrontendMessage, Severity};
-use crate::queue::{self, SqlResponse};
+use coord::SqlResponse;
 use dataflow_types::Update;
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
@@ -27,7 +27,7 @@ use sql::Session;
 
 pub struct Context {
     pub conn_id: u32,
-    pub cmdq_tx: UnboundedSender<queue::Command>,
+    pub cmdq_tx: UnboundedSender<coord::Command>,
 }
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -129,7 +129,7 @@ pub enum StateMachine<A: Conn + 'static> {
     ))]
     HandleQuery {
         conn: A,
-        rx: futures::sync::oneshot::Receiver<queue::Response>,
+        rx: futures::sync::oneshot::Receiver<coord::Response>,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
@@ -137,7 +137,7 @@ pub enum StateMachine<A: Conn + 'static> {
         send: SinkSend<A>,
         session: Session,
         row_type: RelationType,
-        rows_rx: queue::RowsFuture,
+        rows_rx: coord::RowsFuture,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
@@ -145,7 +145,7 @@ pub enum StateMachine<A: Conn + 'static> {
         conn: A,
         session: Session,
         row_type: RelationType,
-        rows_rx: queue::RowsFuture,
+        rows_rx: coord::RowsFuture,
     },
 
     #[state_machine_future(transitions(WaitForUpdates, SendUpdates, SendError, Error))]
@@ -319,7 +319,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Query { query } => {
                 let sql = String::from(String::from_utf8_lossy(&query));
                 let (tx, rx) = futures::sync::oneshot::channel();
-                context.cmdq_tx.unbounded_send(queue::Command {
+                context.cmdq_tx.unbounded_send(coord::Command {
                     sql,
                     session: state.session,
                     conn_id: context.conn_id,
@@ -347,7 +347,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterHandleQuery<A>, failure::Error> {
         match state.rx.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(queue::Response {
+            Ok(Async::Ready(coord::Response {
                 sql_result: Ok(response),
                 session,
             })) => {
@@ -390,7 +390,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     }),
                 }
             }
-            Ok(Async::Ready(queue::Response {
+            Ok(Async::Ready(coord::Response {
                 sql_result: Err(err),
                 session,
             })) => {
