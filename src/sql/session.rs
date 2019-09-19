@@ -85,15 +85,12 @@ pub struct Session {
 impl std::fmt::Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("Session")
-            .field("client_encoding", &self.client_encoding)
-            .field("database", &self.database)
-            .field("date_style", &self.date_style)
-            .field("server_version", &self.server_version)
-            .field("sql_safe_updates", &self.sql_safe_updates)
-            .field(
-                "prepared_statements(count)",
-                &self.prepared_statements.len(),
-            )
+            .field("client_encoding", &self.client_encoding.value)
+            .field("database", &self.database.value)
+            .field("date_style", &self.date_style.value)
+            .field("server_version", &self.server_version.value)
+            .field("sql_safe_updates", &self.sql_safe_updates.value)
+            .field("prepared_statements", &self.prepared_statements.keys())
             .field("portals", &self.portals.keys())
             .finish()
     }
