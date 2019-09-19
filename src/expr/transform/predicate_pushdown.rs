@@ -83,7 +83,11 @@ impl PredicatePushdown {
                     // We want to scan `predicates` for any that can apply
                     // to individual elements of `inputs`.
 
-                    let input_arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+                    let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+                    let input_arities = input_types
+                        .iter()
+                        .map(|i| i.column_types.len())
+                        .collect::<Vec<_>>();
 
                     let mut offset = 0;
                     let mut prior_arities = Vec::new();
@@ -171,16 +175,22 @@ impl PredicatePushdown {
                                             }
                                         }
                                         // null != anything, so joined columns musn't be null
-                                        push_downs[relation1].push(
-                                            ScalarExpr::Column(*c1 - prior_arities[relation1])
-                                                .call_unary(UnaryFunc::IsNull)
-                                                .call_unary(UnaryFunc::Not),
-                                        );
-                                        push_downs[relation2].push(
-                                            ScalarExpr::Column(*c2 - prior_arities[relation2])
-                                                .call_unary(UnaryFunc::IsNull)
-                                                .call_unary(UnaryFunc::Not),
-                                        );
+                                        let column1 = *c1 - prior_arities[relation1];
+                                        if input_types[relation1].column_types[column1].nullable {
+                                            push_downs[relation1].push(
+                                                ScalarExpr::Column(column1)
+                                                    .call_unary(UnaryFunc::IsNull)
+                                                    .call_unary(UnaryFunc::Not),
+                                            );
+                                        }
+                                        let column2 = *c2 - prior_arities[relation2];
+                                        if input_types[relation2].column_types[column2].nullable {
+                                            push_downs[relation2].push(
+                                                ScalarExpr::Column(*c2 - prior_arities[relation2])
+                                                    .call_unary(UnaryFunc::IsNull)
+                                                    .call_unary(UnaryFunc::Not),
+                                            );
+                                        }
                                     } else {
                                         retain.push(predicate);
                                     }
