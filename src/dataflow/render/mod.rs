@@ -211,7 +211,7 @@ where
 
                     let collection = rows
                         .to_stream(scope)
-                        .map(|x| (x, Default::default(), 1))
+                        .map(|(x, diff)| (x, Default::default(), diff))
                         .as_collection();
 
                     self.collections.insert(relation_expr.clone(), collection);

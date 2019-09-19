@@ -26,8 +26,8 @@ use uuid::Uuid;
 pub enum RelationExpr {
     /// Always return the same value
     Constant {
-        /// Rows of the constant collection.
-        rows: Vec<Vec<Datum>>,
+        /// Rows of the constant collection and their multiplicities.
+        rows: Vec<(Vec<Datum>, isize)>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -129,7 +129,7 @@ impl RelationExpr {
     pub fn typ(&self) -> RelationType {
         match self {
             RelationExpr::Constant { rows, typ } => {
-                for row in rows {
+                for (row, _diff) in rows {
                     for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                         assert!(
                             datum.is_instance_of(column_typ),
@@ -211,9 +211,17 @@ impl RelationExpr {
         self.typ().column_types.len()
     }
 
-    /// Constructs a constant collection from specific rows and schema.
+    /// Constructs a constant collection from specific rows and schema, where
+    /// each row will have a multiplicity of one.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        for row in rows.iter() {
+        let rows = rows.into_iter().map(|row| (row, 1)).collect();
+        RelationExpr::constant_diff(rows, typ)
+    }
+
+    /// Constructs a constant collection from specific rows and schema, where
+    /// each row can have an arbitrary multiplicity.
+    pub fn constant_diff(rows: Vec<(Vec<Datum>, isize)>, typ: RelationType) -> Self {
+        for (row, _diff) in rows.iter() {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
                     datum.is_instance_of(column_typ),
@@ -388,7 +396,7 @@ impl RelationExpr {
             inputs: vec![
                 left.union(both.project((0..left_arity).collect()).distinct().negate()),
                 RelationExpr::Constant {
-                    rows: vec![vec![Datum::Null; both_arity - left_arity]],
+                    rows: vec![(vec![Datum::Null; both_arity - left_arity], 1)],
                     typ: RelationType {
                         column_types: vec![
                             ColumnType::new(ScalarType::Null).nullable(true);
@@ -415,7 +423,7 @@ impl RelationExpr {
         RelationExpr::Join {
             inputs: vec![
                 RelationExpr::Constant {
-                    rows: vec![vec![Datum::Null; both_arity - right_arity]],
+                    rows: vec![(vec![Datum::Null; both_arity - right_arity], 1)],
                     typ: RelationType {
                         column_types: vec![
                             ColumnType::new(ScalarType::Null).nullable(true);
@@ -597,9 +605,14 @@ impl RelationExpr {
         let doc = match self {
             RelationExpr::Constant { rows, typ: _ } => {
                 let rows = Doc::intersperse(
-                    rows.iter().map(|row| {
+                    rows.iter().map(|(row, diff)| {
                         let row = Doc::intersperse(row, to_doc!(",", Space));
-                        to_tightly_braced_doc("[", row, "]").group()
+                        let row = to_tightly_braced_doc("[", row, "]").group();
+                        if *diff != 1 {
+                            row.append(to_doc!("*", diff.to_string()))
+                        } else {
+                            row
+                        }
                     }),
                     to_doc!(",", Space),
                 );
@@ -827,12 +840,7 @@ mod tests {
     use super::*;
 
     fn constant(rows: Vec<Vec<Datum>>) -> RelationExpr {
-        RelationExpr::Constant {
-            rows,
-            typ: RelationType {
-                column_types: Vec::new(),
-            },
-        }
+        RelationExpr::constant(rows, RelationType::new(Vec::new()))
     }
 
     fn base() -> RelationExpr {

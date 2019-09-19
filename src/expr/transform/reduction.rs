@@ -28,7 +28,9 @@ impl FoldConstants {
     }
     pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
         match relation {
-            RelationExpr::Constant { .. } => {}
+            RelationExpr::Constant { rows, .. } => {
+                differential_dataflow::consolidation::consolidate(rows)
+            }
             RelationExpr::Get { .. } => {}
             RelationExpr::Let { .. } => { /*constant prop done in InlineLet*/ }
             RelationExpr::Reduce {
@@ -37,11 +39,19 @@ impl FoldConstants {
                 aggregates,
             } => {
                 if let RelationExpr::Constant { rows, .. } = &mut **input {
-                    // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>`,
+                    // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
                     // where `an` is the input to the nth aggregate function in
                     // `aggregates`.
                     let mut groups = BTreeMap::new();
-                    for row in rows.drain(..) {
+                    for (row, diff) in rows.drain(..) {
+                        // We currently maintain the invariant that any negative
+                        // multiplicities will be consolidated away before they
+                        // arrive at a reduce.
+                        assert!(
+                            diff > 0,
+                            "constant folding encountered reduce on collection \
+                             with non-positive multiplicities"
+                        );
                         let key = group_key
                             .iter()
                             .map(|i| row[*i].clone())
@@ -51,7 +61,10 @@ impl FoldConstants {
                             .rev()
                             .map(|(agg, _typ)| agg.expr.eval(&row))
                             .collect::<Vec<_>>();
-                        groups.entry(key).or_insert(Vec::new()).push(val);
+                        let entry = groups.entry(key).or_insert_with(|| Vec::new());
+                        for _ in 0..diff {
+                            entry.push(val.clone());
+                        }
                     }
 
                     // For each group, apply the aggregate function to the rows
@@ -79,7 +92,14 @@ impl FoldConstants {
                 }
             }
             RelationExpr::TopK { .. } => { /*too complicated*/ }
-            RelationExpr::Negate { .. } => { /*cannot currently negate constants*/ }
+            RelationExpr::Negate { input } => {
+                if let RelationExpr::Constant { rows, .. } = &mut **input {
+                    for (_row, diff) in rows {
+                        *diff *= -1;
+                    }
+                    *relation = input.take();
+                }
+            }
             RelationExpr::Threshold { input } => {
                 if let RelationExpr::Constant { .. } = &**input {
                     *relation = input.take();
@@ -94,16 +114,16 @@ impl FoldConstants {
                     let new_rows = rows
                         .iter()
                         .cloned()
-                        .map(|mut row| {
+                        .map(|(mut row, diff)| {
                             let len = row.len();
                             for (func, _typ) in scalars.iter() {
                                 let result = func.eval(&row[..len]);
                                 row.push(result);
                             }
-                            row
+                            (row, diff)
                         })
                         .collect();
-                    *relation = RelationExpr::constant(new_rows, metadata.clone());
+                    *relation = RelationExpr::constant_diff(new_rows, metadata.clone());
                 }
             }
             RelationExpr::Filter { input, predicates } => {
@@ -122,18 +142,22 @@ impl FoldConstants {
                     let new_rows = rows
                         .iter()
                         .cloned()
-                        .filter(|row| predicates.iter().all(|p| p.eval(&row[..]) == Datum::True))
+                        .filter(|(row, _diff)| {
+                            predicates.iter().all(|p| p.eval(&row[..]) == Datum::True)
+                        })
                         .collect();
-                    *relation = RelationExpr::constant(new_rows, metadata.clone());
+                    *relation = RelationExpr::constant_diff(new_rows, metadata.clone());
                 }
             }
             RelationExpr::Project { input, outputs } => {
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = rows
                         .iter()
-                        .map(|row| outputs.iter().map(|i| row[*i].clone()).collect())
+                        .map(|(row, diff)| {
+                            (outputs.iter().map(|i| row[*i].clone()).collect(), *diff)
+                        })
                         .collect();
-                    *relation = RelationExpr::constant(new_rows, metadata.clone());
+                    *relation = RelationExpr::constant_diff(new_rows, metadata.clone());
                 }
             }
             RelationExpr::Join { inputs, .. } => {
