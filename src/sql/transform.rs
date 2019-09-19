@@ -34,6 +34,12 @@ impl<'ast> VisitMut<'ast> for AvgFuncRewriter {
                     over: None,
                     distinct: func.distinct,
                 });
+                let sum = Expr::Function(Function {
+                    name: ObjectName(vec!["internal".into(), "avg_promotion".into()]),
+                    args: vec![sum],
+                    over: None,
+                    distinct: false,
+                });
                 let count = Expr::Function(Function {
                     name: ObjectName(vec!["count".into()]),
                     args: args.clone(),
