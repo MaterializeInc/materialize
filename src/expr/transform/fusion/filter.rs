@@ -29,9 +29,10 @@
 //!     ColumnType::new(ScalarType::Bool),
 //! ]);
 //!
+//! // .transform() will deduplicate any predicates
 //! Filter.transform(&mut expr, &typ);
 //!
-//! let correct = input.filter(vec![predicate0, predicate1, predicate2]);
+//! let correct = input.filter(vec![predicate0]);
 //!
 //! assert_eq!(expr, correct);
 //! ```
@@ -63,12 +64,11 @@ impl Filter {
             } = &mut **input
             {
                 predicates.extend(p2.drain(..));
-                let empty = Box::new(RelationExpr::Constant {
-                    rows: vec![],
-                    typ: metadata.to_owned(),
-                });
-                *input = std::mem::replace(inner, empty);
+                *input = Box::new(inner.take());
             }
+
+            predicates.sort();
+            predicates.dedup();
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {

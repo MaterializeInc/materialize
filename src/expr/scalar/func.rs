@@ -564,7 +564,7 @@ pub fn build_like_regex(a: Datum) -> Datum {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
     Or,
@@ -700,7 +700,7 @@ pub fn is_null(a: Datum) -> Datum {
     Datum::from(a == Datum::Null)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum UnaryFunc {
     Not,
     IsNull,
@@ -828,7 +828,7 @@ pub fn coalesce(datums: Vec<Datum>) -> Datum {
         .unwrap_or(Datum::Null)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
 }
