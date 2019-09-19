@@ -47,6 +47,11 @@ SELECT a - 0.2 FROM basic
 -0.1
 
 query R
+SELECT -a FROM basic
+----
+-0.1
+
+query R
 SELECT a * 0.2 FROM basic
 ----
 0.02
