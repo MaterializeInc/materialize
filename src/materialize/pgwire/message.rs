@@ -3,10 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::borrow::Cow;
 use std::convert::TryFrom;
+use std::sync::Arc;
 
 use bytes::Bytes;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 
 use super::types::PgType;
 use repr::decimal::Decimal;
@@ -89,7 +91,7 @@ pub enum BackendMessage {
     EmptyQueryResponse,
     ReadyForQuery,
     RowDescription(Vec<FieldDescription>),
-    DataRow(Vec<Option<FieldValue>>),
+    DataRow(Vec<Option<FieldValue>>, FieldFormatIter),
     ParameterStatus(&'static str, String),
     ParameterDescription,
     ParseComplete,
@@ -155,12 +157,60 @@ impl From<&FieldFormat> for bool {
     }
 }
 
-impl From<bool> for FieldFormat {
-    fn from(source: bool) -> FieldFormat {
+impl From<&bool> for FieldFormat {
+    fn from(source: &bool) -> FieldFormat {
         match source {
             false => FieldFormat::Text,
             true => FieldFormat::Binary,
         }
+    }
+}
+
+/// Retrieve all the [`FieldFormat`]s, repeatably
+///
+/// Any extended query can request that individual fields come back encoded either as
+/// text or binary.
+///
+/// This implements the following rules:
+///
+/// * Default is `Text` if no formats are specified
+/// * If a single field is provided then that is used for every column
+/// * Otherwise use the specified fields
+/// * Returns Text and logs a warning if we ever go past the end of the
+///   client-provided format list
+#[derive(Debug)]
+pub struct FieldFormatIter {
+    formats: Option<Arc<Vec<FieldFormat>>>,
+    idx: usize,
+}
+
+impl FieldFormatIter {
+    pub fn new(formats: Option<Arc<Vec<FieldFormat>>>) -> FieldFormatIter {
+        FieldFormatIter { formats, idx: 0 }
+    }
+
+    /// Get a fresh iterator over the same values
+    pub fn fresh(&self) -> FieldFormatIter {
+        FieldFormatIter::new(self.formats.as_ref().map(Arc::clone))
+    }
+}
+
+impl Iterator for FieldFormatIter {
+    type Item = FieldFormat;
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(match &mut self.formats {
+            Some(values) if values.len() == 1 => values[0],
+            Some(values) => {
+                self.idx += 1;
+                values.get(self.idx - 1).copied().unwrap_or_else(|| {
+                    // It's unclear what the default should be here, if this actually
+                    // comes up maybe we should return an error
+                    log::warn!("requested a FieldFormat that was not specified, returning Text");
+                    FieldFormat::Text
+                })
+            }
+            None => FieldFormat::Text,
+        })
     }
 }
 
@@ -201,6 +251,87 @@ impl FieldValue {
             Datum::String(s) => Some(FieldValue::Text(s)),
             Datum::Regex(_) => panic!("Datum::Regex cannot be converted into a FieldValue"),
         }
+    }
+
+    /// Errors on some types:
+    ///
+    /// * Numeric
+    /// * Interval
+    pub(crate) fn to_text(&self) -> Cow<[u8]> {
+        match self {
+            FieldValue::Bool(false) => b"f"[..].into(),
+            FieldValue::Bool(true) => b"t"[..].into(),
+            FieldValue::Bytea(b) => b.into(),
+            FieldValue::Date(d) => d.to_string().into_bytes().into(),
+            FieldValue::Timestamp(ts) => ts.to_string().into_bytes().into(),
+            FieldValue::Interval(i) => match i {
+                repr::Interval::Months(count) => format!("{} months", count).into_bytes().into(),
+                repr::Interval::Duration {
+                    is_positive,
+                    duration,
+                } => format!("{}{:?}", if *is_positive { "" } else { "-" }, duration)
+                    .into_bytes()
+                    .into(),
+            },
+            FieldValue::Int4(i) => format!("{}", i).into_bytes().into(),
+            FieldValue::Int8(i) => format!("{}", i).into_bytes().into(),
+            FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),
+            FieldValue::Float8(f) => format!("{}", f).into_bytes().into(),
+            FieldValue::Numeric(n) => format!("{}", n).into_bytes().into(),
+            FieldValue::Text(ref s) => s.as_bytes().into(),
+        }
+    }
+
+    /// Convert to the binary postgres wire format
+    ///
+    /// Some "docs" are at https://www.npgsql.org/dev/types.html
+    pub(crate) fn to_binary(&self) -> Result<Cow<[u8]>, failure::Error> {
+        use byteorder::{ByteOrder, NetworkEndian};
+
+        Ok(match self {
+            FieldValue::Bool(false) => [0u8][..].into(),
+            FieldValue::Bool(true) => [1u8][..].into(),
+            FieldValue::Bytea(b) => b.into(),
+            // https://github.com/postgres/postgres/blob/59354ccef5d7/src/backend/utils/adt/date.c#L223
+            FieldValue::Date(d) => {
+                let day = d.num_days_from_ce() - 719_163;
+                let mut buf = vec![0u8; 4];
+                NetworkEndian::write_i32(&mut buf, day);
+                buf.into()
+            }
+            FieldValue::Timestamp(ts) => {
+                let timestamp =
+                    ts.timestamp() * 1_000_000 + i64::from(ts.timestamp_subsec_micros());
+
+                let mut buf = vec![0u8; 8];
+                NetworkEndian::write_i64(&mut buf, timestamp);
+                buf.into()
+            }
+            FieldValue::Interval(_i) => failure::bail!("cannot serialize binary: interval"),
+            FieldValue::Int4(i) => {
+                let mut buf = vec![0u8; 4];
+                NetworkEndian::write_i32(&mut buf, *i);
+                buf.into()
+            }
+            FieldValue::Int8(i) => {
+                let mut buf = vec![0u8; 8];
+                NetworkEndian::write_i64(&mut buf, *i);
+                buf.into()
+            }
+            FieldValue::Float4(f) => {
+                let mut buf = vec![0u8; 4];
+                NetworkEndian::write_f32(&mut buf, *f);
+                buf.into()
+            }
+            FieldValue::Float8(f) => {
+                let mut buf = vec![0u8; 8];
+                NetworkEndian::write_f64(&mut buf, *f);
+                buf.into()
+            }
+            // https://github.com/postgres/postgres/blob/59354ccef5/src/backend/utils/adt/numeric.c#L868-L891
+            FieldValue::Numeric(_n) => failure::bail!("cannot serialize binary: numeric"),
+            FieldValue::Text(ref s) => s.as_bytes().into(),
+        })
     }
 }
 

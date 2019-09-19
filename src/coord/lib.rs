@@ -47,9 +47,6 @@ pub enum CmdKind {
         name: String,
         sql: String,
     },
-    DescribePreparedStatement {
-        name: String,
-    },
 }
 
 /// Responses from the queue to SQL commands.

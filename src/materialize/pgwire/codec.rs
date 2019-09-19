@@ -18,7 +18,7 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FieldFormat, FieldValue, FrontendMessage};
+use crate::pgwire::message::{BackendMessage, FieldFormat, FrontendMessage};
 use ore::netio;
 
 #[derive(Debug)]
@@ -84,7 +84,7 @@ impl Encoder for Codec {
         buf.put(match msg {
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
-            BackendMessage::DataRow(_) => b'D',
+            BackendMessage::DataRow(_, _) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
@@ -130,35 +130,24 @@ impl Encoder for Codec {
                     buf.put_u32_be(f.type_oid);
                     buf.put_i16_be(f.type_len);
                     buf.put_i32_be(f.type_mod);
+                    // TODO: make the format correct
                     buf.put_u16_be(f.format as u16);
                 }
             }
-            BackendMessage::DataRow(fields) => {
+            BackendMessage::DataRow(fields, formats) => {
                 buf.put_u16_be(fields.len() as u16);
-                for f in fields {
+                for (f, ff) in fields.iter().zip(formats) {
                     if let Some(f) = f {
-                        let s: Cow<[u8]> = match f {
-                            FieldValue::Bool(false) => b"f"[..].into(),
-                            FieldValue::Bool(true) => b"t"[..].into(),
-                            FieldValue::Bytea(b) => b.into(),
-                            FieldValue::Date(d) => d.to_string().into_bytes().into(),
-                            FieldValue::Timestamp(ts) => ts.to_string().into_bytes().into(),
-                            FieldValue::Interval(i) => match i {
-                                repr::Interval::Months(count) => format!("{} months", count).into_bytes().into(),
-                                repr::Interval::Duration { is_positive, duration } => format!(
-                                    "{}{:?}",
-                                    if is_positive { "" } else {"-"},
-                                    duration) .into_bytes().into(),
-                            },
-                            FieldValue::Int4(i) => format!("{}", i).into_bytes().into(),
-                            FieldValue::Int8(i) => format!("{}", i).into_bytes().into(),
-                            FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),
-                            FieldValue::Float8(f) => format!("{}", f).into_bytes().into(),
-                            FieldValue::Numeric(n) => format!("{}", n).into_bytes().into(),
-                            FieldValue::Text(ref s) => s.as_bytes().into(),
-                        };
-                        buf.put_u32_be(s.len() as u32);
-                        buf.put(&*s);
+                        match ff {
+                            FieldFormat::Text => {
+                                let s: Cow<[u8]> = f.to_text();
+                                buf.put_u32_be(s.len() as u32);
+                                buf.put(&*s);
+                            }
+                            FieldFormat::Binary => buf.put(
+                                &*f.to_binary()
+                                    .map_err(unsupported_err)?),
+                        }
                     } else {
                         buf.put_i32_be(-1)
                     }
@@ -189,6 +178,8 @@ impl Encoder for Codec {
                 message,
                 detail,
             } => {
+                log::trace!("sending error: {:?}->{}", severity, message);
+
                 buf.put(b'S');
                 buf.put_string(severity.string());
                 buf.put(b'C');

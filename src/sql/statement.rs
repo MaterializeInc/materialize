@@ -70,6 +70,31 @@ impl Planner {
         self.handle_parse_statement(session, stmt.into_element(), name, sql)
     }
 
+    pub fn handle_execute_command(
+        &mut self,
+        session: &Session,
+        portal_name: &str,
+    ) -> Result<Plan, failure::Error> {
+        let portal = session
+            .get_portal(portal_name)
+            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
+        let prepared = session
+            .prepared_statements
+            .get(&portal.statement_name)
+            .ok_or_else(|| {
+                failure::format_err!(
+                    "statement for portal does not exist portal={:?} statement={:?}",
+                    portal_name,
+                    portal.statement_name
+                )
+            })?;
+        Ok(Plan::Peek {
+            source: prepared.parsed.source.clone(),
+            when: PeekWhen::Immediately,
+            transform: prepared.parsed.transform.clone(),
+        })
+    }
+
     /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
     fn handle_statement(
         &mut self,

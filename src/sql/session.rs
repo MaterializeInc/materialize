@@ -94,7 +94,7 @@ impl std::fmt::Debug for Session {
                 "prepared_statements(count)",
                 &self.prepared_statements.len(),
             )
-            .field("portals(count)", &self.portals.len())
+            .field("portals", &self.portals.keys())
             .finish()
     }
 }
@@ -239,6 +239,11 @@ impl Session {
             );
         }
     }
+
+    /// Retrieve a portal by name
+    pub fn get_portal(&self, portal_name: &str) -> Option<&Portal> {
+        self.portals.get(portal_name)
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
@@ -340,7 +345,7 @@ pub struct Prepared {
 
 #[derive(Debug)]
 pub struct Portal {
-    statement_name: String,
+    pub statement_name: String,
     /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
-    return_field_formats: Vec<bool>,
+    pub return_field_formats: Vec<bool>,
 }

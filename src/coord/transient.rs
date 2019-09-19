@@ -46,7 +46,6 @@ pub fn serve<C>(
                         CmdKind::ParseStatement { sql, name } => {
                             planner.handle_parse_command(&mut cmd.session, sql, name)
                         }
-                        other => Err(failure::format_err!("Cannot handle {:?}", other)),
                     }
                     .map(|plan| {
                         coord.sequence_plan(plan, conn_id, None /* ts_override */)

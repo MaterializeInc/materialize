@@ -3,6 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::io::Write;
+use std::iter;
+use std::sync::Arc;
+
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::sink::Send as SinkSend;
 use futures::stream;
@@ -11,16 +15,15 @@ use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use log::trace;
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
-use std::io::Write;
-use std::iter;
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::pgwire::codec::Codec;
-use crate::pgwire::message;
-use crate::pgwire::message::{BackendMessage, FieldFormat, FrontendMessage, Severity};
-use coord::SqlResponse;
+use crate::pgwire::message::{
+    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity,
+};
+use coord::{self, SqlResponse};
 use dataflow_types::Update;
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
@@ -125,6 +128,7 @@ pub enum StateMachine<A: Conn + 'static> {
         HandleExtendedQuery,
         SendError,
         SendParseComplete,
+        SendReadyForQuery,
         HandleBind,
         Error,
         Done
@@ -146,11 +150,13 @@ pub enum StateMachine<A: Conn + 'static> {
 
     // Extended query flow
     /// We enter the extended query by way of PARSE, then we spin in it until we exit
-    #[state_machine_future(transitions(SendParseComplete, SendError, Error, Done))]
+    #[state_machine_future(transitions(SendParseComplete, WaitForRows, SendError, Error, Done))]
     HandleExtendedQuery {
         conn: A,
         rx: futures::sync::oneshot::Receiver<coord::Response>,
+        field_formats: Option<Vec<FieldFormat>>,
     },
+
     #[state_machine_future(transitions(
         HandleExtendedQuery,
         SendReadyForQuery,
@@ -201,6 +207,7 @@ pub enum StateMachine<A: Conn + 'static> {
         session: Session,
         row_type: RelationType,
         rows_rx: coord::RowsFuture,
+        field_formats: Option<Vec<FieldFormat>>,
     },
 
     #[state_machine_future(transitions(WaitForUpdates, SendUpdates, SendError, Error))]
@@ -397,7 +404,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     conn_id: context.conn_id,
                     tx,
                 })?;
-                transition!(HandleExtendedQuery { conn, rx })
+                transition!(HandleExtendedQuery {
+                    conn,
+                    rx,
+                    field_formats: None
+                })
             }
 
             FrontendMessage::Bind {
@@ -545,6 +556,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         send: state.conn.send(BackendMessage::ParseComplete),
                         session,
                     }),
+                    SqlResponse::SendRows { typ, rx } => {
+                        let ff = state.field_formats;
+                        debug_assert!(ff.is_some(), "field formats must be set for execute");
+                        transition!(WaitForRows {
+                            session,
+                            conn: state.conn,
+                            row_type: typ,
+                            rows_rx: rx,
+                            field_formats: ff
+                        })
+                    }
                     _ => panic!("Got non parse complete in extended query: {:?}", response),
                 }
             }
@@ -616,6 +638,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             session: state.session,
             row_type: state.row_type,
             rows_rx: state.rows_rx,
+            field_formats: None,
         })
     }
 
@@ -648,12 +671,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterWaitForRows<A>, failure::Error> {
         let peek_results = try_ready!(state.rows_rx.poll());
         let state = state.take();
-        trace!("sending row descr row_count={:?}", peek_results.len(),);
+        trace!("sending rows row_count={:?}", peek_results.len(),);
         transition!(send_rows(
             state.conn,
             state.session,
             peek_results,
-            state.row_type
+            state.row_type,
+            state.field_formats.clone(),
         ))
     }
 
@@ -701,7 +725,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, HandleBind<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleBind<A>, failure::Error> {
-        trace!("handle bind");
         let mut state = state.take();
         let (sn, pn) = (state.statement_name, state.portal_name);
         let fmts = state.return_field_formats.iter().map(bool::from).collect();
@@ -749,15 +772,23 @@ fn send_rows<A, R>(
     session: Session,
     rows: R,
     row_type: RelationType,
+    field_formats: Option<Vec<FieldFormat>>,
 ) -> SendCommandComplete<A>
 where
     A: Conn + 'static,
     R: IntoIterator<Item = Vec<Datum>>,
     <R as IntoIterator>::IntoIter: 'static + Send,
 {
+    let formats = FieldFormatIter::new(field_formats.map(Arc::new));
+
     let rows = rows
         .into_iter()
-        .map(move |row| BackendMessage::DataRow(message::field_values_from_row(row, &row_type)))
+        .map(move |row| {
+            BackendMessage::DataRow(
+                message::field_values_from_row(row, &row_type),
+                formats.fresh(),
+            )
+        })
         .chain(iter::once(BackendMessage::CommandComplete {
             tag: "SELECT".into(),
         }));
