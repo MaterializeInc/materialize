@@ -141,18 +141,34 @@ impl FoldConstants {
                     relation.take();
                 }
             }
-            RelationExpr::Union { left, right } => match (left.is_empty(), right.is_empty()) {
-                (true, true) => {
-                    relation.take();
+            RelationExpr::Union { left, right } => {
+                if let (
+                    RelationExpr::Constant {
+                        rows: rows_left,
+                        typ: typ_left,
+                    },
+                    RelationExpr::Constant {
+                        rows: rows_right,
+                        typ: _,
+                    },
+                ) = (&mut **left, &mut **right)
+                {
+                    rows_left.append(rows_right);
+                    if rows_left.is_empty() {
+                        relation.take();
+                    } else {
+                        *typ_left = metadata.clone();
+                        *relation = left.take();
+                    }
+                } else {
+                    match (left.is_empty(), right.is_empty()) {
+                        (true, true) => unreachable!(), // both must be constants, so handled above
+                        (true, false) => *relation = right.take(),
+                        (false, true) => *relation = left.take(),
+                        (false, false) => (),
+                    }
                 }
-                (true, false) => {
-                    *relation = right.take();
-                }
-                (false, true) => {
-                    *relation = left.take();
-                }
-                _ => {}
-            },
+            }
         }
     }
 }
