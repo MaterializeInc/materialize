@@ -7,8 +7,6 @@
 
 set -eo pipefail
 
-set -x
-
 zippackage=mzcli-mtrlz.zip
 mzcli_backupdir="$HOME/Downloads/mzcli-backups"
 
@@ -19,16 +17,16 @@ for fname in "${HOME}"/Downloads/mzcli-mtrlz* ; do
     fi
 done
 
-echo -n "Your web browser will open, please approve the download and then press enter to continue"
+echo -n "Your web browser will open, please approve the download
+press enter when done to continue... "
 open https://github.com/MaterializeInc/mzcli/archive/mtrlz.zip
 read -r
 
 mv "${HOME}"/Downloads/mzcli-mtrlz* .
-
 
 if [[ ! -f $zippackage ]] ; then
     zip -r $zippackage mzcli-mtrlz
 fi
 
 docker build -t materialize/mzcli .
-docker tag materialize/mzcli materialize/mzcli:"$(date +%Y-%m-%d)"
+docker tag materialize/mzcli "materialize/mzcli:$(date +%Y-%m-%d)"
