@@ -478,14 +478,24 @@ pub fn mod_float32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_float32() % b.unwrap_float32())
+    let b = b.unwrap_float32();
+    if b == 0.0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_float32() % b)
+    }
 }
 
 pub fn mod_float64(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_float64() % b.unwrap_float64())
+    let b = b.unwrap_float64();
+    if b == 0.0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_float64() % b)
+    }
 }
 
 pub fn mod_decimal(a: Datum, b: Datum) -> Datum {
