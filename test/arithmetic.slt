@@ -1,0 +1,221 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc
+
+mode cockroach
+
+# TODO: The types supported by mod are SMALLINT, BIGINT, INTEGER, DECIMAL, and NUMERIC.
+# Tests all types?
+### mod ###
+
+# positive dividend and divisor 
+query I
+select mod(34, 7);
+----
+6
+
+query I
+select mod(35, 7);
+----
+0
+
+query I
+select mod(4,4);
+----
+0
+
+query I
+select mod(7, 11);
+----
+7
+
+query R
+select mod(4.3, 2.1);
+----
+0.1
+
+query R
+select mod(4, 2.1);
+----
+1.9
+
+query R
+select mod(0.34, 1.1);
+----
+0.34
+
+query R
+select mod(4.2, 2.1);
+----
+0.0
+
+# negative dividend
+query I
+select mod(-3234, 73);
+----
+-22
+
+query I
+select mod(-100, 10);
+----
+0
+
+query I
+select mod(-5,5);
+----
+0
+
+query I
+select mod(-237, 1100);
+----
+-237
+
+#TODO: materialize#575 uncomment tests when decimal can be negated
+#query R
+#select mod(-2.254, 2.2);
+#----
+#-0.054
+
+query R
+select mod(-4, 1.75);
+----
+-0.50
+
+#query R
+#select mod(-0.3234, 200);
+#----
+#-0.3234
+
+#query R
+#select mod(-7.5, 1.5);
+#----
+#0.0
+
+# negative divisor
+
+query I
+select mod(23, -5);
+----
+3
+
+query I
+select mod(20, -2);
+----
+0
+
+query I
+select mod(29,-29);
+----
+0
+
+query I
+select mod(7, -11);
+----
+7
+
+#query R
+#select mod(8.5, -4.6);
+#----
+#3.9
+
+#query R
+#select mod(30, -11.9);
+#----
+#6.2
+
+#query R
+#select mod(0.0019, -0.013);
+#----
+#0.0019
+
+#query R
+#select mod(14.4, -0.002);
+#----
+#0.000
+
+# negative dividend and negative divisor
+
+query I
+select mod(-121, -17);
+----
+-2
+
+query I
+select mod(-64, -8);
+----
+0
+
+query I
+select mod(-344,-344);
+----
+0
+
+query I
+select mod(-13, -123);
+----
+-13
+
+#query R
+#select mod(-5.6, -2.3);
+#----
+#-1.0
+
+#query R
+#select mod(-10.4, -2);
+#----
+#-0.4
+
+#query R
+#select mod(-2.45, -45.6);
+#----
+#-2.45
+
+#query R
+#select mod(-12.15, -4.05);
+#----
+#0.00
+
+# special values: 0/null dividend and/or divisor
+
+query I
+select mod(0,4);
+----
+0
+
+query R
+select mod(0.000, 2);
+----
+0.000
+
+query R
+select mod(0, 1.23);
+----
+0.00
+
+#TODO: materialize#580 trying these causes the server to crash
+#statement error
+#select mod(4, 0.0);
+
+#statement error
+#select mod(0,0);
+
+query I
+select mod(0, null);
+----
+NULL
+
+query I
+select mod(null, 0);
+----
+NULL
+
+query I
+select mod(-5, null);
+----
+NULL
+
+query I
+select mod(null, 0.45);
+----
+NULL
