@@ -9,7 +9,7 @@ mode cockroach
 # Tests all types?
 ### mod ###
 
-# positive dividend and divisor 
+# positive dividend and divisor
 query I
 select mod(34, 7);
 ----
@@ -193,12 +193,15 @@ select mod(0, 1.23);
 ----
 0.00
 
-#TODO: materialize#580 trying these causes the server to crash
-#statement error
-#select mod(4, 0.0);
+query R
+select mod(4, 0.0);
+----
+NULL
 
-#statement error
-#select mod(0,0);
+query I
+select mod(0, 0);
+----
+NULL
 
 query I
 select mod(0, null);
@@ -217,5 +220,55 @@ NULL
 
 query I
 select mod(null, 0.45);
+----
+NULL
+
+query I
+select 1 % 0;
+----
+NULL
+
+query R
+select 1 % 0.0;
+----
+NULL
+
+query R
+select 1.0 % 0;
+----
+NULL
+
+query R
+select 1.0 % 0.0;
+----
+NULL
+
+query R
+select 1 % cast(0.0 AS float);
+----
+NULL
+
+query I
+select 1 / 0;
+----
+NULL
+
+query R
+select 1 / 0.0;
+----
+NULL
+
+query R
+select 1.0 / 0;
+----
+NULL
+
+query R
+select 1.0 / 0.0;
+----
+NULL
+
+query R
+select 1 / cast(0.0 AS float);
 ----
 NULL

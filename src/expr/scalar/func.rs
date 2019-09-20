@@ -418,35 +418,60 @@ pub fn div_float32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_float32() / b.unwrap_float32())
+    let b = b.unwrap_float32();
+    if b == 0.0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_float32() / b)
+    }
 }
 
 pub fn div_float64(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_float64() / b.unwrap_float64())
+    let b = b.unwrap_float64();
+    if b == 0.0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_float64() / b)
+    }
 }
 
 pub fn div_decimal(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_decimal() / b.unwrap_decimal())
+    let b = b.unwrap_decimal();
+    if b == 0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_decimal() / b)
+    }
 }
 
 pub fn mod_int32(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_int32() % b.unwrap_int32())
+    let b = b.unwrap_int32();
+    if b == 0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_int32() % b)
+    }
 }
 
 pub fn mod_int64(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_int64() % b.unwrap_int64())
+    let b = b.unwrap_int64();
+    if b == 0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_int64() % b)
+    }
 }
 
 pub fn mod_float32(a: Datum, b: Datum) -> Datum {
@@ -467,7 +492,12 @@ pub fn mod_decimal(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_decimal() % b.unwrap_decimal())
+    let b = b.unwrap_decimal();
+    if b == 0 {
+        Datum::Null
+    } else {
+        Datum::from(a.unwrap_decimal() % b)
+    }
 }
 
 pub fn neg_int32(a: Datum) -> Datum {
