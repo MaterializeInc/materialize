@@ -9,7 +9,7 @@ mode cockroach
 # Tests all types?
 ### mod ###
 
-# positive dividend and divisor 
+# positive dividend and divisor
 query I
 select mod(34, 7);
 ----
@@ -71,26 +71,25 @@ select mod(-237, 1100);
 ----
 -237
 
-#TODO: materialize#575 uncomment tests when decimal can be negated
-#query R
-#select mod(-2.254, 2.2);
-#----
-#-0.054
+query R
+select mod(-2.254, 2.2);
+----
+-0.054
 
 query R
 select mod(-4, 1.75);
 ----
 -0.50
 
-#query R
-#select mod(-0.3234, 200);
-#----
-#-0.3234
+query R
+select mod(-0.3234, 200);
+----
+-0.3234
 
-#query R
-#select mod(-7.5, 1.5);
-#----
-#0.0
+query R
+select mod(-7.5, 1.5);
+----
+0.0
 
 # negative divisor
 
@@ -114,25 +113,25 @@ select mod(7, -11);
 ----
 7
 
-#query R
-#select mod(8.5, -4.6);
-#----
-#3.9
+query R
+select mod(8.5, -4.6);
+----
+3.9
 
-#query R
-#select mod(30, -11.9);
-#----
-#6.2
+query R
+select mod(30, -11.9);
+----
+6.2
 
-#query R
-#select mod(0.0019, -0.013);
-#----
-#0.0019
+query R
+select mod(0.0019, -0.013);
+----
+0.0019
 
-#query R
-#select mod(14.4, -0.002);
-#----
-#0.000
+query R
+select mod(14.4, -0.002);
+----
+0.000
 
 # negative dividend and negative divisor
 
@@ -156,25 +155,25 @@ select mod(-13, -123);
 ----
 -13
 
-#query R
-#select mod(-5.6, -2.3);
-#----
-#-1.0
+query R
+select mod(-5.6, -2.3);
+----
+-1.0
 
-#query R
-#select mod(-10.4, -2);
-#----
-#-0.4
+query R
+select mod(-10.4, -2);
+----
+-0.4
 
-#query R
-#select mod(-2.45, -45.6);
-#----
-#-2.45
+query R
+select mod(-2.45, -45.6);
+----
+-2.45
 
-#query R
-#select mod(-12.15, -4.05);
-#----
-#0.00
+query R
+select mod(-12.15, -4.05);
+----
+0.00
 
 # special values: 0/null dividend and/or divisor
 

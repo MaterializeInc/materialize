@@ -1119,6 +1119,7 @@ impl Planner {
                 ScalarType::Int64 => (UnaryFunc::NegInt64, ScalarType::Int64),
                 ScalarType::Float32 => (UnaryFunc::NegFloat32, ScalarType::Float32),
                 ScalarType::Float64 => (UnaryFunc::NegFloat64, ScalarType::Float64),
+                ScalarType::Decimal(p, s) => (UnaryFunc::NegDecimal, ScalarType::Decimal(p, s)),
                 _ => bail!("cannot negate {:?}", typ.scalar_type),
             },
         };

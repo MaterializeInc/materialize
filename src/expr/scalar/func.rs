@@ -498,6 +498,13 @@ pub fn neg_float64(a: Datum) -> Datum {
     Datum::from(-a.unwrap_float64())
 }
 
+pub fn neg_decimal(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(-a.unwrap_decimal())
+}
+
 pub fn eq(a: Datum, b: Datum) -> Datum {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -708,6 +715,7 @@ pub enum UnaryFunc {
     NegInt64,
     NegFloat32,
     NegFloat64,
+    NegDecimal,
     AbsInt32,
     AbsInt64,
     AbsFloat32,
@@ -740,6 +748,7 @@ impl UnaryFunc {
             UnaryFunc::NegInt64 => neg_int64,
             UnaryFunc::NegFloat32 => neg_float32,
             UnaryFunc::NegFloat64 => neg_float64,
+            UnaryFunc::NegDecimal => neg_decimal,
             UnaryFunc::AbsInt32 => abs_int32,
             UnaryFunc::AbsInt64 => abs_int64,
             UnaryFunc::AbsFloat32 => abs_float32,
@@ -771,7 +780,8 @@ impl UnaryFunc {
             | UnaryFunc::NegInt32
             | UnaryFunc::NegInt64
             | UnaryFunc::NegFloat32
-            | UnaryFunc::NegFloat64 => true,
+            | UnaryFunc::NegFloat64
+            | UnaryFunc::NegDecimal => true,
             _ => false,
         };
         // This debug assertion is an attempt to ensure that this function
@@ -790,6 +800,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::NegInt64 => f.write_str("-"),
             UnaryFunc::NegFloat32 => f.write_str("-"),
             UnaryFunc::NegFloat64 => f.write_str("-"),
+            UnaryFunc::NegDecimal => f.write_str("-"),
             UnaryFunc::AbsInt32 => f.write_str("abs"),
             UnaryFunc::AbsInt64 => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),

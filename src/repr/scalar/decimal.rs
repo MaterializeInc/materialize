@@ -51,7 +51,7 @@ use std::fmt;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::iter::Sum;
-use std::ops::{Add, AddAssign, Div, Mul, Rem, Sub};
+use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub};
 
 /// The significand of a decimal number with up to 38 digits of precision.
 ///
@@ -265,6 +265,14 @@ impl Sum for Significand {
         I: Iterator<Item = Self>,
     {
         iter.fold(Significand::new(0), Add::add)
+    }
+}
+
+impl Neg for Significand {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self(-self.0)
     }
 }
 
