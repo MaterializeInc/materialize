@@ -94,7 +94,7 @@ services:
     volumes:
       - chbench-gen:/gen
   cli:
-    image: materialize/mzcli:latest
+    build: cli
     init: true
     # if you run the terminal with a dark background uncomment these lines
     # environment:
