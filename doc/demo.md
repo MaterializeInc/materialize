@@ -13,7 +13,8 @@ assume that you are running commands from the root of the materialize repo.
 Each demo involves starting several terminal sessions:
 
 * A materialize daemon -- where the magic happens
-* A materialize shell -- the human interface to the materialze engine
+* A materialize shell -- the human interface to the materialize engine
+    - Requires `psql` (`brew install postgres`)
 * At least one avro producer window -- the channel through which content gets
   into materialize
 
@@ -22,7 +23,7 @@ demos rely upon are running. For now, that means we need `confluent connect`
 and `materialized`.
 
 We have a collection of helpful tools in `doc/demo-utils.sh`, including one
-that makes sure that confluent is running and materialize is up to date and
+that makes sure that `confluent` is running and materialize is up to date and
 running.
 
 So, to get the core services running we just run `mtrlz-start`:
@@ -88,9 +89,12 @@ $ mtrlz-shell
 > CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA REGISTRY 'http://localhost:8081';
 > SHOW COLUMNS FROM quotes;
 > PEEK quotes;
+> SELECT quote, 42 FROM quotes;
 > CREATE MATERIALIZED VIEW business_insights AS SELECT quote, 42 FROM quotes;
 > PEEK business_insights;
 ```
+
+Though this doesn't really demonstrate the capabilities of Materialize––it's just a toy example––`PEEK` is much faster than the corresponding `SELECT`. However, it is worth noting one can query data in Materialize with arbitrary `SELECT`s; you aren't limited to _only_ creating materialized views.
 
 ## Aggregate demo
 
