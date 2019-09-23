@@ -47,7 +47,7 @@ pub fn validate_key_schema(
                     if key_column.scalar_type == value_column.scalar_type
                         && key_column.nullable == value_column.nullable
                     {
-                        indices.push(index);
+                        indices.push(index.clone());
                     } else {
                         bail!(
                             "key and value column types do not match: key {:?} vs. value {:?}",
