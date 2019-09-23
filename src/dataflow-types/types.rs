@@ -213,26 +213,25 @@ mod tests {
                                 column_types: vec![ColumnType::new(ScalarType::Int64).name("id")],
                             },
                         },
-                        RelationExpr::Distinct {
-                            input: Box::new(RelationExpr::Union {
-                                left: Box::new(RelationExpr::Get {
-                                    name: "customers2018".into(),
-                                    typ: RelationType {
-                                        column_types: vec![
-                                            ColumnType::new(ScalarType::Int64).name("id")
-                                        ],
-                                    },
-                                }),
-                                right: Box::new(RelationExpr::Get {
-                                    name: "customers2019".into(),
-                                    typ: RelationType {
-                                        column_types: vec![
-                                            ColumnType::new(ScalarType::Int64).name("id")
-                                        ],
-                                    },
-                                }),
+                        Box::new(RelationExpr::Union {
+                            left: Box::new(RelationExpr::Get {
+                                name: "customers2018".into(),
+                                typ: RelationType {
+                                    column_types: vec![
+                                        ColumnType::new(ScalarType::Int64).name("id")
+                                    ],
+                                },
                             }),
-                        },
+                            right: Box::new(RelationExpr::Get {
+                                name: "customers2019".into(),
+                                typ: RelationType {
+                                    column_types: vec![
+                                        ColumnType::new(ScalarType::Int64).name("id")
+                                    ],
+                                },
+                            }),
+                        })
+                        .distinct(),
                     ],
                     variables: vec![vec![(0, 0), (1, 0)]],
                 }),

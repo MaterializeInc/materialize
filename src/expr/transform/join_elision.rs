@@ -34,7 +34,7 @@ impl JoinElision {
             let mut new_inputs = Vec::new();
             for (position, expression) in inputs.drain(..).enumerate() {
                 let is_vacuous = if let RelationExpr::Constant { rows, .. } = &expression {
-                    rows.len() == 1 && rows[0].len() == 0
+                    rows.len() == 1 && rows[0].0.len() == 0 && rows[0].1 == 1
                 } else {
                     false
                 };
@@ -56,10 +56,7 @@ impl JoinElision {
             *inputs = new_inputs;
             match inputs.len() {
                 0 => {
-                    *relation = RelationExpr::Constant {
-                        rows: vec![vec![]],
-                        typ: metadata.clone(),
-                    }
+                    *relation = RelationExpr::constant(vec![vec![]], metadata.clone());
                 }
                 1 => {
                     // if there are constraints, they probably should have

@@ -211,7 +211,7 @@ where
 
                     let collection = rows
                         .to_stream(scope)
-                        .map(|x| (x, Default::default(), 1))
+                        .map(|(x, diff)| (x, Default::default(), diff))
                         .as_collection();
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -298,10 +298,6 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let collection = self.collection(input).unwrap().negate();
                     self.collections.insert(relation_expr.clone(), collection);
-                }
-
-                RelationExpr::Distinct { .. } => {
-                    self.render_distinct(relation_expr, scope, worker_index);
                 }
 
                 RelationExpr::Threshold { .. } => {
@@ -736,54 +732,6 @@ where
                 );
 
             self.set_local(&relation_expr, &group_key[..], arrangement.clone());
-        }
-    }
-
-    fn render_distinct(
-        &mut self,
-        relation_expr: &RelationExpr,
-        scope: &mut G,
-        worker_index: usize,
-    ) {
-        if let RelationExpr::Distinct { input } = relation_expr {
-            // TODO: re-use and publish arrangement here.
-            let arity = input.arity();
-            let keys = (0..arity).collect::<Vec<_>>();
-
-            // TODO: easier idioms for detecting, re-using, and stashing.
-            if self.arrangement(&input, &keys[..]).is_none() {
-                self.ensure_rendered(input, scope, worker_index);
-                let built = self.collection(input).unwrap();
-                let keys2 = keys.clone();
-                let keyed = built
-                    .map(move |tuple| {
-                        (
-                            keys2.iter().map(|i| tuple[*i].clone()).collect::<Vec<_>>(),
-                            tuple,
-                        )
-                    })
-                    .arrange_by_key();
-                self.set_local(&input, &keys[..], keyed);
-            }
-
-            use differential_dataflow::operators::reduce::ReduceCore;
-            use differential_dataflow::trace::implementations::ord::OrdValSpine;
-
-            let arranged = match self.arrangement(&input, &keys[..]) {
-                Some(ArrangementFlavor::Local(local)) => local
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Distinct", move |k, _s, t| {
-                        t.push((k.to_vec(), 1))
-                    }),
-                Some(ArrangementFlavor::Trace(trace)) => trace
-                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Distinct", move |k, _s, t| {
-                        t.push((k.to_vec(), 1))
-                    }),
-                None => {
-                    panic!("Arrangement alarmingly absent!");
-                }
-            };
-
-            self.set_local(relation_expr, &keys[..], arranged.clone());
         }
     }
 

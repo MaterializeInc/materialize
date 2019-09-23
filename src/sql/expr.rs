@@ -133,13 +133,8 @@ impl RelationExpr {
     /// Rewrite `self` into a `dataflow_expr::RelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `RelationExpr`s) into flat queries
     pub fn decorrelate(self) -> Result<dataflow_expr::RelationExpr, failure::Error> {
-        dataflow_expr::RelationExpr::Constant {
-            rows: vec![vec![]],
-            typ: RelationType {
-                column_types: vec![],
-            },
-        }
-        .let_in(|get_outer| self.applied_to(get_outer))
+        dataflow_expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+            .let_in(|get_outer| self.applied_to(get_outer))
     }
 
     /// Return a `dataflow_expr::RelationExpr` which evaluates `self` once for each row returned by `get_outer`.
@@ -158,7 +153,7 @@ impl RelationExpr {
             );
         }
         match self {
-            Constant { rows, typ } => Ok(get_outer.product(SR::Constant { rows, typ })),
+            Constant { rows, typ } => Ok(get_outer.product(SR::constant(rows, typ))),
             Get { name, typ } => Ok(get_outer.product(SR::Get { name, typ })),
             Project { input, outputs } => {
                 let input = input.applied_to(get_outer.clone())?;
