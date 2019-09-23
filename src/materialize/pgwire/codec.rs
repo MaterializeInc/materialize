@@ -149,9 +149,7 @@ impl Encoder for Codec {
             BackendMessage::CommandComplete { tag } => {
                 buf.put_string(tag);
             }
-            BackendMessage::ParseComplete => {
-                eprintln!("placing parse complete");
-            }
+            BackendMessage::ParseComplete => {}
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
                 buf.put(b'I'); // transaction indicator
