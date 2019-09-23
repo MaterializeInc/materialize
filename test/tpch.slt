@@ -3,6 +3,8 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+mode cockroach
+
 statement ok
 CREATE TABLE nation (
     n_nationkey  integer PRIMARY KEY,
@@ -98,9 +100,9 @@ CREATE TABLE lineitem (
     PRIMARY KEY (l_orderkey, l_linenumber)
 )
 
-query TTIIIIIIII valuesort
+query T
 -- Query 01
-SELECT
+EXPLAIN PLAN FOR SELECT
 	l_returnflag,
 	l_linestatus,
 	sum(l_quantity) as sum_qty,
@@ -121,6 +123,78 @@ GROUP BY
 ORDER BY
 	l_returnflag,
 	l_linestatus
+----
+Project {
+  outputs: [0, 1, 13, 14, 15, 16, 17, 18, 19, 20],
+  Map {
+    scalars: [#12],
+    Map {
+      scalars: [
+        (
+            (#10 * Significand(10000000))
+            /
+            (i64todec #11 * Significand(100))
+          )
+          *
+          Significand(10)
+      ],
+      Map {
+        scalars: [
+          (
+              (#8 * Significand(10000000))
+              /
+              (i64todec #9 * Significand(100))
+            )
+            *
+            Significand(10)
+        ],
+        Map {
+          scalars: [
+            (
+                (#6 * Significand(10000000))
+                /
+                (i64todec #7 * Significand(100))
+              )
+              *
+              Significand(10)
+          ],
+          Map {
+            scalars: [#5],
+            Map {
+              scalars: [#4],
+              Map {
+                scalars: [#8],
+                Map {
+                  scalars: [#6],
+                  Reduce {
+                    group_key: [8, 9],
+                    aggregates: [
+                      SumDecimal,
+                        SumDecimal,
+                        SumDecimal,
+                        SumDecimal,
+                        SumDecimal,
+                        Count,
+                        SumDecimal,
+                        Count,
+                        SumDecimal,
+                        Count,
+                        CountAll
+                    ],
+                    Filter {
+                      predicates: [#10 <= 1998-12-01],
+                      Get { lineitem }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 
 query T multiline
 EXPLAIN PLAN FOR SELECT
