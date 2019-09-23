@@ -16,7 +16,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
 use crate::pgwire;
-use crate::queue;
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
 use ore::future::FutureExt;
@@ -46,7 +45,7 @@ impl Config {
 fn handle_connection(
     conn: TcpStream,
     switchboard: Switchboard<SniffedStream<TcpStream>>,
-    cmdq_tx: UnboundedSender<queue::Command>,
+    cmdq_tx: UnboundedSender<coord::Command>,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
@@ -83,7 +82,7 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 pub fn serve(config: Config) -> Result<(), failure::Error> {
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
-    let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<queue::Command>();
+    let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<coord::Command>();
 
     // Extract timely dataflow parameters.
     let is_primary = config.process == 0;
@@ -184,7 +183,7 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
 
     // Initialize command queue and sql planner, but only on the primary.
     if is_primary {
-        queue::transient::serve(
+        coord::transient::serve(
             switchboard,
             num_timely_workers,
             logging_config.as_ref(),

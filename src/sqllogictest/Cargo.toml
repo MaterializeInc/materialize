@@ -15,6 +15,7 @@ path = "lib.rs"
 byteorder = "*"
 chrono = "0.4"
 comm = { path = "../comm" }
+coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.5"
@@ -22,7 +23,6 @@ futures = "0.1"
 getopts = "0.2"
 itertools = "0.8.0"
 lazy_static = "1"
-materialize = { path = "../materialize" }
 md5 = "*"
 ordered-float = "*"
 ore = { path = "../ore" }

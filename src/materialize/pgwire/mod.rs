@@ -24,7 +24,6 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::id_alloc::{IdAllocator, IdExhaustionError};
-use crate::queue;
 use ore::future::FutureExt;
 
 mod codec;
@@ -38,7 +37,7 @@ pub use protocol::match_handshake;
 
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
-    cmdq_tx: UnboundedSender<queue::Command>,
+    cmdq_tx: UnboundedSender<coord::Command>,
 ) -> impl Future<Item = (), Error = failure::Error> {
     lazy_static! {
         static ref CONN_ID_ALLOCATOR: id_alloc::IdAllocator = IdAllocator::new(1, 1 << 16);

@@ -10,8 +10,7 @@ use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::Stream;
 
-use super::{Command, Response};
-use crate::queue::coordinator;
+use super::{coordinator, Command, Response};
 
 enum Message {
     Command(Command),

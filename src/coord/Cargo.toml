@@ -1,26 +1,20 @@
 [package]
-name = "materialize"
-description = "Streaming SQL materialized views."
+name = "coord"
+description = "Coordinates client requests with the dataflow layer."
 version = "0.1.0"
 edition = "2018"
 publish = false
-
-[[bin]]
-name = "materialized"
-path = "bin/materialized.rs"
 
 [lib]
 path = "lib.rs"
 
 [dependencies]
-backtrace = { version = "0.3.37", features = ["coresymbolication"] }
+backtrace = "0.3.37"
+bincode = "1.1.4"
 byteorder = "1.3"
 bytes = "0.4"
-cast = "0.2"
 ccsr = { path = "../ccsr" }
 comm = { path = "../comm" }
-coord = { path = "../coord" }
-csv = "1.1"
 chrono = "0.4"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
@@ -30,18 +24,22 @@ futures = "0.1"
 getopts = "0.2"
 hyper = "0.12"
 interchange = { path = "../interchange" }
-jemallocator = "0.3.0"
 lazy_static = "1.4.0"
 log = "0.4"
+ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
-parse_duration = "1.0.3"
+pdqselect = "0.1.0"
 rand = "0.7"
+regex = "1.3.1"
+regex-syntax = "0.6.12"
 repr = { path = "../repr" }
+smallvec = "0.6"
 sql = { path = "../sql" }
-state_machine_future = { git = "https://github.com/benesch/state_machine_future.git", branch = "context-generic-bounds" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.1"
 tokio-threadpool = "0.1"
+url = "1.7.2"
+uuid = { version = "0.7.4", features = ["serde", "v4"] }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"
