@@ -80,12 +80,9 @@ where
                         Ok(message) => {
                             let payload = match message.payload() {
                                 Some(p) => p,
-                                None => {
-                                    // TODO(benesch): what does it mean to have a
-                                    // Kafka message with no payload?
-                                    error!("dropped kafka message with no payload");
-                                    continue;
-                                }
+                                // Null payloads are expected from Debezium.
+                                // See https://github.com/MaterializeInc/materialize/issues/439#issuecomment-534236276
+                                None => continue,
                             };
 
                             let ms = match message.timestamp() {
