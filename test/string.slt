@@ -20,14 +20,14 @@ INSERT INTO asciitest VALUES ('hello world', 'goodbye moon'), (null, null),
 statement error
 select ascii(98)
 
-query II colnames
+query II colnames rowsort
 select ascii(strcol) as strres, ascii(vccol) as vcres from asciitest;
 ----
 strres  vcres
+NULL    NULL
 104     103
 20320   20877
 128512  128123
-NULL    NULL
 
 query I
 select ascii(null);
