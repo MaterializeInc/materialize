@@ -61,7 +61,7 @@ pub fn validate_key_schema(
         }
     }
 
-    Ok(Vec::new())
+    Ok(indices)
 }
 
 /// Converts an Apache Avro schema into a [`repr::RelationType`].
