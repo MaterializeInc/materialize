@@ -1276,8 +1276,9 @@ impl Planner {
                     _ => unreachable!(),
                 };
                 let expr = lexpr.call_binary(rexpr, func);
-                let typ =
-                    ColumnType::new(Decimal(p, *so)).nullable(ltype.nullable || rtype.nullable);
+                let is_nullable_op = op == Modulo;
+                let typ = ColumnType::new(Decimal(p, *so))
+                    .nullable(ltype.nullable || rtype.nullable || is_nullable_op);
                 return Ok((expr, typ));
             }
             (Multiply, Decimal(p1, s1), Decimal(p2, s2)) => {
@@ -1369,12 +1370,12 @@ impl Planner {
             },
         };
         let expr = lexpr.call_binary(rexpr, func);
-        let is_integer_div = match &func {
-            DivInt32 | DivInt64 => true,
+        let is_nullable_op = match op {
+            Divide | Modulo => true,
             _ => false,
         };
         let typ = ColumnType::new(scalar_type)
-            .nullable(ltype.nullable || rtype.nullable || is_integer_div);
+            .nullable(ltype.nullable || rtype.nullable || is_nullable_op);
         Ok((expr, typ))
     }
 
