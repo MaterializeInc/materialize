@@ -692,6 +692,7 @@ fn format_row(
             // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
             (_, Datum::Null) => "NULL".to_owned(),
             (Type::Integer, Datum::Int64(i)) => format!("{}", i),
+            (Type::Integer, Datum::Int32(i)) => format!("{}", i),
             (Type::Real, Datum::Float64(f)) => match mode {
                 Mode::Standard => format!("{:.3}", f),
                 Mode::Cockroach => format!("{}", f),
