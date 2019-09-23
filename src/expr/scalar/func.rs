@@ -611,6 +611,16 @@ pub fn build_like_regex(a: Datum) -> Datum {
     }
 }
 
+pub fn ascii(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    match a.unwrap_str().chars().next() {
+        None => Datum::Int32(0),
+        Some(v) => Datum::Int32(v as i32),
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
@@ -777,6 +787,7 @@ pub enum UnaryFunc {
     CastDecimalToFloat64,
     CastDateToTimestamp,
     BuildLikeRegex,
+    Ascii,
 }
 
 impl UnaryFunc {
@@ -810,6 +821,7 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
             UnaryFunc::BuildLikeRegex => build_like_regex,
+            UnaryFunc::Ascii => ascii,
         }
     }
 
@@ -862,6 +874,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetotimestamp"),
             UnaryFunc::BuildLikeRegex => f.write_str("compilelike"),
+            UnaryFunc::Ascii => f.write_str("ascii"),
         }
     }
 }
