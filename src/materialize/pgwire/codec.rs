@@ -167,7 +167,6 @@ impl Encoder for Codec {
                 buf.put_string(value);
             }
             BackendMessage::ParameterDescription => {
-                log::warn!("ignoring parameters in query");
                 // 7 bytes: b't', u32, 0 parameters
                 buf.put_u32_be(7);
                 buf.put_u16_be(0);
@@ -178,7 +177,7 @@ impl Encoder for Codec {
                 message,
                 detail,
             } => {
-                log::trace!("sending error: {:?}->{}", severity, message);
+                log::warn!("error for client: {:?}->{}", severity, message);
 
                 buf.put(b'S');
                 buf.put_string(severity.string());
@@ -241,7 +240,6 @@ impl Decoder for Codec {
                     }
                     let frame_len = parse_frame_len(&src)?;
                     src.advance(4);
-                    // maybe panics without reserve?
                     src.reserve(frame_len);
                     self.decode_state = DecodeState::Data(b's', frame_len);
                 }
@@ -252,12 +250,6 @@ impl Decoder for Codec {
                     }
                     let msg_type = src[0];
                     let frame_len = parse_frame_len(&src[1..])?;
-                    log::warn!(
-                        "\nmsg={:?}\nbyt={:x?}\nframe_len={}",
-                        std::str::from_utf8(&src),
-                        &src,
-                        frame_len
-                    );
                     src.advance(5);
                     src.reserve(frame_len);
                     self.decode_state = DecodeState::Data(msg_type, frame_len);
@@ -269,21 +261,24 @@ impl Decoder for Codec {
                     }
                     let buf = src.split_to(frame_len).freeze();
                     let msg = match msg_type {
+                        // initialization
                         b's' => {
                             let version = NetworkEndian::read_u32(&buf[..4]);
                             FrontendMessage::Startup { version }
                         }
+                        // Simple query
                         b'Q' => FrontendMessage::Query {
                             query: buf.slice_to(frame_len - 1),
                         },
-                        b'X' => FrontendMessage::Terminate,
                         // Extended query flow
                         b'P' => parse_parse_msg(&buf)?,
                         b'D' => parse_describe(&buf)?,
                         b'B' => parse_bind(&buf)?,
-                        b'S' => FrontendMessage::Sync,
                         b'E' => parse_execute(&buf)?,
+                        b'S' => FrontendMessage::Sync,
 
+                        // end
+                        b'X' => FrontendMessage::Terminate,
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -373,8 +368,6 @@ fn parse_describe(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
 /// Parse a `Byte1('B')`
 fn parse_bind(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
     let buf = Cursor::new(buf);
-    log::info!("parsing bind from buf: {:x?}", buf);
-    log::info!("cur_buf: {:x?}", buf.cur_buf());
 
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
@@ -415,7 +408,7 @@ fn parse_execute(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Execute { portal_name })
 }
 
-/// A struct that moves its cursor forward as it reads items
+/// Read postgres-formatted items from the network
 #[derive(Debug)]
 struct Cursor<'a> {
     buf: &'a [u8],

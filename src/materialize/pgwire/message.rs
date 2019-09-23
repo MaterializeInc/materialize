@@ -42,6 +42,9 @@ impl Severity {
     }
 }
 
+/// A parsed frontend [message]
+///
+/// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 #[derive(Debug)]
 pub enum FrontendMessage {
     Startup {
@@ -87,6 +90,9 @@ pub enum FrontendMessage {
     Terminate,
 }
 
+/// Internal representation of a backend [message]
+///
+/// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 #[allow(dead_code)]
 #[derive(Debug)]
 pub enum BackendMessage {
@@ -126,19 +132,26 @@ pub struct FieldDescription {
 
 /// A postgres input or output format
 ///
-/// From [the docs]:
-///
-/// > Binary representations for integers use network byte order (most significant byte
-/// > first). For other data types consult the documentation or source code to learn about
-/// > the binary representation. Keep in mind that binary representations for complex data
-/// > types might change across server versions; the text format is usually the more
-/// > portable choice.
-///
-/// [the docs]: https://www.postgresql.org/docs/11/protocol-overview.html#PROTOCOL-FORMAT-CODES
+/// https://www.postgresql.org/docs/11/protocol-overview.html#PROTOCOL-FORMAT-CODES
 #[derive(Copy, Clone, Debug)]
 pub enum FieldFormat {
     /// Text encoding, the default
+    ///
+    /// From the docs:
+    /// > The text representation of values is whatever strings are produced and accepted
+    /// > by the input/output conversion functions for the particular data type. In the
+    /// > transmitted representation, there is no trailing null character; the frontend
+    /// > must add one to received values if it wants to process them as C strings. (The
+    /// > text format does not allow embedded nulls, by the way.)
     Text = 0,
+    /// Binary encoding
+    ///
+    /// From the docs:
+    /// > Binary representations for integers use network byte order (most significant byte
+    /// > first). For other data types consult the documentation or source code to learn about
+    /// > the binary representation. Keep in mind that binary representations for complex data
+    /// > types might change across server versions; the text format is usually the more
+    /// > portable choice.
     Binary = 1,
 }
 

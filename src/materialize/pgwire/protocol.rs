@@ -298,7 +298,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
                     code: "08P01",
-                    message: "invalid frontend message flow".into(),
+                    message: "invalid frontend message flow at startup".into(),
                     detail: None,
                 }),
                 session: state.session,
@@ -640,18 +640,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendDescribeResponse<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        trace!("sending describe response parameters for {}", state.name);
+        trace!("send describe response for statement={:?}", state.name);
         match state.session.prepared_statements.get(&state.name) {
             Some(ps) => {
                 let typ = ps.parsed.source().typ();
+                let desc = super::message::row_description_from_type(&typ);
                 transition!(SendDescribeResponseRowdesc {
-                    send: conn.send(BackendMessage::RowDescription(
-                        super::message::row_description_from_type(&typ)
-                    )),
+                    send: conn.send(BackendMessage::RowDescription(desc)),
                     session: state.session,
                 })
             }
-            None => failure::bail!("named statement does not exist"),
+            None => failure::bail!("prepared statement does not exist name={:?}", state.name),
         }
     }
 
@@ -661,7 +660,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendDescribeResponseRowdesc<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        trace!("sent describe response row description");
+        trace!("sent describe response rowdesc");
         transition!(RecvExtendedQuery {
             recv: conn.recv(),
             session: state.session,
@@ -672,9 +671,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
         _context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
-        trace!("sending row description");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
+        trace!("send row description");
         transition!(WaitForRows {
             conn,
             session: state.session,
