@@ -31,6 +31,8 @@ use std::collections::HashMap;
 
 use failure::bail;
 
+use dataflow_types::RowSetFinishing;
+
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
 // always write a macro.
@@ -74,7 +76,7 @@ pub struct Session {
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     /// A map from statement names to SQL queries
-    pub prepared_statements: HashMap<String, Prepared>,
+    pub prepared_statements: HashMap<String, PreparedStatement>,
     /// Portals associated with the current session
     ///
     /// Portals are primarily a way to retrieve the results for a query with all
@@ -335,11 +337,35 @@ impl Var for SessionVar<bool> {
 
 /// A prepared statement
 #[derive(Debug)]
-pub struct Prepared {
+pub struct PreparedStatement {
     pub raw_sql: String,
-    pub parsed: crate::ParsedSelect,
+    source: ::expr::RelationExpr,
+    transform: RowSetFinishing,
 }
 
+impl PreparedStatement {
+    pub fn new(
+        raw_sql: String,
+        source: ::expr::RelationExpr,
+        transform: RowSetFinishing,
+    ) -> PreparedStatement {
+        PreparedStatement {
+            raw_sql,
+            source,
+            transform,
+        }
+    }
+
+    pub fn source(&self) -> &::expr::RelationExpr {
+        &self.source
+    }
+
+    pub fn transform(&self) -> &RowSetFinishing {
+        &self.transform
+    }
+}
+
+/// A portal, used by clients to name the target of an Execute statement
 #[derive(Debug)]
 pub struct Portal {
     pub statement_name: String,

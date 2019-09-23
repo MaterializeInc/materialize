@@ -21,7 +21,7 @@ use url::Url;
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::scope::Scope;
-use crate::session::Session;
+use crate::session::{PreparedStatement, Session};
 use crate::store::{DataflowStore, RemoveMode};
 use crate::{extract_sql_object_name, Plan, Planner};
 use dataflow_types::logging::LoggingConfig;
@@ -89,9 +89,9 @@ impl Planner {
                 )
             })?;
         Ok(Plan::Peek {
-            source: prepared.parsed.source.clone(),
+            source: prepared.source().clone(),
             when: PeekWhen::Immediately,
-            transform: prepared.parsed.transform.clone(),
+            transform: prepared.transform().clone(),
         })
     }
 
@@ -457,7 +457,7 @@ impl Planner {
         })
     }
 
-    /// Convert a parse statement into a [`Plan::Prepared`] and put it in the Session
+    /// Convert a parse statement into a [`Plan::PreparedStatement`] and put it in the Session
     fn handle_parse_statement(
         &mut self,
         session: &mut Session,
@@ -472,13 +472,7 @@ impl Planner {
                 let relation_expr = relation_expr.decorrelate()?;
                 session.prepared_statements.insert(
                     name.clone(),
-                    crate::session::Prepared {
-                        raw_sql: sql,
-                        parsed: crate::ParsedSelect {
-                            source: relation_expr,
-                            transform,
-                        },
-                    },
+                    PreparedStatement::new(sql, relation_expr, transform),
                 );
                 Ok(Plan::Parsed { name })
             }

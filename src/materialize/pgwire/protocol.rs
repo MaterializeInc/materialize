@@ -642,7 +642,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         trace!("send describe response for statement={:?}", state.name);
         match state.session.prepared_statements.get(&state.name) {
             Some(ps) => {
-                let typ = ps.parsed.source().typ();
+                let typ = ps.source().typ();
                 let desc = super::message::row_description_from_type(&typ);
                 transition!(SendDescribeResponseRowdesc {
                     send: conn.send(BackendMessage::RowDescription(desc)),
