@@ -470,6 +470,47 @@ impl super::Transform for Deduplicate {
 
 // =============================================================================
 
+/// The normalize optimization.
+#[derive(Debug)]
+pub struct Normalize;
+
+impl Normalize {
+    /// Normalize the names of local bindings.
+    pub fn normalize(expr: &mut RelationExpr) {
+        let mut count: usize = 0;
+        let mut names = HashMap::new();
+
+        fn rename(expr: &mut RelationExpr, count: &mut usize, names: &mut HashMap<String, String>) {
+            if let RelationExpr::Let { name, value, body } = expr {
+                rename(value, count, names);
+
+                *count += 1;
+                let stale = std::mem::replace(name, format!("id-{}", count));
+                names.insert(stale, name.clone());
+
+                rename(body, count, names);
+            } else if let RelationExpr::Get { name, .. } = expr {
+                if let Some(n) = names.get(name) {
+                    *name = n.clone();
+                }
+            } else {
+                expr.visit1_mut(|e| rename(e, count, names));
+            }
+        }
+
+        rename(expr, &mut count, &mut names);
+    }
+}
+
+impl super::Transform for Normalize {
+    /// Normalize names of local bindings.
+    fn transform(&self, expr: &mut RelationExpr, _metadata: &RelationType) {
+        Normalize::normalize(expr);
+    }
+}
+
+// =============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,6 +652,31 @@ mod tests {
         let expected = b(n2, expected2, expected);
         let expected2 = n(3).negate().union(n(4));
         let expected = b(n1, expected2, expected);
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn test_normalize() {
+        let expr1 = n(1).negate().union(n(2));
+        let expr2 = n(3).negate().union(n(4));
+        let expr3 = expr1.clone().union(expr2.clone());
+        let expr4 = expr3.clone().union(n(5).distinct()).threshold();
+        let expr5 = expr3.clone().distinct().union(expr2.clone());
+        let mut expr = expr4.union(expr5);
+
+        trace("IN normalize", &expr);
+        Deduplicate::deduplicate(&mut expr);
+        Normalize::normalize(&mut expr);
+        trace("OUT normalize", &expr);
+
+        let b = bind_local;
+        let expected = r("id-2").union(n(5).distinct()).threshold();
+        let expected2 = r("id-2").distinct().union(r("id-1"));
+        let expected = expected.union(expected2);
+        let expected2 = n(1).negate().union(n(2)).union(r("id-1"));
+        let expected = b("id-2", expected2, expected);
+        let expected2 = n(3).negate().union(n(4));
+        let expected = b("id-1", expected2, expected);
         assert_eq!(expr, expected);
     }
 }

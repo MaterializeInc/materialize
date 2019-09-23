@@ -93,6 +93,7 @@ impl Default for Optimizer {
             // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::fusion::project::Project),
+            Box::new(crate::transform::binding::Normalize),
         ];
         Self { transforms }
     }
