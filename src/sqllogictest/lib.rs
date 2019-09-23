@@ -442,6 +442,7 @@ pub enum Outcome<'a> {
     InferenceFailure {
         expected_types: &'a [Type],
         inferred_types: Vec<ColumnType>,
+        message: String,
     },
     WrongColumnNames {
         expected_column_names: &'a Vec<&'a str>,
@@ -501,12 +502,14 @@ impl fmt::Display for Outcome<'_> {
             InferenceFailure {
                 expected_types,
                 inferred_types,
+                message,
             } => write!(
                 f,
                 "Inference Failure!{}\
                  expected types: {}{}\
                  inferred types: {}{}\
-                 column names:   {}",
+                 column names:   {}{}\
+                 message: {}",
                 INDENT,
                 expected_types
                     .iter()
@@ -525,6 +528,8 @@ impl fmt::Display for Outcome<'_> {
                     .map(|s| s.name.as_deref().unwrap_or("?").to_string())
                     .collect::<Vec<_>>()
                     .join(" "),
+                INDENT,
+                message
             ),
             WrongColumnNames {
                 expected_column_names,
@@ -1034,6 +1039,9 @@ impl RecordRunner for FullState {
                     }
                 };
 
+                // get actual output
+                let raw_output = rows_rx.wait()?;
+
                 // unpack expected output
                 let QueryOutput {
                     sort,
@@ -1049,15 +1057,48 @@ impl RecordRunner for FullState {
                     Ok(query_output) => query_output,
                 };
 
-                // check inferred types
-                // sqllogictest coerces the output into the expected type, so expected_type is often wrong :(
+                // check that inferred types match expected types
+                // sqllogictest coerces the output into the expected type, so `expected_types` is often wrong :(
                 // but at least it will be the correct length
                 let inferred_types = &typ.column_types;
                 if inferred_types.len() != expected_types.len() {
                     return Ok(Outcome::InferenceFailure {
                         expected_types,
                         inferred_types: inferred_types.to_vec(),
+                        message: format!(
+                            "Expected {} types, got {} types",
+                            expected_types.len(),
+                            inferred_types.len()
+                        ),
                     });
+                }
+
+                // check that output matches inferred types
+                for row in &raw_output {
+                    if row.len() != inferred_types.len() {
+                        return Ok(Outcome::InferenceFailure {
+                            expected_types,
+                            inferred_types: inferred_types.to_vec(),
+                            message: format!(
+                                "Expected {} datums, got {} datums in row {:?}",
+                                expected_types.len(),
+                                inferred_types.len(),
+                                row
+                            ),
+                        });
+                    }
+                    for (inferred_type, datum) in inferred_types.iter().zip(row.iter()) {
+                        if !datum.is_instance_of(inferred_type) {
+                            return Ok(Outcome::InferenceFailure {
+                                expected_types,
+                                inferred_types: inferred_types.to_vec(),
+                                message: format!(
+                                    "Inferred type {:?}, got datum {:?}",
+                                    inferred_type, datum,
+                                ),
+                            });
+                        }
+                    }
                 }
 
                 // check column names
@@ -1084,7 +1125,6 @@ impl RecordRunner for FullState {
                 }
 
                 // format output
-                let raw_output = rows_rx.wait()?;
                 let mut formatted_rows = raw_output
                     .iter()
                     .map(|row| format_row(row, &typ.column_types, &**expected_types, *mode, sort))
