@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use bytes::Bytes;
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 
 use super::types::PgType;
@@ -50,8 +49,9 @@ pub enum FrontendMessage {
     Startup {
         version: u32,
     },
+    /// A simple query from the frontend
     Query {
-        query: Bytes,
+        sql: String,
     },
     /// Start an extended query
     Parse {

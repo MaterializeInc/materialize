@@ -260,21 +260,22 @@ impl Decoder for Codec {
                         return Ok(None);
                     }
                     let buf = src.split_to(frame_len).freeze();
+                    let buf = Cursor::new(&buf);
                     let msg = match msg_type {
                         // initialization
                         b's' => {
-                            let version = NetworkEndian::read_u32(&buf[..4]);
+                            let version = buf.read_u32()?;
                             FrontendMessage::Startup { version }
                         }
                         // Simple query
                         b'Q' => FrontendMessage::Query {
-                            query: buf.slice_to(frame_len - 1),
+                            sql: buf.read_cstr()?.to_string(),
                         },
                         // Extended query flow
-                        b'P' => parse_parse_msg(&buf)?,
-                        b'D' => parse_describe(&buf)?,
-                        b'B' => parse_bind(&buf)?,
-                        b'E' => parse_execute(&buf)?,
+                        b'P' => parse_parse_msg(buf)?,
+                        b'D' => parse_describe(buf)?,
+                        b'B' => parse_bind(buf)?,
+                        b'E' => parse_execute(buf)?,
                         b'S' => FrontendMessage::Sync,
 
                         // end
@@ -309,9 +310,9 @@ impl<B: BufMut> Pgbuf for B {
     }
 }
 
-fn parse_parse_msg(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
-    let (name, buf) = read_cstr(&buf)?;
-    let (sql, buf) = read_cstr(buf)?;
+fn parse_parse_msg(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let name = buf.read_cstr()?;
+    let sql = buf.read_cstr()?;
 
     // A parameter data type can be left unspecified by setting it to zero, or by making
     // the array of parameter type OIDs shorter than the number of parameter symbols ($n)
@@ -325,24 +326,10 @@ fn parse_parse_msg(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
     // having type void.
     //
     // Oh god
-    let u16_size = 2;
-    let parameter_data_type_count = NetworkEndian::read_u16(&buf[..u16_size]);
-    let mut offset = u16_size;
+    let parameter_data_type_count = buf.read_u16()?;
     let mut param_dts = vec![];
     for _ in 0..parameter_data_type_count {
-        if offset + 4 >= buf.len() {
-            break;
-        }
-        param_dts.push(NetworkEndian::read_u32(&buf[offset..offset + 4]));
-        offset += 4;
-    }
-
-    if !&buf[offset..].is_empty() {
-        log::warn!(
-            "remaining {:03} bytes in frame: {:x?}",
-            &buf[offset..].len(),
-            &buf[offset..],
-        );
+        param_dts.push(buf.read_u32()?);
     }
 
     let msg = FrontendMessage::Parse {
@@ -355,20 +342,18 @@ fn parse_parse_msg(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
     Ok(msg)
 }
 
-fn parse_describe(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
-    let first_char = buf[0];
-    let (name, _remain) = read_cstr(&buf[1..])?;
+fn parse_describe(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let first_char = buf.read_byte()?;
+    let name = buf.read_cstr()?.to_string();
     match first_char {
-        b'S' => Ok(FrontendMessage::DescribeStatement { name: name.into() }),
+        b'S' => Ok(FrontendMessage::DescribeStatement { name }),
         b'P' => Err(unsupported_err("Cannot handle Describe Portal")),
         other => Err(input_err(format!("Invalid describe type: {:#x?}", other))),
     }
 }
 
 /// Parse a `Byte1('B')`
-fn parse_bind(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
-    let buf = Cursor::new(buf);
-
+fn parse_bind(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
@@ -394,8 +379,7 @@ fn parse_bind(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
     })
 }
 
-fn parse_execute(buf: &[u8]) -> Result<FrontendMessage, io::Error> {
-    let buf = Cursor::new(buf);
+fn parse_execute(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let max_rows = buf.read_u32()?;
     if max_rows > 0 {
@@ -423,6 +407,16 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    fn read_byte(&self) -> Result<u8, io::Error> {
+        let byte = self
+            .cur_buf()
+            .get(0)
+            .ok_or_else(|| input_err("No byte to read"))?;
+        *self.offset.borrow_mut() += 1;
+        Ok(*byte)
+    }
+
+    /// Read the first full null-terminated string in `self`
     fn read_cstr(&self) -> Result<&str, io::Error> {
         if let Some(pos) = self.cur_buf().iter().position(|b| *b == 0) {
             let val = std::str::from_utf8(&self.cur_buf()[..pos]).map_err(input_err)?;
@@ -443,7 +437,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn read_u32(&self) -> Result<u32, io::Error> {
-        if self.buf.len() < 2 {
+        if self.cur_buf().len() < 4 {
             return Err(input_err("not enough buffer for an Int32"));
         }
         let val = NetworkEndian::read_u32(self.cur_buf());
@@ -451,22 +445,9 @@ impl<'a> Cursor<'a> {
         Ok(val)
     }
 
+    /// Get the current buffer
     fn cur_buf(&self) -> &[u8] {
         &self.buf[*self.offset.borrow()..]
-    }
-}
-
-/// Read the first full null-terminated string in `slice`
-///
-/// Returns the slice starting just after the string that was read
-fn read_cstr(slice: &[u8]) -> Result<(&str, &[u8]), io::Error> {
-    if let Some(pos) = slice.iter().position(|b| *b == 0) {
-        Ok((
-            std::str::from_utf8(&slice[..pos]).map_err(input_err)?,
-            &slice[pos + 1..],
-        ))
-    } else {
-        Err(input_err(CodecError::StringNoTerminator))
     }
 }
 

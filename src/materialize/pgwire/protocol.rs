@@ -387,8 +387,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         trace!("recv query: {:?}", msg);
         let state = state.take();
         match msg {
-            FrontendMessage::Query { query } => {
-                let sql = String::from(String::from_utf8_lossy(&query));
+            FrontendMessage::Query { sql } => {
                 let (tx, rx) = futures::sync::oneshot::channel();
                 context.cmdq_tx.unbounded_send(coord::Command {
                     kind: coord::CommandKind::Query { sql },
