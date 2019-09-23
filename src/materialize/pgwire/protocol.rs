@@ -8,6 +8,7 @@ use futures::sink::Send as SinkSend;
 use futures::stream;
 use futures::sync::mpsc::UnboundedSender;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
+use log::trace;
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
 use std::io::Write;
@@ -223,6 +224,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, Start<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterStart<A>, failure::Error> {
+        trace!("start");
         let state = state.take();
         transition!(RecvStartup {
             recv: state.stream.recv(),
@@ -235,6 +237,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvStartup<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
+        trace!("recv startup: {:?}", msg);
         let state = state.take();
         let version = match msg {
             FrontendMessage::Startup { version } => version,
@@ -287,6 +290,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendAuthenticationOk<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendAuthenticationOk<A>, failure::Error> {
+        trace!("auth ok");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         transition!(SendReadyForQuery {
@@ -299,6 +303,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendReadyForQuery<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendReadyForQuery<A>, failure::Error> {
+        trace!("send ready for query");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         transition!(RecvQuery {
@@ -311,6 +316,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, StartCopyOut<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterStartCopyOut<A>, failure::Error> {
+        trace!("starting copy out");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         transition!(WaitForUpdates {
@@ -325,6 +331,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
+        trace!("recv query: {:?}", msg);
         let state = state.take();
         match msg {
             FrontendMessage::Query { query } => {
@@ -378,6 +385,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         })
                     };
                 }
+                trace!("poll handle query");
 
                 match response {
                     SqlResponse::CreatedSource => command_complete!("CREATE SOURCE"),
@@ -436,6 +444,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         _context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvExtendedQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
+        trace!("recv extended query");
         let state = state.take();
         match msg {
             _ => transition!(SendError {
@@ -455,6 +464,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
         _context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
+        trace!("sending row description");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         transition!(WaitForRows {
@@ -469,6 +479,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, WaitForUpdates<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterWaitForUpdates<A>, failure::Error> {
+        trace!("wait for updates");
         match state.rx.poll() {
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Ok(Async::Ready(Some(results))) => {
@@ -518,6 +529,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendCommandComplete<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
+        trace!("send command complete");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         transition!(SendReadyForQuery {
@@ -530,8 +542,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendParseComplete<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendParseComplete<A>, failure::Error> {
+        trace!("send parse complete");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
+        trace!("transition to recv extended");
         transition!(RecvExtendedQuery {
             recv: conn.recv(),
             session: state.session,
@@ -542,6 +556,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendError<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendError<A>, failure::Error> {
+        trace!("send error");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         if state.fatal {
