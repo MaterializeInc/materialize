@@ -32,3 +32,31 @@ SHOW COLUMNS FROM t
  Field Nullable Type
  a     YES      i64
  b     YES      i64
+
+# avg on an integer column should return a decimal with the default decimal
+# division scale increase.
+
+query R
+SELECT avg(a) FROM t
+----
+1.750000
+
+# But avg on a float column should return a float.
+
+statement ok
+CREATE TABLE t2 (a float)
+
+statement ok
+INSERT INTO t2 VALUES (1.0), (1.0), (2.0), (3.0)
+
+query R
+SELECT avg(a) FROM t2
+----
+1.75
+
+# avg of an explicit NULL should return NULL.
+
+query R
+SELECT avg(NULL)
+----
+NULL

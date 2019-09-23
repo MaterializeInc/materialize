@@ -1078,6 +1078,27 @@ impl Planner {
                     Ok((expr, typ))
                 }
 
+                // Promotes a numeric type to the smallest fractional type that
+                // can represent it. This is primarily useful for the avg
+                // aggregate function, so that the avg of an integer column does
+                // not get truncated to an integer, which would be surprising to
+                // users (#549).
+                "internal.avg_promotion" => {
+                    if sql_func.args.len() != 1 {
+                        bail!("internal.avg_promotion requires exactly one argument");
+                    }
+                    let (expr, typ) = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let output_type = match &typ.scalar_type {
+                        ScalarType::Null => ScalarType::Null,
+                        ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
+                        ScalarType::Decimal(p, s) => ScalarType::Decimal(*p, *s),
+                        ScalarType::Int32 => ScalarType::Decimal(10, 0),
+                        ScalarType::Int64 => ScalarType::Decimal(19, 0),
+                        _ => bail!("internal.avg_promotion called with unexpected argument"),
+                    };
+                    plan_cast_internal("internal.avg_promotion", expr, &typ, output_type)
+                }
+
                 _ => bail!("unsupported function: {}", ident),
             }
         }

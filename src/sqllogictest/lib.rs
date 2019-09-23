@@ -715,6 +715,11 @@ fn format_row(
             (Type::Bool, Datum::True) => "true".to_owned(),
 
             // weird type coercions that sqllogictest doesn't document
+            (Type::Integer, Datum::Decimal(d)) => {
+                let (_precision, scale) = col_typ.scalar_type.unwrap_decimal_parts();
+                let d = d.with_scale(scale);
+                format!("{:.0}", d)
+            }
             (Type::Integer, Datum::Float64(f)) => format!("{:.0}", f.trunc()),
             (Type::Integer, Datum::String(_)) => "0".to_owned(),
             (Type::Integer, Datum::False) => "0".to_owned(),
