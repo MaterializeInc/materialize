@@ -14,9 +14,17 @@ install the TPC-H queries into `materialized` as materialized views, and watch
 as they magically stay up to date.
 
 The components are orchestrated via [Docker Compose][docker-compose], which
-runs each component in a Docker container. Note that this will cause some
-overhead on macOS; to measure performance, you'll want to use Linux.
+runs each component in a Docker container. You can run this demo via Linux,
+an EC2 VM instance, or a Mac laptop. Note that running Docker Compose will cause
+some overhead on macOS; to measure performance, you'll want to use Linux.
 
+Should you want to run this demo on a Mac laptop, you'll
+want to increase memory available to Docker Engine using the following steps:
+   1. Open Docker for Mac's preferences window
+   2. Go to the "Advanced" section.
+   3. Slide the "Memory" slider to at least 8 GiB.
+   4. Click "Apply and Restart".
+   5. Continue with the `docker-compose` steps listed above.
 
 To get started, bring up the Docker Compose containers in the background:
 
@@ -130,15 +138,3 @@ docker-compose run mysqlcli
 
 If you've just run `docker-compose up`, you might need to wait a few seconds
 before running this.
-
-## Using Docker for Mac
-
-You should run this demo on an EC2 VM or Linux machine. Should you want to run
-this demo on a Mac laptop, you'll want to increase memory available to Docker
-Engine using the following steps:
-
-1. Open Docker for Mac's preferences window
-2. Go to the "Advanced" section.
-3. Slide the "Memory" slider to at least 8 GiB.
-4. Click "Apply and Restart".
-5. Continue with the `docker-compose` steps listed above.
