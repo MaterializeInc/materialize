@@ -14,10 +14,8 @@ install the TPC-H queries into `materialized` as materialized views, and watch
 as they magically stay up to date.
 
 The components are orchestrated via [Docker Compose][docker-compose], which
-runs each component in a Docker container. You can run this demo via:
-1. Linux
-2. EC2 VM instance
-3. Mac laptop. Should you want to run this demo on a Mac laptop, you'll
+runs each component in a Docker container. You can run this demo via Linux,
+an EC2 VM instance, or a Mac laptop. Should you want to run this demo on a Mac laptop, you'll
 want to increase memory available to Docker Engine using the following steps:
    1. Open Docker for Mac's preferences window
    2. Go to the "Advanced" section.
