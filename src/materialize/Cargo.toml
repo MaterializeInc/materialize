@@ -34,7 +34,7 @@ jemallocator = "0.3.0"
 lazy_static = "1.4.0"
 log = "0.4"
 ore = { path = "../ore" }
-parse_duration = "1.0.3"
+parse_duration = "2.0.1"
 rand = "0.7"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
