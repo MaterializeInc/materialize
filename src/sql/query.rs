@@ -1046,7 +1046,10 @@ impl Planner {
                         func: UnaryFunc::Ascii,
                         expr: Box::new(expr),
                     };
-                    Ok((expr, ColumnType::new(ScalarType::Int32).nullable(typ.nullable)))
+                    Ok((
+                        expr,
+                        ColumnType::new(ScalarType::Int32).nullable(typ.nullable),
+                    ))
                 }
 
                 "coalesce" => {
