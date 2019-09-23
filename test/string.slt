@@ -20,8 +20,8 @@ INSERT INTO asciitest VALUES ('hello world', 'goodbye moon'), (null, null),
 statement error
 select ascii(98)
 
-query II colnames rowsort
-select ascii(strcol) as strres, ascii(vccol) as vcres from asciitest;
+query II colnames
+select ascii(strcol) as strres, ascii(vccol) as vcres from asciitest order by strres;
 ----
 strres  vcres
 NULL    NULL
