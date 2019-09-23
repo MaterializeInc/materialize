@@ -23,11 +23,8 @@ steps:
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
-          - "$HOME/.cache/sccache:/sccache"
           - "$HOME/.cargo:/cargo"
           environment:
-          - RUSTC_WRAPPER=sccache
-          - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
           - CARGO_HOME=/cargo
 
   - id: lint-slow
@@ -40,11 +37,8 @@ steps:
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
-          - "$HOME/.cache/sccache:/sccache"
           - "$HOME/.cargo:/cargo"
           environment:
-          - RUSTC_WRAPPER=sccache
-          - SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211
           - CARGO_HOME=/cargo
     agents:
       queue: builder

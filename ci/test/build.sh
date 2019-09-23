@@ -22,8 +22,6 @@ docker_run() {
         --volume "$(pwd):/workdir" \
         --env BUILDKITE \
         --env SSH_AUTH_SOCK=/tmp/ssh-agent.sock \
-        --env SCCACHE_MEMCACHED=tcp://buildcache.internal.mtrlz.dev:11211 \
-        --env RUSTC_WRAPPER=sccache \
         --env CARGO_HOME=/cargo \
         --env OPENSSL_STATIC=1 \
         --env OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu \
