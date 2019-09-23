@@ -134,10 +134,12 @@ pub struct Environment {
 
 impl Environment {
     /// Determine whether the name is bound in this environment.
+    #[allow(clippy::ptr_arg)]
     pub fn is_bound(&self, name: &Identifier) -> bool {
         self.bindings.contains_key(name)
     }
 
+    #[allow(clippy::ptr_arg)]
     fn ensure_unbound(&self, name: &Identifier) {
         if self.bindings.contains_key(name) {
             panic!("environment already contains binding for {}", name);
@@ -154,6 +156,7 @@ impl Environment {
     }
 
     /// Look up the given name in this environment.
+    #[allow(clippy::ptr_arg)]
     pub fn lookup(&self, name: &Identifier) -> Option<&RelationExpr> {
         self.bindings.get(name)
     }
@@ -228,9 +231,9 @@ impl Environment {
                 }
             }
             RelationExpr::Get { name, .. } => {
-                self.lookup(name).map(|v| {
+                if let Some(v) = self.lookup(name) {
                     *expr = v.clone();
-                });
+                }
             }
             _ => expr.visit1_mut(|e| self.unbind_all(e)),
         }
@@ -342,12 +345,13 @@ pub enum Metadata {
     Patching(Patch),
 }
 
-impl Metadata {
-    /// Create a new metadata record.
-    pub fn new() -> Self {
+impl Default for Metadata {
+    fn default() -> Self {
         Metadata::Counting(Count::default())
     }
+}
 
+impl Metadata {
     /// Determine whether the metadata is a count.
     pub fn is_count(&self) -> bool {
         if let Metadata::Counting(_) = self {
@@ -410,7 +414,7 @@ impl Deduplicate {
     /// Determine how many times each dataflow graph appears in the given
     /// dataflow graph. This method assumes that the given census is empty.
     pub fn count_all<'a>(expr: &'a RelationExpr, census: &mut HashMap<&'a RelationExpr, Metadata>) {
-        let metadata = census.entry(expr).or_insert_with(Metadata::new);
+        let metadata = census.entry(expr).or_insert_with(Metadata::default);
         if !metadata.unwrap_count().incr().is_repeated() {
             expr.visit1(|e| Deduplicate::count_all(e, census));
         }
@@ -422,7 +426,7 @@ impl Deduplicate {
     /// on the given census for identifying repeated subgraphs. It assumes
     /// that the census contains a metadata entry for each subgraph and
     /// that each entry is a count.
-    pub fn patch_all<'a, 'b>(
+    pub fn patch_all(
         expr: &mut RelationExpr,
         census: &mut HashMap<&RelationExpr, Metadata>,
         env: &mut Environment,
@@ -447,15 +451,13 @@ impl Deduplicate {
 
     /// Deduplicate repeated subgraphs.
     pub fn deduplicate(expr: &mut RelationExpr) {
-        Unbind::unbind(expr);
-
         let mut census = HashMap::new();
-        Deduplicate::count_all(&expr, &mut census);
+        let expr_prime = expr.clone();
+        Deduplicate::count_all(&expr_prime, &mut census);
 
-        let mut expr = expr.clone();
         let mut env = Environment::default();
-        Deduplicate::patch_all(&mut expr, &mut census, &mut env);
-        env.inject(&mut expr);
+        Deduplicate::patch_all(expr, &mut census, &mut env);
+        env.inject(expr);
     }
 }
 
@@ -572,6 +574,20 @@ mod tests {
         assert_eq!(expr, n(1).union(n(1)).union(n(2)))
     }
 
+    fn extract_names(expr: &RelationExpr) -> (String, String) {
+        if let RelationExpr::Let { name, body, .. } = expr {
+            let n1 = name.clone();
+
+            if let RelationExpr::Let { name, .. } = &**body {
+                (n1, name.clone())
+            } else {
+                panic!("body of outermost expression expected to be local binding");
+            }
+        } else {
+            panic!("outermost expression expected to be local binding");
+        }
+    }
+
     #[test]
     fn test_deduplicate() {
         let expr1 = n(1).negate().union(n(2));
@@ -579,11 +595,22 @@ mod tests {
         let expr3 = expr1.clone().union(expr2.clone());
         let expr4 = expr3.clone().union(n(5).distinct()).threshold();
         let expr5 = expr3.clone().distinct().union(expr2.clone());
-
-        let mut expr = expr4.clone().union(expr5.clone());
+        let mut expr = expr4.union(expr5);
 
         trace("IN deduplicate", &expr);
         Deduplicate::deduplicate(&mut expr);
         trace("OUT deduplicate", &expr);
+
+        let b = bind_local;
+        let (n1, n2) = extract_names(&expr);
+
+        let expected = r(n2.clone()).union(n(5).distinct()).threshold();
+        let expected2 = r(n2.clone()).distinct().union(r(n1.clone()));
+        let expected = expected.union(expected2);
+        let expected2 = n(1).negate().union(n(2)).union(r(n1.clone()));
+        let expected = b(n2, expected2, expected);
+        let expected2 = n(3).negate().union(n(4));
+        let expected = b(n1, expected2, expected);
+        assert_eq!(expr, expected);
     }
 }
