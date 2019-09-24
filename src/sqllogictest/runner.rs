@@ -267,10 +267,10 @@ pub(crate) struct State {
     _dataflow_workers: Box<dyn Drop>,
     _runtime: tokio::runtime::Runtime,
     postgres: Postgres,
-    pub(crate) planner: Planner,
-    pub(crate) session: Session,
-    pub(crate) coord: Coordinator<tokio::net::UnixStream>,
-    pub(crate) conn_id: u32,
+    planner: Planner,
+    session: Session,
+    coord: Coordinator<tokio::net::UnixStream>,
+    conn_id: u32,
     current_timestamp: u64,
     local_input_uuids: HashMap<String, Uuid>,
     local_input_mux: Mux<Uuid, LocalInput>,
@@ -444,7 +444,13 @@ impl State {
             | Statement::CreateView { .. }
             | Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
-            | Statement::Drop { .. } => self.run_statement_materialize(sql),
+            | Statement::Drop { .. } => match self.plan_sql(sql) {
+                Ok(plan) => {
+                    let _ = self.run_plan(plan);
+                    Ok(Outcome::Success)
+                }
+                Err(error) => Ok(Outcome::PlanFailure { error }),
+            },
 
             _ => bail!("Unsupported statement: {:?}", statement),
         }
@@ -556,23 +562,6 @@ impl State {
         }
     }
 
-    fn run_statement_materialize<'a>(
-        &mut self,
-        sql: &'a str,
-    ) -> Result<Outcome<'a>, failure::Error> {
-        match self
-            .planner
-            .handle_command(&mut self.session, sql.to_string())
-        {
-            Ok(plan) => {
-                self.coord
-                    .sequence_plan(plan, self.conn_id, Some(self.current_timestamp - 1));
-            }
-            Err(error) => return Ok(Outcome::PlanFailure { error }),
-        };
-        Ok(Outcome::Success)
-    }
-
     fn run_query<'a>(
         &mut self,
         sql: &'a str,
@@ -605,10 +594,7 @@ impl State {
         }
 
         // get plan
-        let plan = match self
-            .planner
-            .handle_command(&mut self.session, sql.to_string())
-        {
+        let plan = match self.plan_sql(sql) {
             Ok(plan) => plan,
             Err(error) => {
                 // TODO(jamii) check error messages, once ours stabilize
@@ -627,21 +613,17 @@ impl State {
         };
 
         // send plan, read response
-        let (typ, rows_rx) =
-            match self
-                .coord
-                .sequence_plan(plan, self.conn_id, Some(self.current_timestamp - 1))
-            {
-                SqlResponse::SendRows { typ, rx } => (typ, rx),
-                other => {
-                    return Ok(Outcome::PlanFailure {
-                        error: failure::format_err!(
-                            "Query did not result in SendRows, instead got {:?}",
-                            other
-                        ),
-                    });
-                }
-            };
+        let (typ, rows_rx) = match self.run_plan(plan) {
+            SqlResponse::SendRows { typ, rx } => (typ, rx),
+            other => {
+                return Ok(Outcome::PlanFailure {
+                    error: failure::format_err!(
+                        "Query did not result in SendRows, instead got {:?}",
+                        other
+                    ),
+                });
+            }
+        };
 
         // get actual output
         let raw_output = rows_rx.wait()?;
@@ -781,6 +763,16 @@ impl State {
         }
 
         Ok(Outcome::Success)
+    }
+
+    pub(crate) fn plan_sql(&mut self, sql: &str) -> Result<sql::Plan, failure::Error> {
+        self.planner
+            .handle_command(&mut self.session, sql.to_string())
+    }
+
+    pub(crate) fn run_plan(&mut self, plan: sql::Plan) -> coord::SqlResponse {
+        let ts = Some(self.current_timestamp - 1);
+        self.coord.sequence_plan(plan, self.conn_id, ts)
     }
 }
 

@@ -5,21 +5,16 @@
 
 //! Fuzz testing via sqllogictest.
 
-use std::borrow::ToOwned;
-
+use coord::SqlResponse;
 use futures::Future;
 
-use coord::SqlResponse;
+use crate::runner::State;
 
 pub fn fuzz(sqls: &str) {
-    let mut state = crate::runner::State::start().unwrap();
+    let mut state = State::start().unwrap();
     for sql in sqls.split(';') {
-        if let Ok(plan) = state
-            .planner
-            .handle_command(&mut state.session, sql.to_owned())
-        {
-            let sql_response = state.coord.sequence_plan(plan, state.conn_id, None);
-            if let SqlResponse::SendRows { typ, rx } = sql_response {
+        if let Ok(plan) = state.plan_sql(sql) {
+            if let SqlResponse::SendRows { typ, rx } = state.run_plan(plan) {
                 for row in rx.wait().unwrap() {
                     for (typ, datum) in typ.column_types.iter().zip(row.into_iter()) {
                         assert!(datum.is_instance_of(typ));
