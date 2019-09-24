@@ -29,6 +29,7 @@ use dataflow_types::{
     ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
     Sink, SinkConnector, Source, SourceConnector, View,
 };
+use expr::RelationExpr;
 use interchange::avro;
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
@@ -258,11 +259,10 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, transform) = self.plan_query(query, &Scope::empty(None))?;
+                let (relation_expr, transform) = self.plan_query_optimize(&query)?;
                 if transform != Default::default() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
-                let relation_expr = relation_expr.decorrelate()?;
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -448,8 +448,7 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, transform) = self.plan_query(&query, &Scope::empty(None))?;
-        let relation_expr = relation_expr.decorrelate()?;
+        let (relation_expr, transform) = self.plan_query_optimize(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
@@ -468,8 +467,7 @@ impl Planner {
         super::transform::transform(&mut stmt);
         match stmt {
             Statement::Query(query) => {
-                let (relation_expr, transform) = self.plan_query(&query, &Scope::empty(None))?;
-                let relation_expr = relation_expr.decorrelate()?;
+                let (relation_expr, transform) = self.plan_query_optimize(&query)?;
                 session.prepared_statements.insert(
                     name.clone(),
                     PreparedStatement::new(sql, relation_expr, transform),
@@ -481,8 +479,7 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, _transform) = self.plan_query(&query, &Scope::empty(None))?;
-        let relation_expr = relation_expr.decorrelate()?;
+        let (relation_expr, _transform) = self.plan_query_optimize(&query)?;
         // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
@@ -500,6 +497,14 @@ impl Planner {
                 relation_expr,
             })
         }
+    }
+
+    fn plan_query_optimize(
+        &mut self,
+        query: &Query,
+    ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
+        let (relation_expr, transform) = self.plan_query(query, &Scope::empty(None))?;
+        Ok((relation_expr.decorrelate()?, transform))
     }
 }
 
