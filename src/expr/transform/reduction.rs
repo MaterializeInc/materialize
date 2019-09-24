@@ -118,9 +118,8 @@ impl FoldConstants {
                         .iter()
                         .cloned()
                         .map(|(mut row, diff)| {
-                            let len = row.len();
                             for (func, _typ) in scalars.iter() {
-                                let result = func.eval(&row[..len]);
+                                let result = func.eval(&row[..]);
                                 row.push(result);
                             }
                             (row, diff)

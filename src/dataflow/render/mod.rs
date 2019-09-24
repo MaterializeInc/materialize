@@ -256,9 +256,8 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let scalars = scalars.clone();
                     let collection = self.collection(input).unwrap().map(move |mut tuple| {
-                        let len = tuple.len();
                         for s in scalars.iter() {
-                            let to_push = s.0.eval(&tuple[..len]);
+                            let to_push = s.0.eval(&tuple[..]);
                             tuple.push(to_push);
                         }
                         tuple
