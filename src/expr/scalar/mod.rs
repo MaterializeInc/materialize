@@ -8,7 +8,7 @@ pub mod func;
 use pretty::{BoxDoc, Doc};
 use repr::Datum;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use self::func::{BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::pretty_pretty::to_tightly_braced_doc;
@@ -149,11 +149,10 @@ impl ScalarExpr {
         f(self);
     }
 
-    #[allow(dead_code)]
-    fn permute(&mut self, permutation: &HashMap<usize, usize>) {
+    pub fn permute(&mut self, permutation: &[usize]) {
         self.visit_mut(&mut |e| {
             if let ScalarExpr::Column(old_i) = e {
-                *old_i = permutation[old_i];
+                *old_i = permutation[*old_i];
             }
         });
     }

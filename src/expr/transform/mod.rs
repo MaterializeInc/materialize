@@ -16,6 +16,7 @@ pub mod inline_let;
 pub mod join_elision;
 pub mod join_order;
 pub mod predicate_pushdown;
+pub mod projection_extraction;
 pub mod reduction;
 pub mod split_predicates;
 
@@ -85,6 +86,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::empty_map::EmptyMap),
                     Box::new(crate::transform::join_elision::JoinElision),
                     Box::new(crate::transform::inline_let::InlineLet),
+                    Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.
