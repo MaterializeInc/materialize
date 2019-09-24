@@ -10,7 +10,7 @@ use std::process;
 use getopts::Options;
 use walkdir::WalkDir;
 
-use sqllogictest::Outcomes;
+use sqllogictest::runner::Outcomes;
 
 const USAGE: &str = r#"usage: sqllogictest [PATH...]
 
@@ -93,14 +93,14 @@ fn main() {
     let mut outcomes = Outcomes::default();
     for path in &popts.free {
         if path == "-" {
-            outcomes += sqllogictest::run_stdin(verbosity, only_parse);
+            outcomes += sqllogictest::runner::run_stdin(verbosity, only_parse);
         } else {
             for entry in WalkDir::new(path) {
                 match entry {
                     Ok(entry) => {
                         if entry.file_type().is_file() {
                             let local_outcomes =
-                                sqllogictest::run_file(entry.path(), verbosity, only_parse);
+                                sqllogictest::runner::run_file(entry.path(), verbosity, only_parse);
                             if local_outcomes.any_failed() && verbosity >= 1 {
                                 println!("{}", local_outcomes);
                             }
