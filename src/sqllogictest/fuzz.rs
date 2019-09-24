@@ -12,7 +12,7 @@ use futures::Future;
 use coord::SqlResponse;
 
 pub fn fuzz(sqls: &str) {
-    let mut state = crate::runner::FullState::start().unwrap();
+    let mut state = crate::runner::State::start().unwrap();
     for sql in sqls.split(';') {
         if let Ok(plan) = state
             .planner

@@ -273,13 +273,9 @@ fn write_err(kind: &str, error: &impl failure::AsFail, f: &mut fmt::Formatter) -
     Ok(())
 }
 
-trait RecordRunner {
-    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error>;
-}
-
 const NUM_TIMELY_WORKERS: usize = 3;
 
-pub(crate) struct FullState {
+pub(crate) struct State {
     // Hold a reference to the dataflow workers threads to avoid dropping them
     // too early. Order is important here! They must appear before the runtime,
     // so that the runtime is *dropped* after the workers. We rely on the
@@ -363,7 +359,7 @@ fn format_row(
     }
 }
 
-impl FullState {
+impl State {
     pub fn start() -> Result<Self, failure::Error> {
         let postgres = Postgres::open_and_erase()?;
         let logging_config = None;
@@ -389,7 +385,7 @@ impl FullState {
             None, // disable logging
         );
 
-        Ok(FullState {
+        Ok(State {
             _runtime: runtime,
             postgres,
             planner,
@@ -402,9 +398,7 @@ impl FullState {
             local_input_mux,
         })
     }
-}
 
-impl RecordRunner for FullState {
     fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
         match &record {
             Record::Statement {
@@ -806,68 +800,18 @@ impl RecordRunner for FullState {
     }
 }
 
-impl Drop for FullState {
+impl Drop for State {
     fn drop(&mut self) {
         self.coord.shutdown();
-    }
-}
-
-struct OnlyParseState;
-
-impl OnlyParseState {
-    fn start() -> Self {
-        OnlyParseState
-    }
-}
-
-impl RecordRunner for OnlyParseState {
-    fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
-        match &record {
-            Record::Statement {
-                should_run, sql, ..
-            } => {
-                lazy_static! {
-                    static ref INDEX_STATEMENT_REGEX: Regex =
-                        Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
-                }
-                if INDEX_STATEMENT_REGEX.is_match(sql) {
-                    // sure, we totally made you an index...
-                    return Ok(Outcome::Success);
-                }
-
-                // we don't support non-materialized views
-                let sql = sql.replace("CREATE VIEW", "CREATE MATERIALIZED VIEW");
-
-                if let Err(error) = SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
-                    if *should_run {
-                        return Ok(Outcome::ParseFailure { error });
-                    } else {
-                        return Ok(Outcome::Success);
-                    }
-                }
-                Ok(Outcome::Success)
-            }
-            Record::Query { sql, .. } => {
-                if let Err(error) = SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
-                    return Ok(Outcome::ParseFailure { error });
-                }
-                Ok(Outcome::Success)
-            }
-            _ => Ok(Outcome::Success),
-        }
     }
 }
 
 const LIGHT_HORIZONTAL_RULE: &str = "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────";
 const HEAVY_HORIZONTAL_RULE: &str = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
 
-pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool) -> Outcomes {
+pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     let mut outcomes = Outcomes::default();
-    let mut state: Box<dyn RecordRunner> = if only_parse {
-        Box::new(OnlyParseState::start())
-    } else {
-        Box::new(FullState::start().unwrap())
-    };
+    let mut state = State::start().unwrap();
     if verbosity >= 1 {
         println!("==> {}", source);
     }
@@ -928,7 +872,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize, only_parse: bool)
     outcomes
 }
 
-pub fn run_file(filename: &Path, verbosity: usize, only_parse: bool) -> Outcomes {
+pub fn run_file(filename: &Path, verbosity: usize) -> Outcomes {
     let mut input = String::new();
     File::open(filename)
         .unwrap()
@@ -938,12 +882,11 @@ pub fn run_file(filename: &Path, verbosity: usize, only_parse: bool) -> Outcomes
         &format!("{}", filename.display()),
         &input,
         verbosity,
-        only_parse,
     )
 }
 
-pub fn run_stdin(verbosity: usize, only_parse: bool) -> Outcomes {
+pub fn run_stdin(verbosity: usize) -> Outcomes {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input).unwrap();
-    run_string("<stdin>", &input, verbosity, only_parse)
+    run_string("<stdin>", &input, verbosity)
 }
