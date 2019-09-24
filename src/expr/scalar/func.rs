@@ -166,28 +166,28 @@ pub fn cast_decimal_to_int32(a: Datum) -> Datum {
     if a.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_decimal().into_i128() as i32)
+    Datum::from(a.unwrap_decimal().as_i128() as i32)
 }
 
 pub fn cast_decimal_to_int64(a: Datum) -> Datum {
     if a.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_decimal().into_i128() as i64)
+    Datum::from(a.unwrap_decimal().as_i128() as i64)
 }
 
 pub fn cast_decimal_to_float32(a: Datum) -> Datum {
     if a.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_decimal().into_i128() as f32)
+    Datum::from(a.unwrap_decimal().as_i128() as f32)
 }
 
 pub fn cast_decimal_to_float64(a: Datum) -> Datum {
     if a.is_null() {
         return Datum::Null;
     }
-    Datum::from(a.unwrap_decimal().into_i128() as f64)
+    Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
 
 pub fn cast_date_to_timestamp(a: Datum) -> Datum {

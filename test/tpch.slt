@@ -148,33 +148,15 @@ Project {
     scalars: [#12],
     Map {
       scalars: [
-        (
-          (#10 * Significand(10000000))
-          /
-          (i64todec #11 * Significand(100))
-        )
-        *
-        Significand(10)
+        ((#10 * 10000000dec) / (i64todec #11 * 100dec)) * 10dec
       ],
       Map {
         scalars: [
-          (
-            (#8 * Significand(10000000))
-            /
-            (i64todec #9 * Significand(100))
-          )
-          *
-          Significand(10)
+          ((#8 * 10000000dec) / (i64todec #9 * 100dec)) * 10dec
         ],
         Map {
           scalars: [
-            (
-              (#6 * Significand(10000000))
-              /
-              (i64todec #7 * Significand(100))
-            )
-            *
-            Significand(10)
+            ((#6 * 10000000dec) / (i64todec #7 * 100dec)) * 10dec
           ],
           Map {
             scalars: [#5],

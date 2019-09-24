@@ -376,7 +376,7 @@ impl fmt::Display for Datum {
             Datum::Date(d) => write!(f, "{}", d),
             Datum::Timestamp(t) => write!(f, "{}", t),
             Datum::Interval(iv) => write!(f, "{}", iv),
-            Datum::Decimal(num) => write!(f, "{:?}", num),
+            Datum::Decimal(sig) => write!(f, "{}dec", sig.as_i128()),
             Datum::Bytes(dat) => {
                 f.write_str("0x")?;
                 for b in dat.iter() {

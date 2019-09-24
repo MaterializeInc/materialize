@@ -537,7 +537,7 @@ where
                                             ((f64::from(*f) * float_scale) as i128, 1)
                                         }
                                         Datum::Float64(f) => ((*f * float_scale) as i128, 1),
-                                        Datum::Decimal(d) => (d.into_i128(), 1),
+                                        Datum::Decimal(d) => (d.as_i128(), 1),
                                         Datum::Null => (0, 0),
                                         x => panic!("Accumulating non-integer data: {:?}", x),
                                     };
