@@ -668,7 +668,7 @@ impl RelationExpr {
                     group_key.iter().map(|k| format!("{}", k)),
                     to_doc!(",", Space),
                 );
-                let keys = to_tightly_braced_doc("group_key: [", keys.nest(2), "]").group();
+                let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
 
                 if aggregates.is_empty() {
                     to_braced_doc("Distinct {", to_doc!(keys, ",", Space, input), "}")
@@ -678,7 +678,7 @@ impl RelationExpr {
                         to_doc!(",", Space),
                     );
                     let aggregates =
-                        to_tightly_braced_doc("aggregates: [", aggregates.nest(2), "]").group();
+                        to_tightly_braced_doc("aggregates: [", aggregates, "]").group();
 
                     to_braced_doc(
                         "Reduce {",
@@ -1005,6 +1005,49 @@ mod tests {
     [(0, 1), (1, 1)]
   ],
   Constant [],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
+    fn test_pretty_reduce() {
+        let agg0 = AggregateExpr {
+            func: AggregateFunc::SumInt64,
+            expr: ScalarExpr::Column(0),
+            distinct: false,
+        };
+        let agg1 = AggregateExpr {
+            func: AggregateFunc::MaxInt64,
+            expr: ScalarExpr::Column(1),
+            distinct: true,
+        };
+
+        let reduce = RelationExpr::Reduce {
+            input: Box::new(base()),
+            group_key: vec![1, 2],
+            aggregates: vec![
+                (agg0, ColumnType::new(ScalarType::Int64)),
+                (agg1, ColumnType::new(ScalarType::Int64)),
+            ],
+        };
+
+        assert_eq!(
+            reduce.to_doc().pretty(82).to_string(),
+            "Reduce { group_key: [1, 2], aggregates: [SumInt64, MaxInt64], Constant [] }",
+        );
+
+        assert_eq!(
+            reduce.to_doc().pretty(16).to_string(),
+            "Reduce {
+  group_key: [
+    1,
+    2
+  ],
+  aggregates: [
+    SumInt64,
+    MaxInt64
+  ],
   Constant []
 }",
         );
