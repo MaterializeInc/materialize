@@ -76,13 +76,7 @@ impl Sort {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Output<'a> {
-    Values(Vec<&'a str>),
-    Hashed { num_values: usize, md5: &'a str },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OwnedOutput {
+pub enum Output {
     Values(Vec<String>),
     Hashed { num_values: usize, md5: String },
 }
@@ -94,7 +88,7 @@ pub struct QueryOutput<'a> {
     label: Option<&'a str>,
     column_names: Option<Vec<&'a str>>,
     mode: Mode,
-    output: Output<'a>,
+    output: Output,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +249,7 @@ pub fn parse_record<'a>(
                 )?;
                 let mut sort = Sort::No;
                 let mut check_column_names = false;
+                let mut multiline = false;
                 if let Some(options) = words.next() {
                     for option in options.split(',') {
                         match option {
@@ -262,6 +257,7 @@ pub fn parse_record<'a>(
                             "rowsort" => sort = Sort::Row,
                             "valuesort" => sort = Sort::Value,
                             "colnames" => check_column_names = true,
+                            "multiline" => multiline = true,
                             other => {
                                 if other.starts_with("partialsort") {
                                     // TODO(jamii) https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/logic.go#L153
@@ -275,6 +271,9 @@ pub fn parse_record<'a>(
                             }
                         };
                     }
+                }
+                if multiline && (check_column_names || sort.yes()) {
+                    bail!("multiline option is incompatible with all other options");
                 }
                 let label = words.next();
                 let sql = parse_sql(&mut input)?;
@@ -296,12 +295,13 @@ pub fn parse_record<'a>(
                 let output = match HASH_REGEX.captures(input) {
                     Some(captures) => Output::Hashed {
                         num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
-                        md5: captures.get(2).unwrap().as_str(),
+                        md5: captures.get(2).unwrap().as_str().to_owned(),
                     },
                     None => {
-                        let mut vals: Vec<_> = input.trim().lines().collect();
+                        let mut vals: Vec<String> =
+                            input.trim().lines().map(|s| s.to_owned()).collect();
                         if *mode == Mode::Cockroach {
-                            let mut rows = vec![];
+                            let mut rows: Vec<Vec<String>> = vec![];
                             for line in vals {
                                 let cols = split_cols(&line, types.len());
                                 if sort != Sort::No && cols.len() != types.len() {
@@ -316,7 +316,7 @@ pub fn parse_record<'a>(
                                         types.len()
                                     );
                                 }
-                                rows.push(cols);
+                                rows.push(cols.into_iter().map(|col| col.to_owned()).collect());
                             }
                             if sort == Sort::Row {
                                 rows.sort();
@@ -325,6 +325,9 @@ pub fn parse_record<'a>(
                             if sort == Sort::Value {
                                 vals.sort();
                             }
+                        }
+                        if multiline {
+                            vals = vec![vals.join("\n")];
                         }
                         Output::Values(vals)
                     }
@@ -449,9 +452,9 @@ pub enum Outcome<'a> {
         inferred_column_names: Vec<Option<String>>,
     },
     OutputFailure {
-        expected_output: &'a Output<'a>,
+        expected_output: &'a Output,
         actual_raw_output: Vec<Vec<Datum>>,
-        actual_output: OwnedOutput,
+        actual_output: Output,
     },
     Bail {
         cause: Box<Outcome<'a>>,
@@ -1155,7 +1158,7 @@ impl RecordRunner for FullState {
                             return Ok(Outcome::OutputFailure {
                                 expected_output,
                                 actual_raw_output: raw_output,
-                                actual_output: OwnedOutput::Values(values),
+                                actual_output: Output::Values(values),
                             });
                         }
                     }
@@ -1173,7 +1176,7 @@ impl RecordRunner for FullState {
                             return Ok(Outcome::OutputFailure {
                                 expected_output,
                                 actual_raw_output: raw_output,
-                                actual_output: OwnedOutput::Hashed {
+                                actual_output: Output::Hashed {
                                     num_values: values.len(),
                                     md5,
                                 },
