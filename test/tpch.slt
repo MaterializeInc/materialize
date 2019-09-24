@@ -125,71 +125,32 @@ ORDER BY
 Project {
   outputs: [0, 1, 13, 14, 15, 16, 17, 18, 19, 20],
   Map {
-    scalars: [#12],
-    Map {
-      scalars: [
-        (
-            (#10 * Significand(10000000))
-            /
-            (i64todec #11 * Significand(100))
-          )
-          *
-          Significand(10)
+    scalars: [
+      #6,
+      #8,
+      #4,
+      #5,
+      ((#6 * 10000000dec) / (i64todec #7 * 100dec)) * 10dec,
+      ((#8 * 10000000dec) / (i64todec #9 * 100dec)) * 10dec,
+      ((#10 * 10000000dec) / (i64todec #11 * 100dec)) * 10dec,
+      #12
+    ],
+    Reduce {
+      group_key: [8, 9],
+      aggregates: [
+        SumDecimal,
+          SumDecimal,
+          SumDecimal,
+          SumDecimal,
+          SumDecimal,
+          Count,
+          SumDecimal,
+          Count,
+          SumDecimal,
+          Count,
+          CountAll
       ],
-      Map {
-        scalars: [
-          (
-              (#8 * Significand(10000000))
-              /
-              (i64todec #9 * Significand(100))
-            )
-            *
-            Significand(10)
-        ],
-        Map {
-          scalars: [
-            (
-                (#6 * Significand(10000000))
-                /
-                (i64todec #7 * Significand(100))
-              )
-              *
-              Significand(10)
-          ],
-          Map {
-            scalars: [#5],
-            Map {
-              scalars: [#4],
-              Map {
-                scalars: [#8],
-                Map {
-                  scalars: [#6],
-                  Reduce {
-                    group_key: [8, 9],
-                    aggregates: [
-                      SumDecimal,
-                        SumDecimal,
-                        SumDecimal,
-                        SumDecimal,
-                        SumDecimal,
-                        Count,
-                        SumDecimal,
-                        Count,
-                        SumDecimal,
-                        Count,
-                        CountAll
-                    ],
-                    Filter {
-                      predicates: [#10 <= 1998-12-01],
-                      Get { lineitem }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      Filter { predicates: [#10 <= 1998-12-01], Get { lineitem } }
     }
   }
 }

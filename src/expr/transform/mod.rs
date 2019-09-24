@@ -81,6 +81,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),
                     Box::new(crate::transform::fusion::project::Project),
+                    Box::new(crate::transform::fusion::map::Map),
                     Box::new(crate::transform::empty_map::EmptyMap),
                     Box::new(crate::transform::join_elision::JoinElision),
                     Box::new(crate::transform::inline_let::InlineLet),
