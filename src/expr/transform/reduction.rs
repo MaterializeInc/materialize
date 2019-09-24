@@ -28,11 +28,9 @@ impl FoldConstants {
     }
     pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
         match relation {
-            RelationExpr::Constant { rows, .. } => {
-                differential_dataflow::consolidation::consolidate(rows)
-            }
+            RelationExpr::Constant { .. } => { /* handled after match */ }
             RelationExpr::Get { .. } => {}
-            RelationExpr::Let { .. } => { /*constant prop done in InlineLet*/ }
+            RelationExpr::Let { .. } => { /* constant prop done in InlineLet */ }
             RelationExpr::Reduce {
                 input,
                 group_key,
@@ -193,6 +191,14 @@ impl FoldConstants {
                     }
                 }
             }
+        }
+
+        // This transformation maintains the invariant that all constant nodes
+        // will be consolidated. We have to make a separate check for constant
+        // nodes here, since the match arm above might install new constant
+        // nodes.
+        if let RelationExpr::Constant { rows, .. } = relation {
+            differential_dataflow::consolidation::consolidate(rows);
         }
     }
 }
