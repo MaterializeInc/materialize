@@ -668,17 +668,17 @@ impl RelationExpr {
                     group_key.iter().map(|k| format!("{}", k)),
                     to_doc!(",", Space),
                 );
-                let keys = to_tightly_braced_doc("group_key: [", keys.nest(2), "]").group();
+                let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
 
                 if aggregates.is_empty() {
                     to_braced_doc("Distinct {", to_doc!(keys, ",", Space, input), "}")
                 } else {
                     let aggregates = Doc::intersperse(
-                        aggregates.iter().map(|(a, _)| format!("{:?}", a.func)),
+                        aggregates.iter().map(|(expr, _typ)| expr),
                         to_doc!(",", Space),
                     );
                     let aggregates =
-                        to_tightly_braced_doc("aggregates: [", aggregates.nest(2), "]").group();
+                        to_tightly_braced_doc("aggregates: [", aggregates, "]").group();
 
                     to_braced_doc(
                         "Reduce {",
@@ -832,6 +832,26 @@ pub struct AggregateExpr {
     pub expr: ScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
     pub distinct: bool,
+}
+
+impl AggregateExpr {
+    /// Converts this [`AggregateExpr`] to a [`Doc`] or document for pretty
+    /// printing. See [`RelationExpr::to_doc`] for details on the approach.
+    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
+        let args = if self.distinct {
+            to_doc!("distinct", Doc::space(), &self.expr)
+        } else {
+            self.expr.to_doc()
+        };
+        let call = to_tightly_braced_doc("(", args, ")").group();
+        to_doc!(&self.func, call)
+    }
+}
+
+impl<'a> From<&'a AggregateExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(s: &'a AggregateExpr) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        s.to_doc()
+    }
 }
 
 #[cfg(test)]
@@ -1005,6 +1025,52 @@ mod tests {
     [(0, 1), (1, 1)]
   ],
   Constant [],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
+    fn test_pretty_reduce() {
+        let agg0 = AggregateExpr {
+            func: AggregateFunc::SumInt64,
+            expr: ScalarExpr::Column(0),
+            distinct: false,
+        };
+        let agg1 = AggregateExpr {
+            func: AggregateFunc::MaxInt64,
+            expr: ScalarExpr::Column(1),
+            distinct: true,
+        };
+
+        let reduce = RelationExpr::Reduce {
+            input: Box::new(base()),
+            group_key: vec![1, 2],
+            aggregates: vec![
+                (agg0, ColumnType::new(ScalarType::Int64)),
+                (agg1, ColumnType::new(ScalarType::Int64)),
+            ],
+        };
+
+        assert_eq!(
+            reduce.to_doc().pretty(82).to_string(),
+            "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
+        );
+
+        assert_eq!(
+            reduce.to_doc().pretty(16).to_string(),
+            "Reduce {
+  group_key: [
+    1,
+    2
+  ],
+  aggregates: [
+    sum(#0),
+    max(
+      distinct
+      #1
+    )
+  ],
   Constant []
 }",
         );
