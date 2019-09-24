@@ -63,7 +63,7 @@ pub enum Outcome<'a> {
     },
     WrongColumnNames {
         expected_column_names: &'a Vec<&'a str>,
-        inferred_column_names: Vec<Option<String>>,
+        inferred_column_names: Vec<String>,
     },
     OutputFailure {
         expected_output: &'a Output,
@@ -165,11 +165,7 @@ impl fmt::Display for Outcome<'_> {
                 INDENT,
                 expected_column_names.join(" "),
                 INDENT,
-                inferred_column_names
-                    .iter()
-                    .map(|s| format!("{:?}", s))
-                    .collect::<Vec<_>>()
-                    .join(" ")
+                inferred_column_names.join(" ")
             ),
             OutputFailure {
                 expected_output,
@@ -692,17 +688,13 @@ impl State {
             let inferred_column_names = typ
                 .column_types
                 .iter()
-                .map(|t| t.name.clone())
+                .map(|t| t.name.clone().unwrap_or_else(|| "?column?".into()))
                 .collect::<Vec<_>>();
-            if expected_column_names
+            let inferred_as_strs = &inferred_column_names
                 .iter()
-                .map(|s| Some(&**s))
-                .collect::<Vec<_>>()
-                != inferred_column_names
-                    .iter()
-                    .map(|n| n.as_ref().map(|s| &**s))
-                    .collect::<Vec<_>>()
-            {
+                .map(|n| n.as_str())
+                .collect::<Vec<_>>();
+            if expected_column_names != inferred_as_strs {
                 return Ok(Outcome::WrongColumnNames {
                     expected_column_names,
                     inferred_column_names,
