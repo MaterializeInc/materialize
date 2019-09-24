@@ -133,17 +133,21 @@ Project {
     Reduce {
       group_key: [8, 9],
       aggregates: [
-        SumDecimal,
-          SumDecimal,
-          SumDecimal,
-          SumDecimal,
-          SumDecimal,
-          Count,
-          SumDecimal,
-          Count,
-          SumDecimal,
-          Count,
-          CountAll
+        sum(#4),
+        sum(#5),
+        sum(#5 * ((i64todec 1 * 100dec) - #6)),
+        sum(
+          (#5 * ((i64todec 1 * 100dec) - #6))
+          *
+          ((i64todec 1 * 100dec) + #7)
+        ),
+        sum(#4),
+        count(#4),
+        sum(#5),
+        count(#5),
+        sum(#6),
+        count(#6),
+        countall(null)
       ],
       Filter { predicates: [#10 <= 1998-12-01], Get { lineitem } }
     }

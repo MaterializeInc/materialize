@@ -5,7 +5,10 @@
 
 #![allow(missing_docs)]
 
+use std::fmt;
+
 use ordered_float::OrderedFloat;
+use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
@@ -382,5 +385,44 @@ impl AggregateFunc {
             AggregateFunc::All => (Datum::True, ScalarType::Bool),
             _ => (Datum::Null, ScalarType::Null),
         }
+    }
+}
+
+impl fmt::Display for AggregateFunc {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            AggregateFunc::MaxInt32 => f.write_str("max"),
+            AggregateFunc::MaxInt64 => f.write_str("max"),
+            AggregateFunc::MaxFloat32 => f.write_str("max"),
+            AggregateFunc::MaxFloat64 => f.write_str("max"),
+            AggregateFunc::MaxDecimal => f.write_str("max"),
+            AggregateFunc::MaxBool => f.write_str("max"),
+            AggregateFunc::MaxString => f.write_str("max"),
+            AggregateFunc::MaxNull => f.write_str("max"),
+            AggregateFunc::MinInt32 => f.write_str("min"),
+            AggregateFunc::MinInt64 => f.write_str("min"),
+            AggregateFunc::MinFloat32 => f.write_str("min"),
+            AggregateFunc::MinFloat64 => f.write_str("min"),
+            AggregateFunc::MinDecimal => f.write_str("min"),
+            AggregateFunc::MinBool => f.write_str("min"),
+            AggregateFunc::MinString => f.write_str("min"),
+            AggregateFunc::MinNull => f.write_str("min"),
+            AggregateFunc::SumInt32 => f.write_str("sum"),
+            AggregateFunc::SumInt64 => f.write_str("sum"),
+            AggregateFunc::SumFloat32 => f.write_str("sum"),
+            AggregateFunc::SumFloat64 => f.write_str("sum"),
+            AggregateFunc::SumDecimal => f.write_str("sum"),
+            AggregateFunc::SumNull => f.write_str("sum"),
+            AggregateFunc::Count => f.write_str("count"),
+            AggregateFunc::CountAll => f.write_str("countall"),
+            AggregateFunc::Any => f.write_str("any"),
+            AggregateFunc::All => f.write_str("all"),
+        }
+    }
+}
+
+impl<'a> From<&'a AggregateFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(f: &'a AggregateFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        Doc::text(f.to_string())
     }
 }

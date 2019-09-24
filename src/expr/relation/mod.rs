@@ -674,7 +674,7 @@ impl RelationExpr {
                     to_braced_doc("Distinct {", to_doc!(keys, ",", Space, input), "}")
                 } else {
                     let aggregates = Doc::intersperse(
-                        aggregates.iter().map(|(a, _)| format!("{:?}", a.func)),
+                        aggregates.iter().map(|(expr, _typ)| expr),
                         to_doc!(",", Space),
                     );
                     let aggregates =
@@ -832,6 +832,26 @@ pub struct AggregateExpr {
     pub expr: ScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
     pub distinct: bool,
+}
+
+impl AggregateExpr {
+    /// Converts this [`AggregateExpr`] to a [`Doc`] or document for pretty
+    /// printing. See [`RelationExpr::to_doc`] for details on the approach.
+    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
+        let args = if self.distinct {
+            to_doc!("distinct", Doc::space(), &self.expr)
+        } else {
+            self.expr.to_doc()
+        };
+        let call = to_tightly_braced_doc("(", args, ")").group();
+        to_doc!(&self.func, call)
+    }
+}
+
+impl<'a> From<&'a AggregateExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(s: &'a AggregateExpr) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        s.to_doc()
+    }
 }
 
 #[cfg(test)]
@@ -1034,7 +1054,7 @@ mod tests {
 
         assert_eq!(
             reduce.to_doc().pretty(82).to_string(),
-            "Reduce { group_key: [1, 2], aggregates: [SumInt64, MaxInt64], Constant [] }",
+            "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
         assert_eq!(
@@ -1045,8 +1065,11 @@ mod tests {
     2
   ],
   aggregates: [
-    SumInt64,
-    MaxInt64
+    sum(#0),
+    max(
+      distinct
+      #1
+    )
   ],
   Constant []
 }",
