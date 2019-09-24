@@ -11,11 +11,14 @@ into a single download. Not so conveniently, it bundles many other components as
 well. Strangely, their webpages do not mention ZooKeeper at all, even though version
 5.3.0 most definitely does include the corresponding binaries.
 
+Due to some change in the scope of the Confluent Platform project, you also need to install the [Confluent CLI] independently.
+
 [Rust]: https://www.rust-lang.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [Apache Kafka]: https://kafka.apache.org
 [Confluent Schema Registry]: https://www.confluent.io/confluent-schema-registry/
 [Confluent Platform]: https://www.confluent.io/product/confluent-platform/
+[Confluent CLI]: https://docs.confluent.io/current/cli/installing.html#scripted-installation
 
 ## Installing
 
@@ -70,7 +73,17 @@ Reach out to @jamii for more information.
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
 [nix]: https://nixos.org/nix/
 
-## Building
+### Confluent CLI
+
+As of Sep 23, 2019 you can run:
+
+```shell
+curl -L https://cnfl.io/cli | sh -s -- -b /usr/local/bin
+```
+
+However, if this ever stops working, check out these great docs on the [Confluent CLI].
+
+## Building Materialize
 
 Materialize is fully integrated with Cargo, so building it is dead simple:
 
@@ -97,19 +110,30 @@ automatically started upon login, but we leave it to you to sort that out.
 
 [MaterializeInc/sqlparser]: https://github.com/MaterializeInc/sqlparser.git
 
-You can use the included `confluent` CLI command to start and stop individual services. For example:
+## Prepping Confluent
+
+Like we mentioned above, you need to have a few Confluent services running to get Materialize to work. To prep what you need (for the [demo], at least), run the following:
 
 ```shell
-confluent status        # View what services are currently running.
-confluent start kafka   # Start Kafka and any services it depends upon.
-confluent log kafka     # View Kafka log file.
+confluent local start kafka     # Also starts zookeeper
+confluent local start schema-registry
+```
+
+You can also use the included `confluent` CLI command to start and stop individual services. For example:
+
+```shell
+confluent local status        # View what services are currently running.
+confluent local start kafka   # Start Kafka and any services it depends upon.
+confluent local log kafka     # View Kafka log file.
 ```
 
 Beware that the CLI is fairly buggy, especially around service management.
 Putting your computer to sleep often causes the service status to get out of
-sync. In other words, trust the output of `confluent log` and `ps ... | grep`
-over the output of `confluent status`. Still, it's reliable enough to be more
-convenient than managing each service manually.
+sync. In other words, trust the output of `confluent local log` and `ps ... |
+grep` over the output of `confluent local status`. Still, it's reliable enough 
+to be more convenient than managing each service manually.
+
+[demo](demo.md)
 
 ## Testing
 
@@ -158,4 +182,3 @@ This keeps the Git history tidy, since it avoids creating merge commits when you
 `git pull` with unpushed changes. The `rebase.autoStash` option makes this
 workflow particularly ergonomic by stashing any uncommitted changes you have
 when you run `git pull`, then unstashing them after the rebase is complete.
-
