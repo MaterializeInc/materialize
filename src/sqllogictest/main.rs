@@ -32,8 +32,8 @@ fn main() {
     opts.optflag("h", "help", "show this usage information");
     opts.optflag(
         "",
-        "fail",
-        "exit with a failing code unless all queries successful",
+        "no-fail",
+        "don't exit with a failing code if not all queries successful",
     );
     opts.optopt(
         "",
@@ -101,23 +101,17 @@ fn main() {
 
     println!("{}", outcomes);
 
-    let mut exit_code = 0;
-    if popts.opt_present("fail") {
-        if outcomes.any_failed() {
-            eprintln!("FAIL");
-            exit_code = 1;
-        } else {
-            eprintln!("PASS");
-        }
-    }
     if let Some(json_summary_file) = json_summary_file {
         match serde_json::to_writer(json_summary_file, &outcomes.as_json()) {
             Ok(()) => (),
             Err(err) => {
                 eprintln!("error: unable to write summary file: {}", err);
-                exit_code = 2;
+                process::exit(2);
             }
         }
     }
-    process::exit(exit_code);
+
+    if outcomes.any_failed() && !popts.opt_present("no-fail") {
+        process::exit(1);
+    }
 }
