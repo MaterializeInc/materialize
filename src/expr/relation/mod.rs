@@ -626,19 +626,18 @@ impl RelationExpr {
             RelationExpr::Project { input, outputs } => {
                 let outputs =
                     Doc::intersperse(outputs.iter().map(Doc::as_string), to_doc!(",", Space));
-                let outputs = to_tightly_braced_doc("outputs: [", outputs.nest(2), "]").group();
+                let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
             RelationExpr::Map { input, scalars } => {
                 let scalars =
                     Doc::intersperse(scalars.iter().map(|(expr, _typ)| expr), to_doc!(",", Space));
-                let scalars = to_tightly_braced_doc("scalars: [", scalars.nest(2), "]").group();
+                let scalars = to_tightly_braced_doc("scalars: [", scalars, "]").group();
                 to_braced_doc("Map {", to_doc!(scalars, ",", Space, input), "}")
             }
             RelationExpr::Filter { input, predicates } => {
                 let predicates = Doc::intersperse(predicates, to_doc!(",", Space));
-                let predicates =
-                    to_tightly_braced_doc("predicates: [", predicates.nest(2), "]").group();
+                let predicates = to_tightly_braced_doc("predicates: [", predicates, "]").group();
                 to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
             }
             RelationExpr::Join { inputs, variables } => {
@@ -905,6 +904,84 @@ mod tests {
   [1, 2],
   [1, 2]
 ]"
+        );
+    }
+
+    #[test]
+    fn test_pretty_project() {
+        let project = RelationExpr::Project {
+            outputs: vec![0, 1, 2, 3, 4],
+            input: Box::new(base()),
+        };
+
+        assert_eq!(
+            project.to_doc().pretty(82).to_string(),
+            "Project { outputs: [0, 1, 2, 3, 4], Constant [] }",
+        );
+
+        assert_eq!(
+            project.to_doc().pretty(24).to_string(),
+            "Project {
+  outputs: [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
+    fn test_pretty_map() {
+        let map = RelationExpr::Map {
+            scalars: vec![
+                (ScalarExpr::Column(0), ColumnType::new(ScalarType::Int64)),
+                (ScalarExpr::Column(1), ColumnType::new(ScalarType::Int64)),
+            ],
+            input: Box::new(base()),
+        };
+
+        assert_eq!(
+            map.to_doc().pretty(82).to_string(),
+            "Map { scalars: [#0, #1], Constant [] }",
+        );
+
+        assert_eq!(
+            map.to_doc().pretty(16).to_string(),
+            "Map {
+  scalars: [
+    #0,
+    #1
+  ],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
+    fn test_pretty_filter() {
+        let filter = RelationExpr::Filter {
+            predicates: vec![ScalarExpr::Column(0), ScalarExpr::Column(1)],
+            input: Box::new(base()),
+        };
+
+        assert_eq!(
+            filter.to_doc().pretty(82).to_string(),
+            "Filter { predicates: [#0, #1], Constant [] }",
+        );
+
+        assert_eq!(
+            filter.to_doc().pretty(20).to_string(),
+            "Filter {
+  predicates: [
+    #0,
+    #1
+  ],
+  Constant []
+}",
         );
     }
 
