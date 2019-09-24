@@ -415,11 +415,10 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, transform) = self.plan_query(&query, &Scope::empty(None))?;
+        let (relation_expr, _transform) = self.plan_query(&query, &Scope::empty(None))?;
         let relation_expr = relation_expr.decorrelate()?;
-        if transform != Default::default() {
-            bail!("Explaining ORDER BY and LIMIT queries is not yet supported.");
-        }
+        // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
+        // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
             Ok(Plan::SendRows {
                 typ: RelationType {

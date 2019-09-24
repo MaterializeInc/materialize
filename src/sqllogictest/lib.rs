@@ -81,6 +81,15 @@ pub enum Output {
     Hashed { num_values: usize, md5: String },
 }
 
+impl std::fmt::Display for Output {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Output::Values(strings) if strings.len() == 1 => f.write_str(&strings[0]),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryOutput<'a> {
     types: Vec<Type>,
@@ -555,7 +564,7 @@ impl fmt::Display for Outcome<'_> {
                 actual_output,
             } => write!(
                 f,
-                "OutputFailure!{}expected: {:?}{}actually: {:?}{}actual raw: {:?}",
+                "OutputFailure!{}expected: {:?}{}actually: {}{}actual raw: {:?}",
                 INDENT, expected_output, INDENT, actual_output, INDENT, actual_raw_output
             ),
             Bail { cause } => write!(f, "Bail! {}", cause),

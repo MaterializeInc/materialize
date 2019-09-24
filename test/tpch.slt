@@ -98,9 +98,9 @@ CREATE TABLE lineitem (
     PRIMARY KEY (l_orderkey, l_linenumber)
 )
 
-query TTIIIIIIII valuesort
+query T multiline
 -- Query 01
-SELECT
+EXPLAIN PLAN FOR SELECT
 	l_returnflag,
 	l_linestatus,
 	sum(l_quantity) as sum_qty,
@@ -119,26 +119,6 @@ GROUP BY
 	l_returnflag,
 	l_linestatus
 ORDER BY
-	l_returnflag,
-	l_linestatus
-
-query T multiline
-EXPLAIN PLAN FOR SELECT
-	l_returnflag,
-	l_linestatus,
-	sum(l_quantity) as sum_qty,
-	sum(l_extendedprice) as sum_base_price,
-	sum(l_extendedprice * (1 - l_discount)) as sum_disc_price,
-	sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) as sum_charge,
-	avg(l_quantity) as avg_qty,
-	avg(l_extendedprice) as avg_price,
-	avg(l_discount) as avg_disc,
-	count(*) as count_order
-FROM
-	lineitem
-WHERE
-	l_shipdate <= date '1998-12-01' -- - interval '60' day (fails with an error)
-GROUP BY
 	l_returnflag,
 	l_linestatus
 ----
