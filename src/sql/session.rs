@@ -76,7 +76,7 @@ pub struct Session {
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     /// A map from statement names to SQL queries
-    pub prepared_statements: HashMap<String, PreparedStatement>,
+    prepared_statements: HashMap<String, PreparedStatement>,
     /// Portals associated with the current session
     ///
     /// Portals are primarily a way to retrieve the results for a query with all
@@ -209,6 +209,16 @@ impl Session {
     /// Returns the value of the `sql_safe_updates` configuration parameter.
     pub fn sql_safe_updates(&self) -> bool {
         *self.sql_safe_updates.value()
+    }
+
+    /// Ensure that the given prepared statement is present in this session
+    pub fn set_prepared_statement(&mut self, name: String, statement: PreparedStatement) {
+        self.prepared_statements.insert(name, statement);
+    }
+
+    /// Retrieve the prepared statement in this session associated with `name`
+    pub fn get_prepared_statement(&self, name: &str) -> Option<&PreparedStatement> {
+        self.prepared_statements.get(name)
     }
 
     /// Ensure that the given portal exists

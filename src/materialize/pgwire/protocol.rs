@@ -640,7 +640,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         trace!("send describe response for statement={:?}", state.name);
-        match state.session.prepared_statements.get(&state.name) {
+        match state.session.get_prepared_statement(&state.name) {
             Some(ps) => {
                 let typ = ps.source().typ();
                 let desc = super::message::row_description_from_type(&typ);

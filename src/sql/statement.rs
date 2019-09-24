@@ -80,8 +80,7 @@ impl Planner {
             .get_portal(portal_name)
             .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
         let prepared = session
-            .prepared_statements
-            .get(&portal.statement_name)
+            .get_prepared_statement(&portal.statement_name)
             .ok_or_else(|| {
                 failure::format_err!(
                     "statement for portal does not exist portal={:?} statement={:?}",
@@ -468,7 +467,7 @@ impl Planner {
         match stmt {
             Statement::Query(query) => {
                 let (relation_expr, transform) = self.plan_query_optimize(&query)?;
-                session.prepared_statements.insert(
+                session.set_prepared_statement(
                     name.clone(),
                     PreparedStatement::new(sql, relation_expr, transform),
                 );
