@@ -386,400 +386,405 @@ impl State {
         match &record {
             Record::Statement {
                 should_run,
-                rows_inserted: expected_rows_inserted,
+                rows_inserted,
                 sql,
-            } => {
-                if !should_run {
-                    // sure, we totally checked it
-                    return Ok(Outcome::Success);
-                }
+            } => self.run_statement(*should_run, *rows_inserted, sql),
+            Record::Query { sql, output } => self.run_query(sql, output),
+            _ => Ok(Outcome::Success),
+        }
+    }
 
-                lazy_static! {
-                    static ref INDEX_STATEMENT_REGEX: Regex =
-                        Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
-                }
-                if INDEX_STATEMENT_REGEX.is_match(sql) {
-                    // sure, we totally made you an index
-                    return Ok(Outcome::Success);
-                }
+    fn run_statement<'a>(
+        &mut self,
+        should_run: bool,
+        expected_rows_inserted: Option<usize>,
+        sql: &'a str,
+    ) -> Result<Outcome<'a>, failure::Error> {
+        if !should_run {
+            // sure, we totally checked it
+            return Ok(Outcome::Success);
+        }
 
-                // parse statement
-                let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
-                    Ok(statements) => statements,
-                    Err(error) => return Ok(Outcome::ParseFailure { error }),
-                };
-                let statement = match &*statements {
-                    [] => bail!("Got zero statements?"),
-                    [statement] => statement,
-                    _ => bail!("Got multiple statements: {:?}", statements),
-                };
+        lazy_static! {
+            static ref INDEX_STATEMENT_REGEX: Regex =
+                Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
+        }
+        if INDEX_STATEMENT_REGEX.is_match(sql) {
+            // sure, we totally made you an index
+            return Ok(Outcome::Success);
+        }
 
-                match statement {
-                    // run through postgres and send diffs to materialize
-                    Statement::CreateTable { .. }
-                    | Statement::Drop {
-                        object_type: ObjectType::Table,
-                        ..
-                    }
-                    | Statement::Delete { .. }
-                    | Statement::Insert { .. }
-                    | Statement::Update { .. } => {
-                        let outcome = match self
-                            .postgres
-                            .run_statement(&sql, statement)
-                            .context("Unsupported by postgres")
-                        {
-                            Ok(outcome) => outcome,
-                            Err(error) => {
-                                return Ok(Outcome::Unsupported {
-                                    error: error.into(),
-                                });
-                            }
-                        };
-                        let rows_inserted;
-                        match outcome {
-                            postgres::Outcome::Created(name, typ) => {
-                                let uuid = Uuid::new_v4();
-                                self.local_input_uuids.insert(name.clone(), uuid);
-                                {
-                                    self.local_input_mux.write().unwrap().channel(uuid).unwrap();
-                                }
-                                let dataflow = Dataflow::Source(Source {
-                                    name,
-                                    connector: SourceConnector::Local(LocalSourceConnector {
-                                        uuid,
-                                    }),
-                                    typ,
-                                    pkey_indices: Vec::new(),
-                                });
-                                self.planner.dataflows.insert(dataflow.clone())?;
-                                self.coord.create_dataflows(vec![dataflow]);
-                                {
-                                    self.local_input_mux
-                                        .read()
-                                        .unwrap()
-                                        .sender(&uuid)
-                                        .unwrap()
-                                        .unbounded_send(LocalInput::Watermark(
-                                            self.current_timestamp,
-                                        ))
-                                        .unwrap();
-                                }
-                                rows_inserted = None;
-                            }
-                            postgres::Outcome::Dropped(names) => {
-                                let mut dataflows = vec![];
-                                // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
-                                for name in &names {
-                                    self.local_input_uuids.remove(name);
-                                    self.planner.dataflows.remove(
-                                        name,
-                                        RemoveMode::Cascade,
-                                        &mut dataflows,
-                                    )?;
-                                }
-                                self.coord.drop_dataflows(names);
-                                rows_inserted = None;
-                            }
-                            postgres::Outcome::Changed(name, _typ, updates) => {
-                                let updates = updates
-                                    .into_iter()
-                                    .map(|(row, diff)| Update {
-                                        row,
-                                        diff,
-                                        timestamp: self.current_timestamp,
-                                    })
-                                    .collect::<Vec<_>>();
-                                let updated_uuid = self
-                                    .local_input_uuids
-                                    .get(&name)
-                                    .expect("Unknown table in update");
-                                {
-                                    let mux = self.local_input_mux.read().unwrap();
-                                    for (uuid, sender) in mux.senders() {
-                                        if uuid == updated_uuid {
-                                            sender
-                                                .unbounded_send(LocalInput::Updates(
-                                                    updates.clone(),
-                                                ))
-                                                .unwrap();
-                                        }
-                                        sender
-                                            .unbounded_send(LocalInput::Watermark(
-                                                self.current_timestamp + 1,
-                                            ))
-                                            .unwrap();
-                                    }
-                                }
-                                self.current_timestamp += 1;
-                                rows_inserted = Some(updates.len());
-                            }
-                        }
-                        match (rows_inserted, expected_rows_inserted) {
-                            (None, Some(expected)) => Ok(Outcome::PlanFailure {
-                                error: failure::format_err!(
-                                    "Query did not insert any rows, expected {}",
-                                    expected,
-                                ),
-                            }),
-                            (Some(actual), Some(expected)) if actual != *expected => {
-                                Ok(Outcome::WrongNumberOfRowsInserted {
-                                    expected_count: *expected,
-                                    actual_count: actual,
-                                })
-                            }
-                            _ => Ok(Outcome::Success),
-                        }
-                    }
+        // parse statement
+        let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
+            Ok(statements) => statements,
+            Err(error) => return Ok(Outcome::ParseFailure { error }),
+        };
+        let statement = match &*statements {
+            [] => bail!("Got zero statements?"),
+            [statement] => statement,
+            _ => bail!("Got multiple statements: {:?}", statements),
+        };
 
-                    // just run through postgres, no diffs
-                    Statement::SetVariable { .. } => {
-                        match self
-                            .postgres
-                            .run_statement(&sql, statement)
-                            .context("Unsupported by postgres")
-                        {
-                            Ok(_) => Ok(Outcome::Success),
-                            Err(error) => Ok(Outcome::Unsupported {
-                                error: error.into(),
-                            }),
-                        }
-                    }
-
-                    // run through materialize directly
-                    Statement::Query { .. }
-                    | Statement::CreateView { .. }
-                    | Statement::CreateSource { .. }
-                    | Statement::CreateSink { .. }
-                    | Statement::Drop { .. } => {
-                        match self
-                            .planner
-                            .handle_command(&mut self.session, sql.to_string())
-                        {
-                            Ok(plan) => {
-                                self.coord.sequence_plan(
-                                    plan,
-                                    self.conn_id,
-                                    Some(self.current_timestamp - 1),
-                                );
-                            }
-                            Err(error) => return Ok(Outcome::PlanFailure { error }),
-                        };
-                        Ok(Outcome::Success)
-                    }
-
-                    _ => bail!("Unsupported statement: {:?}", statement),
-                }
+        match statement {
+            // run through postgres and send diffs to materialize
+            Statement::CreateTable { .. }
+            | Statement::Drop {
+                object_type: ObjectType::Table,
+                ..
             }
-            Record::Query { sql, output } => {
-                // get statement
-                let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
-                    Ok(statements) => statements,
-                    Err(error) => {
-                        if output.is_err() {
-                            return Ok(Outcome::Success);
-                        } else {
-                            return Ok(Outcome::ParseFailure { error });
-                        }
-                    }
-                };
-                let statement = match &*statements {
-                    [] => bail!("Got zero statements?"),
-                    [statement] => statement,
-                    _ => bail!("Got multiple statements: {:?}", statements),
-                };
-                match statement {
-                    Statement::CreateView { .. } | Statement::Query { .. } => (),
-                    _ => {
-                        if output.is_err() {
-                            // We're not interested in testing our hacky handling of INSERT etc
-                            return Ok(Outcome::Success);
-                        }
-                    }
-                }
-
-                // get plan
-                let plan = match self
-                    .planner
-                    .handle_command(&mut self.session, sql.to_string())
+            | Statement::Delete { .. }
+            | Statement::Insert { .. }
+            | Statement::Update { .. } => {
+                let outcome = match self
+                    .postgres
+                    .run_statement(&sql, statement)
+                    .context("Unsupported by postgres")
                 {
-                    Ok(plan) => plan,
+                    Ok(outcome) => outcome,
                     Err(error) => {
-                        // TODO(jamii) check error messages, once ours stabilize
-                        if output.is_err() {
-                            return Ok(Outcome::Success);
-                        } else {
-                            let error_string = format!("{}", error);
-                            if error_string.contains("supported")
-                                || error_string.contains("overload")
-                            {
-                                // this is a failure, but it's caused by lack of support rather than by bugs
-                                return Ok(Outcome::Unsupported { error });
-                            } else {
-                                return Ok(Outcome::PlanFailure { error });
-                            }
-                        }
-                    }
-                };
-
-                // send plan, read response
-                let (typ, rows_rx) = match self.coord.sequence_plan(
-                    plan,
-                    self.conn_id,
-                    Some(self.current_timestamp - 1),
-                ) {
-                    SqlResponse::SendRows { typ, rx } => (typ, rx),
-                    other => {
-                        return Ok(Outcome::PlanFailure {
-                            error: failure::format_err!(
-                                "Query did not result in SendRows, instead got {:?}",
-                                other
-                            ),
+                        return Ok(Outcome::Unsupported {
+                            error: error.into(),
                         });
                     }
                 };
-
-                // get actual output
-                let raw_output = rows_rx.wait()?;
-
-                // unpack expected output
-                let QueryOutput {
-                    sort,
-                    types: expected_types,
-                    column_names: expected_column_names,
-                    output: expected_output,
-                    mode,
-                    ..
-                } = match output {
-                    Err(expected_error) => {
-                        return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
+                let rows_inserted;
+                match outcome {
+                    postgres::Outcome::Created(name, typ) => {
+                        let uuid = Uuid::new_v4();
+                        self.local_input_uuids.insert(name.clone(), uuid);
+                        {
+                            self.local_input_mux.write().unwrap().channel(uuid).unwrap();
+                        }
+                        let dataflow = Dataflow::Source(Source {
+                            name,
+                            connector: SourceConnector::Local(LocalSourceConnector { uuid }),
+                            typ,
+                            pkey_indices: Vec::new(),
+                        });
+                        self.planner.dataflows.insert(dataflow.clone())?;
+                        self.coord.create_dataflows(vec![dataflow]);
+                        {
+                            self.local_input_mux
+                                .read()
+                                .unwrap()
+                                .sender(&uuid)
+                                .unwrap()
+                                .unbounded_send(LocalInput::Watermark(self.current_timestamp))
+                                .unwrap();
+                        }
+                        rows_inserted = None;
                     }
-                    Ok(query_output) => query_output,
-                };
+                    postgres::Outcome::Dropped(names) => {
+                        let mut dataflows = vec![];
+                        // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
+                        for name in &names {
+                            self.local_input_uuids.remove(name);
+                            self.planner.dataflows.remove(
+                                name,
+                                RemoveMode::Cascade,
+                                &mut dataflows,
+                            )?;
+                        }
+                        self.coord.drop_dataflows(names);
+                        rows_inserted = None;
+                    }
+                    postgres::Outcome::Changed(name, _typ, updates) => {
+                        let updates = updates
+                            .into_iter()
+                            .map(|(row, diff)| Update {
+                                row,
+                                diff,
+                                timestamp: self.current_timestamp,
+                            })
+                            .collect::<Vec<_>>();
+                        let updated_uuid = self
+                            .local_input_uuids
+                            .get(&name)
+                            .expect("Unknown table in update");
+                        {
+                            let mux = self.local_input_mux.read().unwrap();
+                            for (uuid, sender) in mux.senders() {
+                                if uuid == updated_uuid {
+                                    sender
+                                        .unbounded_send(LocalInput::Updates(updates.clone()))
+                                        .unwrap();
+                                }
+                                sender
+                                    .unbounded_send(LocalInput::Watermark(
+                                        self.current_timestamp + 1,
+                                    ))
+                                    .unwrap();
+                            }
+                        }
+                        self.current_timestamp += 1;
+                        rows_inserted = Some(updates.len());
+                    }
+                }
+                match (rows_inserted, expected_rows_inserted) {
+                    (None, Some(expected)) => Ok(Outcome::PlanFailure {
+                        error: failure::format_err!(
+                            "Query did not insert any rows, expected {}",
+                            expected,
+                        ),
+                    }),
+                    (Some(actual), Some(expected)) if actual != expected => {
+                        Ok(Outcome::WrongNumberOfRowsInserted {
+                            expected_count: expected,
+                            actual_count: actual,
+                        })
+                    }
+                    _ => Ok(Outcome::Success),
+                }
+            }
 
-                // check that inferred types match expected types
-                // sqllogictest coerces the output into the expected type, so `expected_types` is often wrong :(
-                // but at least it will be the correct length
-                let inferred_types = &typ.column_types;
-                if inferred_types.len() != expected_types.len() {
+            // just run through postgres, no diffs
+            Statement::SetVariable { .. } => {
+                match self
+                    .postgres
+                    .run_statement(&sql, statement)
+                    .context("Unsupported by postgres")
+                {
+                    Ok(_) => Ok(Outcome::Success),
+                    Err(error) => Ok(Outcome::Unsupported {
+                        error: error.into(),
+                    }),
+                }
+            }
+
+            // run through materialize directly
+            Statement::Query { .. }
+            | Statement::CreateView { .. }
+            | Statement::CreateSource { .. }
+            | Statement::CreateSink { .. }
+            | Statement::Drop { .. } => {
+                match self
+                    .planner
+                    .handle_command(&mut self.session, sql.to_string())
+                {
+                    Ok(plan) => {
+                        self.coord.sequence_plan(
+                            plan,
+                            self.conn_id,
+                            Some(self.current_timestamp - 1),
+                        );
+                    }
+                    Err(error) => return Ok(Outcome::PlanFailure { error }),
+                };
+                Ok(Outcome::Success)
+            }
+
+            _ => bail!("Unsupported statement: {:?}", statement),
+        }
+    }
+
+    fn run_query<'a>(
+        &mut self,
+        sql: &'a str,
+        output: &'a Result<QueryOutput, &'a str>,
+    ) -> Result<Outcome<'a>, failure::Error> {
+        // get statement
+        let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
+            Ok(statements) => statements,
+            Err(error) => {
+                if output.is_err() {
+                    return Ok(Outcome::Success);
+                } else {
+                    return Ok(Outcome::ParseFailure { error });
+                }
+            }
+        };
+        let statement = match &*statements {
+            [] => bail!("Got zero statements?"),
+            [statement] => statement,
+            _ => bail!("Got multiple statements: {:?}", statements),
+        };
+        match statement {
+            Statement::CreateView { .. } | Statement::Query { .. } => (),
+            _ => {
+                if output.is_err() {
+                    // We're not interested in testing our hacky handling of INSERT etc
+                    return Ok(Outcome::Success);
+                }
+            }
+        }
+
+        // get plan
+        let plan = match self
+            .planner
+            .handle_command(&mut self.session, sql.to_string())
+        {
+            Ok(plan) => plan,
+            Err(error) => {
+                // TODO(jamii) check error messages, once ours stabilize
+                if output.is_err() {
+                    return Ok(Outcome::Success);
+                } else {
+                    let error_string = format!("{}", error);
+                    if error_string.contains("supported") || error_string.contains("overload") {
+                        // this is a failure, but it's caused by lack of support rather than by bugs
+                        return Ok(Outcome::Unsupported { error });
+                    } else {
+                        return Ok(Outcome::PlanFailure { error });
+                    }
+                }
+            }
+        };
+
+        // send plan, read response
+        let (typ, rows_rx) =
+            match self
+                .coord
+                .sequence_plan(plan, self.conn_id, Some(self.current_timestamp - 1))
+            {
+                SqlResponse::SendRows { typ, rx } => (typ, rx),
+                other => {
+                    return Ok(Outcome::PlanFailure {
+                        error: failure::format_err!(
+                            "Query did not result in SendRows, instead got {:?}",
+                            other
+                        ),
+                    });
+                }
+            };
+
+        // get actual output
+        let raw_output = rows_rx.wait()?;
+
+        // unpack expected output
+        let QueryOutput {
+            sort,
+            types: expected_types,
+            column_names: expected_column_names,
+            output: expected_output,
+            mode,
+            ..
+        } = match output {
+            Err(expected_error) => {
+                return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
+            }
+            Ok(query_output) => query_output,
+        };
+
+        // check that inferred types match expected types
+        // sqllogictest coerces the output into the expected type, so `expected_types` is often wrong :(
+        // but at least it will be the correct length
+        let inferred_types = &typ.column_types;
+        if inferred_types.len() != expected_types.len() {
+            return Ok(Outcome::InferenceFailure {
+                expected_types,
+                inferred_types: inferred_types.to_vec(),
+                message: format!(
+                    "Expected {} types, got {} types",
+                    expected_types.len(),
+                    inferred_types.len()
+                ),
+            });
+        }
+
+        // check that output matches inferred types
+        for row in &raw_output {
+            if row.len() != inferred_types.len() {
+                return Ok(Outcome::InferenceFailure {
+                    expected_types,
+                    inferred_types: inferred_types.to_vec(),
+                    message: format!(
+                        "Expected {} datums, got {} datums in row {:?}",
+                        expected_types.len(),
+                        inferred_types.len(),
+                        row
+                    ),
+                });
+            }
+            for (inferred_type, datum) in inferred_types.iter().zip(row.iter()) {
+                if !datum.is_instance_of(inferred_type) {
                     return Ok(Outcome::InferenceFailure {
                         expected_types,
                         inferred_types: inferred_types.to_vec(),
                         message: format!(
-                            "Expected {} types, got {} types",
-                            expected_types.len(),
-                            inferred_types.len()
+                            "Inferred type {:?}, got datum {:?}",
+                            inferred_type, datum,
                         ),
                     });
                 }
-
-                // check that output matches inferred types
-                for row in &raw_output {
-                    if row.len() != inferred_types.len() {
-                        return Ok(Outcome::InferenceFailure {
-                            expected_types,
-                            inferred_types: inferred_types.to_vec(),
-                            message: format!(
-                                "Expected {} datums, got {} datums in row {:?}",
-                                expected_types.len(),
-                                inferred_types.len(),
-                                row
-                            ),
-                        });
-                    }
-                    for (inferred_type, datum) in inferred_types.iter().zip(row.iter()) {
-                        if !datum.is_instance_of(inferred_type) {
-                            return Ok(Outcome::InferenceFailure {
-                                expected_types,
-                                inferred_types: inferred_types.to_vec(),
-                                message: format!(
-                                    "Inferred type {:?}, got datum {:?}",
-                                    inferred_type, datum,
-                                ),
-                            });
-                        }
-                    }
-                }
-
-                // check column names
-                if let Some(expected_column_names) = expected_column_names {
-                    let inferred_column_names = typ
-                        .column_types
-                        .iter()
-                        .map(|t| t.name.clone())
-                        .collect::<Vec<_>>();
-                    if expected_column_names
-                        .iter()
-                        .map(|s| Some(&**s))
-                        .collect::<Vec<_>>()
-                        != inferred_column_names
-                            .iter()
-                            .map(|n| n.as_ref().map(|s| &**s))
-                            .collect::<Vec<_>>()
-                    {
-                        return Ok(Outcome::WrongColumnNames {
-                            expected_column_names,
-                            inferred_column_names,
-                        });
-                    }
-                }
-
-                // format output
-                let mut formatted_rows = raw_output
-                    .iter()
-                    .map(|row| format_row(row, &typ.column_types, &**expected_types, *mode, sort))
-                    .collect::<Vec<_>>();
-
-                // sort formatted output
-                if let Sort::Row = sort {
-                    formatted_rows.sort();
-                }
-                let mut values = formatted_rows
-                    .into_iter()
-                    .flat_map(|row| row)
-                    .collect::<Vec<_>>();
-                if let Sort::Value = sort {
-                    values.sort();
-                }
-
-                // check output
-                match expected_output {
-                    Output::Values(expected_values) => {
-                        if values != *expected_values {
-                            return Ok(Outcome::OutputFailure {
-                                expected_output,
-                                actual_raw_output: raw_output,
-                                actual_output: Output::Values(values),
-                            });
-                        }
-                    }
-                    Output::Hashed {
-                        num_values,
-                        md5: expected_md5,
-                    } => {
-                        let mut md5_context = md5::Context::new();
-                        for value in &values {
-                            md5_context.consume(value);
-                            md5_context.consume("\n");
-                        }
-                        let md5 = format!("{:x}", md5_context.compute());
-                        if values.len() != *num_values || md5 != *expected_md5 {
-                            return Ok(Outcome::OutputFailure {
-                                expected_output,
-                                actual_raw_output: raw_output,
-                                actual_output: Output::Hashed {
-                                    num_values: values.len(),
-                                    md5,
-                                },
-                            });
-                        }
-                    }
-                }
-
-                Ok(Outcome::Success)
             }
-            _ => Ok(Outcome::Success),
         }
+
+        // check column names
+        if let Some(expected_column_names) = expected_column_names {
+            let inferred_column_names = typ
+                .column_types
+                .iter()
+                .map(|t| t.name.clone())
+                .collect::<Vec<_>>();
+            if expected_column_names
+                .iter()
+                .map(|s| Some(&**s))
+                .collect::<Vec<_>>()
+                != inferred_column_names
+                    .iter()
+                    .map(|n| n.as_ref().map(|s| &**s))
+                    .collect::<Vec<_>>()
+            {
+                return Ok(Outcome::WrongColumnNames {
+                    expected_column_names,
+                    inferred_column_names,
+                });
+            }
+        }
+
+        // format output
+        let mut formatted_rows = raw_output
+            .iter()
+            .map(|row| format_row(row, &typ.column_types, &**expected_types, *mode, sort))
+            .collect::<Vec<_>>();
+
+        // sort formatted output
+        if let Sort::Row = sort {
+            formatted_rows.sort();
+        }
+        let mut values = formatted_rows
+            .into_iter()
+            .flat_map(|row| row)
+            .collect::<Vec<_>>();
+        if let Sort::Value = sort {
+            values.sort();
+        }
+
+        // check output
+        match expected_output {
+            Output::Values(expected_values) => {
+                if values != *expected_values {
+                    return Ok(Outcome::OutputFailure {
+                        expected_output,
+                        actual_raw_output: raw_output,
+                        actual_output: Output::Values(values),
+                    });
+                }
+            }
+            Output::Hashed {
+                num_values,
+                md5: expected_md5,
+            } => {
+                let mut md5_context = md5::Context::new();
+                for value in &values {
+                    md5_context.consume(value);
+                    md5_context.consume("\n");
+                }
+                let md5 = format!("{:x}", md5_context.compute());
+                if values.len() != *num_values || md5 != *expected_md5 {
+                    return Ok(Outcome::OutputFailure {
+                        expected_output,
+                        actual_raw_output: raw_output,
+                        actual_output: Output::Hashed {
+                            num_values: values.len(),
+                            md5,
+                        },
+                    });
+                }
+            }
+        }
+
+        Ok(Outcome::Success)
     }
 }
 
