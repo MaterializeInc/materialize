@@ -218,14 +218,10 @@ impl FromStr for Outcomes {
 impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let total: usize = self.0.iter().sum();
-        let status = if self.0[9] == total {
-            "SUCCESS!"
-        } else {
-            "FAIL!"
-        };
+        let status = if self.0[9] == total { "PASS" } else { "FAIL" };
         write!(
             f,
-            "{} unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
+            "{}: unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
             status,
             self.0[0],
             self.0[1],
@@ -876,11 +872,7 @@ pub fn run_file(filename: &Path, verbosity: usize) -> Outcomes {
         .unwrap()
         .read_to_string(&mut input)
         .unwrap();
-    run_string(
-        &format!("{}", filename.display()),
-        &input,
-        verbosity,
-    )
+    run_string(&format!("{}", filename.display()), &input, verbosity)
 }
 
 pub fn run_stdin(verbosity: usize) -> Outcomes {
