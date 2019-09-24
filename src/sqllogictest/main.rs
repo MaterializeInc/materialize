@@ -99,7 +99,7 @@ fn main() {
                         if entry.file_type().is_file() {
                             let local_outcomes =
                                 sqllogictest::runner::run_file(entry.path(), verbosity);
-                            if local_outcomes.any_failed() && verbosity >= 1 {
+                            if local_outcomes.any_failed() || verbosity >= 1 {
                                 println!("{}", local_outcomes);
                             }
                             outcomes += local_outcomes;
@@ -119,17 +119,11 @@ fn main() {
         process::exit(1);
     }
 
-    if verbosity >= 1 {
-        println!("{}", outcomes);
-    }
+    println!("{}", outcomes);
 
     let mut exit_code = 0;
     if let Some(expected_outcomes) = expected_outcomes {
         if expected_outcomes != outcomes {
-            if verbosity == 0 {
-                // With no verbosity, outcomes have not yet been printed.
-                println!("{}", outcomes);
-            }
             eprintln!("outcomes did not match expectation");
             exit_code = 1;
         }

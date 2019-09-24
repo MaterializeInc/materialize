@@ -812,9 +812,7 @@ const HEAVY_HORIZONTAL_RULE: &str = "━━━━━━━━━━━━━━�
 pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     let mut outcomes = Outcomes::default();
     let mut state = State::start().unwrap();
-    if verbosity >= 1 {
-        println!("==> {}", source);
-    }
+    println!("==> {}", source);
     for record in crate::parser::parse_records(&input) {
         let record = record.unwrap();
 
@@ -840,7 +838,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
         // print failures in verbose mode
         match &outcome {
             Outcome::Success => {
-                if verbosity >= 3 {
+                if verbosity >= 2 {
                     match &record {
                         Record::Statement { sql, .. } => println!("    {}", sql),
                         Record::Query { sql, .. } => println!("    {}", sql),
@@ -849,7 +847,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
                 }
             }
             _ => {
-                if verbosity >= 2 {
+                if verbosity >= 1 {
                     println!("{}", HEAVY_HORIZONTAL_RULE);
                     println!("{}", outcome);
                     match &record {
