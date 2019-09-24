@@ -36,6 +36,7 @@ use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
 use crate::postgres::{self, Postgres};
+use crate::util;
 
 #[derive(Debug)]
 pub enum Outcome<'a> {
@@ -90,6 +91,14 @@ impl<'a> Outcome<'a> {
             Outcome::OutputFailure { .. } => 7,
             Outcome::Bail { .. } => 8,
             Outcome::Success => 9,
+        }
+    }
+
+    fn success(&self) -> bool {
+        if let Outcome::Success = self {
+            true
+        } else {
+            false
         }
     }
 }
@@ -191,23 +200,28 @@ impl ops::AddAssign<Outcomes> for Outcomes {
 impl fmt::Display for Outcomes {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let total: usize = self.0.iter().sum();
-        let status = if self.0[9] == total { "PASS" } else { "FAIL" };
-        write!(
-            f,
-            "{}: unsupported={} parse-failure={} plan-failure={} unexpected-plan-success={} wrong-number-of-rows-inserted={} inference-failure={} wrong-column-names={} output-failure={} bail={} success={} total={}",
-            status,
-            self.0[0],
-            self.0[1],
-            self.0[2],
-            self.0[3],
-            self.0[4],
-            self.0[5],
-            self.0[6],
-            self.0[7],
-            self.0[8],
-            self.0[9],
-            total,
-        )
+        write!(f, "{}:", if self.0[9] == total { "PASS" } else { "FAIL" })?;
+        lazy_static! {
+            static ref NAMES: Vec<&'static str> = vec![
+                "unsupported",
+                "parse-failure",
+                "plan-failure",
+                "unexpected-plan-success",
+                "wrong-number-of-rows-inserted",
+                "inference-failure",
+                "wrong-column-names",
+                "output-failure",
+                "bail",
+                "success",
+                "total",
+            ];
+        }
+        for (i, n) in self.0.iter().enumerate() {
+            if *n > 0 {
+                write!(f, " {}={}", NAMES[i], n)?;
+            }
+        }
+        write!(f, " total={}", total)
     }
 }
 
@@ -775,8 +789,14 @@ impl Drop for State {
     }
 }
 
-const LIGHT_HORIZONTAL_RULE: &str = "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────";
-const HEAVY_HORIZONTAL_RULE: &str = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+fn print_record(record: &Record) {
+    match record {
+        Record::Statement { sql, .. } | Record::Query { sql, .. } => {
+            println!("{}", crate::util::indent(sql, 4))
+        }
+        _ => (),
+    }
+}
 
 pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     let mut outcomes = Outcomes::default();
@@ -785,12 +805,21 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
     for record in crate::parser::parse_records(&input) {
         let record = record.unwrap();
 
+        // In maximal-verbosity mode, print the query before attempting to run
+        // it. Running the query might panic, so it is important to print out
+        // what query we are trying to run *before* we panic.
+        if verbosity >= 2 {
+            print_record(&record);
+        }
+
         let mut outcome = state
             .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", source, err))
             .unwrap();
 
-        // if we failed to execute a statement, running the rest of the tests in this file will probably cause false positives
+        // If we failed to execute a statement, running the rest of the tests in
+        // this file will probably cause false positives, so just give up on
+        // the file entirely.
         match (&record, &outcome) {
             (_, Outcome::Success) => (),
             (Record::Statement { sql, .. }, _)
@@ -804,30 +833,19 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             _ => (),
         }
 
-        // print failures in verbose mode
-        match &outcome {
-            Outcome::Success => {
-                if verbosity >= 2 {
-                    match &record {
-                        Record::Statement { sql, .. } => println!("    {}", sql),
-                        Record::Query { sql, .. } => println!("    {}", sql),
-                        _ => (),
-                    }
-                }
+        // Print failures in verbose mode.
+        if verbosity >= 1 && !outcome.success() {
+            if verbosity < 2 {
+                // If `verbosity >= 2`, we'll already have printed the record,
+                // so don't print it again. Yes, this is an ugly bit of logic.
+                // Please don't try to consolidate it with the `print_record`
+                // call above, as it's important to have a mode in which records
+                // are printed before they are run, so that if running the
+                // record panics, you can tell which record caused it.
+                print_record(&record);
             }
-            _ => {
-                if verbosity >= 1 {
-                    println!("{}", HEAVY_HORIZONTAL_RULE);
-                    println!("{}", outcome);
-                    match &record {
-                        Record::Statement { sql, .. } => {
-                            println!("{}\n{}", LIGHT_HORIZONTAL_RULE, sql)
-                        }
-                        Record::Query { sql, .. } => println!("{}\n{}", LIGHT_HORIZONTAL_RULE, sql),
-                        _ => (),
-                    }
-                }
-            }
+            println!("{}", util::indent(&outcome.to_string(), 4));
+            println!("{}", util::indent("----", 4));
         }
 
         outcomes.0[outcome.code()] += 1;
