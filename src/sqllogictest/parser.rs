@@ -73,145 +73,10 @@ pub fn parse_record<'a>(
 
     let mut words = first_line.split(' ').peekable();
     match words.next().unwrap() {
-        "statement" => {
-            let (should_run, rows_inserted) = match words.next() {
-                Some("count") => (
-                    true,
-                    Some(
-                        words
-                            .next()
-                            .ok_or_else(|| format_err!("missing insert count"))?
-                            .parse::<usize>()
-                            .map_err(|err| format_err!("parsing insert count: {}", err))?,
-                    ),
-                ),
-                Some("ok") | Some("OK") => (true, None),
-                Some("error") => (false, None),
-                Some(other) => bail!("invalid should_run in: {}", other),
-                None => (true, None),
-            };
-            let sql = parse_sql(&mut input)?;
-            if input != "" {
-                bail!("leftover input: {}", input)
-            }
-            Ok(Some(Record::Statement {
-                should_run,
-                rows_inserted,
-                sql,
-            }))
-        }
-        "query" => {
-            if words.peek() == Some(&"error") {
-                let error = &first_line[12..]; // everything after "query error "
-                let sql = input;
-                Ok(Some(Record::Query {
-                    sql,
-                    output: Err(error),
-                }))
-            } else {
-                let types = parse_types(
-                    words
-                        .next()
-                        .ok_or_else(|| format_err!("missing types in: {}", first_line))?,
-                )?;
-                let mut sort = Sort::No;
-                let mut check_column_names = false;
-                let mut multiline = false;
-                if let Some(options) = words.next() {
-                    for option in options.split(',') {
-                        match option {
-                            "nosort" => sort = Sort::No,
-                            "rowsort" => sort = Sort::Row,
-                            "valuesort" => sort = Sort::Value,
-                            "colnames" => check_column_names = true,
-                            "multiline" => multiline = true,
-                            other => {
-                                if other.starts_with("partialsort") {
-                                    // TODO(jamii) https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/logic.go#L153
-                                    // partialsort has comma-separated arguments so our parsing is totally broken
-                                    // luckily it always comes last in the existing tests, so we can just bail out for now
-                                    sort = Sort::Row;
-                                    break;
-                                } else {
-                                    bail!("Unrecognized option {:?} in {:?}", other, options);
-                                }
-                            }
-                        };
-                    }
-                }
-                if multiline && (check_column_names || sort.yes()) {
-                    bail!("multiline option is incompatible with all other options");
-                }
-                let label = words.next();
-                let sql = parse_sql(&mut input)?;
-                let column_names = if check_column_names {
-                    Some(
-                        split_at(&mut input, &LINE_REGEX)?
-                            .split(' ')
-                            .filter(|s| !s.is_empty())
-                            .collect(),
-                    )
-                } else {
-                    None
-                };
-                lazy_static! {
-                    static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
-                    static ref HASH_REGEX: Regex =
-                        Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
-                }
-                let output = match HASH_REGEX.captures(input) {
-                    Some(captures) => Output::Hashed {
-                        num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
-                        md5: captures.get(2).unwrap().as_str().to_owned(),
-                    },
-                    None => {
-                        let mut vals: Vec<String> =
-                            input.trim().lines().map(|s| s.to_owned()).collect();
-                        if *mode == Mode::Cockroach {
-                            let mut rows: Vec<Vec<String>> = vec![];
-                            for line in vals {
-                                let cols = split_cols(&line, types.len());
-                                if sort != Sort::No && cols.len() != types.len() {
-                                    // We can't check this condition for
-                                    // Sort::No, because some tests use strings
-                                    // with whitespace that look like extra
-                                    // columns. (Note that these tests never
-                                    // use any of the sorting options.)
-                                    bail!(
-                                        "col len ({}) did not match declared col len ({})",
-                                        cols.len(),
-                                        types.len()
-                                    );
-                                }
-                                rows.push(cols.into_iter().map(|col| col.to_owned()).collect());
-                            }
-                            if sort == Sort::Row {
-                                rows.sort();
-                            }
-                            vals = rows.into_iter().flat_map(|row| row).collect();
-                            if sort == Sort::Value {
-                                vals.sort();
-                            }
-                        }
-                        if multiline {
-                            vals = vec![vals.join("\n")];
-                        }
-                        Output::Values(vals)
-                    }
-                };
-                Ok(Some(Record::Query {
-                    sql,
-                    output: Ok(QueryOutput {
-                        types,
-                        sort,
-                        label,
-                        column_names,
-                        mode: *mode,
-                        output,
-                    }),
-                }))
-            }
-        }
+        "statement" => Ok(Some(parse_statement(words, &mut input)?)),
+
+        "query" => Ok(Some(parse_query(words, first_line, &mut input, *mode)?)),
+
         "hash-threshold" => {
             let threshold = words
                 .next()
@@ -260,6 +125,153 @@ pub fn parse_record<'a>(
 
         other => bail!("Unexpected start of record: {}", other),
     }
+}
+
+fn parse_statement<'a>(
+    mut words: impl Iterator<Item = &'a str>,
+    input: &mut &'a str,
+) -> Result<Record<'a>, failure::Error> {
+    let (should_run, rows_inserted) = match words.next() {
+        Some("count") => (
+            true,
+            Some(
+                words
+                    .next()
+                    .ok_or_else(|| format_err!("missing insert count"))?
+                    .parse::<usize>()
+                    .map_err(|err| format_err!("parsing insert count: {}", err))?,
+            ),
+        ),
+        Some("ok") | Some("OK") => (true, None),
+        Some("error") => (false, None),
+        Some(other) => bail!("invalid should_run in: {}", other),
+        None => (true, None),
+    };
+    let sql = parse_sql(input)?;
+    if *input != "" {
+        bail!("leftover input: {}", input)
+    }
+    Ok(Record::Statement {
+        should_run,
+        rows_inserted,
+        sql,
+    })
+}
+
+fn parse_query<'a>(
+    mut words: std::iter::Peekable<impl Iterator<Item = &'a str>>,
+    first_line: &'a str,
+    input: &mut &'a str,
+    mode: Mode,
+) -> Result<Record<'a>, failure::Error> {
+    if words.peek() == Some(&"error") {
+        let error = &first_line[12..]; // everything after "query error "
+        let sql = input;
+        return Ok(Record::Query {
+            sql,
+            output: Err(error),
+        });
+    }
+
+    let types = parse_types(
+        words
+            .next()
+            .ok_or_else(|| format_err!("missing types in: {}", first_line))?,
+    )?;
+    let mut sort = Sort::No;
+    let mut check_column_names = false;
+    let mut multiline = false;
+    if let Some(options) = words.next() {
+        for option in options.split(',') {
+            match option {
+                "nosort" => sort = Sort::No,
+                "rowsort" => sort = Sort::Row,
+                "valuesort" => sort = Sort::Value,
+                "colnames" => check_column_names = true,
+                "multiline" => multiline = true,
+                other => {
+                    if other.starts_with("partialsort") {
+                        // TODO(jamii) https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/logic.go#L153
+                        // partialsort has comma-separated arguments so our parsing is totally broken
+                        // luckily it always comes last in the existing tests, so we can just bail out for now
+                        sort = Sort::Row;
+                        break;
+                    } else {
+                        bail!("Unrecognized option {:?} in {:?}", other, options);
+                    }
+                }
+            };
+        }
+    }
+    if multiline && (check_column_names || sort.yes()) {
+        bail!("multiline option is incompatible with all other options");
+    }
+    let label = words.next();
+    let sql = parse_sql(input)?;
+    let column_names = if check_column_names {
+        Some(
+            split_at(input, &LINE_REGEX)?
+                .split(' ')
+                .filter(|s| !s.is_empty())
+                .collect(),
+        )
+    } else {
+        None
+    };
+    lazy_static! {
+        static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
+        static ref HASH_REGEX: Regex = Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
+    }
+    let output = match HASH_REGEX.captures(input) {
+        Some(captures) => Output::Hashed {
+            num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
+            md5: captures.get(2).unwrap().as_str().to_owned(),
+        },
+        None => {
+            let mut vals: Vec<String> = input.trim().lines().map(|s| s.to_owned()).collect();
+            if mode == Mode::Cockroach {
+                let mut rows: Vec<Vec<String>> = vec![];
+                for line in vals {
+                    let cols = split_cols(&line, types.len());
+                    if sort != Sort::No && cols.len() != types.len() {
+                        // We can't check this condition for
+                        // Sort::No, because some tests use strings
+                        // with whitespace that look like extra
+                        // columns. (Note that these tests never
+                        // use any of the sorting options.)
+                        bail!(
+                            "col len ({}) did not match declared col len ({})",
+                            cols.len(),
+                            types.len()
+                        );
+                    }
+                    rows.push(cols.into_iter().map(|col| col.to_owned()).collect());
+                }
+                if sort == Sort::Row {
+                    rows.sort();
+                }
+                vals = rows.into_iter().flat_map(|row| row).collect();
+                if sort == Sort::Value {
+                    vals.sort();
+                }
+            }
+            if multiline {
+                vals = vec![vals.join("\n")];
+            }
+            Output::Values(vals)
+        }
+    };
+    Ok(Record::Query {
+        sql,
+        output: Ok(QueryOutput {
+            types,
+            sort,
+            label,
+            column_names,
+            mode,
+            output,
+        }),
+    })
 }
 
 /// Split on whitespace to normalize multiple spaces to one space. This happens
