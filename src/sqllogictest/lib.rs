@@ -81,13 +81,11 @@ pub enum Output {
     Hashed { num_values: usize, md5: String },
 }
 
-impl std::fmt::Display for OwnedOutput {
+impl std::fmt::Display for Output {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            OwnedOutput::Values(strings) if strings.len() == 1 => {
-                f.write_str(&strings[0])
-            }
-            _ => write!(f, "{:?}", self)
+            Output::Values(strings) if strings.len() == 1 => f.write_str(&strings[0]),
+            _ => write!(f, "{:?}", self),
         }
     }
 }
