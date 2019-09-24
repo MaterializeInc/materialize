@@ -434,121 +434,9 @@ impl State {
             }
             | Statement::Delete { .. }
             | Statement::Insert { .. }
-            | Statement::Update { .. } => {
-                let outcome = match self
-                    .postgres
-                    .run_statement(&sql, statement)
-                    .context("Unsupported by postgres")
-                {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        return Ok(Outcome::Unsupported {
-                            error: error.into(),
-                        });
-                    }
-                };
-                let rows_inserted;
-                match outcome {
-                    postgres::Outcome::Created(name, typ) => {
-                        let uuid = Uuid::new_v4();
-                        self.local_input_uuids.insert(name.clone(), uuid);
-                        {
-                            self.local_input_mux.write().unwrap().channel(uuid).unwrap();
-                        }
-                        let dataflow = Dataflow::Source(Source {
-                            name,
-                            connector: SourceConnector::Local(LocalSourceConnector { uuid }),
-                            typ,
-                            pkey_indices: Vec::new(),
-                        });
-                        self.planner.dataflows.insert(dataflow.clone())?;
-                        self.coord.create_dataflows(vec![dataflow]);
-                        {
-                            self.local_input_mux
-                                .read()
-                                .unwrap()
-                                .sender(&uuid)
-                                .unwrap()
-                                .unbounded_send(LocalInput::Watermark(self.current_timestamp))
-                                .unwrap();
-                        }
-                        rows_inserted = None;
-                    }
-                    postgres::Outcome::Dropped(names) => {
-                        let mut dataflows = vec![];
-                        // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
-                        for name in &names {
-                            self.local_input_uuids.remove(name);
-                            self.planner.dataflows.remove(
-                                name,
-                                RemoveMode::Cascade,
-                                &mut dataflows,
-                            )?;
-                        }
-                        self.coord.drop_dataflows(names);
-                        rows_inserted = None;
-                    }
-                    postgres::Outcome::Changed(name, _typ, updates) => {
-                        let updates = updates
-                            .into_iter()
-                            .map(|(row, diff)| Update {
-                                row,
-                                diff,
-                                timestamp: self.current_timestamp,
-                            })
-                            .collect::<Vec<_>>();
-                        let updated_uuid = self
-                            .local_input_uuids
-                            .get(&name)
-                            .expect("Unknown table in update");
-                        {
-                            let mux = self.local_input_mux.read().unwrap();
-                            for (uuid, sender) in mux.senders() {
-                                if uuid == updated_uuid {
-                                    sender
-                                        .unbounded_send(LocalInput::Updates(updates.clone()))
-                                        .unwrap();
-                                }
-                                sender
-                                    .unbounded_send(LocalInput::Watermark(
-                                        self.current_timestamp + 1,
-                                    ))
-                                    .unwrap();
-                            }
-                        }
-                        self.current_timestamp += 1;
-                        rows_inserted = Some(updates.len());
-                    }
-                }
-                match (rows_inserted, expected_rows_inserted) {
-                    (None, Some(expected)) => Ok(Outcome::PlanFailure {
-                        error: failure::format_err!(
-                            "Query did not insert any rows, expected {}",
-                            expected,
-                        ),
-                    }),
-                    (Some(actual), Some(expected)) if actual != expected => {
-                        Ok(Outcome::WrongNumberOfRowsInserted {
-                            expected_count: expected,
-                            actual_count: actual,
-                        })
-                    }
-                    _ => Ok(Outcome::Success),
-                }
-            }
-
-            // just run through postgres, no diffs
-            Statement::SetVariable { .. } => {
-                match self
-                    .postgres
-                    .run_statement(&sql, statement)
-                    .context("Unsupported by postgres")
-                {
-                    Ok(_) => Ok(Outcome::Success),
-                    Err(error) => Ok(Outcome::Unsupported {
-                        error: error.into(),
-                    }),
-                }
+            | Statement::Update { .. }
+            | Statement::SetVariable { .. } => {
+                self.run_statement_postgres(sql, statement, expected_rows_inserted)
             }
 
             // run through materialize directly
@@ -556,25 +444,133 @@ impl State {
             | Statement::CreateView { .. }
             | Statement::CreateSource { .. }
             | Statement::CreateSink { .. }
-            | Statement::Drop { .. } => {
-                match self
-                    .planner
-                    .handle_command(&mut self.session, sql.to_string())
-                {
-                    Ok(plan) => {
-                        self.coord.sequence_plan(
-                            plan,
-                            self.conn_id,
-                            Some(self.current_timestamp - 1),
-                        );
-                    }
-                    Err(error) => return Ok(Outcome::PlanFailure { error }),
-                };
-                Ok(Outcome::Success)
-            }
+            | Statement::Drop { .. } => self.run_statement_materialize(sql),
 
             _ => bail!("Unsupported statement: {:?}", statement),
         }
+    }
+
+    fn run_statement_postgres<'a>(
+        &mut self,
+        sql: &'a str,
+        statement: &Statement,
+        expected_rows_inserted: Option<usize>,
+    ) -> Result<Outcome<'a>, failure::Error> {
+        let outcome = match self
+            .postgres
+            .run_statement(&sql, statement)
+            .context("Unsupported by postgres")
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Ok(Outcome::Unsupported {
+                    error: error.into(),
+                });
+            }
+        };
+        if let Statement::SetVariable { .. } = statement {
+            // `SetVariable` statements don't generate any diffs, so we can
+            // skip the rest.
+            return Ok(Outcome::Success);
+        }
+        let rows_inserted;
+        match outcome {
+            postgres::Outcome::Created(name, typ) => {
+                let uuid = Uuid::new_v4();
+                self.local_input_uuids.insert(name.clone(), uuid);
+                {
+                    self.local_input_mux.write().unwrap().channel(uuid).unwrap();
+                }
+                let dataflow = Dataflow::Source(Source {
+                    name,
+                    connector: SourceConnector::Local(LocalSourceConnector { uuid }),
+                    typ,
+                    pkey_indices: Vec::new(),
+                });
+                self.planner.dataflows.insert(dataflow.clone())?;
+                self.coord.create_dataflows(vec![dataflow]);
+                {
+                    self.local_input_mux
+                        .read()
+                        .unwrap()
+                        .sender(&uuid)
+                        .unwrap()
+                        .unbounded_send(LocalInput::Watermark(self.current_timestamp))
+                        .unwrap();
+                }
+                rows_inserted = None;
+            }
+            postgres::Outcome::Dropped(names) => {
+                let mut dataflows = vec![];
+                // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
+                for name in &names {
+                    self.local_input_uuids.remove(name);
+                    self.planner
+                        .dataflows
+                        .remove(name, RemoveMode::Cascade, &mut dataflows)?;
+                }
+                self.coord.drop_dataflows(names);
+                rows_inserted = None;
+            }
+            postgres::Outcome::Changed(name, _typ, updates) => {
+                let updates = updates
+                    .into_iter()
+                    .map(|(row, diff)| Update {
+                        row,
+                        diff,
+                        timestamp: self.current_timestamp,
+                    })
+                    .collect::<Vec<_>>();
+                let updated_uuid = self
+                    .local_input_uuids
+                    .get(&name)
+                    .expect("Unknown table in update");
+                {
+                    let mux = self.local_input_mux.read().unwrap();
+                    for (uuid, sender) in mux.senders() {
+                        if uuid == updated_uuid {
+                            sender
+                                .unbounded_send(LocalInput::Updates(updates.clone()))
+                                .unwrap();
+                        }
+                        sender
+                            .unbounded_send(LocalInput::Watermark(self.current_timestamp + 1))
+                            .unwrap();
+                    }
+                }
+                self.current_timestamp += 1;
+                rows_inserted = Some(updates.len());
+            }
+        }
+        match (rows_inserted, expected_rows_inserted) {
+            (None, Some(expected)) => Ok(Outcome::PlanFailure {
+                error: failure::format_err!("Query did not insert any rows, expected {}", expected,),
+            }),
+            (Some(actual), Some(expected)) if actual != expected => {
+                Ok(Outcome::WrongNumberOfRowsInserted {
+                    expected_count: expected,
+                    actual_count: actual,
+                })
+            }
+            _ => Ok(Outcome::Success),
+        }
+    }
+
+    fn run_statement_materialize<'a>(
+        &mut self,
+        sql: &'a str,
+    ) -> Result<Outcome<'a>, failure::Error> {
+        match self
+            .planner
+            .handle_command(&mut self.session, sql.to_string())
+        {
+            Ok(plan) => {
+                self.coord
+                    .sequence_plan(plan, self.conn_id, Some(self.current_timestamp - 1));
+            }
+            Err(error) => return Ok(Outcome::PlanFailure { error }),
+        };
+        Ok(Outcome::Success)
     }
 
     fn run_query<'a>(
