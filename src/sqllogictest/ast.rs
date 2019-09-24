@@ -5,34 +5,48 @@
 
 //! Abstract syntax tree nodes for sqllogictest.
 
+/// The declared type of an output column in a query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    /// A text column. Indicated by `T`.
     Text,
+    /// An integer column. Indicated by `I`.
     Integer,
-    Timestamp,
+    /// A "real" number column (i.e., floating point). Indicated by `R`.
     Real,
+    /// A boolean column. Indicated by `B`. This is a CockroachDB extension.
     Bool,
+    /// An object ID (OID) column. Indicated by `O`. This is a CockroachDB
+    /// extension.
     Oid,
+    // Please don't add new types to this enum, unless you are adding support
+    // for a sqllogictest dialect that has already done so. These type
+    // indicators are not meant to be assertions about the output type, but
+    // rather instructions to the test runner about any necessary coercions.
+    // For example, declaring a column as an `Integer` when the query returns
+    // a floating-point will cause the runner to truncate the floating-point
+    // bit.
+    //
+    // In other words, `Bool` and `Oid` are unfortunate additions, as either
+    // can be replaced with `Text` wherever it appears.
 }
 
-/// How to sort some row outputs
-///
-/// See sqlite/about.wiki
+/// Whether to apply sorting before checking the results of a query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sort {
-    /// Do not sort. Default. signifier `nosort`
+    /// Do not sort. Default. Indicated by the `nosort` query option.
     No,
-    /// Sort each column in each row lexicographically. signifier: `rowsort`
+    /// Sort each column in each row lexicographically. Indicated by the
+    /// `rowsort` query option.
     Row,
-    /// Sert each value as though they're in one big list. signifier: `valuesort`
-    ///
-    /// Every value in every column will end up being sorted with no respect
-    /// for columns or rows.
+    /// Sort each value as though they're in one big list. That is, values are
+    /// sorted with no respect for column or row boundaries. Indicated by the
+    /// `valuesort` query option.
     Value,
 }
 
 impl Sort {
-    /// Is true if any kind of sorting should happen
+    /// Returns true if any kind of sorting should happen.
     pub fn yes(&self) -> bool {
         use Sort::*;
         match self {
@@ -42,9 +56,15 @@ impl Sort {
     }
 }
 
+/// A specific assertion about the expected output of a query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
+    /// The query should produce the specified values. Note that the values may
+    /// need to be sorted according to a [`Sort`] before comparison.
     Values(Vec<String>),
+    /// There should be `num_values` results that hash to `md5`. As with
+    /// `Output::Values`, the values may need to be sorted according to a
+    /// [`Sort`] before hashing.
     Hashed { num_values: usize, md5: String },
 }
 
@@ -57,6 +77,7 @@ impl std::fmt::Display for Output {
     }
 }
 
+/// Instructions for assessing the output of a query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryOutput<'a> {
     pub types: Vec<Type>,
@@ -67,24 +88,28 @@ pub struct QueryOutput<'a> {
     pub output: Output,
 }
 
+/// A single directive in a sqllogictest file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record<'a> {
+    // A `statement` directive.
     Statement {
         should_run: bool,
         rows_inserted: Option<usize>,
         sql: &'a str,
     },
+    /// A `query` directive.
     Query {
         sql: &'a str,
         output: Result<QueryOutput<'a>, &'a str>,
     },
-    HashThreshold {
-        threshold: u64,
-    },
-    Skip,
+    /// A `hash-threshold` directive.
+    HashThreshold { threshold: u64 },
+    /// A `halt` directive.
     Halt,
 }
 
+/// Specifies the dialect of a sqllogictest file. Different sqllogictest runners
+/// have slightly different behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// In `Standard` mode, expected query output is formatted so that every
@@ -103,6 +128,7 @@ pub enum Mode {
     /// because the number of columns per row is specified by the `query`
     /// directive.
     Standard,
+
     /// In `Cockroach` mode, expected query output is formatted so that rows
     /// can contain multiple whitespace-separated columns:
     ///
