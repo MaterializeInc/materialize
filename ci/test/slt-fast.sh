@@ -130,7 +130,7 @@ tests=(
     test/cockroach/tuple.slt
     # test/cockroach/typing.slt
     # test/cockroach/union-opt.slt
-    # test/cockroach/union.slt
+    test/cockroach/union.slt
     test/cockroach/update.slt
     test/cockroach/upsert.slt
     test/cockroach/uuid.slt

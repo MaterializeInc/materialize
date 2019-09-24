@@ -99,7 +99,12 @@ impl FoldConstants {
                 }
             }
             RelationExpr::Threshold { input } => {
-                if let RelationExpr::Constant { .. } = &**input {
+                if let RelationExpr::Constant { rows, .. } = &mut **input {
+                    for (_, diff) in rows {
+                        if *diff < 0 {
+                            *diff = 0;
+                        }
+                    }
                     *relation = input.take();
                 }
             }
