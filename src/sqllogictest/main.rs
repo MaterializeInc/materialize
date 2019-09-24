@@ -37,12 +37,6 @@ fn main() {
     );
     opts.optopt(
         "",
-        "expect-outcomes",
-        "specify expected outcomes",
-        "OUTCOMES",
-    );
-    opts.optopt(
-        "",
         "json-summary-file",
         "save JSON-formatted summary to file",
         "FILE",
@@ -59,21 +53,7 @@ fn main() {
     if popts.opt_present("h") || popts.free.is_empty() {
         eprint!("{}", opts.usage(USAGE));
         process::exit(1);
-    } else if popts.opt_present("fail") && popts.opt_present("expect-outcomes") {
-        eprint!("--fail and --expect-outcomes cannot be specified together");
-        process::exit(1)
     }
-
-    let expected_outcomes: Option<Outcomes> = match popts.opt_str("expect-outcomes") {
-        Some(outcomes_str) => match outcomes_str.parse() {
-            Ok(outcomes) => Some(outcomes),
-            Err(err) => {
-                eprintln!("{}", err);
-                process::exit(1);
-            }
-        },
-        None => None,
-    };
 
     let json_summary_file = match popts.opt_str("json-summary-file") {
         Some(filename) => match File::create(&filename) {
@@ -122,12 +102,7 @@ fn main() {
     println!("{}", outcomes);
 
     let mut exit_code = 0;
-    if let Some(expected_outcomes) = expected_outcomes {
-        if expected_outcomes != outcomes {
-            eprintln!("outcomes did not match expectation");
-            exit_code = 1;
-        }
-    } else if popts.opt_present("fail") {
+    if popts.opt_present("fail") {
         if outcomes.any_failed() {
             eprintln!("FAIL");
             exit_code = 1;

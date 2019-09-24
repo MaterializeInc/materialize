@@ -12,7 +12,6 @@ use std::fs::File;
 use std::io::Read;
 use std::ops;
 use std::path::Path;
-use std::str::FromStr;
 
 use failure::{bail, ResultExt};
 use futures::Future;
@@ -186,32 +185,6 @@ impl ops::AddAssign<Outcomes> for Outcomes {
         for (lhs, rhs) in self.0.iter_mut().zip(rhs.0.iter()) {
             *lhs += rhs
         }
-    }
-}
-
-impl FromStr for Outcomes {
-    type Err = failure::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let pieces: Vec<_> = s.split(',').collect();
-        if pieces.len() != NUM_OUTCOMES {
-            bail!(
-                "expected-outcomes argument needs {} comma-separated ints",
-                NUM_OUTCOMES
-            );
-        }
-        Ok(Outcomes([
-            pieces[0].parse()?,
-            pieces[1].parse()?,
-            pieces[2].parse()?,
-            pieces[3].parse()?,
-            pieces[4].parse()?,
-            pieces[5].parse()?,
-            pieces[6].parse()?,
-            pieces[7].parse()?,
-            pieces[8].parse()?,
-            pieces[9].parse()?,
-        ]))
     }
 }
 
