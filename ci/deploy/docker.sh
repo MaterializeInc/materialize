@@ -18,3 +18,11 @@ for tag in "unstable-$BUILDKITE_COMMIT" latest; do
     run docker tag "materialize/ci-raw-materialized:$MATERIALIZED_IMAGE_ID" "materialize/materialized:$tag"
     run docker push "materialize/materialized:$tag"
 done
+
+docker pull "materialize/ci-metrics:$MATERIALIZED_IMAGE_ID"
+
+for tag in "unstable-$BUILDKITE_COMMIT" latest; do
+    echo "Processing docker tag for metrics: $tag"
+    run docker tag "materialize/ci-metrics:$MATERIALIZED_IMAGE_ID" "materialize/metrics:$tag"
+    run docker push "materialize/metrics:$tag"
+done

@@ -3,9 +3,10 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-FROM rust:1.31
+FROM ubuntu:bionic
 
-COPY . .
+RUN apt-get update && apt-get install -qy postgresql-client
 
-CMD ["cargo", "run"]
+COPY metrics /usr/local/bin
 
+ENTRYPOINT ["metrics"]
