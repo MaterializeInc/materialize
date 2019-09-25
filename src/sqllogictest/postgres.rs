@@ -15,6 +15,7 @@ use ::postgres::types::{FromSql, Type as PostgresType};
 use ::postgres::{Client, NoTls};
 use byteorder::{NetworkEndian, ReadBytesExt};
 use failure::{bail, ensure, format_err};
+use sqlparser::ast::ColumnOption;
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
 use repr::decimal::Significand;
@@ -92,7 +93,10 @@ END $$;
                             Ok(ColumnType {
                                 name: Some(column.name.clone()),
                                 scalar_type: scalar_type_from_sql(&column.data_type)?,
-                                nullable: true,
+                                nullable: !column
+                                    .options
+                                    .iter()
+                                    .any(|o| o.option == ColumnOption::NotNull),
                             })
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,

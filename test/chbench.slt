@@ -319,15 +319,12 @@ Project {
             predicates: [!isnull #0, !isnull #2],
             Get { stock }
           },
-          Filter { predicates: [!isnull #3], Get { supplier } }
+          Get { supplier }
         }
       }
     },
-    Filter { predicates: [!isnull #0, !isnull #2], Get { nation } },
-    Filter {
-      predicates: [!isnull #0, #1 ~ /^EUROP.*$/],
-      Get { region }
-    },
+    Get { nation },
+    Filter { predicates: [#1 ~ /^EUROP.*$/], Get { region } },
     Filter {
       predicates: [!isnull #0, !isnull #1],
       Reduce {
@@ -337,20 +334,10 @@ Project {
           variables: [[(0, 21), (1, 0)], [(1, 2), (2, 0)]],
           Filter {
             predicates: [#17 = i32toi64 #18],
-            Join {
-              variables: [],
-              Get { stock },
-              Filter { predicates: [!isnull #3], Get { supplier } }
-            }
+            Join { variables: [], Get { stock }, Get { supplier } }
           },
-          Filter {
-            predicates: [!isnull #0, !isnull #2],
-            Get { nation }
-          },
-          Filter {
-            predicates: [!isnull #0, #1 ~ /^EUROP.*$/],
-            Get { region }
-          }
+          Get { nation },
+          Filter { predicates: [#1 ~ /^EUROP.*$/], Get { region } }
         }
       }
     }
@@ -613,11 +600,11 @@ Reduce {
           predicates: [!isnull #0, !isnull #1],
           Get { stock }
         },
-        Filter { predicates: [!isnull #3], Get { supplier } }
+        Get { supplier }
       }
     },
-    Filter { predicates: [!isnull #0, !isnull #2], Get { nation } },
-    Filter { predicates: [!isnull #0, #1 = "EUROPE"], Get { region } }
+    Get { nation },
+    Filter { predicates: [#1 = "EUROPE"], Get { region } }
   }
 }
 
@@ -849,16 +836,9 @@ Let {
       variables: [[(0, 21), (1, 0)]],
       Filter {
         predicates: [#17 = i32toi64 #18],
-        Join {
-          variables: [],
-          Get { stock },
-          Filter { predicates: [!isnull #3], Get { supplier } }
-        }
+        Join { variables: [], Get { stock }, Get { supplier } }
       },
-      Filter {
-        predicates: [!isnull #0, #1 = "GERMANY"],
-        Get { nation }
-      }
+      Filter { predicates: [#1 = "GERMANY"], Get { nation } }
     }
   }
 };
@@ -984,17 +964,14 @@ Let {
                 ],
                 Get { id-2 },
                 Get { id-2 },
-                Filter { predicates: [!isnull #3], Get { supplier } },
+                Get { supplier },
                 Get { stock }
               }
             }
           }
         },
         Get { id-2 },
-        Filter {
-          predicates: [!isnull #0, #1 = "GERMANY"],
-          Get { nation }
-        }
+        Filter { predicates: [#1 = "GERMANY"], Get { nation } }
       }
     }
   }

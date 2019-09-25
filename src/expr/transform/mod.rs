@@ -15,6 +15,7 @@ pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
 pub mod join_order;
+pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod reduction;
@@ -78,6 +79,7 @@ impl Default for Optimizer {
             Box::new(crate::transform::split_predicates::SplitPredicates),
             Box::new(crate::transform::Fixpoint {
                 transforms: vec![
+                    Box::new(crate::transform::nonnullable::NonNullable),
                     Box::new(crate::transform::reduction::FoldConstants),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
