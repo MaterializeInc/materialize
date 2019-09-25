@@ -60,18 +60,18 @@ impl NonNullable {
 /// Transformations to scalar functions, based on nonnullability of columns.
 fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
     // Tests for null can be replaced by "false" for non-nullable columns.
-    expr.visit_mut(&mut |e| match e {
-        ScalarExpr::CallUnary {
+    expr.visit_mut(&mut |e| {
+        if let ScalarExpr::CallUnary {
             func: UnaryFunc::IsNull,
             expr,
-        } => {
+        } = e
+        {
             if let ScalarExpr::Column(c) = &**expr {
                 if !metadata.column_types[*c].nullable {
                     *e = ScalarExpr::Literal(Datum::False);
                 }
             }
         }
-        _ => {}
     })
 }
 
