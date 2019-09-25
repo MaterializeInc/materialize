@@ -5,7 +5,7 @@
 
 use crate::relation::AggregateExpr;
 use crate::AggregateFunc;
-use crate::{BinaryFunc, UnaryFunc};
+use crate::UnaryFunc;
 use crate::{RelationExpr, ScalarExpr};
 use repr::Datum;
 use repr::RelationType;
@@ -71,6 +71,7 @@ fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
                 }
             }
         }
+        _ => {}
     })
 }
 
