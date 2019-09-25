@@ -431,8 +431,7 @@ impl RelationExpr {
                     },
                 },
                 right.union(
-                    both.project(((both_arity - right_arity)..both_arity).collect())
-                        .distinct()
+                    both.distinct_by(((both_arity - right_arity)..both_arity).collect())
                         .negate(),
                 ),
             ],
@@ -755,8 +754,7 @@ impl RelationExpr {
             .let_in(id_gen, |_id_gen, get_keys_and_values| {
                 Ok(get_keys_and_values
                     .clone()
-                    .project((0..keys.arity()).collect())
-                    .distinct()
+                    .distinct_by((0..keys.arity()).collect())
                     .negate()
                     .union(keys)
                     // This join is logically equivalent to
@@ -805,7 +803,7 @@ impl RelationExpr {
         self.let_in(id_gen, |id_gen, get_outer| {
             // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
             let key = (0..get_outer.arity()).collect::<Vec<_>>();
-            let keyed_outer = get_outer.clone().project(key.clone()).distinct();
+            let keyed_outer = get_outer.clone().distinct_by(key.clone());
             keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
                 let branch = branch(id_gen, get_keyed_outer.clone())?;
                 branch.let_in(id_gen, |_id_gen, get_branch| {

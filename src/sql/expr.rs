@@ -383,8 +383,7 @@ impl ScalarExpr {
                         // compute for every row in get_inner
                         .applied_to(id_gen, get_inner.clone())?
                         // throw away actual values and just remember whether or not there where __any__ rows
-                        .project((0..get_inner.arity()).collect())
-                        .distinct()
+                        .distinct_by((0..get_inner.arity()).collect())
                         // Append true to anything that returned any rows. This
                         // join is logically equivalent to
                         // `.map(vec![Datum::True])`, but using a join allows
