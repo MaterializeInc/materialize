@@ -71,20 +71,6 @@ fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
                 }
             }
         }
-        ScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
-            expr1,
-            expr2,
-        } => match (&**expr1, &**expr2) {
-            (ScalarExpr::Column(c), ScalarExpr::Literal(Datum::Null))
-            | (ScalarExpr::Literal(Datum::Null), ScalarExpr::Column(c)) => {
-                if !metadata.column_types[*c].nullable {
-                    *e = ScalarExpr::Literal(Datum::False);
-                }
-            }
-            _ => {}
-        },
-        _ => {}
     })
 }
 
