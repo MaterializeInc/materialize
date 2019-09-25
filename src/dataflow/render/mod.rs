@@ -342,7 +342,7 @@ where
             let mut input_iter = inputs.iter().enumerate();
             if let Some((index, input)) = input_iter.next() {
                 // This collection will evolve as we join in more inputs.
-                let mut already_joined_data = self.collection(input).unwrap();
+                let mut joined = self.collection(input).unwrap();
 
                 // Maintain sources of each in-progress column.
                 let mut columns = (0..arities[index]).map(|c| (index, c)).collect::<Vec<_>>();
@@ -425,8 +425,7 @@ where
                     columns.extend((0..arities[index]).map(|c| (index, c)));
                 }
 
-                self.collections
-                    .insert(relation_expr.clone(), joined);
+                self.collections.insert(relation_expr.clone(), joined);
             } else {
                 panic!("Empty join; why?");
             }
