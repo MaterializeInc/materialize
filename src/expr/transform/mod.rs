@@ -19,6 +19,7 @@ pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod reduction;
 pub mod split_predicates;
+pub mod nonnullable;
 
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.

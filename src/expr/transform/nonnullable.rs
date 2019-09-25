@@ -24,36 +24,45 @@ impl NonNullable {
 
     pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
         match relation {
-            RelationExpr::Map { } => {
-
+            RelationExpr::Map { input: _, scalars } => {
+                for (scalar, _typ) in scalars.iter_mut() {
+                    reduce_nonnullable(scalar, metadata);
+                }
             }
-            RelationExpr::Filter { predicates } => {
-
+            RelationExpr::Filter { input: _, predicates } => {
+                for predicate in predicates.iter_mut() {
+                    reduce_nonnullable(predicate, metadata);
+                }
             }
-            RelationExpr::Reduce { } => {
-
+            RelationExpr::Reduce { input: _, group_key: _, aggregates } => {
+                for (aggregate, _typ) in aggregates.iter_mut() {
+                    reduce_nonnullable(&mut aggregate.expr, metadata);
+                }
             }
+            _ => { }
         }
     }
 }
 
-fn reduce_nonnullable(expr: &mut ScalarExpr, nullable: &[bool]) {
-    expr.visit_mut(expr, &mut |e| {
+fn reduce_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
+    expr.visit_mut(&mut |e| {
 
+        use repr::Datum;
         use crate::BinaryFunc;
-        use crate::UnaryFunc;
         if let ScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1,
             expr2,
-        } = &expr
+        } = &e
         {
             match (&**expr1, &**expr2) {
                 (ScalarExpr::Column(c), ScalarExpr::Literal(Datum::Null)) | (ScalarExpr::Literal(Datum::Null), ScalarExpr::Column(c)) => {
-                    if !nullable[c] {
+                    if !metadata.column_types[*c].nullable {
                         *e = ScalarExpr::Literal(Datum::False);
                     }
                 }
+                _ => { }
             }
+        }
     })
 }
