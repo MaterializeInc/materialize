@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# xcompile - `cargo build`, but compiles for Linux regardless of the host.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+. misc/shlib/shlib.bash
+
+main() {
+    case "${1-}" in
+        "") build ;;
+        build) shift && build "$@" ;;
+        bootstrap) bootstrap ;;
+        clean) clean ;;
+        *) usage ;;
+    esac
+}
+
+usage() {
+    die "usage: $0 <bootstrap|clean>
+   or: $0 build [<cargo args>...]
+
+Consider also \`bin/ci-image build-and-run\` to automatically package
+the cross-compiled binaries into Docker images."
+}
+
+build() {
+    if [[ ! -d target/sysroot ]]; then
+        die "xcompile: fatal: run \`bin/xcompile bootstrap\` first"
+    fi
+
+    sysroot=$PWD/target/sysroot/x86_64-unknown-linux-gnu
+
+    export AR=x86_64-unknown-linux-gnu-ar
+    export LD=x86_64-unknown-linux-gnu-ld
+    export CPP=x86_64-unknown-linux-gnu-cpp
+    export CC=x86_64-unknown-linux-gnu-cc
+    export CXX=x86_64-unknown-linux-gnu-c++
+    export CFLAGS="-I$sysroot/usr/include/x86_64-linux-gnu -isystem$sysroot/usr/include"
+    export CXXFLAGS=$CFLAGS
+    export LDFLAGS="-L$sysroot/usr/lib/x86_64-linux-gnu -L$sysroot/lib/x86_64-linux-gnu"
+    export TARGET_CC=$CC
+    export TARGET_CXX=$CXX
+    export TARGET_CFLAGS=$CFLAGS
+    export TARGET_CXXFLAGS=$CXXFLAGS
+    export OPENSSL_STATIC=1
+    export OPENSSL_LIB_DIR=$sysroot/usr/lib/x86_64-linux-gnu
+    export OPENSSL_INCLUDE_DIR=$sysroot/usr/include
+
+    cargo build --target=x86_64-unknown-linux-gnu "$@"
+}
+
+pkg_url=http://archive.ubuntu.com/ubuntu/ubuntu
+
+bootstrap() {
+    clean
+
+    # Check for missing SDK headers first, because we might need to prompt for a
+    # password, and best to do that ASAP so that we catch the user while they're
+    # still looking at the terminal.
+    if [[ ! -e /usr/include/machine ]]; then
+        pkg=/Library/Developer/CommandLineTools/Packages/macOS_SDK_headers_for_macOS_10.14.pkg
+        if [[ -f "$pkg" ]]; then
+            printf "Automatically installing missing macOS headers.\n" >&2
+            printf "Your password may be required.\n" >&2
+            run sudo installer -target / -pkg "$pkg"
+        else
+            printf "macOS SDK headers are missing and cannot automatically installed.\n" >&2
+            printf "Hint: no installer at %q\n" "$pkg" >&2
+            printf "Hint: see if \`brew doctor\` has any suggestions\n" >&2
+            exit 1
+        fi
+    fi
+
+    run brew install SergioBenitez/osxct/x86_64-unknown-linux-gnu
+    run brew install benesch/debian/dctrl-tools
+
+    run rustup target add x86_64-unknown-linux-gnu
+
+    mkdir -p .cargo
+    cat > .cargo/config <<EOF
+    [target.x86_64-unknown-linux-gnu]
+    linker = "x86_64-unknown-linux-gnu-cc"
+EOF
+
+    mkdir -p target/sysroot/x86_64-unknown-linux-gnu
+    cd target/sysroot/x86_64-unknown-linux-gnu
+
+    curl -fsSLO "$pkg_url"/dists/bionic/main/binary-amd64/Packages.gz
+    gunzip Packages.gz
+
+    install_pkg libssl-dev
+    install_pkg zlib1g
+    install_pkg zlib1g-dev
+}
+
+# install_pkg PACKAGE
+install_pkg() {
+    echo "installing $1" >&2
+    path=$(grep-dctrl --no-field-names --field=Package --exact-match --show-field=Filename "$1" Packages)
+    curl -fsSL "$pkg_url/$path" > "$1.deb"
+    ar -p "$1.deb" data.tar.xz | tar xvf -
+}
+
+clean() {
+    run rm -f .cargo/config
+    run rm -rf target/sysroot
+    # N.B.: `cargo clean --target=x86_64-unknown-linux-gnu-cc` cleans the entire
+    # target directory, not just the directory for the specified target triple.
+    run rm -rf target/x86_64-unknown-linux-gnu
+}
+
+main "$@"
