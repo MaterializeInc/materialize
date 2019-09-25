@@ -7,4 +7,4 @@ publish = false
 
 [[bin]]
 name = "metrics"
-path = "lib.rs"
+path = "bin/metrics.rs"
