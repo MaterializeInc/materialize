@@ -1,0 +1,1152 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+statement ok
+CREATE TABLE warehouse (
+    w_id integer,
+    w_name char(10),
+    w_street_1 char(20),
+    w_street_2 char(20),
+    w_city char(20),
+    w_state char(2),
+    w_zip char(9),
+    w_tax decimal(4,4),
+    w_ytd decimal(12,2),
+    PRIMARY KEY (w_id)
+)
+
+statement ok
+CREATE TABLE district (
+    d_id smallint,
+    d_w_id integer,
+    d_name char(10),
+    d_street_1 char(20),
+    d_street_2 char(20),
+    d_city char(20),
+    d_state char(2),
+    d_zip char(9),
+    d_tax decimal(4,4),
+    d_ytd decimal(12,2),
+    d_next_o_id integer,
+    PRIMARY KEY (d_w_id, d_id)
+)
+
+statement ok
+CREATE INDEX fk_district_warehouse ON district (d_w_id ASC)
+
+statement ok
+CREATE TABLE customer (
+    c_id smallint,
+    c_d_id smallint,
+    c_w_id integer,
+    c_first char(16),
+    c_middle char(2),
+    c_last char(16),
+    c_street_1 char(20),
+    c_street_2 char(20),
+    c_city char(20),
+    c_state char(2),
+    c_zip char(9),
+    c_phone char(16),
+    c_since DATE,
+    c_credit char(2),
+    c_credit_lim decimal(12,2),
+    c_discount decimal(4,4),
+    c_balance decimal(12,2),
+    c_ytd_payment decimal(12,2),
+    c_payment_cnt smallint,
+    c_delivery_cnt smallint,
+    c_data text,
+    c_n_nationkey integer,
+    PRIMARY KEY(c_w_id, c_d_id, c_id)
+)
+
+statement ok
+CREATE INDEX fk_customer_district ON customer(c_w_id ASC, c_d_id ASC)
+
+statement ok
+CREATE TABLE history (
+    h_c_id smallint,
+    h_c_d_id smallint,
+    h_c_w_id integer,
+    h_d_id smallint,
+    h_w_id integer,
+    h_date date,
+    h_amount decimal(6,2),
+    h_data char(24)
+)
+
+statement ok
+CREATE INDEX fk_history_customer ON history (h_c_w_id ASC, h_c_d_id ASC, h_c_id ASC)
+
+statement ok
+CREATE INDEX fk_history_district ON history (h_w_id ASC, h_d_id ASC)
+
+statement ok
+CREATE TABLE neworder (
+    no_o_id integer,
+    no_d_id smallint,
+    no_w_id integer,
+    PRIMARY KEY (no_w_id, no_d_id, no_o_id)
+)
+
+statement ok
+CREATE TABLE "order" (
+    o_id integer,
+    o_d_id smallint,
+    o_w_id integer,
+    o_c_id smallint,
+    o_entry_d date,
+    o_carrier_id smallint,
+    o_ol_cnt smallint,
+    o_all_local smallint,
+    PRIMARY KEY (o_w_id, o_d_id, o_id)
+)
+
+statement ok
+CREATE INDEX fk_order_customer ON order (o_w_id ASC, o_d_id ASC, o_c_id ASC)
+
+statement ok
+CREATE TABLE orderline (
+    ol_o_id integer,
+    ol_d_id smallint,
+    ol_w_id integer,
+    ol_number smallint,
+    ol_i_id integer,
+    ol_supply_w_id integer,
+    ol_delivery_d date,
+    ol_quantity smallint,
+    ol_amount decimal(6,2),
+    ol_dist_info char(24),
+    PRIMARY KEY (ol_w_id, ol_d_id, ol_o_id, ol_number)
+)
+
+statement ok
+CREATE INDEX fk_orderline_order ON orderline (ol_w_id ASC, ol_d_id ASC, ol_o_id ASC)
+
+statement ok
+CREATE INDEX fk_orderline_stock ON orderline (ol_supply_w_id ASC, ol_i_id ASC)
+
+statement ok
+CREATE TABLE item (
+    i_id integer,
+    i_im_id smallint,
+    i_name char(24),
+    i_price decimal(5,2),
+    i_data char(50),
+    PRIMARY KEY (i_id)
+)
+
+statement ok
+CREATE TABLE stock (
+    s_i_id integer,
+    s_w_id integer,
+    s_quantity smallint,
+    s_dist_01 char(24),
+    s_dist_02 char(24),
+    s_dist_03 char(24),
+    s_dist_04 char(24),
+    s_dist_05 char(24),
+    s_dist_06 char(24),
+    s_dist_07 char(24),
+    s_dist_08 char(24),
+    s_dist_09 char(24),
+    s_dist_10 char(24),
+    s_ytd integer,
+    s_order_cnt smallint,
+    s_remote_cnt smallint,
+    s_data char(50),
+    s_su_suppkey integer,
+    PRIMARY KEY (s_w_id, s_i_id)
+)
+
+statement ok
+CREATE INDEX fk_stock_warehouse ON stock (s_w_id ASC)
+
+statement ok
+CREATE INDEX fk_stock_item ON stock (s_i_id ASC)
+
+statement ok
+CREATE TABLE nation (
+    n_nationkey smallint NOT NULL,
+    n_name char(25) NOT NULL,
+    n_regionkey smallint NOT NULL,
+    n_comment char(152) NOT NULL,
+    PRIMARY KEY (n_nationkey)
+)
+
+statement ok
+CREATE TABLE supplier (
+    su_suppkey smallint NOT NULL,
+    su_name char(25) NOT NULL,
+    su_address char(40) NOT NULL,
+    su_nationkey smallint NOT NULL,
+    su_phone char(15) NOT NULL,
+    su_acctbal decimal(12,2) NOT NULL,
+    su_comment char(101) NOT NULL,
+    PRIMARY KEY (su_suppkey)
+)
+
+statement ok
+CREATE TABLE region (
+    r_regionkey smallint NOT NULL,
+    r_name char(55) NOT NULL,
+    r_comment char(152) NOT NULL,
+    PRIMARY KEY (r_regionkey)
+)
+
+# Query 01
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    ol_number,
+    sum(ol_quantity) AS sum_qty,
+    sum(ol_amount) AS sum_amount,
+    avg(ol_quantity) AS avg_qty,
+    avg(ol_amount) AS avg_amount,
+    count(*) AS count_order
+FROM orderline
+WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'
+GROUP BY ol_number
+ORDER BY ol_number
+----
+Project {
+  outputs: [0, 8, 9, 10, 11, 12],
+  Map {
+    scalars: [
+      #3,
+      #5,
+      ((i32todec #3 * 10000000dec) / i64todec #4) / 10dec,
+      ((#5 * 10000000dec) / (i64todec #6 * 100dec)) * 10dec,
+      #7
+    ],
+    Reduce {
+      group_key: [3],
+      aggregates: [
+        SumInt32,
+          SumDecimal,
+          SumInt32,
+          Count,
+          SumDecimal,
+          Count,
+          CountAll
+      ],
+      Filter {
+        predicates: [datetotimestamp #6 > 2007-01-02 00:00:00],
+        Get { orderline }
+      }
+    }
+  }
+}
+
+# Query 02
+query T multiline
+EXPLAIN PLAN FOR
+SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment
+FROM
+    item, supplier, stock, nation, region,
+    (
+        SELECT
+            s_i_id AS m_i_id,
+            min(s_quantity) AS m_s_quantity
+        FROM stock, supplier, nation, region
+        WHERE s_su_suppkey = su_suppkey
+        AND su_nationkey = n_nationkey
+        AND n_regionkey = r_regionkey
+        AND r_name like 'EUROP%'
+        GROUP BY s_i_id
+    ) m
+WHERE i_id = s_i_id
+AND s_su_suppkey = su_suppkey
+AND su_nationkey = n_nationkey
+AND n_regionkey = r_regionkey
+AND i_data like '%b'
+AND r_name like 'EUROP%'
+AND i_id = m_i_id
+AND s_quantity = m_s_quantity
+ORDER BY n_name, su_name, i_id
+----
+Project {
+  outputs: [5, 6, 31, 0, 2, 7, 9, 11],
+  Join {
+    variables: [
+      [(0, 8), (1, 0)],
+      [(1, 2), (2, 0)],
+      [(0, 0), (3, 0)],
+      [(0, 14), (3, 1)]
+    ],
+    Filter {
+      predicates: [#29 = i32toi64 #5],
+      Project {
+        outputs: [
+          0,
+          1,
+          2,
+          3,
+          4,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22
+        ],
+        Join {
+          variables: [[(0, 0), (1, 0)]],
+          Filter {
+            predicates: [!isnull #0, #4 ~ /^.*b$/],
+            Get { item }
+          },
+          Filter {
+            predicates: [!isnull #0, !isnull #2],
+            Get { stock }
+          },
+          Filter { predicates: [!isnull #3], Get { supplier } }
+        }
+      }
+    },
+    Filter { predicates: [!isnull #0, !isnull #2], Get { nation } },
+    Filter {
+      predicates: [!isnull #0, #1 ~ /^EUROP.*$/],
+      Get { region }
+    },
+    Project {
+      outputs: [2, 3],
+      Filter {
+        predicates: [!isnull #2, !isnull #3],
+        Map {
+          scalars: [#0, #1],
+          Reduce {
+            group_key: [0],
+            aggregates: [MinInt32],
+            Join {
+              variables: [[(0, 21), (1, 0)], [(1, 2), (2, 0)]],
+              Filter {
+                predicates: [#17 = i32toi64 #18],
+                Join {
+                  variables: [],
+                  Get { stock },
+                  Filter {
+                    predicates: [!isnull #3],
+                    Get { supplier }
+                  }
+                }
+              },
+              Filter {
+                predicates: [!isnull #0, !isnull #2],
+                Get { nation }
+              },
+              Filter {
+                predicates: [!isnull #0, #1 ~ /^EUROP.*$/],
+                Get { region }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# Query 03
+query T multiline
+EXPLAIN PLAN FOR
+SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d
+FROM customer, neworder, "order", orderline
+WHERE c_state LIKE 'A%'
+AND c_id = o_c_id
+AND c_w_id = o_w_id
+AND c_d_id = o_d_id
+AND no_w_id = o_w_id
+AND no_d_id = o_d_id
+AND no_o_id = o_id
+AND ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_o_id = o_id
+AND o_entry_d > TIMESTAMP '2007-01-02 00:00:00.000000'
+GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d
+ORDER BY revenue DESC, o_entry_d
+----
+Project {
+  outputs: [0, 1, 2, 5, 3],
+  Map {
+    scalars: [#4],
+    Reduce {
+      group_key: [33, 35, 34, 29],
+      aggregates: [SumDecimal],
+      Project {
+        outputs: [
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42
+        ],
+        Join {
+          variables: [
+            [(2, 1), (0, 1)],
+            [(2, 2), (0, 2)],
+            [(2, 0), (1, 3)],
+            [(2, 1), (1, 1)],
+            [(2, 2), (1, 2)],
+            [(0, 0), (1, 0)],
+            [(1, 0), (3, 0)],
+            [(1, 1), (3, 1)],
+            [(1, 2), (3, 2)]
+          ],
+          Filter {
+            predicates: [!isnull #0, !isnull #1, !isnull #2],
+            Get { neworder }
+          },
+          Filter {
+            predicates: [
+              !isnull #0,
+              !isnull #1,
+              !isnull #2,
+              !isnull #3,
+              datetotimestamp #4 > 2007-01-02 00:00:00
+            ],
+            Get { "order" }
+          },
+          Filter {
+            predicates: [
+              !isnull #0,
+              !isnull #1,
+              !isnull #2,
+              #9 ~ /^A.*$/
+            ],
+            Get { customer }
+          },
+          Filter {
+            predicates: [!isnull #0, !isnull #1, !isnull #2],
+            Get { orderline }
+          }
+        }
+      }
+    }
+  }
+}
+
+# Query 04
+query T multiline
+EXPLAIN PLAN FOR
+SELECT o_ol_cnt, count(*) AS order_count
+FROM "order"
+WHERE o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
+AND o_entry_d < TIMESTAMP '2012-01-02 00:00:00.000000'
+AND EXISTS (
+    SELECT *
+    FROM orderline
+    WHERE o_id = ol_o_id
+    AND o_w_id = ol_w_id
+    AND o_d_id = ol_d_id
+    AND ol_delivery_d >= o_entry_d
+)
+GROUP BY o_ol_cnt
+ORDER BY o_ol_cnt
+----
+Project {
+  outputs: [0, 2],
+  Map {
+    scalars: [#1],
+    Reduce {
+      group_key: [6],
+      aggregates: [CountAll],
+      Project {
+        outputs: [0, 1, 2, 3, 4, 5, 6, 7],
+        Join {
+          variables: [
+            [(0, 0), (1, 0)],
+            [(0, 1), (1, 1)],
+            [(0, 2), (1, 2)],
+            [(0, 3), (1, 3)],
+            [(0, 4), (1, 4)],
+            [(0, 5), (1, 5)],
+            [(0, 6), (1, 6)],
+            [(0, 7), (1, 7)]
+          ],
+          Filter {
+            predicates: [
+              datetotimestamp #4 < 2012-01-02 00:00:00,
+              datetotimestamp #4 >= 2007-01-02 00:00:00
+            ],
+            Get { "order" }
+          },
+          Distinct {
+            group_key: [0, 1, 2, 3, 4, 5, 6, 7],
+            Project {
+              outputs: [0, 1, 2, 3, 4, 5, 6, 7],
+              Filter {
+                predicates: [#14 >= #4],
+                Join {
+                  variables: [
+                    [(0, 1), (1, 1)],
+                    [(0, 2), (1, 2)],
+                    [(0, 0), (1, 0)]
+                  ],
+                  Filter {
+                    predicates: [!isnull #0, !isnull #1, !isnull #2],
+                    Distinct {
+                      group_key: [0, 1, 2, 3, 4, 5, 6, 7],
+                      Get { "order" }
+                    }
+                  },
+                  Filter {
+                    predicates: [!isnull #0, !isnull #1, !isnull #2],
+                    Get { orderline }
+                  }
+                }
+              }
+            }
+          },
+          Constant [[true]]
+        }
+      }
+    }
+  }
+}
+
+# Query 05
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    n_name,
+    sum(ol_amount) AS revenue
+FROM customer, "order", orderline, stock, supplier, nation, region
+WHERE c_id = o_c_id
+AND c_w_id = o_w_id
+AND c_d_id = o_d_id
+AND ol_o_id = o_id
+AND ol_w_id = o_w_id
+AND ol_d_id=o_d_id
+AND ol_w_id = s_w_id
+AND ol_i_id = s_i_id
+AND s_su_suppkey = su_suppkey
+AND c_n_nationkey = su_nationkey
+AND su_nationkey = n_nationkey
+AND n_regionkey = r_regionkey
+AND r_name = 'EUROPE'
+AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
+GROUP BY n_name
+ORDER BY revenue DESC
+----
+Project {
+  outputs: [0, 2],
+  Map {
+    scalars: [#1],
+    Reduce {
+      group_key: [66],
+      aggregates: [SumDecimal],
+      Join {
+        variables: [[(0, 61), (1, 0)], [(1, 2), (2, 0)]],
+        Filter {
+          predicates: [#21 = i32toi64 #61, #57 = i32toi64 #58],
+          Join {
+            variables: [
+              [(0, 0), (1, 3)],
+              [(0, 1), (1, 1)],
+              [(0, 2), (1, 2)],
+              [(1, 0), (2, 0)],
+              [(1, 1), (2, 1)],
+              [(1, 2), (2, 2)],
+              [(2, 2), (3, 1)],
+              [(2, 4), (3, 0)]
+            ],
+            Filter {
+              predicates: [!isnull #0, !isnull #1, !isnull #2],
+              Get { customer }
+            },
+            Filter {
+              predicates: [
+                !isnull #0,
+                !isnull #1,
+                !isnull #2,
+                !isnull #3,
+                datetotimestamp #4 >= 2007-01-02 00:00:00
+              ],
+              Get { "order" }
+            },
+            Filter {
+              predicates: [
+                !isnull #0,
+                !isnull #1,
+                !isnull #2,
+                !isnull #4
+              ],
+              Get { orderline }
+            },
+            Filter {
+              predicates: [!isnull #0, !isnull #1],
+              Get { stock }
+            },
+            Filter { predicates: [!isnull #3], Get { supplier } }
+          }
+        },
+        Filter {
+          predicates: [!isnull #0, !isnull #2],
+          Get { nation }
+        },
+        Filter {
+          predicates: [!isnull #0, #1 = "EUROPE"],
+          Get { region }
+        }
+      }
+    }
+  }
+}
+
+# Query 06
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT sum(ol_amount) AS revenue
+FROM orderline
+WHERE ol_delivery_d >= TIMESTAMP '1999-01-01 00:00:00.000000'
+AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
+AND ol_quantity BETWEEN 1 AND 100000
+----
+
+# Query 07
+skipif postgresql # TODO(benesch): uses unsupported substr function.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    su_nationkey AS supp_nation,
+    substr(c_state,1,1) AS cust_nation,
+    extract(year FROM o_entry_d) AS l_year,
+    sum(ol_amount) AS revenue
+FROM supplier, stock, orderline, "order", customer, nation n1, nation n2
+WHERE ol_supply_w_id = s_w_id
+AND ol_i_id = s_i_id
+AND s_su_suppkey = su_suppkey
+AND ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_o_id = o_id
+AND c_id = o_c_id
+AND c_w_id = o_w_id
+AND c_d_id = o_d_id
+AND su_nationkey = n1.n_nationkey
+AND c_n_nationkey = n2.n_nationkey
+AND (
+    (n1.n_name = 'GERMANY' AND n2.n_name = 'CAMBODIA')
+    OR
+    (n1.n_name = 'CAMBODIA' AND n2.n_name = 'GERMANY')
+)
+AND ol_delivery_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2012-01-02 00:00:00.000000'
+GROUP BY su_nationkey, substr(c_state, 1, 1), extract(year FROM o_entry_d)
+ORDER BY su_nationkey, cust_nation, l_year
+----
+
+# Query 08
+skipif postgresql # TODO(benesch): uses unsupported extract function.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    extract(year FROM o_entry_d) AS l_year,
+    sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / sum(ol_amount) AS mkt_share
+FROM item, supplier, stock, orderline, "order", customer, nation n1, nation n2, region
+WHERE i_id = s_i_id
+AND ol_i_id = s_i_id
+AND ol_supply_w_id = s_w_id
+AND s_su_suppkey = su_suppkey
+AND ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_o_id = o_id
+AND c_id = o_c_id
+AND c_w_id = o_w_id
+AND c_d_id = o_d_id
+AND n1.n_nationkey = c_n_nationkey
+AND n1.n_regionkey = r_regionkey
+AND ol_i_id < 1000
+AND r_name = 'EUROPE'
+AND su_nationkey = n2.n_nationkey
+AND o_entry_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2012-01-02 00:00:00.000000'
+AND i_data like '%b'
+AND i_id = ol_i_id
+GROUP BY extract(year FROM o_entry_d)
+ORDER BY l_year
+----
+
+# Query 09
+skipif postgresql # TODO(benesch): uses unsupported extract function.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    n_name, extract(year FROM o_entry_d) AS l_year,
+    sum(ol_amount) AS sum_profit
+FROM item, stock, supplier, orderline, "order", nation
+WHERE ol_i_id = s_i_id
+AND ol_supply_w_id = s_w_id
+AND s_su_suppkey = su_suppkey
+AND ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_o_id = o_id
+AND ol_i_id = i_id
+AND su_nationkey = n_nationkey
+AND i_data like '%BB'
+GROUP BY n_name, extract(year FROM o_entry_d)
+ORDER BY n_name, l_year DESC
+----
+
+# Query 10
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    c_id, c_last, sum(ol_amount) AS revenue, c_city, c_phone, n_name
+FROM customer, "order", orderline, nation
+WHERE c_id = o_c_id
+AND c_w_id = o_w_id
+AND c_d_id = o_d_id
+AND ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_o_id = o_id
+AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
+AND o_entry_d <= ol_delivery_d
+AND n_nationkey = c_n_nationkey
+GROUP BY c_id, c_last, c_city, c_phone, n_name
+ORDER BY revenue DESC
+----
+Project {
+  outputs: [0, 1, 6, 2, 3, 4],
+  Map {
+    scalars: [#5],
+    Reduce {
+      group_key: [0, 5, 8, 11, 41],
+      aggregates: [SumDecimal],
+      Filter {
+        predicates: [i32toi64 #40 = #21],
+        Join {
+          variables: [],
+          Filter {
+            predicates: [#26 <= #36],
+            Project {
+              outputs: [
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                30,
+                31,
+                32,
+                33,
+                34,
+                35,
+                36,
+                37,
+                38,
+                39
+              ],
+              Join {
+                variables: [
+                  [(1, 0), (0, 3)],
+                  [(1, 1), (0, 1)],
+                  [(1, 2), (0, 2)],
+                  [(0, 0), (2, 0)],
+                  [(0, 1), (2, 1)],
+                  [(0, 2), (2, 2)]
+                ],
+                Filter {
+                  predicates: [
+                    !isnull #0,
+                    !isnull #1,
+                    !isnull #2,
+                    !isnull #3,
+                    datetotimestamp #4 >= 2007-01-02 00:00:00
+                  ],
+                  Get { "order" }
+                },
+                Filter {
+                  predicates: [!isnull #0, !isnull #1, !isnull #2],
+                  Get { customer }
+                },
+                Filter {
+                  predicates: [!isnull #0, !isnull #1, !isnull #2],
+                  Get { orderline }
+                }
+              }
+            }
+          },
+          Get { nation }
+        }
+      }
+    }
+  }
+}
+
+# Query 11
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT s_i_id, sum(s_order_cnt) AS ordercount
+FROM stock, supplier, nation
+WHERE s_su_suppkey = su_suppkey
+AND su_nationkey = n_nationkey
+AND n_name = 'GERMANY'
+GROUP BY s_i_id
+HAVING sum(s_order_cnt) > (
+    SELECT sum(s_order_cnt) * 0.005
+    FROM stock, supplier, nation
+    WHERE s_su_suppkey = su_suppkey
+    AND su_nationkey = n_nationkey
+    AND n_name = 'GERMANY'
+)
+ORDER BY ordercount DESC
+----
+
+# Query 12
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    o_ol_cnt,
+    sum(CASE WHEN o_carrier_id = 1 OR o_carrier_id = 2 THEN 1 ELSE 0 END) AS high_line_count,
+    sum(CASE WHEN o_carrier_id <> 1 AND o_carrier_id <> 2 THEN 1 ELSE 0 END) AS low_line_count
+FROM
+    "order", orderline
+WHERE ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_o_id = o_id
+AND o_entry_d <= ol_delivery_d
+AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'
+GROUP BY o_ol_cnt
+ORDER BY o_ol_cnt
+----
+Project {
+  outputs: [0, 3, 4],
+  Map {
+    scalars: [#1, #2],
+    Reduce {
+      group_key: [6],
+      aggregates: [SumInt64, SumInt64],
+      Filter {
+        predicates: [#4 <= #14],
+        Join {
+          variables: [
+            [(0, 0), (1, 0)],
+            [(0, 1), (1, 1)],
+            [(0, 2), (1, 2)]
+          ],
+          Filter {
+            predicates: [!isnull #0, !isnull #1, !isnull #2],
+            Get { "order" }
+          },
+          Filter {
+            predicates: [
+              !isnull #0,
+              !isnull #1,
+              !isnull #2,
+              datetotimestamp #6 < 2020-01-01 00:00:00
+            ],
+            Get { orderline }
+          }
+        }
+      }
+    }
+  }
+}
+
+# Query 13
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    c_count, count(*) AS custdist
+FROM (
+    SELECT c_id, count(o_id) as c_count
+    FROM customer
+    LEFT OUTER JOIN "order" ON (
+        c_w_id = o_w_id AND c_d_id = o_d_id AND c_id = o_c_id AND o_carrier_id > 8
+    )
+    GROUP BY c_id
+) AS c_orders
+GROUP BY c_count
+ORDER BY custdist DESC, c_count DESC
+----
+
+# Query 14
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    100.00 * sum(CASE WHEN i_data LIKE 'PR%' THEN ol_amount ELSE 0 END) / (1 + sum(ol_amount)) AS promo_revenue
+FROM orderline, item
+WHERE ol_i_id = i_id
+AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
+AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
+----
+
+# Query 15
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT su_suppkey, su_name, su_address, su_phone, total_revenue
+FROM
+    supplier,
+    (
+        SELECT
+            s_su_suppkey AS supplier_no,
+            sum(ol_amount) AS total_revenue
+        FROM orderline, stock
+        WHERE ol_i_id = s_i_id
+        AND ol_supply_w_id = s_w_id
+        AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
+        GROUP BY s_su_suppkey
+    ) AS revenue
+WHERE su_suppkey = supplier_no
+AND total_revenue = (
+    SELECT max(total_revenue)
+    FROM (
+        SELECT
+            s_su_suppkey AS supplier_no,
+            sum(ol_amount) AS total_revenue
+            FROM orderline, stock
+        WHERE ol_i_id = s_i_id
+        AND ol_supply_w_id = s_w_id
+        AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
+        GROUP BY s_su_suppkey
+    ) AS revenue
+)
+ORDER BY su_suppkey
+----
+
+# Query 16
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    i_name,
+    substr(i_data, 1, 3) AS brand,
+    i_price,
+    count(DISTINCT s_su_suppkey) AS supplier_cnt
+FROM stock, item
+WHERE i_id = s_i_id
+AND i_data NOT LIKE 'zz%'
+AND (
+    s_su_suppkey NOT IN (SELECT su_suppkey FROM supplier WHERE su_comment like '%bad%')
+)
+GROUP BY i_name, substr(i_data, 1, 3), i_price
+ORDER BY supplier_cnt DESC
+----
+
+# Query 17
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    sum(ol_amount) / 2.0 AS avg_yearly
+FROM
+    orderline,
+    (
+        SELECT i_id, avg(ol_quantity) AS a
+        FROM item, orderline
+        WHERE i_data LIKE '%b' AND ol_i_id = i_id
+        GROUP BY i_id
+    ) t
+WHERE ol_i_id = t.i_id
+AND ol_quantity < t.a
+---
+
+# Query 18
+skipif postgresql # TODO(benesch): uses an arbitrary ORDER BY expression.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount)
+FROM customer, "order", orderline
+WHERE c_id = o_c_id
+AND c_w_id = o_w_id
+AND c_d_id = o_d_id
+AND ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_o_id = o_id
+GROUP BY o_id, o_w_id, o_d_id, c_id, c_last, o_entry_d, o_ol_cnt
+HAVING sum(ol_amount) > 200
+ORDER BY sum(ol_amount) DESC, o_entry_d
+----
+
+# Query 19
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT sum(ol_amount) AS revenue
+FROM orderline, item
+WHERE (
+    ol_i_id = i_id
+    AND i_data LIKE '%a'
+    AND ol_quantity >= 1
+    AND ol_quantity <= 10
+    AND i_price BETWEEN 1 AND 400000
+    AND ol_w_id in (1, 2, 3)
+) OR (
+    ol_i_id = i_id
+    AND i_data LIKE '%b'
+    AND ol_quantity >= 1
+    AND ol_quantity <= 10
+    AND i_price BETWEEN 1 AND 400000
+    AND ol_w_id IN (1, 2, 4)
+) OR (
+    ol_i_id = i_id
+    AND i_data LIKE '%c'
+    AND ol_quantity >= 1
+    AND ol_quantity <= 10
+    AND i_price BETWEEN 1 AND 400000
+    AND ol_w_id in (1, 5, 3)
+)
+----
+
+# Query 20
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT su_name, su_address
+FROM supplier, nation
+WHERE su_suppkey IN (
+    SELECT mod(s_i_id * s_w_id, 10000)
+    FROM stock, orderline
+    WHERE s_i_id IN (SELECT i_id FROM item WHERE i_data LIKE 'co%')
+    AND ol_i_id = s_i_id
+    AND ol_delivery_d > TIMESTAMP '2010-05-23 12:00:00'
+    GROUP BY s_i_id, s_w_id, s_quantity
+    HAVING 2 * s_quantity > sum(ol_quantity)
+)
+AND su_nationkey = n_nationkey
+AND n_name = 'GERMANY'
+ORDER BY su_name
+----
+
+# Query 21
+skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    su_name, count(*) as numwait
+FROM
+    supplier, orderline l1, "order", stock, nation
+WHERE ol_o_id = o_id
+AND ol_w_id = o_w_id
+AND ol_d_id = o_d_id
+AND ol_w_id = s_w_id
+AND ol_i_id = s_i_id
+AND s_su_suppkey = su_suppkey
+AND l1.ol_delivery_d > o_entry_d
+AND NOT EXISTS (
+    SELECT *
+    FROM orderline l2
+    WHERE l2.ol_o_id = l1.ol_o_id
+    AND l2.ol_w_id = l1.ol_w_id
+    AND l2.ol_d_id = l1.ol_d_id
+    AND l2.ol_delivery_d > l1.ol_delivery_d
+)
+AND su_nationkey = n_nationkey
+AND n_name = 'GERMANY'
+GROUP BY su_name
+ORDER BY numwait DESC, su_name
+----
+
+# Query 22
+skipif postgresql # TODO(benesch): uses unsupported substr function.
+query T multiline
+EXPLAIN PLAN FOR
+SELECT
+    substr(c_state, 1, 1) AS country,
+    count(*) AS numcust,
+    sum(c_balance) AS totacctbal
+FROM customer
+WHERE substr(c_phone, 1, 1) IN ('1', '2', '3', '4', '5', '6', '7')
+AND c_balance > (
+    SELECT avg(c_BALANCE)
+    FROM customer
+    WHERE c_balance > 0.00
+    AND substr(c_phone, 1, 1) IN ('1', '2', '3', '4', '5', '6', '7')
+)
+AND NOT EXISTS (
+    SELECT *
+    FROM order
+    WHERE o_c_id = c_id AND o_w_id = c_w_id AND o_d_id = c_d_id
+)
+GROUP BY substr(c_state, 1, 1)
+ORDER BY substr(c_state, 1, 1)
+----
