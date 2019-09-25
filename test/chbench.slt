@@ -824,7 +824,6 @@ Project {
 
 
 # Query 11
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT s_i_id, sum(s_order_cnt) AS ordercount
@@ -842,6 +841,218 @@ HAVING sum(s_order_cnt) > (
 )
 ORDER BY ordercount DESC
 ----
+Let {
+  tmp_7 = Reduce {
+    group_key: [0],
+    aggregates: [sum(#14), sum(#14)],
+    Join {
+      variables: [[(0, 21), (1, 0)]],
+      Filter {
+        predicates: [#17 = i32toi64 #18],
+        Join {
+          variables: [],
+          Get { stock },
+          Filter { predicates: [!isnull #3], Get { supplier } }
+        }
+      },
+      Filter {
+        predicates: [!isnull #0, #1 = "GERMANY"],
+        Get { nation }
+      }
+    }
+  }
+};
+Let { tmp_8 = Distinct { group_key: [0, 1, 2], Get { tmp_7 } } };
+Let {
+  tmp_15 = Reduce {
+    group_key: [0, 1, 2],
+    aggregates: [sum(#17)],
+    Project {
+      outputs: [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        31,
+        32,
+        33,
+        34
+      ],
+      Join {
+        variables: [
+          [(0, 0), (1, 0)],
+          [(0, 1), (1, 1)],
+          [(0, 2), (1, 2)],
+          [(0, 24), (2, 0)]
+        ],
+        Project {
+          outputs: [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          Filter {
+            predicates: [#20 = i32toi64 #24],
+            Project {
+              outputs: [
+                0,
+                1,
+                2,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12
+              ],
+              Join {
+                variables: [
+                  [(0, 0), (1, 0)],
+                  [(0, 1), (1, 1)],
+                  [(0, 2), (1, 2)]
+                ],
+                Get { tmp_8 },
+                Get { tmp_8 },
+                Filter { predicates: [!isnull #3], Get { supplier } },
+                Get { stock }
+              }
+            }
+          }
+        },
+        Get { tmp_8 },
+        Filter {
+          predicates: [!isnull #0, #1 = "GERMANY"],
+          Get { nation }
+        }
+      }
+    }
+  }
+};
+Let {
+  tmp_16 = Project {
+    outputs: [0, 1, 2, 4],
+    Map {
+      scalars: [(i32todec #3 * 1000dec) * 5dec],
+      Union {
+        Get { tmp_15 },
+        Join {
+          variables: [],
+          Union {
+            Negate {
+              Distinct {
+                group_key: [0, 1, 2],
+                Project { outputs: [0, 1, 2], Get { tmp_15 } }
+              }
+            },
+            Get { tmp_8 }
+          },
+          Constant [[null]]
+        }
+      }
+    }
+  }
+};
+Project {
+  outputs: [0, 2],
+  Filter {
+    predicates: [(i32todec #2 * 1000000dec) > #6],
+    Join {
+      variables: [
+        [(0, 0), (1, 0)],
+        [(0, 1), (1, 1)],
+        [(0, 2), (1, 2)]
+      ],
+      Get { tmp_7 },
+      Union {
+        Get { tmp_16 },
+        Join {
+          variables: [],
+          Union {
+            Negate {
+              Distinct {
+                group_key: [0, 1, 2],
+                Project { outputs: [0, 1, 2], Get { tmp_16 } }
+              }
+            },
+            Get { tmp_8 }
+          },
+          Constant [[null]]
+        }
+      }
+    }
+  }
+}
 
 # Query 12
 query T multiline
@@ -892,7 +1103,6 @@ ORDER BY o_ol_cnt
 }
 
 # Query 13
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT
@@ -908,9 +1118,137 @@ FROM (
 GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
+Let {
+  tmp_3 = Project {
+    outputs: [
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    Join {
+      variables: [
+        [(1, 0), (0, 3)],
+        [(1, 1), (0, 1)],
+        [(1, 2), (0, 2)]
+      ],
+      Filter {
+        predicates: [
+          !isnull #1,
+          !isnull #2,
+          !isnull #3,
+          i32toi64 #5 > 8
+        ],
+        Get { "order" }
+      },
+      Filter {
+        predicates: [!isnull #0, !isnull #1, !isnull #2],
+        Get { customer }
+      }
+    }
+  }
+};
+Reduce {
+  group_key: [1],
+  aggregates: [countall(null)],
+  Reduce {
+    group_key: [0],
+    aggregates: [count(#22)],
+    Union {
+      Get { tmp_3 },
+      Join {
+        variables: [],
+        Union {
+          Negate {
+            Distinct {
+              group_key: [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21
+              ],
+              Project {
+                outputs: [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6,
+                  7,
+                  8,
+                  9,
+                  10,
+                  11,
+                  12,
+                  13,
+                  14,
+                  15,
+                  16,
+                  17,
+                  18,
+                  19,
+                  20,
+                  21
+                ],
+                Get { tmp_3 }
+              }
+            }
+          },
+          Get { customer }
+        },
+        Constant [[null, null, null, null, null, null, null, null]]
+      }
+    }
+  }
+}
 
 # Query 14
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT
@@ -920,9 +1258,55 @@ WHERE ol_i_id = i_id
 AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'
 AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 ----
+Let {
+  tmp_4 = Reduce {
+    group_key: [],
+    aggregates: [
+      sum(
+        if #14 ~ compilelike "PR%" then #8 else i64todec 0 * 100dec
+      ),
+      sum(#8)
+    ],
+    Join {
+      variables: [[(0, 4), (1, 0)]],
+      Filter {
+        predicates: [
+          !isnull #4,
+          datetotimestamp #6 < 2020-01-02 00:00:00,
+          datetotimestamp #6 >= 2007-01-02 00:00:00
+        ],
+        Get { orderline }
+      },
+      Filter { predicates: [!isnull #0], Get { item } }
+    }
+  }
+};
+Project {
+  outputs: [2],
+  Map {
+    scalars: [
+      (((10000dec * #0) * 10000000dec) / (100dec + #1)) * 10dec
+    ],
+    Union {
+      Get { tmp_4 },
+      Join {
+        variables: [],
+        Union {
+          Negate {
+            Distinct {
+              group_key: [],
+              Project { outputs: [], Get { tmp_4 } }
+            }
+          },
+          Constant [[]]
+        },
+        Constant [[null, null]]
+      }
+    }
+  }
+}
 
 # Query 15
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT su_suppkey, su_name, su_address, su_phone, total_revenue
@@ -954,9 +1338,138 @@ AND total_revenue = (
 )
 ORDER BY su_suppkey
 ----
+Let {
+  tmp_7 = Join {
+    variables: [],
+    Get { supplier },
+    Reduce {
+      group_key: [27],
+      aggregates: [sum(#8)],
+      Join {
+        variables: [[(0, 4), (1, 0)], [(0, 5), (1, 1)]],
+        Filter {
+          predicates: [
+            !isnull #4,
+            !isnull #5,
+            datetotimestamp #6 >= 2007-01-02 00:00:00
+          ],
+          Get { orderline }
+        },
+        Filter { predicates: [!isnull #0, !isnull #1], Get { stock } }
+      }
+    }
+  }
+};
+Let {
+  tmp_8 = Distinct {
+    group_key: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+    Get { tmp_7 }
+  }
+};
+Project {
+  outputs: [0, 1, 2, 4, 8],
+  Join {
+    variables: [
+      [(0, 0), (1, 0)],
+      [(0, 1), (1, 1)],
+      [(0, 2), (1, 2)],
+      [(0, 3), (1, 3)],
+      [(0, 4), (1, 4)],
+      [(0, 5), (1, 5)],
+      [(0, 6), (1, 6)],
+      [(0, 7), (1, 7)],
+      [(0, 8), (1, 8)]
+    ],
+    Filter {
+      predicates: [!isnull #8, i32toi64 #0 = #7],
+      Get { tmp_7 }
+    },
+    Filter {
+      predicates: [!isnull #9, #8 = #9],
+      Reduce {
+        group_key: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+        aggregates: [max(#10)],
+        Reduce {
+          group_key: [0, 1, 2, 3, 4, 5, 6, 7, 8, 36],
+          aggregates: [sum(#17)],
+          Project {
+            outputs: [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              42,
+              43,
+              44,
+              45,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35
+            ],
+            Join {
+              variables: [
+                [(0, 0), (1, 0)],
+                [(0, 1), (1, 1)],
+                [(0, 2), (1, 2)],
+                [(0, 3), (1, 3)],
+                [(0, 4), (1, 4)],
+                [(0, 5), (1, 5)],
+                [(0, 6), (1, 6)],
+                [(0, 7), (1, 7)],
+                [(0, 8), (1, 8)],
+                [(3, 4), (2, 0)],
+                [(3, 5), (2, 1)]
+              ],
+              Get { tmp_8 },
+              Get { tmp_8 },
+              Filter {
+                predicates: [!isnull #0, !isnull #1],
+                Get { stock }
+              },
+              Filter {
+                predicates: [
+                  !isnull #4,
+                  !isnull #5,
+                  datetotimestamp #6 >= 2007-01-02 00:00:00
+                ],
+                Get { orderline }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 
 # Query 16
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
+skipif postgresql # TODO(benesch): uses unsupported substr function.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT
@@ -975,7 +1488,6 @@ ORDER BY supplier_cnt DESC
 ----
 
 # Query 17
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT
@@ -990,7 +1502,87 @@ FROM
     ) t
 WHERE ol_i_id = t.i_id
 AND ol_quantity < t.a
----
+----
+Let {
+  tmp_7 = Reduce {
+    group_key: [],
+    aggregates: [sum(#8)],
+    Filter {
+      predicates: [(i32todec #7 * 1000000dec) < #11],
+      Join {
+        variables: [[(0, 4), (1, 0)]],
+        Filter { predicates: [!isnull #4], Get { orderline } },
+        Project {
+          outputs: [0, 3],
+          Filter {
+            predicates: [!isnull #0],
+            Map {
+              scalars: [
+                ((i32todec #1 * 10000000dec) / i64todec #2) / 10dec
+              ],
+              Reduce {
+                group_key: [0],
+                aggregates: [sum(#12), count(#12)],
+                Project {
+                  outputs: [
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9
+                  ],
+                  Join {
+                    variables: [[(1, 0), (0, 4)]],
+                    Filter {
+                      predicates: [!isnull #4],
+                      Get { orderline }
+                    },
+                    Filter {
+                      predicates: [!isnull #0, #4 ~ /^.*b$/],
+                      Get { item }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+Project {
+  outputs: [1],
+  Map {
+    scalars: [(#0 * 10000000dec) / 20dec],
+    Union {
+      Get { tmp_7 },
+      Join {
+        variables: [],
+        Union {
+          Negate {
+            Distinct {
+              group_key: [],
+              Project { outputs: [], Get { tmp_7 } }
+            }
+          },
+          Constant [[]]
+        },
+        Constant [[null]]
+      }
+    }
+  }
+}
 
 # Query 18
 skipif postgresql # TODO(benesch): uses an arbitrary ORDER BY expression.
@@ -1010,7 +1602,6 @@ ORDER BY sum(ol_amount) DESC, o_entry_d
 ----
 
 # Query 19
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT sum(ol_amount) AS revenue
@@ -1038,9 +1629,69 @@ WHERE (
     AND ol_w_id in (1, 5, 3)
 )
 ----
+Let {
+  tmp_4 = Reduce {
+    group_key: [],
+    aggregates: [sum(#8)],
+    Filter {
+      predicates: [
+        (
+          (
+            (#14 ~ /^.*a$/)
+            &&
+            (((false || (#2 = 1)) || (#2 = 2)) || (#2 = 3))
+          )
+          ||
+          (
+            (#14 ~ /^.*b$/)
+            &&
+            (((false || (#2 = 1)) || (#2 = 2)) || (#2 = 4))
+          )
+        )
+        ||
+        (
+          (#14 ~ /^.*c$/)
+          &&
+          (((false || (#2 = 1)) || (#2 = 5)) || (#2 = 3))
+        )
+      ],
+      Join {
+        variables: [[(0, 4), (1, 0)]],
+        Filter {
+          predicates: [
+            !isnull #4,
+            i32toi64 #7 <= 10,
+            i32toi64 #7 >= 1
+          ],
+          Get { orderline }
+        },
+        Filter {
+          predicates: [!isnull #0, #3 <= 40000000dec, #3 >= 100dec],
+          Get { item }
+        }
+      }
+    }
+  }
+};
+Union {
+  Get { tmp_4 },
+  Join {
+    variables: [],
+    Union {
+      Negate {
+        Distinct {
+          group_key: [],
+          Project { outputs: [], Get { tmp_4 } }
+        }
+      },
+      Constant [[]]
+    },
+    Constant [[null]]
+  }
+}
+
 
 # Query 20
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT su_name, su_address
@@ -1058,9 +1709,376 @@ AND su_nationkey = n_nationkey
 AND n_name = 'GERMANY'
 ORDER BY su_name
 ----
+Let {
+  tmp_4 = Join { variables: [], Get { supplier }, Get { nation } }
+};
+Let {
+  tmp_5 = Distinct {
+    group_key: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    Get { tmp_4 }
+  }
+};
+Let {
+  tmp_9 = Project {
+    outputs: [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    Join {
+      variables: [
+        [(0, 0), (1, 0)],
+        [(0, 1), (1, 1)],
+        [(0, 2), (1, 2)],
+        [(0, 3), (1, 3)],
+        [(0, 4), (1, 4)],
+        [(0, 5), (1, 5)],
+        [(0, 6), (1, 6)],
+        [(0, 7), (1, 7)],
+        [(0, 8), (1, 8)],
+        [(0, 9), (1, 9)],
+        [(0, 10), (1, 10)]
+      ],
+      Get { tmp_5 },
+      Get { tmp_5 },
+      Get { orderline },
+      Get { stock }
+    }
+  }
+};
+Project {
+  outputs: [1, 2],
+  Join {
+    variables: [
+      [(0, 0), (1, 0)],
+      [(0, 1), (1, 1)],
+      [(0, 2), (1, 2)],
+      [(0, 3), (1, 3)],
+      [(0, 4), (1, 4)],
+      [(0, 5), (1, 5)],
+      [(0, 6), (1, 6)],
+      [(0, 7), (1, 7)],
+      [(0, 8), (1, 8)],
+      [(0, 9), (1, 9)],
+      [(0, 10), (1, 10)]
+    ],
+    Filter { predicates: [#3 = #7, #8 = "GERMANY"], Get { tmp_4 } },
+    Filter {
+      predicates: [#11],
+      Reduce {
+        group_key: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        aggregates: [any(distinct #12)],
+        Map {
+          scalars: [i32toi64 #0 = #11],
+          Project {
+            outputs: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15],
+            Map {
+              scalars: [(#11 * #12) % 10000],
+              Filter {
+                predicates: [(2 * i32toi64 #13) > i32toi64 #14],
+                Reduce {
+                  group_key: [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13
+                  ],
+                  aggregates: [sum(#36)],
+                  Project {
+                    outputs: [
+                      0,
+                      1,
+                      2,
+                      3,
+                      4,
+                      5,
+                      6,
+                      7,
+                      8,
+                      9,
+                      10,
+                      11,
+                      12,
+                      13,
+                      14,
+                      15,
+                      16,
+                      17,
+                      18,
+                      19,
+                      20,
+                      21,
+                      22,
+                      23,
+                      24,
+                      25,
+                      26,
+                      27,
+                      28,
+                      29,
+                      30,
+                      31,
+                      32,
+                      33,
+                      34,
+                      35,
+                      36,
+                      37,
+                      38
+                    ],
+                    Join {
+                      variables: [
+                        [(0, 0), (1, 0)],
+                        [(0, 1), (1, 1)],
+                        [(0, 2), (1, 2)],
+                        [(0, 3), (1, 3)],
+                        [(0, 4), (1, 4)],
+                        [(0, 5), (1, 5)],
+                        [(0, 6), (1, 6)],
+                        [(0, 7), (1, 7)],
+                        [(0, 8), (1, 8)],
+                        [(0, 9), (1, 9)],
+                        [(0, 10), (1, 10)],
+                        [(0, 11), (1, 11)],
+                        [(0, 12), (1, 12)],
+                        [(0, 13), (1, 13)],
+                        [(0, 14), (1, 14)],
+                        [(0, 15), (1, 15)],
+                        [(0, 16), (1, 16)],
+                        [(0, 17), (1, 17)],
+                        [(0, 18), (1, 18)],
+                        [(0, 19), (1, 19)],
+                        [(0, 20), (1, 20)],
+                        [(0, 21), (1, 21)],
+                        [(0, 22), (1, 22)],
+                        [(0, 23), (1, 23)],
+                        [(0, 24), (1, 24)],
+                        [(0, 25), (1, 25)],
+                        [(0, 26), (1, 26)],
+                        [(0, 27), (1, 27)],
+                        [(0, 28), (1, 28)],
+                        [(0, 29), (1, 29)],
+                        [(0, 30), (1, 30)],
+                        [(0, 31), (1, 31)],
+                        [(0, 32), (1, 32)],
+                        [(0, 33), (1, 33)],
+                        [(0, 34), (1, 34)],
+                        [(0, 35), (1, 35)],
+                        [(0, 36), (1, 36)],
+                        [(0, 37), (1, 37)],
+                        [(0, 38), (1, 38)]
+                      ],
+                      Filter {
+                        predicates: [
+                          #33 = #11,
+                          datetotimestamp #35 > 2010-05-23 12:00:00
+                        ],
+                        Get { tmp_9 }
+                      },
+                      Filter {
+                        predicates: [#39],
+                        Reduce {
+                          group_key: [
+                            0,
+                            1,
+                            2,
+                            3,
+                            4,
+                            5,
+                            6,
+                            7,
+                            8,
+                            9,
+                            10,
+                            11,
+                            12,
+                            13,
+                            14,
+                            15,
+                            16,
+                            17,
+                            18,
+                            19,
+                            20,
+                            21,
+                            22,
+                            23,
+                            24,
+                            25,
+                            26,
+                            27,
+                            28,
+                            29,
+                            30,
+                            31,
+                            32,
+                            33,
+                            34,
+                            35,
+                            36,
+                            37,
+                            38
+                          ],
+                          aggregates: [any(distinct #40)],
+                          Map {
+                            scalars: [#11 = #39],
+                            Project {
+                              outputs: [
+                                0,
+                                1,
+                                2,
+                                3,
+                                4,
+                                5,
+                                6,
+                                7,
+                                8,
+                                9,
+                                10,
+                                11,
+                                12,
+                                13,
+                                14,
+                                15,
+                                16,
+                                17,
+                                18,
+                                19,
+                                20,
+                                21,
+                                22,
+                                23,
+                                24,
+                                25,
+                                26,
+                                27,
+                                28,
+                                29,
+                                30,
+                                31,
+                                32,
+                                33,
+                                34,
+                                35,
+                                36,
+                                37,
+                                38,
+                                39
+                              ],
+                              Join {
+                                variables: [],
+                                Distinct {
+                                  group_key: [
+                                    0,
+                                    1,
+                                    2,
+                                    3,
+                                    4,
+                                    5,
+                                    6,
+                                    7,
+                                    8,
+                                    9,
+                                    10,
+                                    11,
+                                    12,
+                                    13,
+                                    14,
+                                    15,
+                                    16,
+                                    17,
+                                    18,
+                                    19,
+                                    20,
+                                    21,
+                                    22,
+                                    23,
+                                    24,
+                                    25,
+                                    26,
+                                    27,
+                                    28,
+                                    29,
+                                    30,
+                                    31,
+                                    32,
+                                    33,
+                                    34,
+                                    35,
+                                    36,
+                                    37,
+                                    38
+                                  ],
+                                  Get { tmp_9 }
+                                },
+                                Filter {
+                                  predicates: [#4 ~ /^co.*$/],
+                                  Get { item }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 
 # Query 21
-skipif postgresql # TODO(benesch): uses nondeterministic let bindings.
 query T multiline
 EXPLAIN PLAN FOR
 SELECT
@@ -1087,6 +2105,482 @@ AND n_name = 'GERMANY'
 GROUP BY su_name
 ORDER BY numwait DESC, su_name
 ----
+Let {
+  tmp_13 = Project {
+    outputs: [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      7,
+      8,
+      9,
+      10
+    ],
+    Join {
+      variables: [],
+      Get { supplier },
+      Get { nation },
+      Get { stock },
+      Get { "order" },
+      Get { orderline }
+    }
+  }
+};
+Let {
+  tmp_14 = Distinct {
+    group_key: [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46
+    ],
+    Get { tmp_13 }
+  }
+};
+Let {
+  tmp_15 = Join {
+    variables: [],
+    Distinct {
+      group_key: [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46
+      ],
+      Project {
+        outputs: [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46
+        ],
+        Filter {
+          predicates: [#53 > #13],
+          Join {
+            variables: [
+              [(0, 8), (1, 1)],
+              [(0, 9), (1, 2)],
+              [(0, 7), (1, 0)]
+            ],
+            Filter {
+              predicates: [!isnull #7, !isnull #8, !isnull #9],
+              Get { tmp_14 }
+            },
+            Filter {
+              predicates: [!isnull #0, !isnull #1, !isnull #2],
+              Get { orderline }
+            }
+          }
+        }
+      }
+    },
+    Constant [[true]]
+  }
+};
+Reduce {
+  group_key: [1],
+  aggregates: [countall(null)],
+  Project {
+    outputs: [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46
+    ],
+    Join {
+      variables: [
+        [(0, 0), (1, 0)],
+        [(0, 1), (1, 1)],
+        [(0, 2), (1, 2)],
+        [(0, 3), (1, 3)],
+        [(0, 4), (1, 4)],
+        [(0, 5), (1, 5)],
+        [(0, 6), (1, 6)],
+        [(0, 7), (1, 7)],
+        [(0, 8), (1, 8)],
+        [(0, 9), (1, 9)],
+        [(0, 10), (1, 10)],
+        [(0, 11), (1, 11)],
+        [(0, 12), (1, 12)],
+        [(0, 13), (1, 13)],
+        [(0, 14), (1, 14)],
+        [(0, 15), (1, 15)],
+        [(0, 16), (1, 16)],
+        [(0, 17), (1, 17)],
+        [(0, 18), (1, 18)],
+        [(0, 19), (1, 19)],
+        [(0, 20), (1, 20)],
+        [(0, 21), (1, 21)],
+        [(0, 22), (1, 22)],
+        [(0, 23), (1, 23)],
+        [(0, 24), (1, 24)],
+        [(0, 25), (1, 25)],
+        [(0, 26), (1, 26)],
+        [(0, 27), (1, 27)],
+        [(0, 28), (1, 28)],
+        [(0, 29), (1, 29)],
+        [(0, 30), (1, 30)],
+        [(0, 31), (1, 31)],
+        [(0, 32), (1, 32)],
+        [(0, 33), (1, 33)],
+        [(0, 34), (1, 34)],
+        [(0, 35), (1, 35)],
+        [(0, 36), (1, 36)],
+        [(0, 37), (1, 37)],
+        [(0, 38), (1, 38)],
+        [(0, 39), (1, 39)],
+        [(0, 40), (1, 40)],
+        [(0, 41), (1, 41)],
+        [(0, 42), (1, 42)],
+        [(0, 43), (1, 43)],
+        [(0, 44), (1, 44)],
+        [(0, 45), (1, 45)],
+        [(0, 46), (1, 46)]
+      ],
+      Filter {
+        predicates: [
+          #3 = #43,
+          #7 = #17,
+          #8 = #18,
+          #9 = #19,
+          #9 = #26,
+          #11 = #25,
+          #42 = i32toi64 #0,
+          #44 = "GERMANY",
+          #13 > #21
+        ],
+        Get { tmp_13 }
+      },
+      Union {
+        Filter { predicates: [!#47], Get { tmp_15 } },
+        Join {
+          variables: [],
+          Union {
+            Negate {
+              Distinct {
+                group_key: [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6,
+                  7,
+                  8,
+                  9,
+                  10,
+                  11,
+                  12,
+                  13,
+                  14,
+                  15,
+                  16,
+                  17,
+                  18,
+                  19,
+                  20,
+                  21,
+                  22,
+                  23,
+                  24,
+                  25,
+                  26,
+                  27,
+                  28,
+                  29,
+                  30,
+                  31,
+                  32,
+                  33,
+                  34,
+                  35,
+                  36,
+                  37,
+                  38,
+                  39,
+                  40,
+                  41,
+                  42,
+                  43,
+                  44,
+                  45,
+                  46
+                ],
+                Project {
+                  outputs: [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12,
+                    13,
+                    14,
+                    15,
+                    16,
+                    17,
+                    18,
+                    19,
+                    20,
+                    21,
+                    22,
+                    23,
+                    24,
+                    25,
+                    26,
+                    27,
+                    28,
+                    29,
+                    30,
+                    31,
+                    32,
+                    33,
+                    34,
+                    35,
+                    36,
+                    37,
+                    38,
+                    39,
+                    40,
+                    41,
+                    42,
+                    43,
+                    44,
+                    45,
+                    46
+                  ],
+                  Get { tmp_15 }
+                }
+              }
+            },
+            Get { tmp_14 }
+          },
+          Constant [[false]]
+        }
+      }
+    }
+  }
+}
 
 # Query 22
 skipif postgresql # TODO(benesch): uses unsupported substr function.
