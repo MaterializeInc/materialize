@@ -10,7 +10,7 @@ use dataflow_types::logging::LoggingConfig;
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::Stream;
 
-use super::{coordinator, Command, Response};
+use super::{coordinator, Command, CommandKind, Response};
 
 enum Message {
     Command(Command),
@@ -41,12 +41,18 @@ pub fn serve<C>(
             match msg.unwrap() {
                 Message::Command(mut cmd) => {
                     let conn_id = cmd.conn_id;
-                    let sql_result =
-                        planner
-                            .handle_command(&mut cmd.session, cmd.sql)
-                            .map(|plan| {
-                                coord.sequence_plan(plan, conn_id, None /* ts_override */)
-                            });
+                    let sql_result = match cmd.kind {
+                        CommandKind::Query { sql } => planner.handle_command(&mut cmd.session, sql),
+                        CommandKind::Parse { sql, name } => {
+                            planner.handle_parse_command(&mut cmd.session, sql, name)
+                        }
+                        CommandKind::Execute { portal_name } => {
+                            planner.handle_execute_command(&cmd.session, &portal_name)
+                        }
+                    }
+                    .map(|plan| {
+                        coord.sequence_plan(plan, conn_id, None /* ts_override */)
+                    });
 
                     // The client connection may disappear at any time, so the error
                     // handling here is deliberately relaxed.

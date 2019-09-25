@@ -38,6 +38,9 @@ pub enum Plan {
     DropViews(Vec<String>),
     EmptyQuery,
     DidSetVariable,
+    Parsed {
+        name: String,
+    },
     Peek {
         source: ::expr::RelationExpr,
         when: PeekWhen,

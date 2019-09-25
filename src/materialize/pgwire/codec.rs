@@ -10,14 +10,31 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::convert::TryFrom;
+
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
-use std::borrow::Cow;
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FieldValue, FrontendMessage};
+use crate::pgwire::message::{BackendMessage, FieldFormat, FrontendMessage};
 use ore::netio;
+
+#[derive(Debug)]
+enum CodecError {
+    StringNoTerminator,
+}
+
+impl std::error::Error for CodecError {}
+impl std::fmt::Display for CodecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            CodecError::StringNoTerminator => "The string does not have a terminator",
+        })
+    }
+}
 
 /// A Tokio codec to encode and decode pgwire frames.
 ///
@@ -68,11 +85,14 @@ impl Encoder for Codec {
         buf.put(match msg {
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
-            BackendMessage::DataRow(_) => b'D',
+            BackendMessage::DataRow(_, _) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
             BackendMessage::ParameterStatus(_, _) => b'S',
+            BackendMessage::ParameterDescription => b't',
+            BackendMessage::ParseComplete => b'1',
+            BackendMessage::BindComplete => b'2',
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse => b'H',
             BackendMessage::CopyData(_) => b'd',
@@ -111,43 +131,33 @@ impl Encoder for Codec {
                     buf.put_u32_be(f.type_oid);
                     buf.put_i16_be(f.type_len);
                     buf.put_i32_be(f.type_mod);
+                    // TODO: make the format correct
                     buf.put_u16_be(f.format as u16);
                 }
             }
-            BackendMessage::DataRow(fields) => {
+            BackendMessage::DataRow(fields, formats) => {
                 buf.put_u16_be(fields.len() as u16);
-                for f in fields {
+                for (f, ff) in fields.iter().zip(formats) {
                     if let Some(f) = f {
-                        let s: Cow<[u8]> = match f {
-                            FieldValue::Bool(false) => b"f"[..].into(),
-                            FieldValue::Bool(true) => b"t"[..].into(),
-                            FieldValue::Bytea(b) => b.into(),
-                            FieldValue::Date(d) => d.to_string().into_bytes().into(),
-                            FieldValue::Timestamp(ts) => ts.to_string().into_bytes().into(),
-                            FieldValue::Interval(i) => match i {
-                                repr::Interval::Months(count) => format!("{} months", count).into_bytes().into(),
-                                repr::Interval::Duration { is_positive, duration } => format!(
-                                    "{}{:?}",
-                                    if is_positive { "" } else {"-"},
-                                    duration) .into_bytes().into(),
-                            },
-                            FieldValue::Int4(i) => format!("{}", i).into_bytes().into(),
-                            FieldValue::Int8(i) => format!("{}", i).into_bytes().into(),
-                            FieldValue::Float4(f) => format!("{}", f).into_bytes().into(),
-                            FieldValue::Float8(f) => format!("{}", f).into_bytes().into(),
-                            FieldValue::Numeric(n) => format!("{}", n).into_bytes().into(),
-                            FieldValue::Text(ref s) => s.as_bytes().into(),
+                        let s: Cow<[u8]> = match ff {
+                            FieldFormat::Text => f.to_text(),
+                            FieldFormat::Binary => f.to_binary().map_err(|e| {
+                                log::error!("binary err: {}", e);
+                                unsupported_err(e)
+                            })?,
                         };
                         buf.put_u32_be(s.len() as u32);
                         buf.put(&*s);
                     } else {
-                        buf.put_i32_be(-1)
+                        buf.put_i32_be(-1);
                     }
                 }
             }
             BackendMessage::CommandComplete { tag } => {
                 buf.put_string(tag);
             }
+            BackendMessage::ParseComplete => {}
+            BackendMessage::BindComplete => {}
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
                 buf.put(b'I'); // transaction indicator
@@ -156,12 +166,19 @@ impl Encoder for Codec {
                 buf.put_string(name);
                 buf.put_string(value);
             }
+            BackendMessage::ParameterDescription => {
+                // 7 bytes: b't', u32, 0 parameters
+                buf.put_u32_be(7);
+                buf.put_u16_be(0);
+            }
             BackendMessage::ErrorResponse {
                 severity,
                 code,
                 message,
                 detail,
             } => {
+                log::warn!("error for client: {:?}->{}", severity, message);
+
                 buf.put(b'S');
                 buf.put_string(severity.string());
                 buf.put(b'C');
@@ -242,20 +259,34 @@ impl Decoder for Codec {
                     if src.len() < frame_len {
                         return Ok(None);
                     }
-                    let buf = src.take().freeze();
+                    let buf = src.split_to(frame_len).freeze();
+                    let buf = Cursor::new(&buf);
                     let msg = match msg_type {
+                        // initialization
                         b's' => {
-                            let version = NetworkEndian::read_u32(&buf[..4]);
+                            let version = buf.read_u32()?;
                             FrontendMessage::Startup { version }
                         }
+                        // Simple query
                         b'Q' => FrontendMessage::Query {
-                            query: buf.slice_to(frame_len - 1),
+                            sql: buf.read_cstr()?.to_string(),
                         },
+                        // Extended query flow
+                        b'P' => parse_parse_msg(buf)?,
+                        b'D' => parse_describe(buf)?,
+                        b'B' => parse_bind(buf)?,
+                        b'E' => parse_execute(buf)?,
+                        b'S' => FrontendMessage::Sync,
+
+                        // end
                         b'X' => FrontendMessage::Terminate,
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
-                                format!("unknown message type {}", msg_type),
+                                format!(
+                                    "unknown message type {:?}",
+                                    bytes::Bytes::from(&[msg_type][..])
+                                ),
                             ));
                         }
                     };
@@ -277,4 +308,154 @@ impl<B: BufMut> Pgbuf for B {
         self.put(s);
         self.put(b'\0');
     }
+}
+
+fn parse_parse_msg(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let name = buf.read_cstr()?;
+    let sql = buf.read_cstr()?;
+
+    // A parameter data type can be left unspecified by setting it to zero, or by making
+    // the array of parameter type OIDs shorter than the number of parameter symbols ($n)
+    // used in the query string. Another special case is that a parameter's type can be
+    // specified as void (that is, the OID of the void pseudo-type). This is meant to
+    // allow parameter symbols to be used for function parameters that are actually OUT
+    // parameters. Ordinarily there is no context in which a void parameter could be
+    // used, but if such a parameter symbol appears in a function's parameter list, it is
+    // effectively ignored. For example, a function call such as foo($1,$2,$3,$4) could
+    // match a function with two IN and two OUT arguments, if $3 and $4 are specified as
+    // having type void.
+    //
+    // Oh god
+    let parameter_data_type_count = buf.read_u16()?;
+    let mut param_dts = vec![];
+    for _ in 0..parameter_data_type_count {
+        param_dts.push(buf.read_u32()?);
+    }
+
+    let msg = FrontendMessage::Parse {
+        name: name.into(),
+        sql: sql.into(),
+        parameter_data_type_count,
+        parameter_data_types: param_dts,
+    };
+
+    Ok(msg)
+}
+
+fn parse_describe(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let first_char = buf.read_byte()?;
+    let name = buf.read_cstr()?.to_string();
+    match first_char {
+        b'S' => Ok(FrontendMessage::DescribeStatement { name }),
+        b'P' => Err(unsupported_err("Cannot handle Describe Portal")),
+        other => Err(input_err(format!("Invalid describe type: {:#x?}", other))),
+    }
+}
+
+/// Parse a `Byte1('B')`
+fn parse_bind(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let portal_name = buf.read_cstr()?.to_string();
+    let statement_name = buf.read_cstr()?.to_string();
+
+    let parameter_format_code_count = buf.read_u16()?;
+    if parameter_format_code_count > 0 {
+        // Verify that we can skip parsing parameter format codes (C=Int16, Int16[C]),
+        return Err(unsupported_err("parameter format codes is not supported"));
+    }
+    if buf.read_u16()? > 0 {
+        return Err(unsupported_err("binding parameters is not supported"));
+    }
+
+    let return_format_code_count = buf.read_u16()?;
+    let mut fmt_codes = Vec::with_capacity(usize::from(return_format_code_count));
+    for _ in 0..return_format_code_count {
+        fmt_codes.push(FieldFormat::try_from(buf.read_u16()?).map_err(input_err)?);
+    }
+
+    Ok(FrontendMessage::Bind {
+        portal_name,
+        statement_name,
+        return_field_formats: fmt_codes,
+    })
+}
+
+fn parse_execute(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let portal_name = buf.read_cstr()?.to_string();
+    let max_rows = buf.read_u32()?;
+    if max_rows > 0 {
+        log::warn!(
+            "Ignoring maximum_rows={} for portal={:?}",
+            max_rows,
+            portal_name
+        );
+    }
+    Ok(FrontendMessage::Execute { portal_name })
+}
+
+/// Read postgres-formatted items from the network
+#[derive(Debug)]
+struct Cursor<'a> {
+    buf: &'a [u8],
+    offset: RefCell<usize>,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(buf: &'a [u8]) -> Cursor {
+        Cursor {
+            buf,
+            offset: RefCell::new(0),
+        }
+    }
+
+    fn read_byte(&self) -> Result<u8, io::Error> {
+        let byte = self
+            .cur_buf()
+            .get(0)
+            .ok_or_else(|| input_err("No byte to read"))?;
+        *self.offset.borrow_mut() += 1;
+        Ok(*byte)
+    }
+
+    /// Read the first full null-terminated string in `self`
+    fn read_cstr(&self) -> Result<&str, io::Error> {
+        if let Some(pos) = self.cur_buf().iter().position(|b| *b == 0) {
+            let val = std::str::from_utf8(&self.cur_buf()[..pos]).map_err(input_err)?;
+            *self.offset.borrow_mut() += pos + 1;
+            Ok(val)
+        } else {
+            Err(input_err(CodecError::StringNoTerminator))
+        }
+    }
+
+    fn read_u16(&self) -> Result<u16, io::Error> {
+        if self.cur_buf().len() < 2 {
+            return Err(input_err("not enough buffer for an Int16"));
+        }
+        let val = NetworkEndian::read_u16(self.cur_buf());
+        *self.offset.borrow_mut() += 2;
+        Ok(val)
+    }
+
+    fn read_u32(&self) -> Result<u32, io::Error> {
+        if self.cur_buf().len() < 4 {
+            return Err(input_err("not enough buffer for an Int32"));
+        }
+        let val = NetworkEndian::read_u32(self.cur_buf());
+        *self.offset.borrow_mut() += 4;
+        Ok(val)
+    }
+
+    /// Get the current buffer
+    fn cur_buf(&self) -> &[u8] {
+        &self.buf[*self.offset.borrow()..]
+    }
+}
+
+fn unsupported_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, source.into())
+}
+
+/// An actual error in the input
+fn input_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, source.into())
 }

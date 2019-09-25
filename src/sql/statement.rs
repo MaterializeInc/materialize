@@ -4,32 +4,36 @@
 // distributed without the express permission of Materialize, Inc.
 
 //! SQL `Statement`s are the imperative, side-effecting part of SQL.
+//!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use super::expr::like::build_like_regex_from_string;
-use super::scope::Scope;
-use super::session::Session;
-use super::store::{DataflowStore, RemoveMode};
-use super::{extract_sql_object_name, Plan, Planner};
-use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{
-    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
-    Sink, SinkConnector, Source, SourceConnector, View,
-};
+use std::iter::FromIterator;
+use std::net::{SocketAddr, ToSocketAddrs};
+
 use failure::{bail, ResultExt};
-use interchange::avro;
-use ore::collections::CollectionExt;
-use ore::option::OptionExt;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sqlparser::ast::{
     Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
     Stage, Statement, Value,
 };
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
-use std::iter::FromIterator;
-use std::net::{SocketAddr, ToSocketAddrs};
 use url::Url;
+
+use crate::expr::like::build_like_regex_from_string;
+use crate::scope::Scope;
+use crate::session::{PreparedStatement, Session};
+use crate::store::{DataflowStore, RemoveMode};
+use crate::{extract_sql_object_name, Plan, Planner};
+use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{
+    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
+    Sink, SinkConnector, Source, SourceConnector, View,
+};
+use expr::RelationExpr;
+use interchange::avro;
+use ore::collections::CollectionExt;
+use ore::option::OptionExt;
+use repr::{ColumnType, Datum, RelationType, ScalarType};
 
 impl Planner {
     pub fn new(logging_config: Option<&LoggingConfig>) -> Planner {
@@ -53,6 +57,45 @@ impl Planner {
         }
     }
 
+    /// Convert some raw_sql into a parsed statement, and associate it with the current Session
+    pub fn handle_parse_command(
+        &mut self,
+        session: &mut Session,
+        sql: String,
+        name: String,
+    ) -> Result<Plan, failure::Error> {
+        let stmt = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
+        if stmt.len() != 1 {
+            bail!("cannot parse zero or multiple queries: {}", sql);
+        }
+        self.handle_parse_statement(session, stmt.into_element(), name, sql)
+    }
+
+    pub fn handle_execute_command(
+        &mut self,
+        session: &Session,
+        portal_name: &str,
+    ) -> Result<Plan, failure::Error> {
+        let portal = session
+            .get_portal(portal_name)
+            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
+        let prepared = session
+            .get_prepared_statement(&portal.statement_name)
+            .ok_or_else(|| {
+                failure::format_err!(
+                    "statement for portal does not exist portal={:?} statement={:?}",
+                    portal_name,
+                    portal.statement_name
+                )
+            })?;
+        Ok(Plan::Peek {
+            source: prepared.source().clone(),
+            when: PeekWhen::Immediately,
+            transform: prepared.transform().clone(),
+        })
+    }
+
+    /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
     fn handle_statement(
         &mut self,
         session: &mut Session,
@@ -215,11 +258,10 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, transform) = self.plan_query(query, &Scope::empty(None))?;
+                let (relation_expr, transform) = self.plan_query_optimize(&query)?;
                 if transform != Default::default() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
-                let relation_expr = relation_expr.decorrelate()?;
                 let mut typ = relation_expr.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -405,8 +447,7 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, transform) = self.plan_query(&query, &Scope::empty(None))?;
-        let relation_expr = relation_expr.decorrelate()?;
+        let (relation_expr, transform) = self.plan_query_optimize(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
@@ -414,9 +455,30 @@ impl Planner {
         })
     }
 
+    /// Convert a parse statement into a [`Plan::PreparedStatement`] and put it in the Session
+    fn handle_parse_statement(
+        &mut self,
+        session: &mut Session,
+        mut stmt: Statement,
+        name: String,
+        sql: String,
+    ) -> Result<Plan, failure::Error> {
+        super::transform::transform(&mut stmt);
+        match stmt {
+            Statement::Query(query) => {
+                let (relation_expr, transform) = self.plan_query_optimize(&query)?;
+                session.set_prepared_statement(
+                    name.clone(),
+                    PreparedStatement::new(sql, relation_expr, transform),
+                );
+                Ok(Plan::Parsed { name })
+            }
+            _ => bail!("PARSE unsupported for sql statement: {:?}", sql),
+        }
+    }
+
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, _transform) = self.plan_query(&query, &Scope::empty(None))?;
-        let relation_expr = relation_expr.decorrelate()?;
+        let (relation_expr, _transform) = self.plan_query_optimize(&query)?;
         // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
@@ -434,6 +496,14 @@ impl Planner {
                 relation_expr,
             })
         }
+    }
+
+    fn plan_query_optimize(
+        &mut self,
+        query: &Query,
+    ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
+        let (relation_expr, transform) = self.plan_query(query, &Scope::empty(None))?;
+        Ok((relation_expr.decorrelate()?, transform))
     }
 }
 
