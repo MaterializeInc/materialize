@@ -8,7 +8,6 @@ fn main() {
     measure_peek_times();
 }
 
-
 fn measure_peek_times() {
     let mut latencies = Vec::new();
     let mut running = true;
