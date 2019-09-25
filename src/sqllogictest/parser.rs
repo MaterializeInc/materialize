@@ -222,6 +222,7 @@ fn parse_query<'a>(
         static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
         static ref HASH_REGEX: Regex = Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
     }
+    let output_str = *input;
     let output = match HASH_REGEX.captures(input) {
         Some(captures) => Output::Hashed {
             num_values: captures.get(1).unwrap().as_str().parse::<usize>()?,
@@ -270,6 +271,7 @@ fn parse_query<'a>(
             column_names,
             mode,
             output,
+            output_str,
         }),
     })
 }

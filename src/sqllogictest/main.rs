@@ -36,6 +36,11 @@ fn main() {
         "no-fail",
         "don't exit with a failing code if not all queries successful",
     );
+    opts.optflag(
+        "",
+        "rewrite-results",
+        "rewrite expected output based on actual output",
+    );
     opts.optopt(
         "",
         "json-summary-file",
@@ -54,6 +59,10 @@ fn main() {
     if popts.opt_present("h") || popts.free.is_empty() {
         eprint!("{}", opts.usage(USAGE));
         process::exit(1);
+    }
+
+    if popts.opt_present("rewrite-results") {
+        return rewrite(popts);
     }
 
     let json_summary_file = match popts.opt_str("json-summary-file") {
@@ -83,8 +92,6 @@ fn main() {
                                 println!("{}", util::indent(&local_outcomes.to_string(), 4));
                             }
                             outcomes += local_outcomes;
-                        } else {
-                            continue;
                         }
                     }
                     Err(err) => {
@@ -112,6 +119,39 @@ fn main() {
     }
 
     if outcomes.any_failed() && !popts.opt_present("no-fail") {
+        process::exit(1);
+    }
+}
+
+fn rewrite(popts: getopts::Matches) {
+    if popts.opt_present("json-summary-file") {
+        eprintln!("--rewrite-results is not compatible with --json-summary-file");
+        process::exit(1);
+    }
+
+    if popts.free.iter().any(|path| path == "-") {
+        eprintln!("--rewrite-results cannot be used with stdin");
+        process::exit(1);
+    }
+
+    let verbosity = popts.opt_count("v");
+    let mut bad_file = false;
+    for path in popts.free {
+        for entry in WalkDir::new(path) {
+            match entry {
+                Ok(entry) => {
+                    if entry.file_type().is_file() {
+                        runner::rewrite_file(entry.path(), verbosity);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("{}", err);
+                    bad_file = true;
+                }
+            }
+        }
+    }
+    if bad_file {
         process::exit(1);
     }
 }

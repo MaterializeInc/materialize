@@ -86,6 +86,7 @@ pub struct QueryOutput<'a> {
     pub column_names: Option<Vec<&'a str>>,
     pub mode: Mode,
     pub output: Output,
+    pub output_str: &'a str,
 }
 
 /// A single directive in a sqllogictest file.

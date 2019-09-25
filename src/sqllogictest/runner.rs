@@ -8,8 +8,8 @@
 use std::borrow::ToOwned;
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::File;
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops;
 use std::path::Path;
 
@@ -847,4 +847,131 @@ pub fn run_stdin(verbosity: usize) -> Outcomes {
     let mut input = String::new();
     std::io::stdin().lock().read_to_string(&mut input).unwrap();
     run_string("<stdin>", &input, verbosity)
+}
+
+pub fn rewrite_file(filename: &Path, _verbosity: usize) {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(filename)
+        .unwrap();
+
+    let mut input = String::new();
+    file.read_to_string(&mut input).unwrap();
+
+    let mut buf = RewriteBuffer::new(&input);
+
+    let mut state = State::start().unwrap();
+    println!("==> {}", filename.display());
+    for record in crate::parser::parse_records(&input) {
+        let record = record.unwrap();
+        let outcome = state.run_record(&record).unwrap();
+
+        // If we see an output failure for a query, rewrite the expected output
+        // to match the observed output.
+        if let (
+            Record::Query {
+                output:
+                    Ok(QueryOutput {
+                        mode,
+                        output: Output::Values(_),
+                        output_str: expected_output,
+                        types,
+                        ..
+                    }),
+                ..
+            },
+            Outcome::OutputFailure {
+                actual_output: Output::Values(actual_output),
+                ..
+            },
+        ) = (&record, &outcome)
+        {
+            // Output everything before this record.
+            let offset = expected_output.as_ptr() as usize - input.as_ptr() as usize;
+            buf.flush_to(offset);
+            buf.skip_to(offset + expected_output.len());
+
+            // Attempt to install the result separator (----), if it does
+            // not already exist.
+            if buf.peek_last(5) == "\n----" {
+                buf.append("\n");
+            } else if buf.peek_last(6) != "\n----\n" {
+                buf.append("\n----\n");
+            }
+
+            for (i, row) in actual_output.chunks(types.len()).enumerate() {
+                match mode {
+                    // In Cockroach mode, output each row on its own line, with
+                    // two spaces between each column.
+                    Mode::Cockroach => {
+                        if i != 0 {
+                            buf.append("\n");
+                        }
+                        buf.append(&row.join("  "));
+                    }
+                    // In standard mode, output each value on its own line,
+                    // and ignore row boundaries.
+                    Mode::Standard => {
+                        for (j, col) in row.iter().enumerate() {
+                            if i != 0 || j != 0 {
+                                buf.append("\n");
+                            }
+                            buf.append(col);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Outcome::Bail { .. } = outcome {
+            break;
+        }
+    }
+
+    file.set_len(0).unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.write_all(buf.finish().as_bytes()).unwrap();
+    file.sync_all().unwrap();
+}
+
+struct RewriteBuffer<'a> {
+    input: &'a str,
+    input_offset: usize,
+    output: String,
+}
+
+impl<'a> RewriteBuffer<'a> {
+    fn new(input: &'a str) -> RewriteBuffer<'a> {
+        RewriteBuffer {
+            input,
+            input_offset: 0,
+            output: String::new(),
+        }
+    }
+
+    fn flush_to(&mut self, offset: usize) {
+        assert!(offset >= self.input_offset);
+        let chunk = &self.input[self.input_offset..offset];
+        self.output.push_str(chunk);
+        self.input_offset = offset;
+    }
+
+    fn skip_to(&mut self, offset: usize) {
+        assert!(offset >= self.input_offset);
+        self.input_offset = offset;
+    }
+
+    fn append(&mut self, s: &str) {
+        self.output.push_str(s);
+    }
+
+    fn peek_last(&self, n: usize) -> &str {
+        &self.output[self.output.len() - n..]
+    }
+
+    fn finish(mut self) -> String {
+        self.flush_to(self.input.len());
+        self.output
+    }
 }
