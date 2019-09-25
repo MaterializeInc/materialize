@@ -319,8 +319,6 @@ where
     }
 
     fn render_join(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
-        // Inputs are `RelationExpr`s. Variables are a list of lists where
-        // each nested list contains (relation id, column id) pairs.
         if let RelationExpr::Join { inputs, variables } = relation_expr {
             // For the moment, assert that each relation participates at most
             // once in each equivalence class. If not, we should be able to
@@ -343,9 +341,7 @@ where
             // The relation_expr is to implement join as a `fold` over `inputs`.
             let mut input_iter = inputs.iter().enumerate();
             if let Some((index, input)) = input_iter.next() {
-                // To get started, create a collection with the first input.
-                // This collection will grow as we join with additional inputs.
-                // TODO@jldlaughlin: do something smarter here, like check if an arrangement exists?
+                // This collection will evolve as we join in more inputs.
                 let mut already_joined_data = self.collection(input).unwrap();
 
                 // Maintain sources of each in-progress column.
@@ -380,7 +376,7 @@ where
                         }
                     }
 
-                    let old_keyed = already_joined_data
+                    let old_keyed = joined
                         .map(move |tuple| {
                             (
                                 old_keys
@@ -410,7 +406,7 @@ where
                         self.set_local(&input, &new_keys[..], new_keyed);
                     }
 
-                    already_joined_data = match self.arrangement(&input, &new_keys[..]) {
+                    joined = match self.arrangement(&input, &new_keys[..]) {
                         Some(ArrangementFlavor::Local(local)) => {
                             old_keyed.join_core(&local, |_keys, old, new| {
                                 Some(old.iter().chain(new).cloned().collect::<Vec<_>>())
@@ -430,7 +426,7 @@ where
                 }
 
                 self.collections
-                    .insert(relation_expr.clone(), already_joined_data);
+                    .insert(relation_expr.clone(), joined);
             } else {
                 panic!("Empty join; why?");
             }
