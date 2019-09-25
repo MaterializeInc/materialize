@@ -27,7 +27,11 @@
 
 #![forbid(missing_docs)]
 
+use std::collections::HashMap;
+
 use failure::bail;
+
+use dataflow_types::RowSetFinishing;
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
@@ -65,27 +69,51 @@ const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
 };
 
 /// A `Session` holds SQL state that is attached to a session.
-#[derive(Debug)]
 pub struct Session {
     client_encoding: ServerVar<&'static str>,
     database: ServerVar<&'static str>,
     date_style: ServerVar<&'static str>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
+    /// A map from statement names to SQL queries
+    prepared_statements: HashMap<String, PreparedStatement>,
+    /// Portals associated with the current session
+    ///
+    /// Portals are primarily a way to retrieve the results for a query with all
+    /// parameters bound.
+    portals: HashMap<String, Portal>,
 }
 
-impl Session {
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("client_encoding", &self.client_encoding.value)
+            .field("database", &self.database.value)
+            .field("date_style", &self.date_style.value)
+            .field("server_version", &self.server_version.value)
+            .field("sql_safe_updates", &self.sql_safe_updates.value)
+            .field("prepared_statements", &self.prepared_statements.keys())
+            .field("portals", &self.portals.keys())
+            .finish()
+    }
+}
+
+impl std::default::Default for Session {
     /// Constructs a new `Session` with default values.
-    pub fn default() -> Session {
+    fn default() -> Session {
         Session {
             client_encoding: CLIENT_ENCODING,
             database: DATABASE,
             date_style: DATE_STYLE,
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            prepared_statements: HashMap::new(),
+            portals: HashMap::new(),
         }
     }
+}
 
+impl Session {
     /// Returns all configuration parameters and their current values for this
     /// session.
     pub fn vars(&self) -> Vec<&dyn Var> {
@@ -182,6 +210,49 @@ impl Session {
     pub fn sql_safe_updates(&self) -> bool {
         *self.sql_safe_updates.value()
     }
+
+    /// Ensure that the given prepared statement is present in this session
+    pub fn set_prepared_statement(&mut self, name: String, statement: PreparedStatement) {
+        self.prepared_statements.insert(name, statement);
+    }
+
+    /// Retrieve the prepared statement in this session associated with `name`
+    pub fn get_prepared_statement(&self, name: &str) -> Option<&PreparedStatement> {
+        self.prepared_statements.get(name)
+    }
+
+    /// Ensure that the given portal exists
+    ///
+    /// **Errors** if the statement name has not be set
+    pub fn set_portal(
+        &mut self,
+        portal_name: String,
+        statement_name: String,
+        return_field_formats: Vec<bool>,
+    ) -> Result<(), failure::Error> {
+        if self.prepared_statements.contains_key(&statement_name) {
+            self.portals.insert(
+                portal_name,
+                Portal {
+                    statement_name,
+                    return_field_formats,
+                },
+            );
+            Ok(())
+        } else {
+            failure::bail!(
+                "statement does not exist for portal creation: \
+                 statement={:?} portal={:?}",
+                statement_name,
+                portal_name
+            );
+        }
+    }
+
+    /// Retrieve a portal by name
+    pub fn get_portal(&self, portal_name: &str) -> Option<&Portal> {
+        self.portals.get(portal_name)
+    }
 }
 
 /// A `Var` represents a configuration parameter of an arbitrary type.
@@ -272,4 +343,42 @@ impl Var for SessionVar<bool> {
     fn description(&self) -> &'static str {
         self.parent.description
     }
+}
+
+/// A prepared statement
+#[derive(Debug)]
+pub struct PreparedStatement {
+    pub raw_sql: String,
+    source: ::expr::RelationExpr,
+    transform: RowSetFinishing,
+}
+
+impl PreparedStatement {
+    pub fn new(
+        raw_sql: String,
+        source: ::expr::RelationExpr,
+        transform: RowSetFinishing,
+    ) -> PreparedStatement {
+        PreparedStatement {
+            raw_sql,
+            source,
+            transform,
+        }
+    }
+
+    pub fn source(&self) -> &::expr::RelationExpr {
+        &self.source
+    }
+
+    pub fn transform(&self) -> &RowSetFinishing {
+        &self.transform
+    }
+}
+
+/// A portal, used by clients to name the target of an Execute statement
+#[derive(Debug)]
+pub struct Portal {
+    pub statement_name: String,
+    /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
+    pub return_field_formats: Vec<bool>,
 }

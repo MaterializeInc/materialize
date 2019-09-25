@@ -1,0 +1,10 @@
+[package]
+name = "metrics"
+description = "Run metrics on chbench."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[[bin]]
+name = "metrics"
+path = "bin/metrics.rs"

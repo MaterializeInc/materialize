@@ -9,6 +9,7 @@ members = [
     "src/expr",
     "src/interchange",
     "src/metastore",
+    "src/metrics",
     "src/materialize",
     "src/ore",
     "src/repr",

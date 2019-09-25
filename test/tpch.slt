@@ -98,9 +98,9 @@ CREATE TABLE lineitem (
     PRIMARY KEY (l_orderkey, l_linenumber)
 )
 
-query TTIIIIIIII valuesort
+query T multiline
 -- Query 01
-SELECT
+EXPLAIN PLAN FOR SELECT
 	l_returnflag,
 	l_linestatus,
 	sum(l_quantity) as sum_qty,
@@ -121,6 +121,38 @@ GROUP BY
 ORDER BY
 	l_returnflag,
 	l_linestatus
+----
+Project {
+  outputs: [0, 1, 6, 8, 4, 5, 13, 14, 15, 12],
+  Map {
+    scalars: [
+      ((#6 * 10000000dec) / (i64todec #7 * 100dec)) * 10dec,
+      ((#8 * 10000000dec) / (i64todec #9 * 100dec)) * 10dec,
+      ((#10 * 10000000dec) / (i64todec #11 * 100dec)) * 10dec
+    ],
+    Reduce {
+      group_key: [8, 9],
+      aggregates: [
+        sum(#4),
+        sum(#5),
+        sum(#5 * ((i64todec 1 * 100dec) - #6)),
+        sum(
+          (#5 * ((i64todec 1 * 100dec) - #6))
+          *
+          ((i64todec 1 * 100dec) + #7)
+        ),
+        sum(#4),
+        count(#4),
+        sum(#5),
+        count(#5),
+        sum(#6),
+        count(#6),
+        countall(null)
+      ],
+      Filter { predicates: [#10 <= 1998-12-01], Get { lineitem } }
+    }
+  }
+}
 
 
 query IITI valuesort

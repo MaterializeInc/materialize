@@ -9,7 +9,6 @@
 
 set -euo pipefail
 
-
 tests=(
     test/*.slt
     # test/sqlite/test/evidence/in1.test
@@ -130,7 +129,7 @@ tests=(
     test/cockroach/tuple.slt
     # test/cockroach/typing.slt
     # test/cockroach/union-opt.slt
-    # test/cockroach/union.slt
+    test/cockroach/union.slt
     test/cockroach/update.slt
     test/cockroach/upsert.slt
     test/cockroach/uuid.slt
@@ -142,6 +141,4 @@ tests=(
     # test/cockroach/zero.slt
 )
 
-RUST_BACKTRACE=full sqllogictest \
-    -vv --fail \
-    "${tests[@]}"
+RUST_BACKTRACE=full sqllogictest -v "${tests[@]}"

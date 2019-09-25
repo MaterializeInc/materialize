@@ -10,7 +10,8 @@ use std::process;
 use getopts::Options;
 use walkdir::WalkDir;
 
-use sqllogictest::Outcomes;
+use sqllogictest::runner::{self, Outcomes};
+use sqllogictest::util;
 
 const USAGE: &str = r#"usage: sqllogictest [PATH...]
 
@@ -30,17 +31,15 @@ fn main() {
          -vvv: show all queries executed",
     );
     opts.optflag("h", "help", "show this usage information");
-    opts.optflag("", "only-parse", "only attempt to parse queries");
     opts.optflag(
         "",
-        "fail",
-        "exit with a failing code unless all queries successful",
+        "no-fail",
+        "don't exit with a failing code if not all queries successful",
     );
-    opts.optopt(
+    opts.optflag(
         "",
-        "expect-outcomes",
-        "specify expected outcomes",
-        "OUTCOMES",
+        "rewrite-results",
+        "rewrite expected output based on actual output",
     );
     opts.optopt(
         "",
@@ -60,21 +59,11 @@ fn main() {
     if popts.opt_present("h") || popts.free.is_empty() {
         eprint!("{}", opts.usage(USAGE));
         process::exit(1);
-    } else if popts.opt_present("fail") && popts.opt_present("expect-outcomes") {
-        eprint!("--fail and --expect-outcomes cannot be specified together");
-        process::exit(1)
     }
 
-    let expected_outcomes: Option<Outcomes> = match popts.opt_str("expect-outcomes") {
-        Some(outcomes_str) => match outcomes_str.parse() {
-            Ok(outcomes) => Some(outcomes),
-            Err(err) => {
-                eprintln!("{}", err);
-                process::exit(1);
-            }
-        },
-        None => None,
-    };
+    if popts.opt_present("rewrite-results") {
+        return rewrite(popts);
+    }
 
     let json_summary_file = match popts.opt_str("json-summary-file") {
         Some(filename) => match File::create(&filename) {
@@ -88,25 +77,21 @@ fn main() {
     };
 
     let verbosity = popts.opt_count("v");
-    let only_parse = popts.opt_present("only-parse");
     let mut bad_file = false;
     let mut outcomes = Outcomes::default();
     for path in &popts.free {
         if path == "-" {
-            outcomes += sqllogictest::run_stdin(verbosity, only_parse);
+            outcomes += sqllogictest::runner::run_stdin(verbosity);
         } else {
             for entry in WalkDir::new(path) {
                 match entry {
                     Ok(entry) => {
                         if entry.file_type().is_file() {
-                            let local_outcomes =
-                                sqllogictest::run_file(entry.path(), verbosity, only_parse);
-                            if local_outcomes.any_failed() && verbosity >= 1 {
-                                println!("{}", local_outcomes);
+                            let local_outcomes = runner::run_file(entry.path(), verbosity);
+                            if local_outcomes.any_failed() || verbosity >= 1 {
+                                println!("{}", util::indent(&local_outcomes.to_string(), 4));
                             }
                             outcomes += local_outcomes;
-                        } else {
-                            continue;
                         }
                     }
                     Err(err) => {
@@ -121,36 +106,52 @@ fn main() {
         process::exit(1);
     }
 
-    if verbosity >= 1 {
-        println!("{}", outcomes);
-    }
+    println!("{}", outcomes);
 
-    let mut exit_code = 0;
-    if let Some(expected_outcomes) = expected_outcomes {
-        if expected_outcomes != outcomes {
-            if verbosity == 0 {
-                // With no verbosity, outcomes have not yet been printed.
-                println!("{}", outcomes);
-            }
-            eprintln!("outcomes did not match expectation");
-            exit_code = 1;
-        }
-    } else if popts.opt_present("fail") {
-        if outcomes.any_failed() {
-            eprintln!("FAIL");
-            exit_code = 1;
-        } else {
-            eprintln!("PASS");
-        }
-    }
     if let Some(json_summary_file) = json_summary_file {
         match serde_json::to_writer(json_summary_file, &outcomes.as_json()) {
             Ok(()) => (),
             Err(err) => {
                 eprintln!("error: unable to write summary file: {}", err);
-                exit_code = 2;
+                process::exit(2);
             }
         }
     }
-    process::exit(exit_code);
+
+    if outcomes.any_failed() && !popts.opt_present("no-fail") {
+        process::exit(1);
+    }
+}
+
+fn rewrite(popts: getopts::Matches) {
+    if popts.opt_present("json-summary-file") {
+        eprintln!("--rewrite-results is not compatible with --json-summary-file");
+        process::exit(1);
+    }
+
+    if popts.free.iter().any(|path| path == "-") {
+        eprintln!("--rewrite-results cannot be used with stdin");
+        process::exit(1);
+    }
+
+    let verbosity = popts.opt_count("v");
+    let mut bad_file = false;
+    for path in popts.free {
+        for entry in WalkDir::new(path) {
+            match entry {
+                Ok(entry) => {
+                    if entry.file_type().is_file() {
+                        runner::rewrite_file(entry.path(), verbosity);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("{}", err);
+                    bad_file = true;
+                }
+            }
+        }
+    }
+    if bad_file {
+        process::exit(1);
+    }
 }

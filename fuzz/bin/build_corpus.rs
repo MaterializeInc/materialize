@@ -25,10 +25,10 @@ fn main() {
                 .unwrap()
                 .read_to_string(&mut contents)
                 .unwrap();
-            for record in sqllogictest::parse_records(&contents) {
+            for record in sqllogictest::parser::parse_records(&contents) {
                 match record {
-                    Ok(sqllogictest::Record::Query { sql, .. })
-                    | Ok(sqllogictest::Record::Statement { sql, .. }) => {
+                    Ok(sqllogictest::ast::Record::Query { sql, .. })
+                    | Ok(sqllogictest::ast::Record::Statement { sql, .. }) => {
                         if rng.gen_ratio(1, CHANCE_TO_PICK_QUERY) {
                             let filename =
                                 &format!("./corpus/fuzz_sqllogictest/imported-{}", query_num);

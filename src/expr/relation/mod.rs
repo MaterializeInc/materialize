@@ -15,7 +15,6 @@ use pretty::Doc::{Newline, Space};
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -626,19 +625,18 @@ impl RelationExpr {
             RelationExpr::Project { input, outputs } => {
                 let outputs =
                     Doc::intersperse(outputs.iter().map(Doc::as_string), to_doc!(",", Space));
-                let outputs = to_tightly_braced_doc("outputs: [", outputs.nest(2), "]").group();
+                let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
             RelationExpr::Map { input, scalars } => {
                 let scalars =
                     Doc::intersperse(scalars.iter().map(|(expr, _typ)| expr), to_doc!(",", Space));
-                let scalars = to_tightly_braced_doc("scalars: [", scalars.nest(2), "]").group();
+                let scalars = to_tightly_braced_doc("scalars: [", scalars, "]").group();
                 to_braced_doc("Map {", to_doc!(scalars, ",", Space, input), "}")
             }
             RelationExpr::Filter { input, predicates } => {
                 let predicates = Doc::intersperse(predicates, to_doc!(",", Space));
-                let predicates =
-                    to_tightly_braced_doc("predicates: [", predicates.nest(2), "]").group();
+                let predicates = to_tightly_braced_doc("predicates: [", predicates, "]").group();
                 to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
             }
             RelationExpr::Join { inputs, variables } => {
@@ -669,17 +667,17 @@ impl RelationExpr {
                     group_key.iter().map(|k| format!("{}", k)),
                     to_doc!(",", Space),
                 );
-                let keys = to_tightly_braced_doc("group_key: [", keys.nest(2), "]").group();
+                let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
 
                 if aggregates.is_empty() {
                     to_braced_doc("Distinct {", to_doc!(keys, ",", Space, input), "}")
                 } else {
                     let aggregates = Doc::intersperse(
-                        aggregates.iter().map(|(a, _)| format!("{:?}", a.func)),
+                        aggregates.iter().map(|(expr, _typ)| expr),
                         to_doc!(",", Space),
                     );
                     let aggregates =
-                        to_tightly_braced_doc("aggregates: [", aggregates.nest(2), "]").group();
+                        to_tightly_braced_doc("aggregates: [", aggregates, "]").group();
 
                     to_braced_doc(
                         "Reduce {",
@@ -717,20 +715,24 @@ impl RelationExpr {
     }
 
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
-    pub fn let_in<Body>(self, body: Body) -> Result<RelationExpr, failure::Error>
+    pub fn let_in<Body>(
+        self,
+        id_gen: &mut IdGen,
+        body: Body,
+    ) -> Result<RelationExpr, failure::Error>
     where
-        Body: FnOnce(RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+        Body: FnOnce(&mut IdGen, RelationExpr) -> Result<super::RelationExpr, failure::Error>,
     {
         if let RelationExpr::Get { .. } = self {
             // already done
-            body(self)
+            body(id_gen, self)
         } else {
-            let name = format!("tmp_{}", Uuid::new_v4());
+            let name = format!("tmp_{}", id_gen.allocate_id());
             let get = RelationExpr::Get {
                 name: name.clone(),
                 typ: self.typ(),
             };
-            let body = (body)(get)?;
+            let body = (body)(id_gen, get)?;
             Ok(RelationExpr::Let {
                 name,
                 value: Box::new(self),
@@ -743,13 +745,14 @@ impl RelationExpr {
     /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
     pub fn anti_lookup(
         self,
+        id_gen: &mut IdGen,
         keys_and_values: RelationExpr,
         default: Vec<(Datum, ColumnType)>,
     ) -> RelationExpr {
         let keys = self;
         assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
         keys_and_values
-            .let_in(|get_keys_and_values| {
+            .let_in(id_gen, |_id_gen, get_keys_and_values| {
                 Ok(get_keys_and_values
                     .clone()
                     .project((0..keys.arity()).collect())
@@ -774,31 +777,38 @@ impl RelationExpr {
     /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
     pub fn lookup(
         self,
+        id_gen: &mut IdGen,
         keys_and_values: RelationExpr,
         default: Vec<(Datum, ColumnType)>,
     ) -> RelationExpr {
         keys_and_values
-            .let_in(|get_keys_and_values| {
-                Ok(get_keys_and_values
-                    .clone()
-                    .union(self.anti_lookup(get_keys_and_values, default)))
+            .let_in(id_gen, |id_gen, get_keys_and_values| {
+                Ok(get_keys_and_values.clone().union(self.anti_lookup(
+                    id_gen,
+                    get_keys_and_values,
+                    default,
+                )))
             })
             .unwrap()
     }
 
     /// Perform some operation using `self` and then inner-join the results with `self`.
     /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
-    pub fn branch<Branch>(self, branch: Branch) -> Result<RelationExpr, failure::Error>
+    pub fn branch<Branch>(
+        self,
+        id_gen: &mut IdGen,
+        branch: Branch,
+    ) -> Result<RelationExpr, failure::Error>
     where
-        Branch: FnOnce(RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+        Branch: FnOnce(&mut IdGen, RelationExpr) -> Result<super::RelationExpr, failure::Error>,
     {
-        self.let_in(|get_outer| {
+        self.let_in(id_gen, |id_gen, get_outer| {
             // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
             let key = (0..get_outer.arity()).collect::<Vec<_>>();
             let keyed_outer = get_outer.clone().project(key.clone()).distinct();
-            keyed_outer.let_in(|get_keyed_outer| {
-                let branch = branch(get_keyed_outer.clone())?;
-                branch.let_in(|get_branch| {
+            keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
+                let branch = branch(id_gen, get_keyed_outer.clone())?;
+                branch.let_in(id_gen, |_id_gen, get_branch| {
                     let joined = RelationExpr::Join {
                         inputs: vec![get_outer.clone(), get_branch.clone()],
                         variables: key
@@ -823,6 +833,20 @@ impl RelationExpr {
     }
 }
 
+/// Manages the allocation of locally unique IDs when building a [`RelationExpr`].
+#[derive(Debug, Default)]
+pub struct IdGen {
+    id: usize,
+}
+
+impl IdGen {
+    fn allocate_id(&mut self) -> usize {
+        let id = self.id;
+        self.id += 1;
+        id
+    }
+}
+
 /// Describes an aggregation expression.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -833,6 +857,26 @@ pub struct AggregateExpr {
     pub expr: ScalarExpr,
     /// Should the aggregation be applied only to distinct results in each group.
     pub distinct: bool,
+}
+
+impl AggregateExpr {
+    /// Converts this [`AggregateExpr`] to a [`Doc`] or document for pretty
+    /// printing. See [`RelationExpr::to_doc`] for details on the approach.
+    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
+        let args = if self.distinct {
+            to_doc!("distinct", Doc::space(), &self.expr)
+        } else {
+            self.expr.to_doc()
+        };
+        let call = to_tightly_braced_doc("(", args, ")").group();
+        to_doc!(&self.func, call)
+    }
+}
+
+impl<'a> From<&'a AggregateExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    fn from(s: &'a AggregateExpr) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        s.to_doc()
+    }
 }
 
 #[cfg(test)]
@@ -909,6 +953,84 @@ mod tests {
     }
 
     #[test]
+    fn test_pretty_project() {
+        let project = RelationExpr::Project {
+            outputs: vec![0, 1, 2, 3, 4],
+            input: Box::new(base()),
+        };
+
+        assert_eq!(
+            project.to_doc().pretty(82).to_string(),
+            "Project { outputs: [0, 1, 2, 3, 4], Constant [] }",
+        );
+
+        assert_eq!(
+            project.to_doc().pretty(24).to_string(),
+            "Project {
+  outputs: [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
+    fn test_pretty_map() {
+        let map = RelationExpr::Map {
+            scalars: vec![
+                (ScalarExpr::Column(0), ColumnType::new(ScalarType::Int64)),
+                (ScalarExpr::Column(1), ColumnType::new(ScalarType::Int64)),
+            ],
+            input: Box::new(base()),
+        };
+
+        assert_eq!(
+            map.to_doc().pretty(82).to_string(),
+            "Map { scalars: [#0, #1], Constant [] }",
+        );
+
+        assert_eq!(
+            map.to_doc().pretty(16).to_string(),
+            "Map {
+  scalars: [
+    #0,
+    #1
+  ],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
+    fn test_pretty_filter() {
+        let filter = RelationExpr::Filter {
+            predicates: vec![ScalarExpr::Column(0), ScalarExpr::Column(1)],
+            input: Box::new(base()),
+        };
+
+        assert_eq!(
+            filter.to_doc().pretty(82).to_string(),
+            "Filter { predicates: [#0, #1], Constant [] }",
+        );
+
+        assert_eq!(
+            filter.to_doc().pretty(20).to_string(),
+            "Filter {
+  predicates: [
+    #0,
+    #1
+  ],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
     fn test_pretty_join() {
         let join = RelationExpr::Join {
             variables: vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]],
@@ -928,6 +1050,52 @@ mod tests {
     [(0, 1), (1, 1)]
   ],
   Constant [],
+  Constant []
+}",
+        );
+    }
+
+    #[test]
+    fn test_pretty_reduce() {
+        let agg0 = AggregateExpr {
+            func: AggregateFunc::SumInt64,
+            expr: ScalarExpr::Column(0),
+            distinct: false,
+        };
+        let agg1 = AggregateExpr {
+            func: AggregateFunc::MaxInt64,
+            expr: ScalarExpr::Column(1),
+            distinct: true,
+        };
+
+        let reduce = RelationExpr::Reduce {
+            input: Box::new(base()),
+            group_key: vec![1, 2],
+            aggregates: vec![
+                (agg0, ColumnType::new(ScalarType::Int64)),
+                (agg1, ColumnType::new(ScalarType::Int64)),
+            ],
+        };
+
+        assert_eq!(
+            reduce.to_doc().pretty(82).to_string(),
+            "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
+        );
+
+        assert_eq!(
+            reduce.to_doc().pretty(16).to_string(),
+            "Reduce {
+  group_key: [
+    1,
+    2
+  ],
+  aggregates: [
+    sum(#0),
+    max(
+      distinct
+      #1
+    )
+  ],
   Constant []
 }",
         );

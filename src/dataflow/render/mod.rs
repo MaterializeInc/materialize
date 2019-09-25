@@ -256,9 +256,8 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let scalars = scalars.clone();
                     let collection = self.collection(input).unwrap().map(move |mut tuple| {
-                        let len = tuple.len();
                         for s in scalars.iter() {
-                            let to_push = s.0.eval(&tuple[..len]);
+                            let to_push = s.0.eval(&tuple[..]);
                             tuple.push(to_push);
                         }
                         tuple
@@ -537,7 +536,7 @@ where
                                             ((f64::from(*f) * float_scale) as i128, 1)
                                         }
                                         Datum::Float64(f) => ((*f * float_scale) as i128, 1),
-                                        Datum::Decimal(d) => (d.into_i128(), 1),
+                                        Datum::Decimal(d) => (d.as_i128(), 1),
                                         Datum::Null => (0, 0),
                                         x => panic!("Accumulating non-integer data: {:?}", x),
                                     };

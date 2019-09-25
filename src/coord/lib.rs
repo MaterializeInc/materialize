@@ -18,12 +18,46 @@ use std::fmt;
 pub mod coordinator;
 pub mod transient;
 
-/// Incoming raw SQL from users.
 pub struct Command {
+    pub kind: CommandKind,
     pub conn_id: u32,
-    pub sql: String,
     pub session: sql::Session,
     pub tx: futures::sync::oneshot::Sender<Response>,
+}
+
+impl fmt::Debug for Command {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Command")
+            .field("kind", &self.kind)
+            .field("conn_id", &self.conn_id)
+            .field("session", &self.session)
+            .field("tx", &"<>")
+            .finish()
+    }
+}
+
+/// Things a user could request of the dataflow layer
+///
+/// [`CommandKind::Query`] is the most general command. Everything else is part of the
+/// extended query flow
+#[derive(Debug)]
+pub enum CommandKind {
+    /// Incoming raw sql from users, arbitrary one-off queries come in this way
+    Query { sql: String },
+
+    // Extended query flow
+    /// Parse a statement but do not execute it
+    ///
+    /// This results in a Prepared Statement and begins the extended query flow, see the
+    /// `pgwire::protocol` module for the full flow, some parts of it don't need to go
+    /// all the way to the query layer so they aren't reflected here.
+    Parse { name: String, sql: String },
+    /// Execute a bound statement
+    ///
+    /// Bind doesn't need to go through the planner, so there is no `Bind` command right
+    /// now, although we could imagine creating a dataflow at that point, which would
+    /// make it show up in this enum
+    Execute { portal_name: String },
 }
 
 /// Responses from the queue to SQL commands.
@@ -46,6 +80,10 @@ pub enum SqlResponse {
         typ: RelationType,
         rx: RowsFuture,
     },
+    /// We have successfully parsed the query and stashed it in the [`Session`]
+    Parsed {
+        name: String,
+    },
     SetVariable,
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
@@ -61,6 +99,7 @@ impl fmt::Debug for SqlResponse {
             SqlResponse::DroppedSource => f.write_str("SqlResponse::DroppedSource"),
             SqlResponse::DroppedView => f.write_str("SqlResposne::DroppedView"),
             SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
+            SqlResponse::Parsed { name } => write!(f, "SqlResponse::Parsed(name: {})", name),
             SqlResponse::SendRows { typ, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", typ),
             SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
             SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),

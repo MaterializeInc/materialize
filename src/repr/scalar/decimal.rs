@@ -116,8 +116,8 @@ impl Significand {
         Ok(Significand(significand))
     }
 
-    /// Consumes this `Significand`, returning the underlying `i128`.
-    pub fn into_i128(self) -> i128 {
+    /// Returns the underlying `i128`.
+    pub fn as_i128(&self) -> i128 {
         self.0
     }
 
