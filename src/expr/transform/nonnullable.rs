@@ -5,7 +5,7 @@
 
 use crate::relation::AggregateExpr;
 use crate::AggregateFunc;
-use crate::BinaryFunc;
+use crate::{BinaryFunc, UnaryFunc};
 use crate::{RelationExpr, ScalarExpr};
 use repr::Datum;
 use repr::RelationType;
@@ -60,23 +60,31 @@ impl NonNullable {
 /// Transformations to scalar functions, based on nonnullability of columns.
 fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
     // Tests for null can be replaced by "false" for non-nullable columns.
-    expr.visit_mut(&mut |e| {
-        if let ScalarExpr::CallBinary {
+    expr.visit_mut(&mut |e| match e {
+        ScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull,
+            expr,
+        } => {
+            if let ScalarExpr::Column(c) = &**expr {
+                if !metadata.column_types[*c].nullable {
+                    *e = ScalarExpr::Literal(Datum::False);
+                }
+            }
+        }
+        ScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1,
             expr2,
-        } = &e
-        {
-            match (&**expr1, &**expr2) {
-                (ScalarExpr::Column(c), ScalarExpr::Literal(Datum::Null))
-                | (ScalarExpr::Literal(Datum::Null), ScalarExpr::Column(c)) => {
-                    if !metadata.column_types[*c].nullable {
-                        *e = ScalarExpr::Literal(Datum::False);
-                    }
+        } => match (&**expr1, &**expr2) {
+            (ScalarExpr::Column(c), ScalarExpr::Literal(Datum::Null))
+            | (ScalarExpr::Literal(Datum::Null), ScalarExpr::Column(c)) => {
+                if !metadata.column_types[*c].nullable {
+                    *e = ScalarExpr::Literal(Datum::False);
                 }
-                _ => {}
             }
-        }
+            _ => {}
+        },
+        _ => {}
     })
 }
 
