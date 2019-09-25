@@ -384,7 +384,15 @@ impl State {
                 should_run,
                 rows_inserted,
                 sql,
-            } => self.run_statement(*should_run, *rows_inserted, sql),
+            } => match self.run_statement(*should_run, *rows_inserted, sql)? {
+                Outcome::Success => Ok(Outcome::Success),
+                // If we failed to execute a statement, running the rest of the
+                // tests in this file will probably cause false positives, so
+                // just give up on the file entirely.
+                other => Ok(Outcome::Bail {
+                    cause: Box::new(other),
+                }),
+            },
             Record::Query { sql, output } => self.run_query(sql, output),
             _ => Ok(Outcome::Success),
         }
@@ -797,26 +805,10 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             print_record(&record);
         }
 
-        let mut outcome = state
+        let outcome = state
             .run_record(&record)
             .with_context(|err| format!("In {}:\n{}", source, err))
             .unwrap();
-
-        // If we failed to execute a statement, running the rest of the tests in
-        // this file will probably cause false positives, so just give up on
-        // the file entirely.
-        match (&record, &outcome) {
-            (_, Outcome::Success) => (),
-            (Record::Statement { sql, .. }, _)
-                if !sql.to_lowercase().starts_with("create view")
-                    && !sql.to_lowercase().starts_with("select") =>
-            {
-                outcome = Outcome::Bail {
-                    cause: Box::new(outcome),
-                };
-            }
-            _ => (),
-        }
 
         // Print failures in verbose mode.
         if verbosity >= 1 && !outcome.success() {
