@@ -94,32 +94,27 @@ where
     }
 }
 
-//// -----------------------------------------------------------------------------
-//
-///// A binding between a name and a value.
-//#[derive(Debug)]
-//pub struct Binding {
-//    name: Identifier,
-//    value: RelationExpr,
-//}
-//
-//impl Binding {
-//    /// Create a new binding for the given name and value.
-//    pub fn new(name: Identifier, value: RelationExpr) -> Self {
-//        Self { name, value }
-//    }
-//
-//    /// Apply the binding to the body, yielding a [`RelationExpr::Let`].
-//    pub fn use_in(self, body: RelationExpr) -> RelationExpr {
-//        RelationExpr::Let {
-//            name: self.name,
-//            value: Box::new(self.value),
-//            body: Box::new(body),
-//        }
-//    }
-//}
-
 // -----------------------------------------------------------------------------
+
+/// A local binding that is automatically removed from its environment again.
+#[derive(Debug)]
+pub struct LocalBinding<'a> {
+    env: &'a mut Environment,
+    name: String,
+    prior: Option<RelationExpr>,
+}
+
+impl Drop for LocalBinding<'_> {
+    /// Drop this local binding by restoring the environment to its prior state.
+    fn drop(&mut self) {
+        if let Some(value) = self.prior.take() {
+            let name = std::mem::replace(&mut self.name, String::new());
+            self.env.bindings.insert(name, value);
+        } else {
+            self.env.bindings.pop();
+        }
+    }
+}
 
 /// An environment.
 ///
@@ -148,95 +143,30 @@ impl Environment {
 
     /// Add a new binding for the given name and value to this environment.
     /// This method panics if this environment already contains a binding
-    /// with the given name.
+    /// with the given name. See also [`Environment::bind_local`].
     pub fn bind(&mut self, name: Identifier, value: RelationExpr) -> &mut Self {
         self.ensure_unbound(&name);
         self.bindings.insert(name, value);
         self
     }
 
+    /// Add a new, *local* binding for the given name and value to this
+    /// environment. This method does support shadowed identifiers but
+    /// the binding only persists as long as the returned object. See also
+    /// [`Environment::bind`].
+    pub fn bind_local(&mut self, name: Identifier, value: RelationExpr) -> LocalBinding {
+        let prior = self.bindings.insert(name.clone(), value);
+        LocalBinding {
+            env: self,
+            name,
+            prior,
+        }
+    }
+
     /// Look up the given name in this environment.
     #[allow(clippy::ptr_arg)]
     pub fn lookup(&self, name: &Identifier) -> Option<&RelationExpr> {
         self.bindings.get(name)
-    }
-
-    /// Extract the binding from the given dataflow graph. If the expression is
-    /// a [`RelationExpr::Let`], this method adds a binding for the name and
-    /// value to this environment and replaces the let expression with the body.
-    /// Otherwise, it does nothing.
-    pub fn extract(&mut self, expr: &mut RelationExpr) -> &mut Self {
-        if let RelationExpr::Let { .. } = expr {
-            if let RelationExpr::Let { name, value, body } = expr.take() {
-                self.ensure_unbound(&name);
-                self.bindings.insert(name, *value);
-                *expr = *body;
-            } else {
-                unreachable!();
-            }
-        }
-        self
-    }
-
-    /// Extract all bindings from the given dataflow graph. This method
-    /// traverses the entire dataflow graph while relying on
-    /// [`Environment::extract`] to remove individual instances of
-    /// [`RelationExpr::Let`] from the graph.
-    pub fn extract_all(&mut self, expr: &mut RelationExpr) -> &mut Self {
-        // NB: visit1_mut() invokes the callback on the children of a
-        // RelationExpr. That is not good enough for RelationExpr::Let since the
-        // value and body might just be RelationExpr::Let's, too. Hence we
-        // recurse on extract().
-        if let RelationExpr::Let { value, .. } = expr {
-            self.extract_all(value);
-            self.extract(expr);
-            // By the magic vested in extract1(), expr now is let's body.
-            self.extract_all(expr);
-        } else {
-            expr.visit1_mut(|e| {
-                self.extract_all(e);
-            });
-        }
-        self
-    }
-
-    pub fn unbind_all(&mut self, expr: &mut RelationExpr) {
-        match expr {
-            RelationExpr::Let { .. } => {
-                if let RelationExpr::Let {
-                    name,
-                    mut value,
-                    body,
-                } = expr.take()
-                {
-                    // Process value.
-                    self.unbind_all(&mut value);
-
-                    // Push binding.
-                    let n2 = name.clone();
-                    let prior = self.bindings.insert(name, *value);
-
-                    // Process body.
-                    *expr = *body;
-                    self.unbind_all(expr);
-
-                    // Pop binding.
-                    if let Some(v) = prior {
-                        self.bindings.insert(n2, v);
-                    } else {
-                        self.bindings.pop();
-                    }
-                } else {
-                    unreachable!();
-                }
-            }
-            RelationExpr::Get { name, .. } => {
-                if let Some(v) = self.lookup(name) {
-                    *expr = v.clone();
-                }
-            }
-            _ => expr.visit1_mut(|e| self.unbind_all(e)),
-        }
     }
 
     /// Use this environment's bindings in the given expression. This method
@@ -267,7 +197,33 @@ impl Hoist {
     /// Hoist all bindings to the top of a dataflow graph.
     pub fn hoist(expr: &mut RelationExpr) {
         let mut env = Environment::default();
-        env.extract_all(expr);
+
+        fn extract_all(expr: &mut RelationExpr, env: &mut Environment) {
+            // NB: visit1_mut() invokes the callback on the children of a
+            // RelationExpr. That is not good enough for RelationExpr::Let since
+            // the value and body might just be RelationExpr::Let's, too. Hence
+            // we recurse on extract().
+            if let RelationExpr::Let { .. } = expr {
+                if let RelationExpr::Let {
+                    name,
+                    mut value,
+                    body,
+                } = expr.take()
+                {
+                    extract_all(&mut *value, env);
+                    env.bind(name, *value);
+                    *expr = *body;
+                    // By the magic vested in extract1(), expr now is let's body.
+                    extract_all(expr, env);
+                } else {
+                    unreachable!();
+                }
+            } else {
+                expr.visit1_mut(|e| extract_all(e, env));
+            }
+        }
+
+        extract_all(expr, &mut env);
         env.inject(expr);
     }
 }
@@ -285,13 +241,55 @@ impl super::Transform for Hoist {
 pub struct Unbind;
 
 impl Unbind {
+    /// Eliminate all let expressions by replacing get expressions with the
+    /// bound value. This optimization correctly handles shadowed bindings.
+    /// Since it eliminates all local bindings, it also eliminates local
+    /// bindings that are referenced only once and thus superfluous. It is
+    /// highly recommend to perform the [`Deduplicate`] optimization next.
+    /// Since all bindings have been eliminated, `Deduplicate` can correctly
+    /// identify all actually shared subgraphs and introduce bindings for them.
+    ///
+    /// `Unbind` has worst-case exponential space requirements. The alternative
+    /// is to compute a fixed-point of `UnbindTrivial` followed by
+    /// `Deduplicate`. The not yet implemented `UnbindTrivial` optimization
+    /// eliminates only let expressions that bind get expressions. In other
+    /// words, it is the equivalent of alpha-renaming in the lambda calculus.
     pub fn unbind(expr: &mut RelationExpr) {
         let mut env = Environment::default();
-        env.unbind_all(expr);
+
+        fn unbind_all(expr: &mut RelationExpr, env: &mut Environment) {
+            match expr {
+                RelationExpr::Let { .. } => {
+                    if let RelationExpr::Let {
+                        name,
+                        mut value,
+                        body,
+                    } = expr.take()
+                    {
+                        unbind_all(&mut value, env);
+
+                        let local = env.bind_local(name.clone(), *value.clone());
+                        *expr = *body;
+                        unbind_all(expr, local.env);
+                    } else {
+                        unreachable!();
+                    }
+                }
+                RelationExpr::Get { name, .. } => {
+                    if let Some(value) = env.lookup(name) {
+                        *expr = value.clone();
+                    }
+                }
+                _ => expr.visit1_mut(|e| unbind_all(e, env)),
+            }
+        }
+
+        unbind_all(expr, &mut env);
     }
 }
 
 impl super::Transform for Unbind {
+    /// Perform the unbind optimization.
     fn transform(&self, expr: &mut RelationExpr, _meta: &RelationType) {
         Unbind::unbind(expr);
     }
@@ -309,9 +307,8 @@ pub struct Count {
 
 impl Count {
     /// Increment the count.
-    pub fn incr(&mut self) -> &Self {
+    pub fn incr(&mut self) {
         self.count += 1;
-        self
     }
 
     /// Determine whether the count is larger than one.
@@ -414,8 +411,12 @@ impl Deduplicate {
     /// Determine how many times each dataflow graph appears in the given
     /// dataflow graph. This method assumes that the given census is empty.
     pub fn count_all<'a>(expr: &'a RelationExpr, census: &mut HashMap<&'a RelationExpr, Metadata>) {
-        let metadata = census.entry(expr).or_insert_with(Metadata::default);
-        if !metadata.unwrap_count().incr().is_repeated() {
+        let metadata = census
+            .entry(expr)
+            .or_insert_with(Metadata::default)
+            .unwrap_count();
+        metadata.incr();
+        if !metadata.is_repeated() {
             expr.visit1(|e| Deduplicate::count_all(e, census));
         }
     }
