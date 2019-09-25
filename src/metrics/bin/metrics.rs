@@ -9,6 +9,7 @@ fn main() {
 }
 
 fn measure_peek_times() {
+    println!("starting up!");
     let mut latencies = Vec::new();
     let mut running = true;
     while running {
@@ -26,12 +27,15 @@ fn measure_peek_times() {
             .output();
 
         match output {
-            Ok(latency) => latencies.push(latency),
+            Ok(latency) => {
+                println!("\nLatency: {:#?}", latency);
+                latencies.push(latency)
+            },
             Err(error) => {
-                println!("Hit error: {:#?}", error);
-                running = false;
+                println!("\nHit error: {:#?}", error);
+//                running = false;
             }
         }
     }
-    println!("Latencies are: {:#?}", latencies);
+//    println!("Latencies are: {:#?}", latencies);
 }
