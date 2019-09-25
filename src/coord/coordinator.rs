@@ -250,6 +250,8 @@ where
                 let rows = vec![vec![Datum::from(relation_expr.pretty())]];
                 send_immediate_rows(typ, rows)
             }
+
+            Plan::Parsed { name } => SqlResponse::Parsed { name },
         }
     }
 
