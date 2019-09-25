@@ -30,12 +30,12 @@ fn measure_peek_times() {
             Ok(latency) => {
                 println!("\nLatency: {:#?}", latency);
                 latencies.push(latency)
-            },
+            }
             Err(error) => {
                 println!("\nHit error: {:#?}", error);
-//                running = false;
+                //                running = false;
             }
         }
     }
-//    println!("Latencies are: {:#?}", latencies);
+    //    println!("Latencies are: {:#?}", latencies);
 }
