@@ -3,7 +3,11 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use crate::relation::AggregateExpr;
+use crate::AggregateFunc;
+use crate::BinaryFunc;
 use crate::{RelationExpr, ScalarExpr};
+use repr::Datum;
 use repr::RelationType;
 
 #[derive(Debug)]
@@ -26,29 +30,37 @@ impl NonNullable {
         match relation {
             RelationExpr::Map { input: _, scalars } => {
                 for (scalar, _typ) in scalars.iter_mut() {
-                    reduce_nonnullable(scalar, metadata);
+                    scalar_nonnullable(scalar, metadata);
                 }
             }
-            RelationExpr::Filter { input: _, predicates } => {
+            RelationExpr::Filter {
+                input: _,
+                predicates,
+            } => {
                 for predicate in predicates.iter_mut() {
-                    reduce_nonnullable(predicate, metadata);
+                    scalar_nonnullable(predicate, metadata);
                 }
             }
-            RelationExpr::Reduce { input: _, group_key: _, aggregates } => {
+            RelationExpr::Reduce {
+                input,
+                group_key: _,
+                aggregates,
+            } => {
                 for (aggregate, _typ) in aggregates.iter_mut() {
-                    reduce_nonnullable(&mut aggregate.expr, metadata);
+                    let input_type = input.typ();
+                    scalar_nonnullable(&mut aggregate.expr, &input_type);
+                    aggregate_nonnullable(aggregate, &input_type);
                 }
             }
-            _ => { }
+            _ => {}
         }
     }
 }
 
-fn reduce_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
+/// Transformations to scalar functions, based on nonnullability of columns.
+fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
+    // Tests for null can be replaced by "false" for non-nullable columns.
     expr.visit_mut(&mut |e| {
-
-        use repr::Datum;
-        use crate::BinaryFunc;
         if let ScalarExpr::CallBinary {
             func: BinaryFunc::Eq,
             expr1,
@@ -56,13 +68,25 @@ fn reduce_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
         } = &e
         {
             match (&**expr1, &**expr2) {
-                (ScalarExpr::Column(c), ScalarExpr::Literal(Datum::Null)) | (ScalarExpr::Literal(Datum::Null), ScalarExpr::Column(c)) => {
+                (ScalarExpr::Column(c), ScalarExpr::Literal(Datum::Null))
+                | (ScalarExpr::Literal(Datum::Null), ScalarExpr::Column(c)) => {
                     if !metadata.column_types[*c].nullable {
                         *e = ScalarExpr::Literal(Datum::False);
                     }
                 }
-                _ => { }
+                _ => {}
             }
         }
     })
+}
+
+/// Transformations to aggregation functions, based on nonnullability of columns.
+fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
+    // An aggregate that is a count of non-nullable data can be replaced by a countall.
+    if let (AggregateFunc::Count, ScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
+        if !metadata.column_types[*c].nullable && !expr.distinct {
+            expr.func = AggregateFunc::CountAll;
+            expr.expr = ScalarExpr::Literal(Datum::Null);
+        }
+    }
 }
