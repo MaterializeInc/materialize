@@ -70,7 +70,8 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
-            Box::new(crate::transform::inline_let::InlineLet),
+            Box::new(crate::transform::binding::Unbind),
+            Box::new(crate::transform::binding::Deduplicate),
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),
             Box::new(crate::transform::reduction::UndistributeAnd),
@@ -92,7 +93,7 @@ impl Default for Optimizer {
             // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::fusion::project::Project),
-            Box::new(crate::transform::binding::Hoist),
+            Box::new(crate::transform::binding::Normalize),
         ];
         Self { transforms }
     }
