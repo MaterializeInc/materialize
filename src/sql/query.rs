@@ -1067,7 +1067,10 @@ impl Planner {
 
                 "ascii" => {
                     if sql_func.args.len() != 1 {
-                        bail!("ascii expects one argument, got {}", sql_func.args.len());
+                        bail!(
+                            "ascii expects one argument, got {}",
+                            sql_func.args.len()
+                        );
                     }
                     let (expr, typ) = self.plan_expr(ctx, &sql_func.args[0])?;
                     if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null
@@ -2102,7 +2105,7 @@ impl<'ast> AggregateFuncVisitor<'ast> {
                 Ok(self
                     .aggs
                     .into_iter()
-                    .filter(move |agg| seen.insert(agg.clone()))
+                    .filter(move |agg| seen.insert(&**agg))
                     .collect())
             }
         }
