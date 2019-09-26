@@ -71,6 +71,7 @@ fn run() -> Result<(), failure::Error> {
         "text file whose lines are process addresses",
         "FILE",
     );
+    opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
     let popts = opts.parse(&args[1..])?;
     let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("MZ_GIT_SHA"));
@@ -95,6 +96,7 @@ fn run() -> Result<(), failure::Error> {
     let process = popts.opt_get_default("process", 0)?;
     let processes = popts.opt_get_default("processes", 1)?;
     let address_file = popts.opt_str("address-file");
+    let gather_metrics = !popts.opt_present("no-prometheus");
 
     if process >= processes {
         bail!("process ID {} is not between 0 and {}", process, processes);
@@ -113,6 +115,7 @@ fn run() -> Result<(), failure::Error> {
         threads,
         process,
         addresses,
+        gather_metrics,
     })
 }
 
