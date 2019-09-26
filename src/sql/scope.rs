@@ -18,6 +18,8 @@
 //! * Table aliases such as `foo as quux` replace the old table name.
 //! * Functions create unnamed columns, which can be named with columns aliases `(bar + 1) as more_bar`
 
+//! Additionally, most databases fold some form of CSE into name resolution so that eg `SELECT sum(x) FROM foo GROUP BY sum(x)` would be treated something like `SELECT "sum(x)" FROM foo GROUP BY sum(x) AS "sum(x)"` rather than failing to resolve `x`. We handle this by including the underlying `sqlparser::ast::Expr` in cases where this is possible.
+
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
 use super::expr::ColumnRef;
@@ -36,6 +38,7 @@ pub struct ScopeItemName {
 pub struct ScopeItem {
     pub names: Vec<ScopeItemName>,
     pub typ: ColumnType,
+    pub expr: Option<sqlparser::ast::Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +87,7 @@ impl Scope {
                     column_name: typ.name.clone(),
                 }],
                 typ,
+                expr: None,
             })
             .collect();
         scope
@@ -152,6 +156,19 @@ impl Scope {
             },
             &format!("{}.{}", table_name, column_name),
         )
+    }
+
+    /// Look to see if there is an already-calculated instance of this expr.
+    /// Failing to find one is not an error, so this just returns Option
+    pub fn resolve_expr<'a>(
+        &'a self,
+        expr: &sqlparser::ast::Expr,
+    ) -> Option<(ColumnRef, &'a ScopeItem)> {
+        self.items
+            .iter()
+            .enumerate()
+            .find(|(_, item)| item.expr == expr)
+            .map(|(i, item)| (ColumnRef::Inner(i), item))
     }
 
     pub fn product(self, right: Self) -> Self {
