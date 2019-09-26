@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+#
+# ci-image — builds local testing versions of CI docker containers.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+. misc/shlib/shlib.bash
+
+if [[ $# -lt 2 ]]
+then
+    echo "usage: $0 <build|run|build-and-run|bnr> <materialized|metrics> [<args>...]"
+    exit 1
+fi
+
+cmd=$1 && shift
+image=$1 && shift
+
+case "$image" in
+    materialized|metrics) ;;
+    *) die "$0: unknown image: $image"
+esac
+
+do_build() {
+    run bin/xcompile build --bin "$image" "$@"
+    run cp target/x86_64-unknown-linux-gnu/debug/"$image" misc/docker/ci-"$image"
+    local tag=materialize/ci-"$image"
+    run docker build --pull --tag "$tag:latest" --tag "$tag:local" misc/docker/ci-"$image"
+}
+
+do_run() {
+    run docker run -it --rm --init materialize/ci-"$image" "$@"
+}
+
+do_bnr() {
+    # Arguments are interpreted as run arguments, not build arguments, because
+    # there's no obvious way to separate the two.
+    do_build
+    do_run "$@"
+}
+
+case "$cmd" in
+    build) do_build "$@" ;;
+    run) do_run "$@" ;;
+    build-and-run|bnr) do_bnr "$@" ;;
+    *)
+        printf "$0: unknown command %q\n" "$cmd"
+        exit 1
+        ;;
+esac

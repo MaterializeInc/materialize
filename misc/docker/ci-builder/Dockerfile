@@ -8,6 +8,7 @@ FROM ubuntu:bionic
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     clang \
+    cmake \
     curl \
     gcc \
     g++ \
@@ -46,11 +47,12 @@ ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
 WORKDIR /workdir
 
+ARG RUST_DATE
 ARG RUST_VERSION
 
 RUN mkdir rust \
-    && curl -fsSL https://static.rust-lang.org/dist/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz > rust.tar.gz \
-    && curl -fsSL "https://static.rust-lang.org/dist/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz.asc" > rust.asc \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz > rust.tar.gz \
+    && curl -fsSL "https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-x86_64-unknown-linux-gnu.tar.gz.asc" > rust.asc \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C rust --strip-components=1 \
     && rm -f rust.asc rust.tar.gz \
