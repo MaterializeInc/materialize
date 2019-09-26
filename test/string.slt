@@ -34,4 +34,307 @@ select ascii(null);
 ----
 NULL
 
-#TODO: test that ascii works with string expressions inside
+query I
+select ascii(substr('inside literal', 3, 4));
+----
+115
+
+statement ok
+CREATE TABLE substrtest (strcol CHAR(15), vccol VARCHAR(15), smicol SMALLINT, intcol INT)
+
+### substr ###
+statement ok
+INSERT INTO substrtest VALUES ('Mg', 'Mn', 1, 1), ('magnesium', 'manganese', 3, null),
+    (null, null, 0, 0), ('24.31', '54.94', 2, 3), ('长久不见', '爱不释手', null, 2),
+    ('', '', -1, 2) 
+
+#invalid input
+statement error
+select substr(192, 1, 1)
+
+statement error
+select substr('from wrong type', 1.5, 2)
+
+statement error
+select substr('for wrong type', 2, 1.5)
+
+query I
+select substr('for cannot be negative', 1, -3)
+----
+NULL
+
+query I
+select substr('for still cannot be negative', 30, -2)
+----
+NULL
+
+#standard tests
+
+#TODO: materialize#589 select strcol from substrtest
+query T colnames
+select substr(vccol, 1, 3) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54.
+Mn
+man
+爱不释
+
+query T colnames
+select substr(vccol, 1, 5) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54.94
+Mn
+manga
+爱不释手
+
+query T colnames
+select substr(vccol, 1) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54.94
+Mn
+manganese
+爱不释手
+
+query T colnames
+select substr(vccol, 3) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+(empty)
+.94
+nganese
+释手
+
+query T colnames
+select substr(vccol, 3, 1) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+(empty)
+.
+n
+释
+
+#negative start position
+query T colnames
+select substr(vccol, -1) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54.94
+Mn
+manganese
+爱不释手
+
+query T colnames
+select substr(vccol, -2, 6) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54.
+Mn
+man
+爱不释
+
+query T colnames
+select substr(vccol, -3, 5) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+5
+M
+m
+爱
+
+query TT colnames
+select substr(strcol, -4, 5) as strres, substr(vccol, -4, 5) as vcres from substrtest order by vcres;
+----
+strres  vcres
+NULL    NULL
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+
+query TT colnames
+select substr(strcol, -6, 6) as strres, substr(vccol, -6, 6) as vcres from substrtest order by vcres;
+----
+strres  vcres
+NULL    NULL
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+
+query TT colnames
+select substr(strcol, -5, 4) as strres, substr(vccol, -5, 4) as vcres from substrtest order by vcres;
+----
+strres  vcres
+NULL    NULL
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+
+#for or start is zero
+query T colnames
+select substr(vccol, 0) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54.94
+Mn
+manganese
+爱不释手
+
+query T colnames
+select substr(vccol, 0, 3) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54
+Mn
+ma
+爱不
+
+query TT colnames
+select substr(strcol, 0, 0) as strres, substr(vccol, 0, 0) as vcres from substrtest order by vcres;
+----
+strres  vcres
+NULL    NULL
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+
+query TT colnames
+select substr(strcol, 3, 0) as strres, substr(vccol, 3, 0) as vcres from substrtest order by vcres;
+----
+strres  vcres
+NULL    NULL
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+(empty) (empty)
+
+#null inputs
+query T
+select substr(null, 1);
+----
+NULL
+
+query T
+select substr(null, 1, 3);
+----
+NULL
+
+query T
+select substr('text string', null);
+----
+NULL
+
+query T
+select substr(null, null);
+----
+NULL
+
+query T
+select substr('foo', null, 3);
+----
+NULL
+
+query T
+select substr('bar', null, null);
+----
+NULL
+
+query T
+select substr('baz', 2, null);
+----
+NULL
+
+query T
+select substr(null, null, null);
+----
+NULL
+
+#alternative syntax
+query T colnames
+select substring(vccol, 1, 3) as vcres from substrtest order by vcres;
+----
+vcres
+NULL
+(empty)
+54.
+Mn
+man
+爱不释
+
+#testing different kinds of int columns and null content in columns
+query T
+select substr(vccol, smicol, smicol) as vcres from substrtest order by vcres;
+----
+NULL
+NULL
+NULL
+4.
+M
+nga
+
+query T
+select substr(vccol, intcol, intcol) as vcres from substrtest order by vcres;
+----
+NULL
+NULL
+(empty)
+.94
+M
+不释
+
+query T
+select substr(vccol, smicol, intcol) as vcres from substrtest order by vcres;
+----
+NULL
+NULL
+NULL
+(empty)
+4.9
+M
+
+query T
+select substr(vccol, intcol, smicol) as vcres from substrtest order by vcres;
+----
+NULL
+NULL
+NULL
+NULL
+.9
+M
+
+query T
+select substr('subexpression test', ascii(''), 3);
+----
+su
+
+#TODO: materialize#606 Add tests for the alternate syntax if it is enabled

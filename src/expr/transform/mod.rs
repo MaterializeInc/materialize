@@ -15,6 +15,7 @@ pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
 pub mod join_order;
+pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod reduction;
@@ -70,13 +71,15 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
-            Box::new(crate::transform::inline_let::InlineLet),
+            Box::new(crate::transform::binding::Unbind),
+            Box::new(crate::transform::binding::Deduplicate),
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),
             Box::new(crate::transform::reduction::UndistributeAnd),
             Box::new(crate::transform::split_predicates::SplitPredicates),
             Box::new(crate::transform::Fixpoint {
                 transforms: vec![
+                    Box::new(crate::transform::nonnullable::NonNullable),
                     Box::new(crate::transform::reduction::FoldConstants),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
@@ -92,7 +95,7 @@ impl Default for Optimizer {
             // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::fusion::project::Project),
-            Box::new(crate::transform::binding::Hoist),
+            Box::new(crate::transform::binding::Normalize),
         ];
         Self { transforms }
     }

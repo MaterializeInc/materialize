@@ -207,8 +207,7 @@ pub trait StreamExt: Stream {
     ///      to write more boilerplate.
     fn recv(self) -> Recv<Self>
     where
-        Self: Stream<Error = io::Error>,
-        Self: Sized,
+        Self: Stream<Error = io::Error> + Sized,
     {
         Recv { inner: Some(self) }
     }

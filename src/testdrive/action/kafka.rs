@@ -222,6 +222,7 @@ impl Action for IngestAction {
             // many assumptions that our tests make.)
             let mut backoff = ExponentialBackoff::default();
             backoff.max_elapsed_time = Some(Duration::from_secs(5));
+            #[allow(clippy::try_err)]
             (|| {
                 let metadata = state
                     .kafka_consumer

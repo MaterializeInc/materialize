@@ -115,8 +115,7 @@ impl<D> fmt::Debug for SenderState<D> {
 
 impl<D> Sender<D>
 where
-    D: Serialize + Send + Clone + 'static,
-    for<'de> D: Deserialize<'de>,
+    D: Serialize + for<'de> Deserialize<'de> + Send + Clone + 'static,
 {
     pub(crate) fn new<'a, C, I>(uuid: Uuid, addrs: I) -> Sender<D>
     where
@@ -192,8 +191,7 @@ pub struct Receiver<D>(mpsc::Receiver<D>);
 
 impl<D> Receiver<D>
 where
-    D: Serialize + Send + 'static,
-    for<'de> D: Deserialize<'de>,
+    D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
 {
     pub(crate) fn new<C>(conn_rx: impl Stream<Item = C, Error = ()> + Send + 'static) -> Receiver<D>
     where

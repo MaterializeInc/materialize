@@ -187,8 +187,7 @@ where
 pub(crate) fn encoder<C, D>(conn: C) -> impl Sink<SinkItem = D, SinkError = bincode::Error>
 where
     C: Connection,
-    D: Serialize + Send,
-    for<'de> D: Deserialize<'de>,
+    D: Serialize + for<'de> Deserialize<'de> + Send,
 {
     WriteBincode::new(FramedWrite::new(conn, LengthDelimitedCodec::new()).sink_from_err())
 }
@@ -198,8 +197,7 @@ where
 pub(crate) fn decoder<C, D>(conn: C) -> impl Stream<Item = D, Error = bincode::Error>
 where
     C: Connection,
-    D: Serialize + Send,
-    for<'de> D: Deserialize<'de>,
+    D: Serialize + for<'de> Deserialize<'de> + Send,
 {
     ReadBincode::new(FramedRead::new(conn, LengthDelimitedCodec::new()).from_err())
 }

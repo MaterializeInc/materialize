@@ -15,6 +15,7 @@ use ::postgres::types::{FromSql, Type as PostgresType};
 use ::postgres::{Client, NoTls};
 use byteorder::{NetworkEndian, ReadBytesExt};
 use failure::{bail, ensure, format_err};
+use sqlparser::ast::ColumnOption;
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
 use repr::decimal::Significand;
@@ -92,7 +93,10 @@ END $$;
                             Ok(ColumnType {
                                 name: Some(column.name.clone()),
                                 scalar_type: scalar_type_from_sql(&column.data_type)?,
-                                nullable: true,
+                                nullable: !column
+                                    .options
+                                    .iter()
+                                    .any(|o| o.option == ColumnOption::NotNull),
                             })
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
@@ -331,8 +335,8 @@ impl FromSql<'_> for DecimalWrapper {
         significand *= match sign {
             0 => 1,
             0x4000 => -1,
-            0xC000 => Err(format_err!("Got a decimal NaN"))?,
-            _ => Err(format_err!("Got an invalid sign byte: {:?}", sign))?,
+            0xC000 => return Err(format_err!("Got a decimal NaN").into()),
+            _ => return Err(format_err!("Got an invalid sign byte: {:?}", sign).into()),
         };
 
         // first digit got factor 10_000^(digits.len() - 1), but should get 10_000^weight

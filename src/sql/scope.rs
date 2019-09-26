@@ -135,7 +135,7 @@ impl Scope {
         column_name: &str,
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
         self.resolve(
-            |item: &ScopeItemName| item.column_name.as_deref() == Some(column_name),
+            |item: &ScopeItemName| item.column_name.mz_as_deref() == Some(column_name),
             column_name,
         )
     }
@@ -147,8 +147,8 @@ impl Scope {
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
         self.resolve(
             |item: &ScopeItemName| {
-                item.table_name.as_deref() == Some(table_name)
-                    && item.column_name.as_deref() == Some(column_name)
+                item.table_name.mz_as_deref() == Some(table_name)
+                    && item.column_name.mz_as_deref() == Some(column_name)
             },
             &format!("{}.{}", table_name, column_name),
         )

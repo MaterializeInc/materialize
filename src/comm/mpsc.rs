@@ -77,8 +77,7 @@ impl<D> Sender<D> {
     /// about the API for sending messages to a sink.
     pub fn connect(&self) -> impl Future<Item = SendSink<D>, Error = io::Error>
     where
-        D: Serialize + Send + 'static,
-        for<'de> D: Deserialize<'de>,
+        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     {
         match &self.addr {
             Addr::Tcp(addr) => self.connect_core::<TcpStream>(addr).left(),
@@ -89,8 +88,7 @@ impl<D> Sender<D> {
     fn connect_core<C>(&self, addr: &C::Addr) -> impl Future<Item = SendSink<D>, Error = io::Error>
     where
         C: Connection,
-        D: Serialize + Send + 'static,
-        for<'de> D: Deserialize<'de>,
+        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     {
         let uuid = self.uuid;
         C::connect(addr)
@@ -109,8 +107,7 @@ impl<D> Receiver<D> {
     pub(crate) fn new<C>(conn_rx: impl Stream<Item = C, Error = ()> + Send + 'static) -> Receiver<D>
     where
         C: protocol::Connection,
-        D: Serialize + Send + 'static,
-        for<'de> D: Deserialize<'de>,
+        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     {
         Receiver(Box::new(
             conn_rx
