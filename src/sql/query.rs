@@ -2016,7 +2016,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
 /// This is used to collect aggregates from within an `Expr`.
 /// See the explanation of aggregate handling at the top of the file for more details.
 struct AggregateFuncVisitor<'ast> {
-    aggs: HashSet<&'ast Function>,
+    aggs: Vec<&'ast Function>,
     within_aggregate: bool,
     err: Option<failure::Error>,
 }
@@ -2024,16 +2024,23 @@ struct AggregateFuncVisitor<'ast> {
 impl<'ast> AggregateFuncVisitor<'ast> {
     fn new() -> AggregateFuncVisitor<'ast> {
         AggregateFuncVisitor {
-            aggs: HashSet::new(),
+            aggs: Vec::new(),
             within_aggregate: false,
             err: None,
         }
     }
 
-    fn into_result(self) -> Result<HashSet<&'ast Function>, failure::Error> {
+    fn into_result(self) -> Result<Vec<&'ast Function>, failure::Error> {
         match self.err {
             Some(err) => Err(err),
-            None => Ok(self.aggs),
+            None => {
+                let mut seen = HashSet::new();
+                Ok(self
+                    .aggs
+                    .into_iter()
+                    .filter(move |agg| seen.insert(agg.clone()))
+                    .collect())
+            }
         }
     }
 }
@@ -2047,7 +2054,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
                 self.err = Some(format_err!("nested aggregate functions are not allowed"));
                 return;
             }
-            self.aggs.insert(func);
+            self.aggs.push(func);
             self.within_aggregate = true;
         }
         visit::visit_function(self, func);

@@ -213,18 +213,18 @@ GROUP BY ol_number
 ORDER BY ol_number
 ----
 Project {
-  outputs: [0, 4, 1, 6, 7, 3, 0],
+  outputs: [0, 4, 3, 6, 7, 2, 0],
   Map {
     scalars: [
-      ((i32todec #4 * 10000000dec) / i64todec #2) / 10dec,
-      ((#1 * 10000000dec) / (i64todec #5 * 100dec)) * 10dec
+      ((i32todec #4 * 10000000dec) / i64todec #1) / 10dec,
+      ((#3 * 10000000dec) / (i64todec #5 * 100dec)) * 10dec
     ],
     Reduce {
       group_key: [10],
       aggregates: [
-        sum(#8),
         count(#7),
         countall(null),
+        sum(#8),
         sum(#7),
         count(#8)
       ],
@@ -1536,10 +1536,10 @@ Let {
   id-1 = Reduce {
     group_key: [],
     aggregates: [
+      sum(#8),
       sum(
         if #14 ~ compilelike "PR%" then #8 else i64todec 0 * 100dec
-      ),
-      sum(#8)
+      )
     ],
     Join {
       variables: [[(0, 4), (1, 0)]],
@@ -1559,7 +1559,7 @@ Project {
   outputs: [2],
   Map {
     scalars: [
-      (((10000dec * #0) * 10000000dec) / (100dec + #1)) * 10dec
+      (((10000dec * #1) * 10000000dec) / (100dec + #0)) * 10dec
     ],
     Union {
       Get { id-1 },

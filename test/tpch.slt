@@ -123,29 +123,29 @@ ORDER BY
 	l_linestatus
 ----
 Project {
-  outputs: [0, 1, 7, 5, 2, 10, 11, 12, 13, 4, 0, 1],
+  outputs: [0, 1, 7, 3, 6, 9, 11, 12, 13, 5, 0, 1],
   Map {
     scalars: [
-      ((#7 * 10000000dec) / (i64todec #9 * 100dec)) * 10dec,
-      ((#5 * 10000000dec) / (i64todec #6 * 100dec)) * 10dec,
-      ((#8 * 10000000dec) / (i64todec #3 * 100dec)) * 10dec
+      ((#7 * 10000000dec) / (i64todec #8 * 100dec)) * 10dec,
+      ((#3 * 10000000dec) / (i64todec #2 * 100dec)) * 10dec,
+      ((#10 * 10000000dec) / (i64todec #4 * 100dec)) * 10dec
     ],
     Reduce {
       group_key: [16, 17],
       aggregates: [
-        sum(#5 * ((i64todec 1 * 100dec) - #6)),
+        count(#5),
+        sum(#5),
         count(#6),
         countall(null),
-        sum(#5),
-        count(#5),
+        sum(#5 * ((i64todec 1 * 100dec) - #6)),
         sum(#4),
-        sum(#6),
         count(#4),
         sum(
           (#5 * ((i64todec 1 * 100dec) - #6))
           *
           ((i64todec 1 * 100dec) + #7)
-        )
+        ),
+        sum(#6)
       ],
       Project {
         outputs: [
