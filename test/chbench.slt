@@ -501,27 +501,24 @@ Reduce {
       },
       Distinct {
         group_key: [0, 1, 2, 3, 4, 5, 6, 7],
-        Project {
-          outputs: [0, 1, 2, 3, 4, 5, 6, 7],
-          Filter {
-            predicates: [#14 >= #4],
-            Join {
-              variables: [
-                [(0, 1), (1, 1)],
-                [(0, 2), (1, 2)],
-                [(0, 0), (1, 0)]
-              ],
-              Filter {
-                predicates: [!isnull #0, !isnull #1, !isnull #2],
-                Distinct {
-                  group_key: [0, 1, 2, 3, 4, 5, 6, 7],
-                  Get { "order" }
-                }
-              },
-              Filter {
-                predicates: [!isnull #0, !isnull #1, !isnull #2],
-                Get { orderline }
+        Filter {
+          predicates: [#14 >= #4],
+          Join {
+            variables: [
+              [(0, 1), (1, 1)],
+              [(0, 2), (1, 2)],
+              [(0, 0), (1, 0)]
+            ],
+            Filter {
+              predicates: [!isnull #0, !isnull #1, !isnull #2],
+              Distinct {
+                group_key: [0, 1, 2, 3, 4, 5, 6, 7],
+                Get { "order" }
               }
+            },
+            Filter {
+              predicates: [!isnull #0, !isnull #1, !isnull #2],
+              Get { orderline }
             }
           }
         }
@@ -987,10 +984,7 @@ Let {
           variables: [],
           Union {
             Negate {
-              Distinct {
-                group_key: [0, 1, 2],
-                Project { outputs: [0, 1, 2], Get { id-3 } }
-              }
+              Distinct { group_key: [0, 1, 2], Get { id-3 } }
             },
             Get { id-2 }
           },
@@ -1017,10 +1011,7 @@ Project {
           variables: [],
           Union {
             Negate {
-              Distinct {
-                group_key: [0, 1, 2],
-                Project { outputs: [0, 1, 2], Get { id-4 } }
-              }
+              Distinct { group_key: [0, 1, 2], Get { id-4 } }
             },
             Get { id-2 }
           },
@@ -1188,33 +1179,7 @@ Reduce {
                 20,
                 21
               ],
-              Project {
-                outputs: [
-                  0,
-                  1,
-                  2,
-                  3,
-                  4,
-                  5,
-                  6,
-                  7,
-                  8,
-                  9,
-                  10,
-                  11,
-                  12,
-                  13,
-                  14,
-                  15,
-                  16,
-                  17,
-                  18,
-                  19,
-                  20,
-                  21
-                ],
-                Get { id-1 }
-              }
+              Get { id-1 }
             }
           },
           Get { customer }
@@ -1269,12 +1234,7 @@ Project {
       Join {
         variables: [],
         Union {
-          Negate {
-            Distinct {
-              group_key: [],
-              Project { outputs: [], Get { id-1 } }
-            }
-          },
+          Negate { Distinct { group_key: [], Get { id-1 } } },
           Constant [[]]
         },
         Constant [[null, null]]
@@ -1547,12 +1507,7 @@ Project {
       Join {
         variables: [],
         Union {
-          Negate {
-            Distinct {
-              group_key: [],
-              Project { outputs: [], Get { id-1 } }
-            }
-          },
+          Negate { Distinct { group_key: [], Get { id-1 } } },
           Constant [[]]
         },
         Constant [[null]]
@@ -1655,12 +1610,7 @@ Union {
   Join {
     variables: [],
     Union {
-      Negate {
-        Distinct {
-          group_key: [],
-          Project { outputs: [], Get { id-1 } }
-        }
-      },
+      Negate { Distinct { group_key: [], Get { id-1 } } },
       Constant [[]]
     },
     Constant [[null]]
@@ -2250,72 +2200,21 @@ Let {
         45,
         46
       ],
-      Project {
-        outputs: [
-          0,
-          1,
-          2,
-          3,
-          4,
-          5,
-          6,
-          7,
-          8,
-          9,
-          10,
-          11,
-          12,
-          13,
-          14,
-          15,
-          16,
-          17,
-          18,
-          19,
-          20,
-          21,
-          22,
-          23,
-          24,
-          25,
-          26,
-          27,
-          28,
-          29,
-          30,
-          31,
-          32,
-          33,
-          34,
-          35,
-          36,
-          37,
-          38,
-          39,
-          40,
-          41,
-          42,
-          43,
-          44,
-          45,
-          46
-        ],
-        Filter {
-          predicates: [#53 > #13],
-          Join {
-            variables: [
-              [(0, 8), (1, 1)],
-              [(0, 9), (1, 2)],
-              [(0, 7), (1, 0)]
-            ],
-            Filter {
-              predicates: [!isnull #7, !isnull #8, !isnull #9],
-              Get { id-2 }
-            },
-            Filter {
-              predicates: [!isnull #0, !isnull #1, !isnull #2],
-              Get { orderline }
-            }
+      Filter {
+        predicates: [#53 > #13],
+        Join {
+          variables: [
+            [(0, 8), (1, 1)],
+            [(0, 9), (1, 2)],
+            [(0, 7), (1, 0)]
+          ],
+          Filter {
+            predicates: [!isnull #7, !isnull #8, !isnull #9],
+            Get { id-2 }
+          },
+          Filter {
+            predicates: [!isnull #0, !isnull #1, !isnull #2],
+            Get { orderline }
           }
         }
       }
@@ -2496,58 +2395,7 @@ Reduce {
                   45,
                   46
                 ],
-                Project {
-                  outputs: [
-                    0,
-                    1,
-                    2,
-                    3,
-                    4,
-                    5,
-                    6,
-                    7,
-                    8,
-                    9,
-                    10,
-                    11,
-                    12,
-                    13,
-                    14,
-                    15,
-                    16,
-                    17,
-                    18,
-                    19,
-                    20,
-                    21,
-                    22,
-                    23,
-                    24,
-                    25,
-                    26,
-                    27,
-                    28,
-                    29,
-                    30,
-                    31,
-                    32,
-                    33,
-                    34,
-                    35,
-                    36,
-                    37,
-                    38,
-                    39,
-                    40,
-                    41,
-                    42,
-                    43,
-                    44,
-                    45,
-                    46
-                  ],
-                  Get { id-3 }
-                }
+                Get { id-3 }
               }
             },
             Get { id-2 }
