@@ -20,14 +20,19 @@ fi
 cmd=$1 && shift
 channel=$1 && shift
 
-if [[ "$channel" = stable ]]; then
-    rust_version=$(<rust-toolchain)
-elif [[ "$channel" = nightly ]]; then
-    rust_version=nightly
-else
-    printf "unknown rust channel %q\n" "$channel"
-    exit 1
-fi
+rust_date=
+case "$channel" in
+    stable) rust_version=$(<rust-toolchain) ;;
+    nightly) rust_version=nightly ;;
+    nightly-*)
+        rust_date=/${channel#nightly-}
+        rust_version=nightly
+        ;;
+    *)
+        printf "unknown rust channel %q\n" "$channel"
+        exit 1
+        ;;
+esac
 
 uid=$(id -u)
 gid=$(id -g)
@@ -37,6 +42,7 @@ gid=$(id -g)
 build() {
     docker build --pull \
         --build-arg "RUST_VERSION=$rust_version" \
+        --build-arg "RUST_DATE=$rust_date" \
         --tag materialize/ci-builder \
         "$@" misc/docker/ci-builder
 }
@@ -46,7 +52,7 @@ case "$cmd" in
         build
         ;;
     push)
-        tag=$channel-$(date +%Y%m%d-%H%M%S)
+        tag=$rust_version-$(date +%Y%m%d-%H%M%S)
         build --tag materialize/ci-builder:"$tag"
         docker push materialize/ci-builder:"$tag"
         ;;

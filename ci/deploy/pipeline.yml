@@ -10,7 +10,7 @@ steps:
       queue: builder
     plugins:
       - docker#v3.1.0:
-          image: materialize/ci-builder:nightly-20190731-030202
+          image: materialize/ci-builder:nightly-20190926-130826
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
