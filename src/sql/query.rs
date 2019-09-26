@@ -308,13 +308,13 @@ impl Planner {
             let mut select_all_mapping = HashMap::new();
             for group_expr in &s.group_by {
                 let (expr, typ) = self.plan_expr(ctx, group_expr)?;
-                let column = from_scope.len() + group_exprs.len();
+                let new_column = group_key.len();
                 if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr {
                     // If we later have `SELECT foo.*` we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
                     // This is really hard to do right using SQL name resolution, so instead we just track the movement here
-                    select_all_mapping.insert(*old_column, column);
+                    select_all_mapping.insert(*old_column, new_column);
                 }
-                group_key.push(column);
+                group_key.push(from_scope.len() + group_exprs.len());
                 group_exprs.push((expr, typ.clone()));
                 group_scope.items.push(ScopeItem {
                     names: vec![ScopeItemName {
