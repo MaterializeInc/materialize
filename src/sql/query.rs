@@ -532,8 +532,7 @@ impl Planner {
                 expr: sql_expr,
                 alias,
             } => {
-                let (expr, mut typ) = self.plan_expr(ctx, sql_expr)?;
-                typ.name = Some(alias.clone());
+                let (expr, typ) = self.plan_expr(ctx, sql_expr)?;
                 let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
                     ctx.scope.items[*i].clone()
                 } else {
@@ -543,6 +542,7 @@ impl Planner {
                     table_name: None,
                     column_name: Some(alias.clone()),
                 });
+                scope_item.typ.name = Some(alias.clone());
                 scope_item.expr = Some(sql_expr.clone());
                 Ok(vec![(expr, scope_item)])
             }

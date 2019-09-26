@@ -1,17 +1,8 @@
-# Various SQL-specific forms of common subexpression elimination, which shades into scoping-by-expression-text
-
 statement ok
 create table foo(a int, b text);
 
 statement ok
 insert into foo(a,b) values (0, 'zero'), (1, 'one'), (2, 'two');
-
-query I rowsort
-select a+1 from foo group by a+1
-----
-1
-2
-3
 
 query I nosort
 select a from foo order by a
@@ -53,7 +44,7 @@ statement ok
 insert into bar(a) values (1);
 
 query I nosort
-select a from foo order by exists (select * from bar where bar.a = foo.a);
+select a from foo order by exists (select * from bar where bar.a = foo.a), a;
 ----
 0
 2

@@ -703,6 +703,11 @@ impl State {
                 .iter()
                 .map(|t| t.name.clone().unwrap_or_else(|| "?column?".into()))
                 .collect::<Vec<_>>();
+
+            // TODO(jamii) `typ` includes some extra types that are need by RowSetFinishing and then projected away.
+            // We don't have a good way of figuring out which these are since we don't get sent the RowSetFinishing, so we'll just assume it lines up with expected_types for now
+            let inferred_column_names = inferred_column_names[0..expected_types.len()].to_vec();
+
             let inferred_as_strs = &inferred_column_names
                 .iter()
                 .map(|n| n.as_str())
