@@ -26,7 +26,7 @@ want to increase memory available to Docker Engine using the following steps:
    4. Click "Apply and Restart".
    5. Continue with the `docker-compose` steps listed above.
 
-To get started, bring up the Docker Compose containers in the background:
+To get started, bring up the Docker Compose containers in the background. To do this, open up a new shell, and from the Materialize repository, change to the `ex/chbench` directory and type the following three commands after each other:
 
 ```shell session
 $ docker-compose up -d
@@ -62,7 +62,8 @@ $ docker-compose run chbench gen --warehouses=1
 ```
 
 You can generate bigger datasets by using more warehouses. Once the data is
-generated, it's time to fire up some load:
+generated, it's time to fire up some load! Type the follow command, which will 
+take control of your session and run for the specified number of seconds.
 
 ```shell session
 $ docker-compose run chbench run \
@@ -85,8 +86,12 @@ Workload:
 ```
 
 Once you see that the CSV import has succeeded, the initial data set has been
-loaded into MySQL. It's time to connect to `materialized` and install
-some materialized views!
+loaded into MySQL. The load generator will continue to run for the specified
+duration.
+
+It's time to connect to `materialized` and install some materialized views! In 
+a new shell, in the same directory, type the following which will bring up a
+materialize shell.
 
 ```shell session
 $ docker-compose run cli
