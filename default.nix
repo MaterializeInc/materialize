@@ -25,6 +25,7 @@ in pkgs.stdenv.mkDerivation rec {
     lsof # for mtrlz-shell
     curl # for testing
     confluent
+    shellcheck
     ] ++
     (if stdenv.isDarwin then [
     darwin.apple_sdk.frameworks.Security
