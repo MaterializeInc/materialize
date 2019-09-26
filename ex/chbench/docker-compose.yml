@@ -10,7 +10,7 @@ services:
     init: true
     command: -w1
   metrics:
-    image: materialize/ci-metrics:latest
+    image: materialize/metrics:latest
     init: true
   mysql:
     image: debezium/example-mysql:0.9
