@@ -308,21 +308,21 @@ impl Planner {
             let mut select_all_mapping = HashMap::new();
             for expr in &s.group_by {
                 let (expr, typ) = self.plan_expr(ctx, &expr)?;
-                match &expr {
-                    ScalarExpr::Column(ColumnRef::Inner(i)) => {
-                        // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
-                        if !group_key.contains(i) {
-                            group_key.push(*i);
-                            select_all_mapping.insert(*i, group_scope.len());
-                            group_scope.items.push(from_scope.items[*i].clone());
-                        }
-                    }
-                    _ => {
-                        group_key.push(from_scope.len() + group_exprs.len());
-                        group_exprs.push((expr, typ.clone()));
-                        group_scope.items.push(ScopeItem { names: vec![], typ });
-                    }
+                let column = from_scope.len() + group_exprs.len();
+                if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr {
+                    // If we later have `SELECT foo.*` we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
+                    // This is really hard to do right using SQL name resolution, so instead we just track the movement here
+                    select_all_mapping.insert(*old_column, column);
                 }
+                group_key.push(column);
+                group_exprs.push((expr, typ.clone()));
+                group_scope.items.push(ScopeItem {
+                    names: vec![ScopeItemName {
+                        table_name: None,
+                        column_name: typ.name.clone(),
+                    }],
+                    typ,
+                });
             }
             // gather aggregates
             let mut aggregate_visitor = AggregateFuncVisitor::new();
@@ -383,7 +383,6 @@ impl Planner {
 
         // Step 5. Handle projections.
         {
-            let relation_type = relation_expr.typ();
             let mut project_exprs = vec![];
             let mut project_key = vec![];
             for p in &s.projection {
@@ -395,26 +394,8 @@ impl Planner {
                 for (expr, typ) in
                     self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
                 {
-                    match &expr {
-                        ScalarExpr::Column(ColumnRef::Inner(i))
-                            if typ.name == relation_type.column_types[*i].name =>
-                        {
-                            // Note that if the column name changed (i.e.,
-                            // because the select item was aliased), then we
-                            // can't take this fast path, or we'll lose the
-                            // alias. Hence the guard on this match arm.
-                            //
-                            // TODO(benesch): this is a dumb restriction. If
-                            // this optimization is actually important, perhaps
-                            // it should become a proper query transformation
-                            // and we shouldn't bother trying to do it here.
-                            project_key.push(*i);
-                        }
-                        _ => {
-                            project_key.push(group_scope.len() + project_exprs.len());
-                            project_exprs.push((expr, typ));
-                        }
-                    }
+                    project_key.push(group_scope.len() + project_exprs.len());
+                    project_exprs.push((expr, typ));
                 }
             }
             relation_expr = relation_expr.map(project_exprs).project(project_key);
