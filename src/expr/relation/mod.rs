@@ -8,7 +8,7 @@
 pub mod func;
 
 use self::func::AggregateFunc;
-use crate::pretty_pretty::{to_braced_doc, to_tightly_braced_doc};
+use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
 use crate::ScalarExpr;
 use failure::ResultExt;
 use pretty::Doc::{Newline, Space};
@@ -622,8 +622,10 @@ impl RelationExpr {
                 to_doc!(binding, Newline, body)
             }
             RelationExpr::Project { input, outputs } => {
-                let outputs =
-                    Doc::intersperse(outputs.iter().map(Doc::as_string), to_doc!(",", Space));
+                let outputs = compact_intersperse_doc(
+                    outputs.iter().map(Doc::as_string),
+                    to_doc!(",", Space),
+                );
                 let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
@@ -662,8 +664,8 @@ impl RelationExpr {
                 group_key,
                 aggregates,
             } => {
-                let keys = Doc::intersperse(
-                    group_key.iter().map(|k| format!("{}", k)),
+                let keys = compact_intersperse_doc(
+                    group_key.iter().map(Doc::as_string),
                     to_doc!(",", Space),
                 );
                 let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
@@ -963,13 +965,11 @@ mod tests {
         );
 
         assert_eq!(
-            project.to_doc().pretty(24).to_string(),
+            project.to_doc().pretty(14).to_string(),
             "Project {
   outputs: [
-    0,
-    1,
-    2,
-    3,
+    0, 1,
+    2, 3,
     4
   ],
   Constant []
@@ -1076,7 +1076,7 @@ mod tests {
         };
 
         assert_eq!(
-            reduce.to_doc().pretty(82).to_string(),
+            reduce.to_doc().pretty(84).to_string(),
             "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
@@ -1084,8 +1084,7 @@ mod tests {
             reduce.to_doc().pretty(16).to_string(),
             "Reduce {
   group_key: [
-    1,
-    2
+    1, 2
   ],
   aggregates: [
     sum(#0),

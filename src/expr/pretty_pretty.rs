@@ -14,8 +14,10 @@
 //! Making [`pretty`] Pretty Again
 
 use crate::RelationExpr;
+use ore::collections::CollectionExt;
 use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
+use std::collections::VecDeque;
 
 /// Convert the arguments into a [`pretty::Doc`], that is, a *document* for
 /// subsequent layout during pretty-printing. This macro makes it
@@ -118,4 +120,83 @@ where
         Doc::space_(),
         right
     )
+}
+
+/// Like [`Doc::intersperse`], but with additional breakpoints to allow for a
+/// more compressed expanded representation.
+///
+/// For example, a list of numbers interspersed with commas would normally be
+/// rendered as `1, 2, 3, 4, 5`, if it fits on one line, or otherwise one number
+/// per line:
+///
+/// ```text
+/// 1,
+/// 2,
+/// 3,
+/// 4,
+/// 5
+/// ```
+///
+/// If `compact_intersperse_doc` is used instead of [`Doc::intersperse`], the
+/// expanded representation can instead be laid out as
+///
+/// ```text
+/// 1, 2
+/// 3, 4
+/// 5
+/// ```
+///
+/// or:
+///
+/// ```text
+/// 1, 2, 3, 4
+/// 5
+/// ```
+///
+/// This isn't perfect, but it does a decent job, and works especially well when
+/// each element in `docs` has the same width. The problem space is more fully
+/// mapped out by Jean-Philippe Bernardy in ["Towards the Prettiest
+/// Printer"][blog], but his approach requires a new pretty-printing algorithm,
+/// while this approach works with the standard Wadler algorithm.
+///
+/// [blog]: https://jyp.github.io/posts/towards-the-prettiest-printer.html
+pub fn compact_intersperse_doc<'a, I, S>(docs: I, separator: S) -> Doc<'a, BoxDoc<'a, ()>, ()>
+where
+    I: IntoIterator,
+    I::Item: Into<Doc<'a, BoxDoc<'a, ()>, ()>>,
+    S: Into<Doc<'a, BoxDoc<'a, ()>, ()>> + Clone,
+{
+    let mut docs: VecDeque<_> = docs.into_iter().map(Into::into).collect();
+
+    if docs.is_empty() {
+        return Doc::nil();
+    }
+
+    // Build a binary tree of groupings. Given docs of A, B, C, D, E and
+    // separator SEP, we'll build:
+    //
+    //     (
+    //         (A SEP B).group()
+    //         SEP
+    //         (C SEP D).group()
+    //     ).group()
+    //     SEP
+    //     E.group
+    //
+    while docs.len() != 1 {
+        let chunks = docs.len() / 2;
+        let odd = docs.len() % 2 == 1;
+        for _ in 0..chunks {
+            let left = docs.pop_front().unwrap();
+            let right = docs.pop_front().unwrap();
+            let merged = left.append(separator.clone()).append(right).group();
+            docs.push_back(merged);
+        }
+        if odd {
+            let last = docs.pop_front().unwrap().group();
+            docs.push_back(last);
+        }
+    }
+
+    docs.into_element()
 }
