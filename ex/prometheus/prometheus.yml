@@ -1,0 +1,16 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+global:
+  # maximum dashboard update frequency, also the rate that clients clear their
+  # local cache. Overridable locally.
+  scrape_interval: 1s
+
+scrape_configs:
+  - job_name: materialized
+    scrape_interval: 1s
+    static_configs:
+      - targets:
+          - 'localhost:6875'
