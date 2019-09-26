@@ -32,7 +32,7 @@ fn measure_peek_times() {
                     Some(matched) => println!("Found time: {}.{}", &matched[1], &matched[2]),
                     None => println!("Didn't find a time!"),
                 }
-            },
+            }
             Err(error) => {
                 println!("Hit error: {:#?}", error);
             }
