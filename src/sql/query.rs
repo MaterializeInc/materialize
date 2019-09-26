@@ -108,13 +108,13 @@ impl Planner {
                 }
             }
         }
-        let transform = RowSetFinishing {
+        let finishing = RowSetFinishing {
             order_by,
             limit,
             project: (0..output_typ.column_types.len()).collect(),
             offset,
         };
-        Ok((expr.map(map_exprs), scope, transform))
+        Ok((expr.map(map_exprs), scope, finishing))
     }
 
     fn plan_set_expr(
@@ -253,8 +253,8 @@ impl Planner {
                 Ok((expr.unwrap(), scope))
             }
             SetExpr::Query(query) => {
-                let (expr, scope, transform) = self.plan_query(query, outer_scope)?;
-                if !transform.is_trivial() {
+                let (expr, scope, finishing) = self.plan_query(query, outer_scope)?;
+                if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
                 Ok((expr, scope))
@@ -857,15 +857,15 @@ impl Planner {
                 Expr::Cast { expr, data_type } => self.plan_cast(ctx, expr, data_type),
                 Expr::Function(func) => self.plan_function(ctx, func),
                 Expr::Exists(query) => {
-                    let (expr, _scope, transform) = self.plan_query(query, &ctx.scope)?;
-                    if !transform.is_trivial() {
+                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope)?;
+                    if !finishing.is_trivial() {
                         bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                     }
                     Ok((expr.exists(), ColumnType::new(ScalarType::Bool)))
                 }
                 Expr::Subquery(query) => {
-                    let (expr, _scope, transform) = self.plan_query(query, &ctx.scope)?;
-                    if !transform.is_trivial() {
+                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope)?;
+                    if !finishing.is_trivial() {
                         bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                     }
                     let column_types = expr.typ().column_types;
@@ -921,8 +921,8 @@ impl Planner {
         func: AggregateFunc,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         // plan right
-        let (right, _scope, transform) = self.plan_query(right, &ctx.scope)?;
-        if !transform.is_trivial() {
+        let (right, _scope, finishing) = self.plan_query(right, &ctx.scope)?;
+        if !finishing.is_trivial() {
             bail!("ORDER BY and LIMIT are not yet supported in subqueries");
         }
         let column_types = right.typ().column_types;

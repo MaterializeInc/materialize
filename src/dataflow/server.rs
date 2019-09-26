@@ -67,7 +67,7 @@ pub enum SequencedCommand {
         conn_id: u32,
         tx: comm::mpsc::Sender<Vec<Vec<Datum>>>,
         timestamp: Timestamp,
-        transform: RowSetFinishing,
+        finishing: RowSetFinishing,
     },
     /// Enable compaction in views.
     ///
@@ -172,7 +172,7 @@ struct PendingPeek {
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
     /// limit.
-    transform: RowSetFinishing,
+    finishing: RowSetFinishing,
 }
 
 struct Worker<'w, A>
@@ -351,7 +351,7 @@ where
                 timestamp,
                 conn_id,
                 tx,
-                transform,
+                finishing,
             } => {
                 let mut trace = self
                     .traces
@@ -365,7 +365,7 @@ where
                     conn_id,
                     tx,
                     timestamp,
-                    transform,
+                    finishing,
                 };
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(
@@ -459,11 +459,11 @@ where
                 }
                 cur.step_key(&storage)
             }
-            if let Some(limit) = peek.transform.limit {
-                let offset_plus_limit = limit + peek.transform.offset;
+            if let Some(limit) = peek.finishing.limit {
+                let offset_plus_limit = limit + peek.finishing.offset;
                 if results.len() > offset_plus_limit {
                     pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
-                        compare_columns(&peek.transform.order_by, left, right)
+                        compare_columns(&peek.finishing.order_by, left, right)
                     });
                     results.truncate(offset_plus_limit);
                 }

@@ -91,7 +91,7 @@ impl Planner {
         Ok(Plan::Peek {
             source: prepared.source().clone(),
             when: PeekWhen::Immediately,
-            transform: prepared.transform().clone(),
+            finishing: prepared.finishing().clone(),
         })
     }
 
@@ -258,8 +258,8 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, transform) = self.plan_toplevel_query(&query)?;
-                if !transform.is_trivial() {
+                let (relation_expr, finishing) = self.plan_toplevel_query(&query)?;
+                if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
                 let mut typ = relation_expr.typ();
@@ -434,7 +434,7 @@ impl Planner {
             } else {
                 PeekWhen::EarliestSource
             },
-            transform: RowSetFinishing {
+            finishing: RowSetFinishing {
                 offset: 0,
                 limit: None,
                 order_by: (0..typ.column_types.len())
@@ -449,11 +449,11 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, transform) = self.plan_toplevel_query(&query)?;
+        let (relation_expr, finishing) = self.plan_toplevel_query(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
-            transform,
+            finishing,
         })
     }
 
@@ -468,10 +468,10 @@ impl Planner {
         super::transform::transform(&mut stmt);
         match stmt {
             Statement::Query(query) => {
-                let (relation_expr, transform) = self.plan_toplevel_query(&query)?;
+                let (relation_expr, finishing) = self.plan_toplevel_query(&query)?;
                 session.set_prepared_statement(
                     name.clone(),
-                    PreparedStatement::new(sql, relation_expr, transform),
+                    PreparedStatement::new(sql, relation_expr, finishing),
                 );
                 Ok(Plan::Parsed { name })
             }
@@ -480,7 +480,7 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, _transform) = self.plan_toplevel_query(&query)?;
+        let (relation_expr, _finishing) = self.plan_toplevel_query(&query)?;
         // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
@@ -507,8 +507,8 @@ impl Planner {
         &mut self,
         query: &Query,
     ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
-        let (relation_expr, _scope, transform) = self.plan_query(query, &Scope::empty(None))?;
-        Ok((relation_expr.decorrelate()?, transform))
+        let (relation_expr, _scope, finishing) = self.plan_query(query, &Scope::empty(None))?;
+        Ok((relation_expr.decorrelate()?, finishing))
     }
 }
 
