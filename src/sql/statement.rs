@@ -230,7 +230,7 @@ impl Planner {
             .iter()
             .map(|colty| {
                 vec![
-                    colty.name.as_deref().unwrap_or("?").into(),
+                    colty.name.mz_as_deref().unwrap_or("?").into(),
                     if colty.nullable { "YES" } else { "NO" }.into(),
                     colty.scalar_type.to_string().into(),
                 ]

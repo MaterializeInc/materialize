@@ -24,10 +24,11 @@ pub trait OptionExt<T> {
     /// Leaves the original `Option` in-place, creating a new one containing a
     /// reference to the inner type's `Deref::Target` type.
     ///
-    /// This method is awaiting stabilization upstream ([#50264]).
+    /// This method is awaiting stabilization upstream ([#50264]). The `mz_`
+    /// prefix exists to avoid a warning about the upcoming stable function.
     ///
     /// [#50264]: https://github.com/rust-lang/rust/issues/50264
-    fn as_deref(&self) -> Option<&T::Target>
+    fn mz_as_deref(&self) -> Option<&T::Target>
     where
         T: Deref;
 
@@ -45,7 +46,7 @@ pub trait OptionExt<T> {
 }
 
 impl<T> OptionExt<T> for Option<T> {
-    fn as_deref(&self) -> Option<&T::Target>
+    fn mz_as_deref(&self) -> Option<&T::Target>
     where
         T: Deref,
     {

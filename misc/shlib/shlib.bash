@@ -12,9 +12,14 @@ die() {
     exit 1
 }
 
-run() {
-    echo "run> ${*}" >&2
+runv() {
+    echo "run> $*" >&2
     "$@"
+}
+
+run() {
+   echo "$*" >&2
+   "$@"
 }
 
 ci_init() {

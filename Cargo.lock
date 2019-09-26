@@ -326,6 +326,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmake"
+version = "0.1.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "cc 1.0.37 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "comm"
 version = "0.1.0"
 dependencies = [
@@ -779,6 +787,7 @@ dependencies = [
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "indexmap 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "ordered-float 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ore 0.1.0",
  "pretty 0.5.3-alpha.0 (git+https://github.com/Marwes/pretty.rs.git?rev=7fb895eff160b8bfd6d28efb19bf24f0b9326109)",
  "regex 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex-syntax 0.6.12 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1290,6 +1299,7 @@ dependencies = [
  "ore 0.1.0",
  "parse_duration 2.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pretty_assertions 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "prometheus 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "repr 0.1.0",
  "sql 0.1.0",
@@ -1340,6 +1350,9 @@ dependencies = [
 [[package]]
 name = "metrics"
 version = "0.1.0"
+dependencies = [
+ "regex 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "mime"
@@ -1803,6 +1816,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "prometheus"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "cfg-if 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "spin 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "publicsuffix"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2037,7 +2062,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.21.0"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#86b7a99124c79183ea4e4ceb49a536c1df11ce1f"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#92c9cd25fdaeff2097ccd51ce564558be4a62904"
 dependencies = [
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "libc 0.2.62 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2051,9 +2076,10 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "1.0.1"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#86b7a99124c79183ea4e4ceb49a536c1df11ce1f"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#92c9cd25fdaeff2097ccd51ce564558be4a62904"
 dependencies = [
  "bindgen 0.49.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cmake 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)",
  "libz-sys 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "pkg-config 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2344,6 +2370,11 @@ dependencies = [
  "redox_syscall 0.1.54 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "spin"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "sql"
@@ -3202,6 +3233,7 @@ dependencies = [
 "checksum clang-sys 0.28.1 (registry+https://github.com/rust-lang/crates.io-index)" = "81de550971c976f176130da4b2978d3b524eaa0fd9ac31f3ceb5ae1231fb4853"
 "checksum clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)" = "5067f5bb2d80ef5d68b4c87db81601f0b75bca627bc2ef76b141d7b846a3c6d9"
 "checksum cloudabi 0.0.3 (registry+https://github.com/rust-lang/crates.io-index)" = "ddfc5b9aa5d4507acaf872de71051dfd0e309860e88966e1051e462a077aac4f"
+"checksum cmake 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)" = "3c84c596dcf125d6781f58e3f4254677ec2a6d8aa56e8501ac277100990b3229"
 "checksum cookie 0.12.0 (registry+https://github.com/rust-lang/crates.io-index)" = "888604f00b3db336d2af898ec3c1d5d0ddf5e6d462220f2ededc33a87ac4bbd5"
 "checksum cookie_store 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "46750b3f362965f197996c4448e4a0935e791bf7d6631bfce9ee0af3d24c919c"
 "checksum core-foundation 0.6.4 (registry+https://github.com/rust-lang/crates.io-index)" = "25b9e03f145fd4f2bf705e07b900cd41fc636598fe5dc452fd0db1441c3f496d"
@@ -3342,6 +3374,7 @@ dependencies = [
 "checksum pretty_assertions 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)" = "3f81e1644e1b54f5a68959a29aa86cde704219254669da328ecfdf6a1f09d427"
 "checksum proc-macro2 0.4.30 (registry+https://github.com/rust-lang/crates.io-index)" = "cf3d2011ab5c909338f7887f4fc896d35932e29146c12c8d01da6b22a80ba759"
 "checksum proc-macro2 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "4c5c2380ae88876faae57698be9e9775e3544decad214599c3a6266cca6ac802"
+"checksum prometheus 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "5567486d5778e2c6455b1b90ff1c558f29e751fc018130fa182e15828e728af1"
 "checksum publicsuffix 1.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "5afecba86dcf1e4fd610246f89899d1924fe12e1e89f555eb7c7f710f3c5ad1d"
 "checksum quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "9274b940887ce9addde99c4eee6b5c44cc494b182b97e73dc8ffdcb3397fd3f0"
 "checksum quote 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)" = "7a6e920b65c65f10b2ae65c831a81a073a89edd28c7cce89475bff467ab4167a"
@@ -3402,6 +3435,7 @@ dependencies = [
 "checksum slog 2.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "1cc9c640a4adbfbcc11ffb95efe5aa7af7309e002adab54b185507dbf2377b99"
 "checksum smallvec 0.6.10 (registry+https://github.com/rust-lang/crates.io-index)" = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
 "checksum socket2 0.3.11 (registry+https://github.com/rust-lang/crates.io-index)" = "e8b74de517221a2cb01a53349cf54182acdc31a074727d3079068448c0676d85"
+"checksum spin 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 "checksum sqlparser 0.4.1-alpha.0 (git+ssh://git@github.com/MaterializeInc/sqlparser.git)" = "<none>"
 "checksum stable_deref_trait 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 "checksum state_machine_future 0.2.0 (git+https://github.com/benesch/state_machine_future.git?branch=context-generic-bounds)" = "<none>"

@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -892,15 +893,41 @@ pub fn coalesce(datums: Vec<Datum>) -> Datum {
         .unwrap_or(Datum::Null)
 }
 
+pub fn substr(datums: Vec<Datum>) -> Datum {
+    if datums.iter().any(|d| d.is_null()) {
+        return Datum::Null;
+    }
+    let char_expr = datums[0].unwrap_str();
+
+    let start = datums[1].unwrap_int64() - 1;
+    let chars = char_expr.chars().skip(cmp::max(start, 0) as usize);
+
+    let out: String = if datums.len() == 3 {
+        let mut length = datums[2].unwrap_int64();
+        if length < 0 {
+            return Datum::Null;
+        }
+        if start < 0 {
+            length += start;
+        }
+        chars.take(cmp::max(length, 0) as usize).collect()
+    } else {
+        chars.collect()
+    };
+    Datum::from(out)
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
+    Substr,
 }
 
 impl VariadicFunc {
     pub fn func(self) -> fn(Vec<Datum>) -> Datum {
         match self {
             VariadicFunc::Coalesce => coalesce,
+            VariadicFunc::Substr => substr,
         }
     }
 }
@@ -909,6 +936,7 @@ impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
+            VariadicFunc::Substr => f.write_str("substr"),
         }
     }
 }

@@ -29,7 +29,7 @@ use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
-    BinaryOperator, DataType, Expr, Function, JoinConstraint, JoinOperator, ParsedDate,
+    BinaryOperator, DataType, Expr, Function, JoinConstraint, JoinOperator, ObjectName, ParsedDate,
     ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator, TableAlias, TableFactor,
     TableWithJoins, UnaryOperator, Value, Values,
 };
@@ -1067,10 +1067,7 @@ impl Planner {
 
                 "ascii" => {
                     if sql_func.args.len() != 1 {
-                        bail!(
-                            "ascii expects one argument, got {}",
-                            sql_func.args.len()
-                        );
+                        bail!("ascii expects one argument, got {}", sql_func.args.len());
                     }
                     let (expr, typ) = self.plan_expr(ctx, &sql_func.args[0])?;
                     if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null
@@ -1133,6 +1130,49 @@ impl Planner {
                     };
                     let typ = ColumnType::new(else_type.scalar_type).nullable(true);
                     Ok((expr, typ))
+                }
+
+                "substr" => {
+                    let func = Function {
+                        name: ObjectName(vec![String::from("substring")]),
+                        args: sql_func.args.clone(),
+                        over: sql_func.over.clone(),
+                        distinct: sql_func.distinct,
+                    };
+                    self.plan_function(ctx, &func)
+                }
+
+                "substring" => {
+                    if sql_func.args.len() < 2 || sql_func.args.len() > 3 {
+                        bail!(
+                            "substring expects two or three arguments, got {:?}",
+                            sql_func.args.len()
+                        );
+                    }
+                    let mut exprs = Vec::new();
+                    let (expr1, typ1) = self.plan_expr(ctx, &sql_func.args[0])?;
+                    if typ1.scalar_type != ScalarType::String
+                        && typ1.scalar_type != ScalarType::Null
+                    {
+                        bail!("substring first argument has non-string type {:?}", typ1);
+                    }
+                    exprs.push(expr1);
+
+                    let (expr2, typ2) = self.plan_expr(ctx, &sql_func.args[1])?;
+                    let (verified_expr2, _) =
+                        plan_promote_int_int64("substring", expr2, typ2, "start")?;
+                    exprs.push(verified_expr2);
+                    if sql_func.args.len() == 3 {
+                        let (expr3, typ3) = self.plan_expr(ctx, &sql_func.args[2])?;
+                        let (verified_expr3, _) =
+                            plan_promote_int_int64("substring", expr3, typ3, "length")?;
+                        exprs.push(verified_expr3);
+                    }
+                    let expr = ScalarExpr::CallVariadic {
+                        func: VariadicFunc::Substr,
+                        exprs,
+                    };
+                    Ok((expr, ColumnType::new(typ1.scalar_type).nullable(true)))
                 }
 
                 // Promotes a numeric type to the smallest fractional type that
@@ -1956,6 +1996,30 @@ where
         }
     };
     Ok((expr, to_type))
+}
+
+fn plan_promote_int_int64<C>(
+    context: C,
+    e: ScalarExpr,
+    typ: ColumnType,
+    argname: &str,
+) -> Result<(ScalarExpr, ColumnType), failure::Error>
+where
+    C: fmt::Display + Copy,
+{
+    let (caste, casttyp) = match typ.scalar_type {
+        ScalarType::Int32 => plan_cast_internal(context, e, &typ, ScalarType::Int64)?,
+        _ => (e, typ),
+    };
+    if casttyp.scalar_type != ScalarType::Int64 && casttyp.scalar_type != ScalarType::Null {
+        bail!(
+            "{} {:?} argument has non-integer type {:?}",
+            context,
+            argname,
+            casttyp
+        );
+    }
+    Ok((caste, casttyp))
 }
 
 fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {

@@ -150,7 +150,7 @@ impl fmt::Display for Outcome<'_> {
                 INDENT,
                 inferred_types
                     .iter()
-                    .map(|s| s.name.as_deref().unwrap_or("?").to_string())
+                    .map(|s| s.name.mz_as_deref().unwrap_or("?").to_string())
                     .collect::<Vec<_>>()
                     .join(" "),
                 INDENT,

@@ -12,6 +12,7 @@ use futures::sink::Send as SinkSend;
 use futures::stream;
 use futures::sync::mpsc::UnboundedSender;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
+use lazy_static::lazy_static;
 use log::trace;
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
@@ -29,9 +30,27 @@ use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationType};
 use sql::Session;
 
+use prometheus::IntCounterVec;
+
+lazy_static! {
+    /// The number of responses that we have ever sent to clients
+    ///
+    /// TODO: consider using prometheus-static-metric or a variation on its
+    /// precompilation pattern to improve perf?
+    /// https://github.com/pingcap/rust-prometheus/tree/master/static-metric
+    static ref RESPONSES_SENT_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "mz_responses_sent_total",
+        "Number of times we have have sent rows or errors back to clients",
+        &["status", "kind"]
+    )
+    .unwrap();
+}
+
 pub struct Context {
     pub conn_id: u32,
     pub cmdq_tx: UnboundedSender<coord::Command>,
+    /// If true, we gather prometheus metrics
+    pub gather_metrics: bool,
 }
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -238,6 +257,8 @@ pub enum StateMachine<A: Conn + 'static> {
         send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
         session: Session,
         currently_extended: bool,
+        /// Labels for prometheus. These provide the `kind` label value in [`RESPONSES_SENT_COUNTER`]
+        label: &'static str,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, Done, Error))]
@@ -488,27 +509,33 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let state = state.take();
 
                 macro_rules! command_complete {
-                    ($($arg:tt)*) => {
+                    ($cmd:tt, $label:tt) => {
                         transition!(SendCommandComplete {
-                            send: Box::new(state.conn.send(BackendMessage::CommandComplete {
-                                tag: std::fmt::format(format_args!($($arg)*))
-                            })),
+                            send: Box::new(
+                                state
+                                    .conn
+                                    .send(BackendMessage::CommandComplete { tag: $cmd.into() })
+                            ),
                             session,
-                            currently_extended: false
+                            currently_extended: false,
+                            label: $label
                         })
                     };
                 }
 
                 match response {
-                    SqlResponse::CreatedSource => command_complete!("CREATE SOURCE"),
-                    SqlResponse::CreatedSink => command_complete!("CREATE SINK"),
-                    SqlResponse::CreatedView => command_complete!("CREATE VIEW"),
-                    SqlResponse::DroppedSource => command_complete!("DROP SOURCE"),
-                    SqlResponse::DroppedView => command_complete!("DROP VIEW"),
+                    SqlResponse::CreatedSource => {
+                        command_complete!("CREATE SOURCE", "create_source")
+                    }
+                    SqlResponse::CreatedSink => command_complete!("CREATE SINK", "create_sink"),
+                    SqlResponse::CreatedView => command_complete!("CREATE VIEW", "create_view"),
+                    SqlResponse::DroppedSource => command_complete!("DROP SOURCE", "drop_source"),
+                    SqlResponse::DroppedView => command_complete!("DROP VIEW", "drop_view"),
                     SqlResponse::EmptyQuery => transition!(SendCommandComplete {
                         send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
                         session,
                         currently_extended: false,
+                        label: "empty",
                     }),
                     SqlResponse::SendRows { typ, rx } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
@@ -518,7 +545,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         row_type: typ,
                         rows_rx: rx,
                     }),
-                    SqlResponse::SetVariable => command_complete!("SET"),
+                    SqlResponse::SetVariable => command_complete!("SET", "set"),
                     SqlResponse::Tailing { rx } => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
                         session,
@@ -743,12 +770,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_command_complete<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendCommandComplete<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
+        context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         let extended = state.currently_extended;
         trace!("send command complete extended={}", extended);
+        if context.gather_metrics {
+            RESPONSES_SENT_COUNTER
+                .with_label_values(&["success", state.label])
+                .inc();
+        }
         if extended {
             transition!(RecvExtendedQuery {
                 recv: conn.recv(),
@@ -806,11 +838,16 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_send_error<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendError<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
+        context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendError<A>, failure::Error> {
         trace!("send error");
         let conn = try_ready!(state.send.poll());
         let state = state.take();
+        if context.gather_metrics {
+            RESPONSES_SENT_COUNTER
+                .with_label_values(&["error", ""])
+                .inc();
+        }
         if state.fatal {
             transition!(Done(()))
         } else {
@@ -849,9 +886,11 @@ where
         .chain(iter::once(BackendMessage::CommandComplete {
             tag: "SELECT".into(),
         }));
+
     SendCommandComplete {
         send: Box::new(stream::iter_ok(rows).forward(conn).map(|(_, conn)| conn)),
         session,
         currently_extended,
+        label: "select",
     }
 }

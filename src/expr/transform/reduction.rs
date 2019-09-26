@@ -296,7 +296,6 @@ pub mod demorgans {
             }
         }
     }
-
 }
 
 pub mod undistribute_and {
@@ -410,5 +409,4 @@ pub mod undistribute_and {
             }
         }
     }
-
 }

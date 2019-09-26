@@ -289,8 +289,7 @@ where
     /// threads in the same process.
     pub fn mpsc<D>(&self) -> (mpsc::Sender<D>, mpsc::Receiver<D>)
     where
-        D: Serialize + Send + 'static,
-        for<'de> D: Deserialize<'de>,
+        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     {
         let uuid = Uuid::new_v4();
         let addr = self.0.nodes[self.0.id].clone();

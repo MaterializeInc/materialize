@@ -9,7 +9,9 @@ services:
     image: materialize/materialized:unstable-6abf3bdc43568c452ab7b9d15cf9d601386b105f
     init: true
     command: -w1
-  # TODO@jldlaughlin: put in new metrics crate
+  metrics:
+    image: materialize/ci-metrics:latest
+    init: true
   mysql:
     image: debezium/example-mysql:0.9
     ports:
@@ -105,6 +107,14 @@ services:
   inspect:
     image: ubuntu:bionic
     command: "true"
+  prometheus:
+    image: prom/prometheus:v2.12.0
+    ports:
+      - "9090:9090"
+    depends_on:
+      - materialized
+    volumes:
+      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
 
 volumes:
   chbench-gen:

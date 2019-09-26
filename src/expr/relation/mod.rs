@@ -8,7 +8,7 @@
 pub mod func;
 
 use self::func::AggregateFunc;
-use crate::pretty_pretty::{to_braced_doc, to_tightly_braced_doc};
+use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
 use crate::ScalarExpr;
 use failure::ResultExt;
 use pretty::Doc::{Newline, Space};
@@ -431,8 +431,7 @@ impl RelationExpr {
                     },
                 },
                 right.union(
-                    both.project(((both_arity - right_arity)..both_arity).collect())
-                        .distinct()
+                    both.distinct_by(((both_arity - right_arity)..both_arity).collect())
                         .negate(),
                 ),
             ],
@@ -623,8 +622,10 @@ impl RelationExpr {
                 to_doc!(binding, Newline, body)
             }
             RelationExpr::Project { input, outputs } => {
-                let outputs =
-                    Doc::intersperse(outputs.iter().map(Doc::as_string), to_doc!(",", Space));
+                let outputs = compact_intersperse_doc(
+                    outputs.iter().map(Doc::as_string),
+                    to_doc!(",", Space),
+                );
                 let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
@@ -663,8 +664,8 @@ impl RelationExpr {
                 group_key,
                 aggregates,
             } => {
-                let keys = Doc::intersperse(
-                    group_key.iter().map(|k| format!("{}", k)),
+                let keys = compact_intersperse_doc(
+                    group_key.iter().map(Doc::as_string),
                     to_doc!(",", Space),
                 );
                 let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
@@ -755,8 +756,7 @@ impl RelationExpr {
             .let_in(id_gen, |_id_gen, get_keys_and_values| {
                 Ok(get_keys_and_values
                     .clone()
-                    .project((0..keys.arity()).collect())
-                    .distinct()
+                    .distinct_by((0..keys.arity()).collect())
                     .negate()
                     .union(keys)
                     // This join is logically equivalent to
@@ -805,7 +805,7 @@ impl RelationExpr {
         self.let_in(id_gen, |id_gen, get_outer| {
             // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
             let key = (0..get_outer.arity()).collect::<Vec<_>>();
-            let keyed_outer = get_outer.clone().project(key.clone()).distinct();
+            let keyed_outer = get_outer.clone().distinct_by(key.clone());
             keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
                 let branch = branch(id_gen, get_keyed_outer.clone())?;
                 branch.let_in(id_gen, |_id_gen, get_branch| {
@@ -965,13 +965,11 @@ mod tests {
         );
 
         assert_eq!(
-            project.to_doc().pretty(24).to_string(),
+            project.to_doc().pretty(14).to_string(),
             "Project {
   outputs: [
-    0,
-    1,
-    2,
-    3,
+    0, 1,
+    2, 3,
     4
   ],
   Constant []
@@ -1078,7 +1076,7 @@ mod tests {
         };
 
         assert_eq!(
-            reduce.to_doc().pretty(82).to_string(),
+            reduce.to_doc().pretty(84).to_string(),
             "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
@@ -1086,8 +1084,7 @@ mod tests {
             reduce.to_doc().pretty(16).to_string(),
             "Reduce {
   group_key: [
-    1,
-    2
+    1, 2
   ],
   aggregates: [
     sum(#0),

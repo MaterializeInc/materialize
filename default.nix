@@ -20,6 +20,7 @@ in pkgs.stdenv.mkDerivation rec {
     zlib.static
     clang
     llvmPackages.libclang
+    cmake
     pkgconfig
     rustup
     lsof # for mtrlz-shell

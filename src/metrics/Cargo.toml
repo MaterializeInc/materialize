@@ -8,3 +8,6 @@ publish = false
 [[bin]]
 name = "metrics"
 path = "bin/metrics.rs"
+
+[dependencies]
+regex = "1.3.1"
