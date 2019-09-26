@@ -2,6 +2,7 @@
 //
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc..
+use regex::Regex;
 use std::process::Command;
 
 fn main() {
@@ -9,9 +10,8 @@ fn main() {
 }
 
 fn measure_peek_times() {
-    let mut latencies = Vec::new();
-    let mut running = true;
-    while running {
+    let re = Regex::new(r"Time: (\d*).(\d*) ms").unwrap();
+    loop {
         let output = Command::new("psql") // use postgres rust package, look at sql logic test
             .arg("-q")
             .arg("-h")
@@ -22,16 +22,20 @@ fn measure_peek_times() {
             .arg("-c")
             .arg("\\timing")
             .arg("-c")
-            .arg("\"PEEK q01\"") // parameterize this later
+            .arg("PEEK q01") // TODO@jldlaughlin: parameterize the SQL command
             .output();
 
         match output {
-            Ok(latency) => latencies.push(latency),
+            Ok(psql_output) => {
+                match re.captures(String::from_utf8(psql_output.stdout).unwrap().as_ref()) {
+                    // TODO@jldlaughlin: send times to Prometheus.
+                    Some(matched) => println!("Found time: {}.{}", &matched[1], &matched[2]),
+                    None => println!("Didn't find a time!"),
+                }
+            },
             Err(error) => {
                 println!("Hit error: {:#?}", error);
-                running = false;
             }
         }
     }
-    println!("Latencies are: {:#?}", latencies);
 }
