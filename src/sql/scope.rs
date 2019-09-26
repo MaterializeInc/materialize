@@ -167,7 +167,7 @@ impl Scope {
         self.items
             .iter()
             .enumerate()
-            .find(|(_, item)| item.expr == expr)
+            .find(|(_, item)| item.expr.as_ref() == Some(expr))
             .map(|(i, item)| (ColumnRef::Inner(i), item))
     }
 

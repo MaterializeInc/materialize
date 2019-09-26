@@ -187,7 +187,7 @@ impl Planner {
                 let ctx = &ExprContext {
                     name: "values",
                     scope: &Scope::empty(Some(outer_scope.clone())),
-                    aggregate_context: None,
+                    allow_aggregates: false,
                 };
                 let mut expr: Option<RelationExpr> = None;
                 let mut types: Option<Vec<ColumnType>> = None;
@@ -282,7 +282,7 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "WHERE clause",
                 scope: &from_scope,
-                aggregate_context: None,
+                allow_aggregates: false,
             };
             let (expr, typ) = self.plan_expr(ctx, &selection)?;
             if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Null {
@@ -295,12 +295,12 @@ impl Planner {
         }
 
         // Step 3. Handle GROUP BY clause.
-        let (group_scope, aggregate_context, select_all_mapping) = {
+        let (group_scope, select_all_mapping) = {
             // gather group columns
             let ctx = &ExprContext {
                 name: "GROUP BY clause",
                 scope: &from_scope,
-                aggregate_context: None,
+                allow_aggregates: false,
             };
             let mut group_key = vec![];
             let mut group_exprs = vec![];
@@ -336,16 +336,11 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "aggregate function",
                 scope: &from_scope,
-                aggregate_context: None,
+                allow_aggregates: false,
             };
-            let mut aggregate_context = HashMap::new();
             let mut aggregates = vec![];
             for sql_function in aggregate_visitor.into_result()? {
                 let (expr, typ) = self.plan_aggregate(ctx, sql_function)?;
-                aggregate_context.insert(
-                    sql_function,
-                    (group_key.len() + aggregates.len(), typ.clone()),
-                );
                 aggregates.push((expr, typ.clone()));
                 group_scope.items.push(ScopeItem {
                     names: vec![],
@@ -358,12 +353,11 @@ impl Planner {
                 relation_expr = relation_expr
                     .map(group_exprs)
                     .reduce(group_key.clone(), aggregates.clone());
-                (group_scope, aggregate_context, select_all_mapping)
+                (group_scope, select_all_mapping)
             } else {
                 // if no GROUP BY, aggregates or having then all columns remain in scope
                 (
                     from_scope.clone(),
-                    aggregate_context,
                     (0..from_scope.len()).map(|i| (i, i)).collect(),
                 )
             }
@@ -374,7 +368,7 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "HAVING clause",
                 scope: &group_scope,
-                aggregate_context: Some(&aggregate_context),
+                allow_aggregates: true,
             };
             let (expr, typ) = self.plan_expr(ctx, having)?;
             if typ.scalar_type != ScalarType::Bool {
@@ -394,7 +388,7 @@ impl Planner {
                 let ctx = &ExprContext {
                     name: "SELECT clause",
                     scope: &group_scope,
-                    aggregate_context: Some(&aggregate_context),
+                    allow_aggregates: true,
                 };
                 for (expr, typ) in
                     self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
@@ -610,7 +604,7 @@ impl Planner {
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
-                    aggregate_context: None,
+                    allow_aggregates: false,
                 };
                 let (on, _) = self.plan_expr(ctx, expr)?;
                 for (l, r) in find_trivial_column_equivalences(&on) {
@@ -723,7 +717,11 @@ impl Planner {
             ));
             let mut names = l_item.names.clone();
             names.extend(r_item.names.clone());
-            new_items.push(ScopeItem { names, typ });
+            new_items.push(ScopeItem {
+                names,
+                typ,
+                expr: None,
+            });
             dropped_columns.insert(l);
             dropped_columns.insert(left_scope.len() + r);
         }
@@ -899,7 +897,7 @@ impl Planner {
         let any_ctx = ExprContext {
             name: "WHERE clause",
             scope: &scope,
-            aggregate_context: None,
+            allow_aggregates: false,
         };
         let (op_expr, op_type) =
             self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
@@ -991,7 +989,7 @@ impl Planner {
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
         if is_aggregate_func(&ident) {
-            if let Some(agg_cx) = ctx.aggregate_context {
+            if ctx.allow_aggregates {
                 // should already have been caught by `scope.resolve_expr` in `plan_expr`
                 bail!(
                     "Internal error: encountered unplanned aggregate function: {:?}",
@@ -2022,11 +2020,8 @@ struct ExprContext<'a> {
     name: &'static str,
     /// The current scope
     scope: &'a Scope,
-    /// Any precomputed aggregates
-    /// If None, aggregates are not allowed in this context.
-    /// If Some(nodes), nodes.get(aggregate) tells us which column to find the aggregate in.
-    /// See the explanation of aggregate handling at the top of the file for more details.
-    aggregate_context: Option<&'a HashMap<&'a Function, (usize, ColumnType)>>,
+    /// Are aggregate functions allowed in this context
+    allow_aggregates: bool,
 }
 
 fn is_aggregate_func(name: &str) -> bool {
