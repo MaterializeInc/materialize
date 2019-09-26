@@ -56,6 +56,19 @@ enum Resolution<'a> {
     Ambiguous,
 }
 
+impl ScopeItem {
+    pub fn from_column_type(typ: ColumnType) -> Self {
+        ScopeItem {
+            names: vec![ScopeItemName {
+                table_name: None,
+                column_name: typ.name.clone(),
+            }],
+            typ,
+            expr: None,
+        }
+    }
+}
+
 impl Scope {
     pub fn empty(outer_scope: Option<Scope>) -> Self {
         Scope {

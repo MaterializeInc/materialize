@@ -10,7 +10,7 @@ use repr::*;
 pub use dataflow_expr::like;
 pub use dataflow_expr::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like dataflow_expr::RelationExpr, except where otherwise noted below
 pub enum RelationExpr {
     Constant {
@@ -67,7 +67,7 @@ pub enum RelationExpr {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like dataflow::ScalarExpr, except where otherwise noted below.
 pub enum ScalarExpr {
     /// Unlike dataflow::ScalarExpr, we can nest RelationExprs via eg Exists. This means that a variable could refer to a column of the current input, or to a column of an outer relation. We use ColumnRef to denote the difference.
@@ -105,7 +105,7 @@ pub enum ScalarExpr {
     Select(Box<RelationExpr>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColumnRef {
     /// References a variable from the input relation
     Inner(usize),
@@ -113,7 +113,7 @@ pub enum ColumnRef {
     Outer(usize),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JoinKind {
     Inner,
     LeftOuter,
@@ -121,7 +121,7 @@ pub enum JoinKind {
     FullOuter,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: Box<ScalarExpr>,

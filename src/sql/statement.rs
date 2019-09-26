@@ -502,7 +502,7 @@ impl Planner {
         &mut self,
         query: &Query,
     ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
-        let (relation_expr, transform) = self.plan_query(query, &Scope::empty(None))?;
+        let (relation_expr, _scope, transform) = self.plan_query(query, &Scope::empty(None))?;
         Ok((relation_expr.decorrelate()?, transform))
     }
 }
