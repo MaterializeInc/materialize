@@ -38,6 +38,7 @@ pub use protocol::match_handshake;
 pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     a: A,
     cmdq_tx: UnboundedSender<coord::Command>,
+    gather_metrics: bool,
 ) -> impl Future<Item = (), Error = failure::Error> {
     lazy_static! {
         static ref CONN_ID_ALLOCATOR: id_alloc::IdAllocator = IdAllocator::new(1, 1 << 16);
@@ -48,11 +49,14 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
             return future::err(format_err!("maximum number of connections reached")).left()
         }
     };
-    let stream = Framed::new(a, codec::Codec::new());
     protocol::StateMachine::start(
-        stream,
+        Framed::new(a, codec::Codec::new()),
         sql::Session::default(),
-        protocol::Context { conn_id, cmdq_tx },
+        protocol::Context {
+            conn_id,
+            cmdq_tx,
+            gather_metrics,
+        },
     )
     .then(move |res| {
         CONN_ID_ALLOCATOR.free(conn_id);

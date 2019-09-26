@@ -107,6 +107,14 @@ services:
   inspect:
     image: ubuntu:bionic
     command: "true"
+  prometheus:
+    image: prom/prometheus:v2.12.0
+    ports:
+      - "9090:9090"
+    depends_on:
+      - materialized
+    volumes:
+      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
 
 volumes:
   chbench-gen:

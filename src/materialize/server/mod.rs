@@ -33,6 +33,7 @@ pub struct Config {
     pub threads: usize,
     pub process: usize,
     pub addresses: Vec<String>,
+    pub gather_metrics: bool,
 }
 
 impl Config {
@@ -46,6 +47,7 @@ fn handle_connection(
     conn: TcpStream,
     switchboard: Switchboard<SniffedStream<TcpStream>>,
     cmdq_tx: UnboundedSender<coord::Command>,
+    gather_metrics: bool,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
     // is a delicate business. Read too many bytes and you'll stall out
@@ -59,9 +61,9 @@ fn handle_connection(
         .and_then(move |(ss, buf, nread)| {
             let buf = &buf[..nread];
             if pgwire::match_handshake(buf) {
-                pgwire::serve(ss.into_sniffed(), cmdq_tx).boxed()
+                pgwire::serve(ss.into_sniffed(), cmdq_tx, gather_metrics).boxed()
             } else if http::match_handshake(buf) {
-                http::handle_connection(ss.into_sniffed()).boxed()
+                http::handle_connection(ss.into_sniffed(), gather_metrics).boxed()
             } else if comm::protocol::match_handshake(buf) {
                 switchboard
                     .handle_connection(ss.into_sniffed())
@@ -119,6 +121,7 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
 
     let switchboard = Switchboard::new(socket_addrs, config.process);
     let mut runtime = tokio::runtime::Runtime::new()?;
+    let gather_metrics = config.gather_metrics;
     runtime.spawn({
         let switchboard = switchboard.clone();
         listener
@@ -141,6 +144,7 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
                         conn,
                         switchboard.clone(),
                         cmdq_tx.clone(),
+                        gather_metrics,
                     ));
                 } else {
                     // When not the primary, we only need to route switchboard
