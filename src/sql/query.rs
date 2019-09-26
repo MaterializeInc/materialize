@@ -56,12 +56,10 @@ impl Planner {
         };
         let (expr, scope) = self.plan_set_expr(&q.body, outer_scope)?;
         let output_typ = expr.typ();
-        // This is O(m*n) where m is the number of columns and n is the number of order keys.
-        // If this ever becomes a bottleneck (which I doubt) it is easy enough to make faster...
-        let order: Result<Vec<ColumnOrder>, failure::Error> = q
-            .order_by
-            .iter()
-            .map(|obe| match &obe.expr {
+        let mut order_by = vec![];
+        let mut map_exprs = vec![];
+        for obe in &q.order_by {
+            match &obe.expr {
                 Expr::Value(Value::Number(n)) => {
                     let n = n.parse::<usize>().with_context(|err| {
                         format_err!(
@@ -78,13 +76,13 @@ impl Planner {
                             max
                         );
                     }
-                    Ok(ColumnOrder {
+                    order_by.push(ColumnOrder {
                         column: n - 1,
                         desc: match obe.asc {
                             None => false,
                             Some(asc) => !asc,
                         },
-                    })
+                    });
                 }
                 other => {
                     let ctx = &ExprContext {
@@ -92,30 +90,25 @@ impl Planner {
                         scope: &scope,
                         allow_aggregates: true,
                     };
-                    let (expr, _typ) = self.plan_expr(ctx, other)?;
-                    if let ScalarExpr::Column(ColumnRef::Inner(idx)) = expr {
-                        Ok(ColumnOrder {
-                            column: idx,
-                            desc: match obe.asc {
-                                None => false,
-                                Some(asc) => !asc,
-                            },
-                        })
-                    } else {
-                        // we can't execute arbitrary `ScalarExpr`s in the `RowSetFinishing`
-                        Err(format_err!(
-                            "Complex expressions for ORDER BY keys are not yet supported: {:?}",
-                            other
-                        ))
-                    }
+                    let (expr, typ) = self.plan_expr(ctx, other)?;
+                    let idx = output_typ.column_types.len() + map_exprs.len();
+                    map_exprs.push((expr, typ));
+                    order_by.push(ColumnOrder {
+                        column: idx,
+                        desc: match obe.asc {
+                            None => false,
+                            Some(asc) => !asc,
+                        },
+                    });
                 }
-            })
-            .collect();
+            }
+        }
         let transform = RowSetFinishing {
-            order_by: order?,
+            order_by,
             limit,
+            project: (0..output_typ.column_types.len()).collect(),
         };
-        Ok((expr, scope, transform))
+        Ok((expr.map(map_exprs), scope, transform))
     }
 
     fn plan_set_expr(
@@ -255,7 +248,7 @@ impl Planner {
             }
             SetExpr::Query(query) => {
                 let (expr, scope, transform) = self.plan_query(query, outer_scope)?;
-                if transform != Default::default() {
+                if !transform.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
                 Ok((expr, scope))
@@ -497,7 +490,7 @@ impl Planner {
                 }
                 // TODO(jamii) would be nice to use this scope instead of use expr.typ() below
                 let (expr, _scope, finishing) = self.plan_query(&subquery, &Scope::empty(None))?;
-                if finishing != Default::default() {
+                if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
                 let alias = if let Some(TableAlias { name, columns }) = alias {
@@ -527,7 +520,11 @@ impl Planner {
         match s {
             SelectItem::UnnamedExpr(sql_expr) => {
                 let (expr, typ) = self.plan_expr(ctx, sql_expr)?;
-                let mut scope_item = ScopeItem::from_column_type(typ);
+                let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
+                    ctx.scope.items[*i].clone()
+                } else {
+                    ScopeItem::from_column_type(typ)
+                };
                 scope_item.expr = Some(sql_expr.clone());
                 Ok(vec![(expr, scope_item)])
             }
@@ -537,7 +534,15 @@ impl Planner {
             } => {
                 let (expr, mut typ) = self.plan_expr(ctx, sql_expr)?;
                 typ.name = Some(alias.clone());
-                let mut scope_item = ScopeItem::from_column_type(typ);
+                let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
+                    ctx.scope.items[*i].clone()
+                } else {
+                    ScopeItem::from_column_type(typ)
+                };
+                scope_item.names.push(ScopeItemName {
+                    table_name: None,
+                    column_name: Some(alias.clone()),
+                });
                 scope_item.expr = Some(sql_expr.clone());
                 Ok(vec![(expr, scope_item)])
             }
@@ -847,14 +852,14 @@ impl Planner {
                 Expr::Function(func) => self.plan_function(ctx, func),
                 Expr::Exists(query) => {
                     let (expr, _scope, transform) = self.plan_query(query, &ctx.scope)?;
-                    if transform != Default::default() {
+                    if !transform.is_trivial() {
                         bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                     }
                     Ok((expr.exists(), ColumnType::new(ScalarType::Bool)))
                 }
                 Expr::Subquery(query) => {
                     let (expr, _scope, transform) = self.plan_query(query, &ctx.scope)?;
-                    if transform != Default::default() {
+                    if !transform.is_trivial() {
                         bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                     }
                     let column_types = expr.typ().column_types;
@@ -911,7 +916,7 @@ impl Planner {
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         // plan right
         let (right, _scope, transform) = self.plan_query(right, &ctx.scope)?;
-        if transform != Default::default() {
+        if !transform.is_trivial() {
             bail!("ORDER BY and LIMIT are not yet supported in subqueries");
         }
         let column_types = right.typ().column_types;

@@ -219,6 +219,9 @@ where
                             rows.truncate(limit);
                         }
                         rows.sort_by(sort_by);
+                        for row in &mut rows {
+                            *row = transform.project.iter().map(|i| row[*i].clone()).collect();
+                        }
                         rows
                     })
                     .from_err()

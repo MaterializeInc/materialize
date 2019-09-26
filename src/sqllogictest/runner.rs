@@ -648,9 +648,14 @@ impl State {
         };
 
         // check that inferred types match expected types
+        let inferred_types = &typ.column_types;
+
+        // TODO(jamii) `typ` includes some extra types that are need by RowSetFinishing and then projected away.
+        // We don't have a good way of figuring out which these are since we don't get sent the RowSetFinishing, so we'll just assume it lines up with expected_types for now
+        let inferred_types = &inferred_types[0..expected_types.len()];
+
         // sqllogictest coerces the output into the expected type, so `expected_types` is often wrong :(
         // but at least it will be the correct length
-        let inferred_types = &typ.column_types;
         if inferred_types.len() != expected_types.len() {
             return Ok(Outcome::InferenceFailure {
                 expected_types,

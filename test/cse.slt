@@ -13,14 +13,48 @@ select a+1 from foo group by a+1
 2
 3
 
-query I rowsort
+query I nosort
+select a from foo order by a
+----
+0
+1
+2
+
+query I nosort
+select a from foo order by a desc
+----
+2
+1
+0
+
+query I nosort
 select a+1 from foo order by a+1
 ----
 1
 2
 3
 
-query I rowsort
+query I nosort
 select sum(a) from foo order by sum(a)
 ----
 3
+
+query I nosort
+select a from foo order by (0-a)
+----
+2
+1
+0
+
+statement ok
+create table bar(a int);
+
+statement ok
+insert into bar(a) values (1);
+
+query I nosort
+select a from foo order by exists (select * from bar where bar.a = foo.a);
+----
+0
+2
+1
