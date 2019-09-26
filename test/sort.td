@@ -88,3 +88,54 @@ quote                                                                           
 "It was a virgin forest, a place where the Hand of Man had never set foot."       12345
 "If it pours before seven, it has rained by eleven."                              12345
 "All power corrupts, but we need electricity."                                    12345
+
+> SELECT val, quote FROM foobar ORDER BY quote OFFSET 5 ROWS
+val    quote
+----------------------------------------------------------------------------
+25040  "New York is real.  The rest is done with mirrors."
+1735   "Ring around the collar."
+21243  "Yes, but every time I try to see things your way, I get a headache." 
+24223  "You are magnetic in your bearing."
+
+> SELECT val, quote FROM foobar ORDER BY quote LIMIT 4 OFFSET 0 ROWS
+val    quote
+--------------------------------------------------------------------------------------
+12345  "All power corrupts, but we need electricity."
+2079   "I have a theory that it's impossible to prove anything, but I can't prove it."
+6745   "I want to read my new poem about pork brains and outer space ..."
+12345  "If it pours before seven, it has rained by eleven."
+
+> SELECT val, quote FROM foobar ORDER BY val, quote LIMIT 3 OFFSET 2 ROWS
+val    quote
+--------------------------------------------------------------------------------------
+6745   "I want to read my new poem about pork brains and outer space ..."
+12345  "All power corrupts, but we need electricity."
+12345  "If it pours before seven, it has rained by eleven."
+
+> SELECT val, quote FROM foobar ORDER BY quote DESC LIMIT 5 OFFSET 6 ROWS
+val    quote
+--------------------------------------------------------------------------------------
+6745   "I want to read my new poem about pork brains and outer space ..."
+2079   "I have a theory that it's impossible to prove anything, but I can't prove it."
+12345  "All power corrupts, but we need electricity."
+
+> SELECT val, quote FROM foobar ORDER BY quote DESC LIMIT 4 OFFSET 10 ROWS
+val    quote
+--------------------------------------------------------------------------------------
+
+> SELECT val, quote FROM foobar ORDER BY quote DESC OFFSET 10 ROWS
+val    quote
+--------------------------------------------------------------------------------------
+
+> SELECT val, quote FROM foobar ORDER BY quote DESC OFFSET 0 ROWS
+val    quote
+--------------------------------------------------------------------------------------
+24223  "You are magnetic in your bearing."
+21243  "Yes, but every time I try to see things your way, I get a headache."
+1735   "Ring around the collar."
+25040  "New York is real.  The rest is done with mirrors."
+12345  "It was a virgin forest, a place where the Hand of Man had never set foot."
+12345  "If it pours before seven, it has rained by eleven."
+6745   "I want to read my new poem about pork brains and outer space ..."
+2079   "I have a theory that it's impossible to prove anything, but I can't prove it."
+12345  "All power corrupts, but we need electricity."

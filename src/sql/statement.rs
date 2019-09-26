@@ -435,6 +435,7 @@ impl Planner {
                 PeekWhen::EarliestSource
             },
             transform: RowSetFinishing {
+                offset: 0,
                 limit: None,
                 order_by: (0..typ.column_types.len())
                     .map(|column| ColumnOrder {
