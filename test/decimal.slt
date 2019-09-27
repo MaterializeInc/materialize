@@ -204,3 +204,10 @@ SELECT
     CAST(0.1 as float)
 ----
 0  0.10  0.1
+
+# Ensure precision doesn't overflow with chained multiplications (#646).
+
+query R
+SELECT 1.0 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1
+----
+1.000000000000
