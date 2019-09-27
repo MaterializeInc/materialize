@@ -18,6 +18,27 @@ use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
 use interchange::avro;
 use repr::Datum;
 
+use lazy_static::lazy_static;
+use prometheus::IntCounter;
+
+lazy_static! {
+    static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
+        "mz_kafka_bytes_read_total",
+        "Count of kafka bytes we have read from the wire"
+    )
+    .unwrap();
+    static ref EVENTS_READ_COUNTER: IntCounter = register_int_counter!(
+        "mz_kafka_events_read_total",
+        "Count of kafka events we have read from the wire"
+    )
+    .unwrap();
+    static ref EVENTS_ERROR_COUNTER: IntCounter = register_int_counter!(
+        "mz_kafka_error_read_total",
+        "Count of kafka events we have read from the wire"
+    )
+    .unwrap();
+}
+
 pub fn kafka<G>(
     scope: &G,
     name: &str,
@@ -108,7 +129,9 @@ where
                                 );
                             };
 
-                            output.session(&cap).give(payload.to_vec());
+                            let out = payload.to_vec();
+                            BYTES_READ_COUNTER.inc_by(out.len() as i64);
+                            output.session(&cap).give(out);
                         }
                         Err(err) => error!("kafka error: {}: {}", name, err),
                     }
@@ -144,6 +167,7 @@ where
                     for payload in data.iter() {
                         match decoder.decode(payload) {
                             Ok(diff_pair) => {
+                                EVENTS_READ_COUNTER.inc();
                                 if let Some(before) = diff_pair.before {
                                     session.give((before, *cap.time(), -1));
                                 }
@@ -151,7 +175,10 @@ where
                                     session.give((after, *cap.time(), 1));
                                 }
                             }
-                            Err(err) => error!("avro deserialization error: {}", err),
+                            Err(err) => {
+                                EVENTS_ERROR_COUNTER.inc();
+                                error!("avro deserialization error: {}", err)
+                            }
                         }
                     }
                 });
