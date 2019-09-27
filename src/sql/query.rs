@@ -2098,6 +2098,8 @@ impl<'ast> AggregateFuncVisitor<'ast> {
         match self.err {
             Some(err) => Err(err),
             None => {
+                // dedup aggs while preserving the order
+                // (we don't care what the order is, but it has to be reproducible so that EXPLAIN PLAN tests work)
                 let mut seen = HashSet::new();
                 Ok(self
                     .aggs

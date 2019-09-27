@@ -207,28 +207,6 @@ where
                     );
                 }
 
-                let rows_rx = {
-                    let transform = transform.clone();
-                    rows_rx
-                        .take(self.num_timely_workers as u64)
-                        .concat2()
-                        .map(move |mut rows| {
-                            let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
-                                compare_columns(&transform.order_by, left, right)
-                            };
-                            if let Some(limit) = transform.limit {
-                                pdqselect::select_by(&mut rows, limit, sort_by);
-                                rows.truncate(limit);
-                            }
-                            rows.sort_by(sort_by);
-                            for row in &mut rows {
-                                *row = transform.project.iter().map(|i| row[*i].clone()).collect();
-                            }
-                            rows
-                        })
-                        .from_err()
-                        .boxed()
-                };
                 let typ = RelationType {
                     column_types: transform
                         .project
@@ -236,6 +214,25 @@ where
                         .map(|i| typ.column_types[*i].clone())
                         .collect(),
                 };
+                let rows_rx = rows_rx
+                    .take(self.num_timely_workers as u64)
+                    .concat2()
+                    .map(move |mut rows| {
+                        let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
+                            compare_columns(&transform.order_by, left, right)
+                        };
+                        if let Some(limit) = transform.limit {
+                            pdqselect::select_by(&mut rows, limit, sort_by);
+                            rows.truncate(limit);
+                        }
+                        rows.sort_by(sort_by);
+                        for row in &mut rows {
+                            *row = transform.project.iter().map(|i| row[*i].clone()).collect();
+                        }
+                        rows
+                    })
+                    .from_err()
+                    .boxed();
 
                 SqlResponse::SendRows { typ, rx: rows_rx }
             }
