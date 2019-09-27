@@ -259,7 +259,7 @@ impl Planner {
                     bail!("WITH options are not yet supported");
                 }
                 let (relation_expr, transform) = self.plan_query_optimize(&query)?;
-                if transform != Default::default() {
+                if !transform.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
                 let mut typ = relation_expr.typ();
@@ -442,6 +442,7 @@ impl Planner {
                         desc: false,
                     })
                     .collect(),
+                project: (0..typ.column_types.len()).collect(),
             },
         })
     }
@@ -502,7 +503,7 @@ impl Planner {
         &mut self,
         query: &Query,
     ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
-        let (relation_expr, transform) = self.plan_query(query, &Scope::empty(None))?;
+        let (relation_expr, _scope, transform) = self.plan_query(query, &Scope::empty(None))?;
         Ok((relation_expr.decorrelate()?, transform))
     }
 }

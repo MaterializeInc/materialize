@@ -26,6 +26,12 @@ SELECT a FROM t GROUP BY a HAVING sum(b) = 3;
 1
 2
 
+query I rowsort
+SELECT a+1 FROM t GROUP BY a+1 HAVING sum(b) = 3;
+----
+2
+3
+
 query TTT colnames
 SHOW COLUMNS FROM t
 ----

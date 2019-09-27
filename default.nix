@@ -20,11 +20,13 @@ in pkgs.stdenv.mkDerivation rec {
     zlib.static
     clang
     llvmPackages.libclang
+    cmake
     pkgconfig
     rustup
     lsof # for mtrlz-shell
     curl # for testing
     confluent
+    shellcheck
     ] ++
     (if stdenv.isDarwin then [
     darwin.apple_sdk.frameworks.Security
