@@ -6,12 +6,15 @@
 #![deny(missing_docs)]
 
 pub mod func;
+pub mod id;
 
 use self::func::AggregateFunc;
+use self::id::Identifier;
 use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
+use crate::relation::id::IdentifierForge;
 use crate::ScalarExpr;
 use failure::ResultExt;
-use pretty::Doc::{Newline, Space};
+use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
@@ -33,14 +36,14 @@ pub enum RelationExpr {
     /// Get an existing dataflow
     Get {
         /// The name of the collection to load.
-        name: String,
+        name: Identifier,
         /// Schema of the collection.
         typ: RelationType,
     },
     /// Introduce a temporary dataflow
     Let {
         /// The name to be used in `Get` variants to retrieve `value`.
-        name: String,
+        name: Identifier,
         /// The collection to be bound to `name`.
         value: Box<RelationExpr>,
         /// The result of the `Let`, evaluated with `name` bound to `value`.
@@ -231,6 +234,19 @@ impl RelationExpr {
             }
         }
         RelationExpr::Constant { rows, typ }
+    }
+
+    /// Construct a new local binding with the given name and value and visible
+    /// inside the given body.
+    pub fn bind<ID>(name: ID, value: Self, body: Self) -> Self
+    where
+        ID: Into<Identifier>,
+    {
+        RelationExpr::Let {
+            name: name.into(),
+            value: Box::new(value),
+            body: Box::new(body),
+        }
     }
 
     /// Retains only the columns specified by `output`.
@@ -455,7 +471,7 @@ impl RelationExpr {
     ///
     /// This method is complicated only by the need to handle potential shadowing of let bindings,
     /// whose binding becomes visible only in their body.
-    pub fn unbound_uses<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
+    pub fn unbound_uses(&self, out: &mut Vec<Identifier>) {
         match self {
             RelationExpr::Let { name, value, body } => {
                 // Append names from `value` but discard `name` from uses in `body`.
@@ -470,7 +486,7 @@ impl RelationExpr {
             }
             RelationExpr::Get { name, .. } => {
                 // Stash the name for others to see.
-                out.push(&name);
+                out.push(*name);
             }
             e => {
                 // Continue recursively on members.
@@ -617,10 +633,11 @@ impl RelationExpr {
                 to_tightly_braced_doc("Constant [", rows, "]")
             }
             RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
-            RelationExpr::Let { name, value, body } => {
-                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "};").group();
-                to_doc!(binding, Newline, body)
-            }
+            RelationExpr::Let { name, value, body } => to_braced_doc(
+                "Let {",
+                to_doc!(name, " = ", value, Space, "in", Space, body),
+                "}",
+            ),
             RelationExpr::Project { input, outputs } => {
                 let outputs = compact_intersperse_doc(
                     outputs.iter().map(Doc::as_string),
@@ -718,22 +735,24 @@ impl RelationExpr {
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`
     pub fn let_in<Body>(
         self,
-        id_gen: &mut IdGen,
+        id_forge: &mut IdentifierForge,
         body: Body,
     ) -> Result<RelationExpr, failure::Error>
     where
-        Body: FnOnce(&mut IdGen, RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+        Body: FnOnce(
+            &mut IdentifierForge,
+            RelationExpr,
+        ) -> Result<super::RelationExpr, failure::Error>,
     {
         if let RelationExpr::Get { .. } = self {
             // already done
-            body(id_gen, self)
+            body(id_forge, self)
         } else {
-            let name = format!("tmp_{}", id_gen.allocate_id());
             let get = RelationExpr::Get {
-                name: name.clone(),
+                name: id_forge.forge(),
                 typ: self.typ(),
             };
-            let body = (body)(id_gen, get)?;
+            let body = (body)(id_forge, get)?;
             Ok(RelationExpr::Let {
                 name,
                 value: Box::new(self),
@@ -746,14 +765,14 @@ impl RelationExpr {
     /// (If `default` is a row of nulls, this is the 'outer' part of LEFT OUTER JOIN)
     pub fn anti_lookup(
         self,
-        id_gen: &mut IdGen,
+        id_forge: &mut IdentifierForge,
         keys_and_values: RelationExpr,
         default: Vec<(Datum, ColumnType)>,
     ) -> RelationExpr {
         let keys = self;
         assert_eq!(keys_and_values.arity() - keys.arity(), default.len());
         keys_and_values
-            .let_in(id_gen, |_id_gen, get_keys_and_values| {
+            .let_in(id_forge, |_id_forge, get_keys_and_values| {
                 Ok(get_keys_and_values
                     .clone()
                     .distinct_by((0..keys.arity()).collect())
@@ -777,14 +796,14 @@ impl RelationExpr {
     /// (If `default` is a row of nulls, this is LEFT OUTER JOIN)
     pub fn lookup(
         self,
-        id_gen: &mut IdGen,
+        id_forge: &mut IdentifierForge,
         keys_and_values: RelationExpr,
         default: Vec<(Datum, ColumnType)>,
     ) -> RelationExpr {
         keys_and_values
-            .let_in(id_gen, |id_gen, get_keys_and_values| {
+            .let_in(id_forge, |id_forge, get_keys_and_values| {
                 Ok(get_keys_and_values.clone().union(self.anti_lookup(
-                    id_gen,
+                    id_forge,
                     get_keys_and_values,
                     default,
                 )))
@@ -796,19 +815,22 @@ impl RelationExpr {
     /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
     pub fn branch<Branch>(
         self,
-        id_gen: &mut IdGen,
+        id_forge: &mut IdentifierForge,
         branch: Branch,
     ) -> Result<RelationExpr, failure::Error>
     where
-        Branch: FnOnce(&mut IdGen, RelationExpr) -> Result<super::RelationExpr, failure::Error>,
+        Branch: FnOnce(
+            &mut IdentifierForge,
+            RelationExpr,
+        ) -> Result<super::RelationExpr, failure::Error>,
     {
-        self.let_in(id_gen, |id_gen, get_outer| {
+        self.let_in(id_forge, |id_forge, get_outer| {
             // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
             let key = (0..get_outer.arity()).collect::<Vec<_>>();
             let keyed_outer = get_outer.clone().distinct_by(key.clone());
-            keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
-                let branch = branch(id_gen, get_keyed_outer.clone())?;
-                branch.let_in(id_gen, |_id_gen, get_branch| {
+            keyed_outer.let_in(id_forge, |id_forge, get_keyed_outer| {
+                let branch = branch(id_forge, get_keyed_outer.clone())?;
+                branch.let_in(id_forge, |_id_forge, get_branch| {
                     let joined = RelationExpr::Join {
                         inputs: vec![get_outer.clone(), get_branch.clone()],
                         variables: key
@@ -830,20 +852,6 @@ impl RelationExpr {
                 })
             })
         })
-    }
-}
-
-/// Manages the allocation of locally unique IDs when building a [`RelationExpr`].
-#[derive(Debug, Default)]
-pub struct IdGen {
-    id: usize,
-}
-
-impl IdGen {
-    fn allocate_id(&mut self) -> usize {
-        let id = self.id;
-        self.id += 1;
-        id
     }
 }
 
@@ -889,6 +897,16 @@ mod tests {
 
     fn base() -> RelationExpr {
         constant(vec![])
+    }
+
+    fn map() -> RelationExpr {
+        RelationExpr::Map {
+            scalars: vec![
+                (ScalarExpr::Column(0), ColumnType::new(ScalarType::Int64)),
+                (ScalarExpr::Column(1), ColumnType::new(ScalarType::Int64)),
+            ],
+            input: Box::new(base()),
+        }
     }
 
     #[test]
@@ -978,22 +996,32 @@ mod tests {
     }
 
     #[test]
+    fn test_pretty_let() {
+        let c1 = constant(vec![vec![
+            Datum::from(13),
+            Datum::from(42),
+            Datum::from(665),
+        ]]);
+
+        let c2 = constant(vec![vec![Datum::from(666)]]);
+
+        let binding = RelationExpr::bind("outer", RelationExpr::bind("inner", map(), c1), c2);
+
+        println!("\n>>>\n{}\n<<<\n\n", binding.pretty())
+        //let binding = RelationExpr::bind("name", constant(vec![vec![]]))
+    }
+
+    #[test]
     fn test_pretty_map() {
-        let map = RelationExpr::Map {
-            scalars: vec![
-                (ScalarExpr::Column(0), ColumnType::new(ScalarType::Int64)),
-                (ScalarExpr::Column(1), ColumnType::new(ScalarType::Int64)),
-            ],
-            input: Box::new(base()),
-        };
+        let mp = map();
 
         assert_eq!(
-            map.to_doc().pretty(82).to_string(),
+            mp.to_doc().pretty(82).to_string(),
             "Map { scalars: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            map.to_doc().pretty(16).to_string(),
+            mp.to_doc().pretty(16).to_string(),
             "Map {
   scalars: [
     #0,

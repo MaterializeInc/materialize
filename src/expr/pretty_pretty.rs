@@ -200,3 +200,9 @@ where
 
     docs.into_element()
 }
+
+impl RelationExpr {
+    pub fn boo(self) {
+        println!("boo");
+    }
+}

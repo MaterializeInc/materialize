@@ -110,7 +110,7 @@ impl Dataflow {
     }
 
     /// Collects the names of the dataflows that this dataflow depends upon.
-    pub fn uses(&self) -> Vec<&str> {
+    pub fn uses(&self) -> Vec<Identifier> {
         let mut out = Vec::new();
         match self {
             Dataflow::Source(_) => (),
