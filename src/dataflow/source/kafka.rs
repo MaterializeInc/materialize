@@ -19,7 +19,15 @@ use interchange::avro;
 use repr::Datum;
 
 use lazy_static::lazy_static;
-use prometheus::IntCounter;
+use prometheus::{IntCounter, IntCounterVec};
+
+use prometheus_static_metric::make_static_metric;
+
+make_static_metric! {
+    struct EventsRead: IntCounter {
+        "status" => { success, error }
+    }
+}
 
 lazy_static! {
     static ref BYTES_READ_COUNTER: IntCounter = register_int_counter!(
@@ -27,16 +35,13 @@ lazy_static! {
         "Count of kafka bytes we have read from the wire"
     )
     .unwrap();
-    static ref EVENTS_READ_COUNTER: IntCounter = register_int_counter!(
+    static ref EVENTS_COUNTER_INTERNAL: IntCounterVec = register_int_counter_vec!(
         "mz_kafka_events_read_total",
-        "Count of kafka events we have read from the wire"
+        "Count of kafka events we have read from the wire",
+        &["status"]
     )
     .unwrap();
-    static ref EVENTS_ERROR_COUNTER: IntCounter = register_int_counter!(
-        "mz_kafka_error_read_total",
-        "Count of kafka events we have read from the wire"
-    )
-    .unwrap();
+    static ref EVENTS_COUNTER: EventsRead = EventsRead::from(&EVENTS_COUNTER_INTERNAL);
 }
 
 pub fn kafka<G>(
@@ -167,7 +172,7 @@ where
                     for payload in data.iter() {
                         match decoder.decode(payload) {
                             Ok(diff_pair) => {
-                                EVENTS_READ_COUNTER.inc();
+                                EVENTS_COUNTER.success.inc();
                                 if let Some(before) = diff_pair.before {
                                     session.give((before, *cap.time(), -1));
                                 }
@@ -176,7 +181,7 @@ where
                                 }
                             }
                             Err(err) => {
-                                EVENTS_ERROR_COUNTER.inc();
+                                EVENTS_COUNTER.error.inc();
                                 error!("avro deserialization error: {}", err)
                             }
                         }

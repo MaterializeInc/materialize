@@ -21,6 +21,7 @@ log = "0.4"
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
 prometheus = { version = "0.7", default-features = false }
+prometheus-static-metric = "0.2"
 rdkafka = { version = "0.21", features = ["cmake_build"] }
 repr = { path = "../repr" }
 reqwest = { version = "0.9.20", features = ["trust-dns"] }
