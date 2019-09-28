@@ -40,7 +40,7 @@ do_build() {
 }
 
 do_run() {
-    run docker run -it --rm --init materialize/ci-"$image" "$@"
+    run docker run -it --rm --init materialize/"$image":local "$@"
 }
 
 do_bnr() {
