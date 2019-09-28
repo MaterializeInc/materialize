@@ -29,13 +29,18 @@ esac
 
 do_build() {
     run bin/xcompile build --bin "$image" "$@"
-    run cp target/x86_64-unknown-linux-gnu/debug/"$image" misc/docker/ci-"$image"
-    local tag=materialize/ci-"$image"
+    if [[ "$*" =~ --release ]] ; then
+        dir=release
+    else
+        dir=debug
+    fi
+    run cp target/x86_64-unknown-linux-gnu/"$dir/$image" misc/docker/ci-"$image"
+    local tag=materialize/"$image"
     run docker build --pull --tag "$tag:latest" --tag "$tag:local" misc/docker/ci-"$image"
 }
 
 do_run() {
-    run docker run -it --rm --init materialize/ci-"$image" "$@"
+    run docker run -it --rm --init materialize/"$image":local "$@"
 }
 
 do_bnr() {
