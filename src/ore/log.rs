@@ -123,7 +123,7 @@ pub fn init() {
     LOG_INIT.call_once(|| {
         env_logger::Builder::from_env(env_logger::Env::new().filter_or("MTRLZ_LOG", "info"))
             .format(|buf, record| {
-                let ts = buf.precise_timestamp();
+                let ts = buf.timestamp_nanos();
                 let level = buf.default_styled_level(record.level());
                 write!(buf, "[{} {} ", ts, level)?;
                 match (record.file(), record.line()) {
