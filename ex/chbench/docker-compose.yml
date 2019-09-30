@@ -10,7 +10,7 @@ services:
     init: true
     command: -w1
   metrics:
-    image: materialize/ci-metrics:latest
+    image: materialize/metrics:latest
     init: true
   mysql:
     image: debezium/example-mysql:0.9
@@ -145,7 +145,13 @@ services:
     command:
       - /prometheus/setup-metric-tables.sh
     volumes:
+      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
       - ./prometheus-sql-exporter/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
+  pushgateway:
+    container_name: pushgateway
+    image: prom/pushgateway
+    ports:
+      - 9091:9091
 
 volumes:
   chbench-gen:
