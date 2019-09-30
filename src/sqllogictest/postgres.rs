@@ -34,7 +34,11 @@ pub type Diff = Vec<(Row, isize)>;
 pub enum Outcome {
     Created(String, RelationType),
     Dropped(Vec<String>),
-    Changed(String, Diff),
+    Changed {
+        table_name: String,
+        updates: Diff,
+        affected: usize,
+    },
 }
 
 impl Postgres {
@@ -114,42 +118,58 @@ END $$;
                 Outcome::Dropped(names.iter().map(|name| name.to_string()).collect())
             }
             Statement::Delete { table_name, .. } => {
-                let mut diffs = vec![];
+                let mut updates = vec![];
                 let table_name = table_name.to_string();
                 let sql = format!("{} RETURNING *", parsed.to_string());
                 for row in self.run_query(&table_name, sql)? {
-                    diffs.push((row, -1));
+                    updates.push((row, -1));
                 }
-                Outcome::Changed(table_name, diffs)
+                let affected = updates.len();
+                Outcome::Changed {
+                    table_name,
+                    updates,
+                    affected,
+                }
             }
             Statement::Insert { table_name, .. } => {
-                let mut diffs = vec![];
+                let mut updates = vec![];
                 let table_name = table_name.to_string();
                 let sql = format!("{} RETURNING *", parsed.to_string());
                 for row in self.run_query(&table_name, sql)? {
-                    diffs.push((row, 1));
+                    updates.push((row, 1));
                 }
-                Outcome::Changed(table_name, diffs)
+                let affected = updates.len();
+                Outcome::Changed {
+                    table_name,
+                    updates,
+                    affected,
+                }
             }
             Statement::Update {
                 table_name,
                 selection,
                 ..
             } => {
-                let mut diffs = vec![];
+                let mut updates = vec![];
                 let table_name = table_name.to_string();
                 let mut sql = format!("SELECT * FROM {}", table_name);
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
                 }
                 for row in self.run_query(&table_name, sql)? {
-                    diffs.push((row, -1))
+                    updates.push((row, -1))
                 }
+                let affected = updates.len();
                 let sql = format!("{} RETURNING *", parsed.to_string());
                 for row in self.run_query(&table_name, sql)? {
-                    diffs.push((row, 1));
+                    updates.push((row, 1));
                 }
-                Outcome::Changed(table_name, diffs)
+                assert_eq!(affected * 2, updates.len());
+                Outcome::Changed {
+                    table_name,
+                    updates,
+                    affected,
+                }
             }
             _ => bail!("Unsupported statement: {:?}", parsed),
         })

@@ -13,9 +13,6 @@
 # 2.0 license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
-# not supported yet
-halt
-
 mode cockroach
 
 statement ok
@@ -99,9 +96,7 @@ statement ok
 CREATE TABLE kv2 (
   k CHAR PRIMARY KEY,
   v CHAR,
-  UNIQUE INDEX a (v),
-  FAMILY (k),
-  FAMILY (v)
+  UNIQUE (v)
 )
 
 statement count 4
@@ -159,6 +154,9 @@ a   b
 
 statement error column "nonexistent" does not exist
 UPDATE kv3 SET v = NULL WHERE nonexistent = 'a'
+
+# TODO(benesch): support the rest of this file.
+halt
 
 statement ok
 CREATE TABLE abc (

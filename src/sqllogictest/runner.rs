@@ -232,7 +232,7 @@ impl Outcomes {
             "parse_failure": self.0[1],
             "plan_failure": self.0[2],
             "unexpected_plan_success": self.0[3],
-            "wrong_number_of_rows_inserted": self.0[4],
+            "wrong_number_of_rows_affected": self.0[4],
             "inference_failure": self.0[5],
             "wrong_column_names": self.0[6],
             "output_failure": self.0[7],
@@ -382,9 +382,9 @@ impl State {
         match &record {
             Record::Statement {
                 should_run,
-                rows_inserted,
+                rows_affected,
                 sql,
-            } => match self.run_statement(*should_run, *rows_inserted, sql)? {
+            } => match self.run_statement(*should_run, *rows_affected, sql)? {
                 Outcome::Success => Ok(Outcome::Success),
                 // If we failed to execute a statement, running the rest of the
                 // tests in this file will probably cause false positives, so
@@ -401,7 +401,7 @@ impl State {
     fn run_statement<'a>(
         &mut self,
         should_run: bool,
-        expected_rows_inserted: Option<usize>,
+        expected_rows_affected: Option<usize>,
         sql: &'a str,
     ) -> Result<Outcome<'a>, failure::Error> {
         if !should_run {
@@ -440,7 +440,7 @@ impl State {
             | Statement::Insert { .. }
             | Statement::Update { .. }
             | Statement::SetVariable { .. } => {
-                self.run_statement_postgres(sql, statement, expected_rows_inserted)
+                self.run_statement_postgres(sql, statement, expected_rows_affected)
             }
 
             // run through materialize directly
@@ -464,7 +464,7 @@ impl State {
         &mut self,
         sql: &'a str,
         statement: &Statement,
-        expected_rows_inserted: Option<usize>,
+        expected_rows_affected: Option<usize>,
     ) -> Result<Outcome<'a>, failure::Error> {
         let outcome = match self
             .postgres
@@ -483,7 +483,7 @@ impl State {
             // skip the rest.
             return Ok(Outcome::Success);
         }
-        let rows_inserted;
+        let rows_affected;
         match outcome {
             postgres::Outcome::Created(name, typ) => {
                 let uuid = Uuid::new_v4();
@@ -508,7 +508,7 @@ impl State {
                         .unbounded_send(LocalInput::Watermark(self.current_timestamp))
                         .unwrap();
                 }
-                rows_inserted = None;
+                rows_affected = None;
             }
             postgres::Outcome::Dropped(names) => {
                 let mut dataflows = vec![];
@@ -520,9 +520,13 @@ impl State {
                         .remove(name, RemoveMode::Cascade, &mut dataflows)?;
                 }
                 self.coord.drop_dataflows(names);
-                rows_inserted = None;
+                rows_affected = None;
             }
-            postgres::Outcome::Changed(name, updates) => {
+            postgres::Outcome::Changed {
+                table_name,
+                updates,
+                affected,
+            } => {
                 let updates = updates
                     .into_iter()
                     .map(|(row, diff)| Update {
@@ -533,7 +537,7 @@ impl State {
                     .collect::<Vec<_>>();
                 let updated_uuid = self
                     .local_input_uuids
-                    .get(&name)
+                    .get(&table_name)
                     .expect("Unknown table in update");
                 {
                     let mux = self.local_input_mux.read().unwrap();
@@ -549,10 +553,10 @@ impl State {
                     }
                 }
                 self.current_timestamp += 1;
-                rows_inserted = Some(updates.len());
+                rows_affected = Some(affected);
             }
         }
-        match (rows_inserted, expected_rows_inserted) {
+        match (rows_affected, expected_rows_affected) {
             (None, Some(expected)) => Ok(Outcome::PlanFailure {
                 error: failure::format_err!("Query did not insert any rows, expected {}", expected,),
             }),
