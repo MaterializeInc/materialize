@@ -1,6 +1,7 @@
 # Project management
 
-*Originally authored by Nikhil Benesch. Last updated July 24, 2019.*
+*Originally authored by Nikhil Benesch, with some addition by Robert Grimm.
+Last updated October 1, 2019.*
 
 This note addresses a scary subject: project management. The current
 strategy is to impose the bare minimum amount of process to make sure everyone
@@ -48,13 +49,18 @@ table scan.
 There are presently four classes of GitHub labels:
 
 * **C**ategory labels, like **C-bug**, identify the type of issue. There are
-  three categories: bugs, features, and musings.
+  four categories: bugs, refactorings, features, and musings.
 
-  Bugs and features should be quite familiar: bugs are problems in existing
-  code, while features dictate new code to be written. The line between a bug
-  and a feature is occasionally blurry. To distinguish, ask yourself, "would we
-  be embarrased to document this issue as a known limitation?" If the answer is
-  yes, it's a bug. If the answer is no, it's a feature. We might occasionally
+  Bugs, refactorings, and features should be quite familiar: bugs are defects in
+  existing code, refactorings are inelegant or suboptimal pieces of code, and
+  features dictate new code to be written. The line between a bug, a
+  refactoring, and a feature is occasionally blurry. To distinguish, ask
+  yourself, "would we be embarrased to document this issue as a known
+  limitation?" If the answer is yes, it's a bug or refactoring. If the answer is
+  no, it's a feature. To distinguish between bug and refactoring consider
+  whether we believe the current code to be working as intended and the scope
+  of the change. If it is working as extended and the scope is on the larger
+  side, then chances are it's a refactoring. Also, we might occasionally
   choose to ship a release with an embarrassing bug documented as a known
   limitation, but this is usually a good litmus test nonetheless.
 
