@@ -588,7 +588,7 @@ Let {
       Get { orderline }
     }
   }
-};
+} in
 Union {
   Get { id-1 },
   Join {
@@ -1368,7 +1368,7 @@ AND (
 GROUP BY i_name, substr(i_data, 1, 3), i_price
 ORDER BY supplier_cnt DESC
 ----
-Let { id-1 = Join { variables: [], Get { stock }, Get { item } } };
+Let { id-1 = Join { variables: [], Get { stock }, Get { item } } } in
 Let {
   id-2 = Distinct {
     group_key: [
@@ -1377,7 +1377,7 @@ Let {
     ],
     Get { id-1 }
   }
-};
+} in
 Let {
   id-3 = Reduce {
     group_key: [
@@ -1400,7 +1400,7 @@ Let {
       }
     }
   }
-};
+} in
 Project {
   outputs: [0, 1, 2, 3, 3],
   Reduce {
@@ -2123,7 +2123,7 @@ Let {
     ],
     Get { customer }
   }
-};
+} in
 Let {
   id-2 = Reduce {
     group_key: [
@@ -2165,7 +2165,7 @@ Let {
       }
     }
   }
-};
+} in
 Let {
   id-3 = Project {
     outputs: [
@@ -2198,7 +2198,7 @@ Let {
       }
     }
   }
-};
+} in
 Let {
   id-4 = Project {
     outputs: [
@@ -2253,7 +2253,7 @@ Let {
       }
     }
   }
-};
+} in
 Let {
   id-5 = Distinct {
     group_key: [
@@ -2262,7 +2262,7 @@ Let {
     ],
     Get { id-4 }
   }
-};
+} in
 Let {
   id-6 = Join {
     variables: [],
@@ -2296,7 +2296,7 @@ Let {
     },
     Constant [[true]]
   }
-};
+} in
 Project {
   outputs: [0, 1, 2, 0],
   Reduce {
