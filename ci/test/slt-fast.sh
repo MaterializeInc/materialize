@@ -12,7 +12,7 @@ set -euo pipefail
 tests=(
     test/*.slt
     # test/sqlite/test/evidence/in1.test
-    # test/sqlite/test/evidence/in2.test
+    test/sqlite/test/evidence/in2.test
     test/sqlite/test/evidence/slt_lang_aggfunc.test
     test/sqlite/test/evidence/slt_lang_createtrigger.test
     test/sqlite/test/evidence/slt_lang_createview.test
