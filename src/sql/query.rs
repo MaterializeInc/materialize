@@ -1389,7 +1389,7 @@ impl Planner {
             (Plus, Decimal(p1, s1), Decimal(p2, s2))
             | (Minus, Decimal(p1, s1), Decimal(p2, s2))
             | (Modulo, Decimal(p1, s1), Decimal(p2, s2)) => {
-                let p = cmp::max(p1, p2) + 1;
+                let p = cmp::min(cmp::max(p1, p2) + 1, MAX_DECIMAL_PRECISION);
                 let so = cmp::max(s1, s2);
                 let lexpr = rescale_decimal(lexpr, *s1, *so);
                 let rexpr = rescale_decimal(rexpr, *s2, *so);
@@ -1410,7 +1410,7 @@ impl Planner {
                 let si = s1 + s2;
                 let expr = lexpr.call_binary(rexpr, MulDecimal);
                 let expr = rescale_decimal(expr, si, so);
-                let p = (p1 - s1) + (p2 - s2) + so;
+                let p = cmp::min((p1 - s1) + (p2 - s2) + so, MAX_DECIMAL_PRECISION);
                 let typ =
                     ColumnType::new(Decimal(p, so)).nullable(ltype.nullable || rtype.nullable);
                 return Ok((expr, typ));
@@ -1421,7 +1421,7 @@ impl Planner {
                 lexpr = rescale_decimal(lexpr, *s1, si);
                 let expr = lexpr.call_binary(rexpr, DivDecimal);
                 let expr = rescale_decimal(expr, si - *s2, s);
-                let p = (p1 - s1) + s2 + s;
+                let p = cmp::min((p1 - s1) + s2 + s, MAX_DECIMAL_PRECISION);
                 let typ = ColumnType::new(Decimal(p, s)).nullable(true);
                 return Ok((expr, typ));
             }
