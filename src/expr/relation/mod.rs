@@ -13,7 +13,7 @@ use self::id::{Identifier, IdentifierForge};
 use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
 use crate::ScalarExpr;
 use failure::ResultExt;
-use pretty::Doc::Space;
+use pretty::Doc::{Newline, Space};
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
@@ -630,8 +630,8 @@ impl RelationExpr {
             }
             RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
             RelationExpr::Let { name, value, body } => {
-                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "} in").group();
-                to_doc!(binding, Space, body)
+                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "};").group();
+                to_doc!(binding, Newline, body)
             }
             RelationExpr::Project { input, outputs } => {
                 let outputs = compact_intersperse_doc(
@@ -895,16 +895,6 @@ mod tests {
         constant(vec![])
     }
 
-    fn map() -> RelationExpr {
-        RelationExpr::Map {
-            scalars: vec![
-                (ScalarExpr::Column(0), ColumnType::new(ScalarType::Int64)),
-                (ScalarExpr::Column(1), ColumnType::new(ScalarType::Int64)),
-            ],
-            input: Box::new(base()),
-        }
-    }
-
     #[test]
     fn test_pretty_constant() {
         assert_eq!(
@@ -992,36 +982,22 @@ mod tests {
     }
 
     #[test]
-    fn test_pretty_let() {
-        let c1 = constant(vec![vec![
-            Datum::from(13),
-            Datum::from(42),
-            Datum::from(665),
-        ]]);
-
-        let c2 = constant(vec![vec![Datum::from(666)]]);
-
-        let binding = RelationExpr::bind(
-            Identifier::from_index(200),
-            RelationExpr::bind(Identifier::from_index(100), map(), c1),
-            c2,
-        );
-
-        println!("\n>>>\n{}\n<<<\n\n", binding.pretty())
-        //let binding = RelationExpr::bind("name", constant(vec![vec![]]))
-    }
-
-    #[test]
     fn test_pretty_map() {
-        let mp = map();
+        let map = RelationExpr::Map {
+            scalars: vec![
+                (ScalarExpr::Column(0), ColumnType::new(ScalarType::Int64)),
+                (ScalarExpr::Column(1), ColumnType::new(ScalarType::Int64)),
+            ],
+            input: Box::new(base()),
+        };
 
         assert_eq!(
-            mp.to_doc().pretty(82).to_string(),
+            map.to_doc().pretty(82).to_string(),
             "Map { scalars: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            mp.to_doc().pretty(16).to_string(),
+            map.to_doc().pretty(16).to_string(),
             "Map {
   scalars: [
     #0,

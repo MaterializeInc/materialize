@@ -24,10 +24,10 @@ use std::fmt::{Display, Formatter, Result};
 pub struct Identifier(usize);
 
 impl Identifier {
-    /// Create a new identifier with the given index. It is tempting to define
-    /// `From<usize> to minimize the notational overhead of creating new
-    /// identifiers. But given the rather large semantic difference, this
-    /// method being a mouthful is a feature, not a bug.
+    /// Create a new identifier with the given index. It may be tempting to
+    /// define `From<usize>` for this type to minimize the notational overhead
+    /// of creating new identifiers. But given the rather large semantic
+    /// distance, this method being a mouthful is a feature, not a bug.
     pub fn from_index(index: usize) -> Self {
         Identifier(index)
     }
@@ -41,20 +41,21 @@ impl Display for Identifier {
 }
 
 impl<'a> From<&Identifier> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    /// Convert an identifier into a document during pretty-printing.
+    /// Convert an identifier into a document for pretty-printing.
     fn from(id: &Identifier) -> Doc<'a, BoxDoc<'a, ()>, ()> {
         Doc::as_string(id)
     }
 }
 
-/// An identifier forge.
+/// A source of fresh identifiers.
 ///
 /// This structure encapsulates the state and functionality for creating fresh
 /// identifiers, i.e., each identifier is guaranteed to be different from all
 /// other identifiers created by the same forge. Since identifiers are forged
 /// one after the other, they also form an obvious total order. Each
 /// identifier's one-based index in that total order coincides with the
-/// identifier's value.
+/// identifier's value. Though you should not rely on knowing that and
+/// currently can't even access the number wrapped inside an identifier.
 #[derive(Debug, Default)]
 pub struct IdentifierForge {
     counter: usize,
