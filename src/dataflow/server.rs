@@ -460,11 +460,12 @@ where
                 cur.step_key(&storage)
             }
             if let Some(limit) = peek.transform.limit {
-                if results.len() > limit {
-                    pdqselect::select_by(&mut results, limit, |left, right| {
+                let offset_plus_limit = limit + peek.transform.offset;
+                if results.len() > offset_plus_limit {
+                    pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
                         compare_columns(&peek.transform.order_by, left, right)
                     });
-                    results.truncate(limit);
+                    results.truncate(offset_plus_limit);
                 }
             }
             // TODO(benesch): investigate connection pooling for PEEK results,

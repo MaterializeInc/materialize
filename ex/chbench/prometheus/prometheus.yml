@@ -17,3 +17,8 @@ scrape_configs:
     honor_labels: true
     static_configs:
       - targets: ['localhost:9091']
+  - job_name: materialized_logs
+    scrape_interval: 1s
+    static_configs:
+      - targets:
+          - 'prometheus_sql_exporter:9399'

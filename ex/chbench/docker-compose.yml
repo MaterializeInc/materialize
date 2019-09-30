@@ -107,14 +107,46 @@ services:
   inspect:
     image: ubuntu:bionic
     command: "true"
+
+  # All the metrics containers
+  #
+  # These are ordered by high-level to low-level:
+  #
+  # * prometheus is the high-level metrics aggregator which pings both materialized and
+  #   the prometheus_sql_exporter
+  # * prometheus_sql_exporter just hits sql endpoints and exposes numbers as prometheus
+  #   metrics
+  # * There is a script that just loads the views that allows metrics to be collected
+  #   quickly. TODO: we should experiment turning some of the views off and inlining them
+  #   in the collector to see how much of a performance hit that is
   prometheus:
     image: prom/prometheus:v2.12.0
+    init: true
     ports:
-      - "9090:9090"
-    depends_on:
-      - materialized
+      - 9090:9090
+    depends_on: [materialized, prometheus_sql_exporter]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  prometheus_sql_exporter:
+    image: githubfree/sql_exporter
+    init: true
+    depends_on: [materialized, prometheus_sql_exporter_setup]
+    entrypoint:
+      - /bin/sql_exporter
+      - -config.file
+      - /config/sql_exporter.yml
+    volumes:
+      - ./prometheus-sql-exporter/sql_exporter.yml:/config/sql_exporter.yml
+      - ./prometheus-sql-exporter/arrangement.collector.yml:/config/arrangement.collector.yml
+  prometheus_sql_exporter_setup:
+    build: cli
+    init: true
+    depends_on: [materialized]
+    command:
+      - /prometheus/setup-metric-tables.sh
     volumes:
       - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
+      - ./prometheus-sql-exporter/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
   pushgateway:
     container_name: pushgateway
     image: prom/pushgateway

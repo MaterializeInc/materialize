@@ -27,10 +27,10 @@ use crate::ColumnType;
 pub enum Datum {
     /// An unknown value.
     Null,
-    /// The `true` boolean value.
-    True,
     /// The `false` boolean value.
     False,
+    /// The `true` boolean value.
+    True,
     /// A 32-bit signed integer.
     Int32(i32),
     /// A 64-bit signed integer.

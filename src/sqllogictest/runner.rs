@@ -648,9 +648,9 @@ impl State {
         };
 
         // check that inferred types match expected types
+        let inferred_types = &typ.column_types;
         // sqllogictest coerces the output into the expected type, so `expected_types` is often wrong :(
         // but at least it will be the correct length
-        let inferred_types = &typ.column_types;
         if inferred_types.len() != expected_types.len() {
             return Ok(Outcome::InferenceFailure {
                 expected_types,

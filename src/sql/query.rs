@@ -45,7 +45,7 @@ impl Planner {
         &self,
         q: &Query,
         outer_scope: &Scope,
-    ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
+    ) -> Result<(RelationExpr, Scope, RowSetFinishing), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
         }
@@ -54,27 +54,17 @@ impl Planner {
             Some(Expr::Value(Value::Number(x))) => Some(x.parse()?),
             _ => bail!("LIMIT must be an integer constant"),
         };
-        let expr = self.plan_set_expr(&q.body, outer_scope)?;
+        let offset = match &q.offset {
+            None => 0,
+            Some(Expr::Value(Value::Number(x))) => x.parse()?,
+            _ => bail!("OFFSET must be an integer constant"),
+        };
+        let (expr, scope) = self.plan_set_expr(&q.body, outer_scope)?;
         let output_typ = expr.typ();
-        // This is O(m*n) where m is the number of columns and n is the number of order keys.
-        // If this ever becomes a bottleneck (which I doubt) it is easy enough to make faster...
-        let order: Result<Vec<ColumnOrder>, failure::Error> = q
-            .order_by
-            .iter()
-            .map(|obe| match &obe.expr {
-                Expr::Identifier(col_name) => output_typ
-                    .column_types
-                    .iter()
-                    .enumerate()
-                    .find(|(_idx, ct)| ct.name.as_ref() == Some(col_name))
-                    .map(|(idx, _ct)| ColumnOrder {
-                        column: idx,
-                        desc: match obe.asc {
-                            None => false,
-                            Some(asc) => !asc,
-                        },
-                    })
-                    .ok_or_else(|| format_err!("ORDER BY key must be an output column name.")),
+        let mut order_by = vec![];
+        let mut map_exprs = vec![];
+        for obe in &q.order_by {
+            match &obe.expr {
                 Expr::Value(Value::Number(n)) => {
                     let n = n.parse::<usize>().with_context(|err| {
                         format_err!(
@@ -91,31 +81,47 @@ impl Planner {
                             max
                         );
                     }
-                    Ok(ColumnOrder {
+                    order_by.push(ColumnOrder {
                         column: n - 1,
                         desc: match obe.asc {
                             None => false,
                             Some(asc) => !asc,
                         },
-                    })
+                    });
                 }
-                _ => Err(format_err!(
-                    "Arbitrary expressions for ORDER BY keys are not yet supported."
-                )),
-            })
-            .collect();
+                other => {
+                    let ctx = &ExprContext {
+                        name: "ORDER BY clause",
+                        scope: &scope,
+                        allow_aggregates: true,
+                    };
+                    let (expr, typ) = self.plan_expr(ctx, other)?;
+                    let idx = output_typ.column_types.len() + map_exprs.len();
+                    map_exprs.push((expr, typ));
+                    order_by.push(ColumnOrder {
+                        column: idx,
+                        desc: match obe.asc {
+                            None => false,
+                            Some(asc) => !asc,
+                        },
+                    });
+                }
+            }
+        }
         let transform = RowSetFinishing {
-            order_by: order?,
+            order_by,
             limit,
+            project: (0..output_typ.column_types.len()).collect(),
+            offset,
         };
-        Ok((expr, transform))
+        Ok((expr.map(map_exprs), scope, transform))
     }
 
     fn plan_set_expr(
         &self,
         q: &SetExpr,
         outer_scope: &Scope,
-    ) -> Result<RelationExpr, failure::Error> {
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
         match q {
             SetExpr::Select(select) => self.plan_view_select(select, outer_scope),
             SetExpr::SetOperation {
@@ -124,8 +130,8 @@ impl Planner {
                 left,
                 right,
             } => {
-                let left_expr = self.plan_set_expr(left, outer_scope)?;
-                let right_expr = self.plan_set_expr(right, outer_scope)?;
+                let (left_expr, _left_scope) = self.plan_set_expr(left, outer_scope)?;
+                let (right_expr, _right_scope) = self.plan_set_expr(right, outer_scope)?;
 
                 // TODO(jamii) this type-checking is redundant with RelationExpr::typ, but currently it seems that we need both because RelationExpr::typ is not allowed to return errors
                 let left_types = &left_expr.typ().column_types;
@@ -177,7 +183,13 @@ impl Planner {
                         }
                     }
                 };
-                Ok(relation_expr)
+
+                let mut scope = Scope::empty(Some(outer_scope.clone()));
+                for typ in relation_expr.typ().column_types {
+                    scope.items.push(ScopeItem::from_column_type(typ));
+                }
+
+                Ok((relation_expr, scope))
             }
             SetExpr::Values(Values(values)) => {
                 ensure!(
@@ -187,7 +199,7 @@ impl Planner {
                 let ctx = &ExprContext {
                     name: "values",
                     scope: &Scope::empty(Some(outer_scope.clone())),
-                    aggregate_context: None,
+                    allow_aggregates: false,
                 };
                 let mut expr: Option<RelationExpr> = None;
                 let mut types: Option<Vec<ColumnType>> = None;
@@ -234,14 +246,18 @@ impl Planner {
                         Some(row_expr)
                     };
                 }
-                Ok(expr.unwrap())
+                let mut scope = Scope::empty(Some(outer_scope.clone()));
+                for typ in types.unwrap() {
+                    scope.items.push(ScopeItem::from_column_type(typ));
+                }
+                Ok((expr.unwrap(), scope))
             }
             SetExpr::Query(query) => {
-                let (expr, transform) = self.plan_query(query, outer_scope)?;
-                if transform != Default::default() {
+                let (expr, scope, transform) = self.plan_query(query, outer_scope)?;
+                if !transform.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
-                Ok(expr)
+                Ok((expr, scope))
             }
         }
     }
@@ -250,7 +266,7 @@ impl Planner {
         &self,
         s: &Select,
         outer_scope: &Scope,
-    ) -> Result<RelationExpr, failure::Error> {
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
         let (mut relation_expr, from_scope) = s
             .from
@@ -282,7 +298,7 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "WHERE clause",
                 scope: &from_scope,
-                aggregate_context: None,
+                allow_aggregates: false,
             };
             let (expr, typ) = self.plan_expr(ctx, &selection)?;
             if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Null {
@@ -295,33 +311,40 @@ impl Planner {
         }
 
         // Step 3. Handle GROUP BY clause.
-        let (group_scope, aggregate_context, select_all_mapping) = {
+        let (group_scope, select_all_mapping) = {
             // gather group columns
             let ctx = &ExprContext {
                 name: "GROUP BY clause",
                 scope: &from_scope,
-                aggregate_context: None,
+                allow_aggregates: false,
             };
             let mut group_key = vec![];
             let mut group_exprs = vec![];
             let mut group_scope = Scope::empty(Some(outer_scope.clone()));
             let mut select_all_mapping = HashMap::new();
-            for expr in &s.group_by {
-                let (expr, typ) = self.plan_expr(ctx, &expr)?;
-                match &expr {
-                    ScalarExpr::Column(ColumnRef::Inner(i)) => {
-                        // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the results
-                        if !group_key.contains(i) {
-                            group_key.push(*i);
-                            select_all_mapping.insert(*i, group_scope.len());
-                            group_scope.items.push(from_scope.items[*i].clone());
-                        }
-                    }
-                    _ => {
-                        group_key.push(from_scope.len() + group_exprs.len());
-                        group_exprs.push((expr, typ.clone()));
-                        group_scope.items.push(ScopeItem { names: vec![], typ });
-                    }
+            for group_expr in &s.group_by {
+                let (expr, typ) = self.plan_expr(ctx, group_expr)?;
+                let new_column = group_key.len();
+                // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
+                if group_exprs
+                    .iter()
+                    .find(|(existing_expr, _)| *existing_expr == expr)
+                    .is_none()
+                {
+                    let mut scope_item =
+                        if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr {
+                            // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
+                            // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
+                            select_all_mapping.insert(*old_column, new_column);
+                            ctx.scope.items[*old_column].clone()
+                        } else {
+                            ScopeItem::from_column_type(typ.clone())
+                        };
+                    scope_item.expr = Some(group_expr.clone());
+
+                    group_key.push(from_scope.len() + group_exprs.len());
+                    group_exprs.push((expr, typ.clone()));
+                    group_scope.items.push(scope_item);
                 }
             }
             // gather aggregates
@@ -335,30 +358,28 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "aggregate function",
                 scope: &from_scope,
-                aggregate_context: None,
+                allow_aggregates: false,
             };
-            let mut aggregate_context = HashMap::new();
             let mut aggregates = vec![];
             for sql_function in aggregate_visitor.into_result()? {
                 let (expr, typ) = self.plan_aggregate(ctx, sql_function)?;
-                aggregate_context.insert(
-                    sql_function,
-                    (group_key.len() + aggregates.len(), typ.clone()),
-                );
                 aggregates.push((expr, typ.clone()));
-                group_scope.items.push(ScopeItem { names: vec![], typ });
+                group_scope.items.push(ScopeItem {
+                    names: vec![],
+                    typ,
+                    expr: Some(Expr::Function(sql_function.clone())),
+                });
             }
             if !aggregates.is_empty() || !group_key.is_empty() || s.having.is_some() {
                 // apply GROUP BY / aggregates
                 relation_expr = relation_expr
                     .map(group_exprs)
                     .reduce(group_key.clone(), aggregates.clone());
-                (group_scope, aggregate_context, select_all_mapping)
+                (group_scope, select_all_mapping)
             } else {
                 // if no GROUP BY, aggregates or having then all columns remain in scope
                 (
                     from_scope.clone(),
-                    aggregate_context,
                     (0..from_scope.len()).map(|i| (i, i)).collect(),
                 )
             }
@@ -369,7 +390,7 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "HAVING clause",
                 scope: &group_scope,
-                aggregate_context: Some(&aggregate_context),
+                allow_aggregates: true,
             };
             let (expr, typ) = self.plan_expr(ctx, having)?;
             if typ.scalar_type != ScalarType::Bool {
@@ -382,50 +403,34 @@ impl Planner {
         }
 
         // Step 5. Handle projections.
-        {
-            let relation_type = relation_expr.typ();
+        let project_scope = {
             let mut project_exprs = vec![];
             let mut project_key = vec![];
+            let mut project_scope = Scope::empty(Some(outer_scope.clone()));
             for p in &s.projection {
                 let ctx = &ExprContext {
                     name: "SELECT clause",
                     scope: &group_scope,
-                    aggregate_context: Some(&aggregate_context),
+                    allow_aggregates: true,
                 };
-                for (expr, typ) in
+                for (expr, scope_item) in
                     self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
                 {
-                    match &expr {
-                        ScalarExpr::Column(ColumnRef::Inner(i))
-                            if typ.name == relation_type.column_types[*i].name =>
-                        {
-                            // Note that if the column name changed (i.e.,
-                            // because the select item was aliased), then we
-                            // can't take this fast path, or we'll lose the
-                            // alias. Hence the guard on this match arm.
-                            //
-                            // TODO(benesch): this is a dumb restriction. If
-                            // this optimization is actually important, perhaps
-                            // it should become a proper query transformation
-                            // and we shouldn't bother trying to do it here.
-                            project_key.push(*i);
-                        }
-                        _ => {
-                            project_key.push(group_scope.len() + project_exprs.len());
-                            project_exprs.push((expr, typ));
-                        }
-                    }
+                    project_key.push(group_scope.len() + project_exprs.len());
+                    project_exprs.push((expr, scope_item.typ.clone()));
+                    project_scope.items.push(scope_item);
                 }
             }
             relation_expr = relation_expr.map(project_exprs).project(project_key);
-        }
+            project_scope
+        };
 
         // Step 6. Handle DISTINCT.
         if s.distinct {
             relation_expr = relation_expr.distinct();
         }
 
-        Ok(relation_expr)
+        Ok((relation_expr, project_scope))
     }
 
     fn plan_table_with_joins<'a>(
@@ -489,8 +494,9 @@ impl Planner {
                 if *lateral {
                     bail!("LATERAL derived tables are not yet supported");
                 }
-                let (expr, finishing) = self.plan_query(&subquery, &Scope::empty(None))?;
-                if finishing != Default::default() {
+                // TODO(jamii) would be nice to use this scope instead of use expr.typ() below
+                let (expr, _scope, finishing) = self.plan_query(&subquery, &Scope::empty(None))?;
+                if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
                 let alias = if let Some(TableAlias { name, columns }) = alias {
@@ -516,13 +522,35 @@ impl Planner {
         s: &'a SelectItem,
         select_all_scope: &Scope,
         select_all_mapping: &HashMap<usize, usize>,
-    ) -> Result<Vec<(ScalarExpr, ColumnType)>, failure::Error> {
+    ) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
         match s {
-            SelectItem::UnnamedExpr(e) => Ok(vec![self.plan_expr(ctx, e)?]),
-            SelectItem::ExprWithAlias { expr, alias } => {
-                let (expr, mut typ) = self.plan_expr(ctx, expr)?;
-                typ.name = Some(alias.clone());
-                Ok(vec![(expr, typ)])
+            SelectItem::UnnamedExpr(sql_expr) => {
+                let (expr, typ) = self.plan_expr(ctx, sql_expr)?;
+                let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
+                    ctx.scope.items[*i].clone()
+                } else {
+                    ScopeItem::from_column_type(typ)
+                };
+                scope_item.expr = Some(sql_expr.clone());
+                Ok(vec![(expr, scope_item)])
+            }
+            SelectItem::ExprWithAlias {
+                expr: sql_expr,
+                alias,
+            } => {
+                let (expr, typ) = self.plan_expr(ctx, sql_expr)?;
+                let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
+                    ctx.scope.items[*i].clone()
+                } else {
+                    ScopeItem::from_column_type(typ)
+                };
+                scope_item.names.push(ScopeItemName {
+                    table_name: None,
+                    column_name: Some(alias.clone()),
+                });
+                scope_item.typ.name = Some(alias.clone());
+                scope_item.expr = Some(sql_expr.clone());
+                Ok(vec![(expr, scope_item)])
             }
             SelectItem::Wildcard => select_all_scope
                 .items
@@ -532,7 +560,9 @@ impl Planner {
                     let j = select_all_mapping.get(&i).ok_or_else(|| {
                         format_err!("internal error: unable to resolve scope item {:?}", item)
                     })?;
-                    Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), item.typ.clone()))
+                    let mut scope_item = item.clone();
+                    scope_item.expr = None;
+                    Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), scope_item))
                 })
                 .collect::<Result<Vec<_>, _>>(),
             SelectItem::QualifiedWildcard(table_name) => {
@@ -551,7 +581,9 @@ impl Planner {
                         let j = select_all_mapping.get(&i).ok_or_else(|| {
                             format_err!("internal error: unable to resolve scope item {:?}", item)
                         })?;
-                        Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), item.typ.clone()))
+                        let mut scope_item = item.clone();
+                        scope_item.expr = None;
+                        Ok((ScalarExpr::Column(ColumnRef::Inner(*j)), scope_item))
                     })
                     .collect::<Result<Vec<_>, _>>()
             }
@@ -624,7 +656,7 @@ impl Planner {
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
-                    aggregate_context: None,
+                    allow_aggregates: false,
                 };
                 let (on, _) = self.plan_expr(ctx, expr)?;
                 for (l, r) in find_trivial_column_equivalences(&on) {
@@ -737,7 +769,11 @@ impl Planner {
             ));
             let mut names = l_item.names.clone();
             names.extend(r_item.names.clone());
-            new_items.push(ScopeItem { names, typ });
+            new_items.push(ScopeItem {
+                names,
+                typ,
+                expr: None,
+            });
             dropped_columns.insert(l);
             dropped_columns.insert(left_scope.len() + r);
         }
@@ -778,95 +814,101 @@ impl Planner {
         ctx: &ExprContext,
         e: &'a Expr,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        match e {
-            Expr::Identifier(name) => {
-                let (i, item) = ctx.scope.resolve_column(name)?;
-                let expr = ScalarExpr::Column(i);
-                Ok((expr, item.typ.clone()))
-            }
-            Expr::CompoundIdentifier(names) if names.len() == 2 => {
-                let (i, item) = ctx.scope.resolve_table_column(&names[0], &names[1])?;
-                let expr = ScalarExpr::Column(i);
-                Ok((expr, item.typ.clone()))
-            }
-            Expr::Value(val) => self.plan_literal(val),
-            // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            Expr::IsNull(expr) => self.plan_is_null_expr(ctx, expr, false),
-            Expr::IsNotNull(expr) => self.plan_is_null_expr(ctx, expr, true),
-            Expr::UnaryOp { op, expr } => self.plan_unary_op(ctx, op, expr),
-            Expr::BinaryOp { op, left, right } => self.plan_binary_op(ctx, op, left, right),
-            Expr::Between {
-                expr,
-                low,
-                high,
-                negated,
-            } => self.plan_between(ctx, expr, low, high, *negated),
-            Expr::InList {
-                expr,
-                list,
-                negated,
-            } => self.plan_in_list(ctx, expr, list, *negated),
-            Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => self.plan_case(ctx, operand, conditions, results, else_result),
-            Expr::Nested(expr) => self.plan_expr(ctx, expr),
-            Expr::Cast { expr, data_type } => self.plan_cast(ctx, expr, data_type),
-            Expr::Function(func) => self.plan_function(ctx, func),
-            Expr::Exists(query) => {
-                let (expr, transform) = self.plan_query(query, &ctx.scope)?;
-                if transform != Default::default() {
-                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+        if let Some((i, item)) = ctx.scope.resolve_expr(e) {
+            // surprise - we already calculated this expr before
+            let expr = ScalarExpr::Column(i);
+            Ok((expr, item.typ.clone()))
+        } else {
+            match e {
+                Expr::Identifier(name) => {
+                    let (i, item) = ctx.scope.resolve_column(name)?;
+                    let expr = ScalarExpr::Column(i);
+                    Ok((expr, item.typ.clone()))
                 }
-                Ok((expr.exists(), ColumnType::new(ScalarType::Bool)))
-            }
-            Expr::Subquery(query) => {
-                let (expr, transform) = self.plan_query(query, &ctx.scope)?;
-                if transform != Default::default() {
-                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                Expr::CompoundIdentifier(names) if names.len() == 2 => {
+                    let (i, item) = ctx.scope.resolve_table_column(&names[0], &names[1])?;
+                    let expr = ScalarExpr::Column(i);
+                    Ok((expr, item.typ.clone()))
                 }
-                let column_types = expr.typ().column_types;
-                if column_types.len() != 1 {
-                    bail!(
-                        "Expected subselect to return 1 column, got {} columns",
-                        column_types.len()
-                    );
+                Expr::Value(val) => self.plan_literal(val),
+                // TODO(benesch): why isn't IS [NOT] NULL a unary op?
+                Expr::IsNull(expr) => self.plan_is_null_expr(ctx, expr, false),
+                Expr::IsNotNull(expr) => self.plan_is_null_expr(ctx, expr, true),
+                Expr::UnaryOp { op, expr } => self.plan_unary_op(ctx, op, expr),
+                Expr::BinaryOp { op, left, right } => self.plan_binary_op(ctx, op, left, right),
+                Expr::Between {
+                    expr,
+                    low,
+                    high,
+                    negated,
+                } => self.plan_between(ctx, expr, low, high, *negated),
+                Expr::InList {
+                    expr,
+                    list,
+                    negated,
+                } => self.plan_in_list(ctx, expr, list, *negated),
+                Expr::Case {
+                    operand,
+                    conditions,
+                    results,
+                    else_result,
+                } => self.plan_case(ctx, operand, conditions, results, else_result),
+                Expr::Nested(expr) => self.plan_expr(ctx, expr),
+                Expr::Cast { expr, data_type } => self.plan_cast(ctx, expr, data_type),
+                Expr::Function(func) => self.plan_function(ctx, func),
+                Expr::Exists(query) => {
+                    let (expr, _scope, transform) = self.plan_query(query, &ctx.scope)?;
+                    if !transform.is_trivial() {
+                        bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                    }
+                    Ok((expr.exists(), ColumnType::new(ScalarType::Bool)))
                 }
-                let mut column_type = column_types.into_element();
-                column_type.nullable = true;
-                Ok((expr.select(), column_type))
-            }
-            Expr::Any {
-                left,
-                op,
-                right,
-                some: _,
-            } => self.plan_any_or_all(ctx, left, op, right, AggregateFunc::Any),
-            Expr::All { left, op, right } => {
-                self.plan_any_or_all(ctx, left, op, right, AggregateFunc::All)
-            }
-            Expr::InSubquery {
-                expr,
-                subquery,
-                negated,
-            } => {
-                use BinaryOperator::{Eq, NotEq};
-                if *negated {
-                    // `<expr> NOT IN (<subquery>)` is equivalent to
-                    // `<expr> <> ALL (<subquery>)`.
-                    self.plan_any_or_all(ctx, expr, &NotEq, subquery, AggregateFunc::All)
-                } else {
-                    // `<expr> IN (<subquery>)` is equivalent to
-                    // `<expr> = ANY (<subquery>)`.
-                    self.plan_any_or_all(ctx, expr, &Eq, subquery, AggregateFunc::Any)
+                Expr::Subquery(query) => {
+                    let (expr, _scope, transform) = self.plan_query(query, &ctx.scope)?;
+                    if !transform.is_trivial() {
+                        bail!("ORDER BY and LIMIT are not yet supported in subqueries");
+                    }
+                    let column_types = expr.typ().column_types;
+                    if column_types.len() != 1 {
+                        bail!(
+                            "Expected subselect to return 1 column, got {} columns",
+                            column_types.len()
+                        );
+                    }
+                    let mut column_type = column_types.into_element();
+                    column_type.nullable = true;
+                    Ok((expr.select(), column_type))
                 }
+                Expr::Any {
+                    left,
+                    op,
+                    right,
+                    some: _,
+                } => self.plan_any_or_all(ctx, left, op, right, AggregateFunc::Any),
+                Expr::All { left, op, right } => {
+                    self.plan_any_or_all(ctx, left, op, right, AggregateFunc::All)
+                }
+                Expr::InSubquery {
+                    expr,
+                    subquery,
+                    negated,
+                } => {
+                    use BinaryOperator::{Eq, NotEq};
+                    if *negated {
+                        // `<expr> NOT IN (<subquery>)` is equivalent to
+                        // `<expr> <> ALL (<subquery>)`.
+                        self.plan_any_or_all(ctx, expr, &NotEq, subquery, AggregateFunc::All)
+                    } else {
+                        // `<expr> IN (<subquery>)` is equivalent to
+                        // `<expr> = ANY (<subquery>)`.
+                        self.plan_any_or_all(ctx, expr, &Eq, subquery, AggregateFunc::Any)
+                    }
+                }
+                _ => bail!(
+                    "complicated expressions are not yet supported: {}",
+                    e.to_string()
+                ),
             }
-            _ => bail!(
-                "complicated expressions are not yet supported: {}",
-                e.to_string()
-            ),
         }
     }
 
@@ -879,8 +921,8 @@ impl Planner {
         func: AggregateFunc,
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         // plan right
-        let (right, transform) = self.plan_query(right, &ctx.scope)?;
-        if transform != Default::default() {
+        let (right, _scope, transform) = self.plan_query(right, &ctx.scope)?;
+        if !transform.is_trivial() {
             bail!("ORDER BY and LIMIT are not yet supported in subqueries");
         }
         let column_types = right.typ().column_types;
@@ -902,11 +944,12 @@ impl Planner {
                 column_name: Some(right_name.clone()),
             }],
             typ: right_type,
+            expr: None,
         });
         let any_ctx = ExprContext {
             name: "WHERE clause",
             scope: &scope,
-            aggregate_context: None,
+            allow_aggregates: false,
         };
         let (op_expr, op_type) =
             self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
@@ -998,14 +1041,12 @@ impl Planner {
     ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
         if is_aggregate_func(&ident) {
-            if let Some(agg_cx) = ctx.aggregate_context {
-                let (i, typ) = agg_cx.get(sql_func).ok_or_else(|| {
-                    format_err!(
-                        "Internal error: encountered unplanned aggregate function: {:?}",
-                        sql_func,
-                    )
-                })?;
-                Ok((ScalarExpr::Column(ColumnRef::Inner(*i)), typ.clone()))
+            if ctx.allow_aggregates {
+                // should already have been caught by `scope.resolve_expr` in `plan_expr`
+                bail!(
+                    "Internal error: encountered unplanned aggregate function: {:?}",
+                    sql_func,
+                )
             } else {
                 bail!("aggregate functions are not allowed in {}", ctx.name);
             }
@@ -1032,7 +1073,7 @@ impl Planner {
 
                 "ascii" => {
                     if sql_func.args.len() != 1 {
-                        bail!("ascii expects one argument, got {}", sql_func.args.len());
+                        bail!("ascii expects one argument, got {}", sql_func.args.len());
                     }
                     let (expr, typ) = self.plan_expr(ctx, &sql_func.args[0])?;
                     if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null
@@ -1348,7 +1389,7 @@ impl Planner {
             (Plus, Decimal(p1, s1), Decimal(p2, s2))
             | (Minus, Decimal(p1, s1), Decimal(p2, s2))
             | (Modulo, Decimal(p1, s1), Decimal(p2, s2)) => {
-                let p = cmp::max(p1, p2) + 1;
+                let p = cmp::min(cmp::max(p1, p2) + 1, MAX_DECIMAL_PRECISION);
                 let so = cmp::max(s1, s2);
                 let lexpr = rescale_decimal(lexpr, *s1, *so);
                 let rexpr = rescale_decimal(rexpr, *s2, *so);
@@ -1369,7 +1410,7 @@ impl Planner {
                 let si = s1 + s2;
                 let expr = lexpr.call_binary(rexpr, MulDecimal);
                 let expr = rescale_decimal(expr, si, so);
-                let p = (p1 - s1) + (p2 - s2) + so;
+                let p = cmp::min((p1 - s1) + (p2 - s2) + so, MAX_DECIMAL_PRECISION);
                 let typ =
                     ColumnType::new(Decimal(p, so)).nullable(ltype.nullable || rtype.nullable);
                 return Ok((expr, typ));
@@ -1380,7 +1421,7 @@ impl Planner {
                 lexpr = rescale_decimal(lexpr, *s1, si);
                 let expr = lexpr.call_binary(rexpr, DivDecimal);
                 let expr = rescale_decimal(expr, si - *s2, s);
-                let p = (p1 - s1) + s2 + s;
+                let p = cmp::min((p1 - s1) + s2 + s, MAX_DECIMAL_PRECISION);
                 let typ = ColumnType::new(Decimal(p, s)).nullable(true);
                 return Ok((expr, typ));
             }
@@ -2062,7 +2103,16 @@ impl<'ast> AggregateFuncVisitor<'ast> {
     fn into_result(self) -> Result<Vec<&'ast Function>, failure::Error> {
         match self.err {
             Some(err) => Err(err),
-            None => Ok(self.aggs),
+            None => {
+                // dedup aggs while preserving the order
+                // (we don't care what the order is, but it has to be reproducible so that EXPLAIN PLAN tests work)
+                let mut seen = HashSet::new();
+                Ok(self
+                    .aggs
+                    .into_iter()
+                    .filter(move |agg| seen.insert(&**agg))
+                    .collect())
+            }
         }
     }
 }
@@ -2095,11 +2145,8 @@ struct ExprContext<'a> {
     name: &'static str,
     /// The current scope
     scope: &'a Scope,
-    /// Any precomputed aggregates
-    /// If None, aggregates are not allowed in this context.
-    /// If Some(nodes), nodes.get(aggregate) tells us which column to find the aggregate in.
-    /// See the explanation of aggregate handling at the top of the file for more details.
-    aggregate_context: Option<&'a HashMap<&'a Function, (usize, ColumnType)>>,
+    /// Are aggregate functions allowed in this context
+    allow_aggregates: bool,
 }
 
 fn is_aggregate_func(name: &str) -> bool {

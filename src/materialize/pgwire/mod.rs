@@ -46,7 +46,7 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     let conn_id = match CONN_ID_ALLOCATOR.alloc() {
         Ok(id) => id,
         Err(IdExhaustionError) => {
-            return future::err(format_err!("maximum number of connections reached")).left()
+            return future::err(format_err!("maximum number of connections reached")).left();
         }
     };
     protocol::StateMachine::start(

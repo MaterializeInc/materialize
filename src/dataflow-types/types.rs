@@ -68,6 +68,14 @@ pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -
 pub struct RowSetFinishing {
     pub order_by: Vec<ColumnOrder>,
     pub limit: Option<usize>,
+    pub offset: usize,
+    pub project: Vec<usize>,
+}
+
+impl RowSetFinishing {
+    pub fn is_trivial(&self) -> bool {
+        (self.limit == None) && self.order_by.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
