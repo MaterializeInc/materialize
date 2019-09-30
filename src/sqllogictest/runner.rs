@@ -522,7 +522,7 @@ impl State {
                 self.coord.drop_dataflows(names);
                 rows_inserted = None;
             }
-            postgres::Outcome::Changed(name, _typ, updates) => {
+            postgres::Outcome::Changed(name, updates) => {
                 let updates = updates
                     .into_iter()
                     .map(|(row, diff)| Update {
