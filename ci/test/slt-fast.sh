@@ -22,7 +22,7 @@ tests=(
     test/sqlite/test/evidence/slt_lang_dropview.test
     test/sqlite/test/evidence/slt_lang_reindex.test
     test/sqlite/test/evidence/slt_lang_replace.test
-    # test/sqlite/test/evidence/slt_lang_update.test
+    test/sqlite/test/evidence/slt_lang_update.test
     # test/sqlite/test/index/between/1/slt_good_0.test
     # test/sqlite/test/index/commute/10/slt_good_0.test
     # test/sqlite/test/index/delete/1/slt_good_0.test
