@@ -6,7 +6,7 @@
 version: '3.7'
 services:
   materialized:
-    image: materialize/materialized:unstable-6abf3bdc43568c452ab7b9d15cf9d601386b105f
+    image: materialize/materialized:unstable-b7db1344db4b21bb8c16773a3bc7a12152c23d14
     init: true
     command: -w1
   metrics:
@@ -112,6 +112,7 @@ services:
   #
   # These are ordered by high-level to low-level:
   #
+  # * grafana is the primary dashboard system that we use
   # * prometheus is the high-level metrics aggregator which pings both materialized and
   #   the prometheus_sql_exporter
   # * prometheus_sql_exporter just hits sql endpoints and exposes numbers as prometheus
@@ -119,6 +120,19 @@ services:
   # * There is a script that just loads the views that allows metrics to be collected
   #   quickly. TODO: we should experiment turning some of the views off and inlining them
   #   in the collector to see how much of a performance hit that is
+  grafana:
+    # upstream: https://hub.docker.com/r/grafana/grafana
+    # docker config for grafana: https://grafana.com/docs/installation/docker/
+    depends_on: [prometheus]
+    init: true
+    image: grafana/grafana:6.3.6
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./grafana/conf:/etc/grafana/provisioning
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    ports:
+      - 3000:3000
   prometheus:
     image: prom/prometheus:v2.12.0
     init: true
@@ -149,3 +163,4 @@ services:
 
 volumes:
   chbench-gen:
+  grafana:
