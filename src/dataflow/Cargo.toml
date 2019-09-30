@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-bincode = "1.1.4"
+bincode = "1.2.0"
 comm = { path = "../comm" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
