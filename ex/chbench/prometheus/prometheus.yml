@@ -13,3 +13,8 @@ scrape_configs:
     static_configs:
       - targets:
           - 'materialized:6875'
+  - job_name: materialized_logs
+    scrape_interval: 1s
+    static_configs:
+      - targets:
+          - 'prometheus_sql_exporter:9399'

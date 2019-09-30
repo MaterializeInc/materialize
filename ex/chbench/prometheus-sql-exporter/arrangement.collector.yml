@@ -1,0 +1,63 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+# These collections depend on views created by the setup-metric-tables.sh script, which
+# is run automatically by docker-compose, but which should be run manually if you want to
+# test locally.
+
+collector_name: arrangements_meta
+metrics:
+  - metric_name: mz_perf_dependency_frontiers
+    query: |
+      SELECT
+          dataflow, source, lag_ms
+      FROM
+          mz_perf_dependency_frontiers
+    help: information about dependency_frontiers
+    type: gauge
+    values:
+      - lag_ms
+    key_labels:
+      - dataflow
+      - source
+  - metric_name: mz_perf_arrangements_batches
+    query: |
+      SELECT
+          operator, worker, batches
+      FROM
+          logs_arrangement
+    help: information about running arrangements
+    type: gauge
+    values:
+      - batches
+    key_labels:
+      - operator
+      - worker
+  - metric_name: mz_perf_peek_durations
+    query: |
+      SELECT
+          worker, duration_ns, percent
+      FROM
+          mz_perf_peek_durations
+    help: evolving histogram of peek durations
+    type: gauge
+    values:
+      - percent
+    key_labels:
+      - worker
+      - duration_ns
+  - metric_name: mz_perf_shared_arrangements
+    help: how many operators are using each arrangement
+    query: |
+      SELECT
+          operator, worker, count
+      FROM
+          logs_sharing
+    type: gauge
+    values:
+      - count
+    key_labels:
+      - worker
+      - operator
