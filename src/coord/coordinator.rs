@@ -221,15 +221,27 @@ where
                         let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
                             compare_columns(&transform.order_by, left, right)
                         };
-                        if let Some(limit) = transform.limit {
-                            pdqselect::select_by(&mut rows, limit, sort_by);
-                            rows.truncate(limit);
+                        let offset = transform.offset;
+                        if offset > rows.len() {
+                            Vec::new()
+                        } else {
+                            if let Some(limit) = transform.limit {
+                                let offset_plus_limit = offset + limit;
+                                if rows.len() > offset_plus_limit {
+                                    pdqselect::select_by(&mut rows, offset_plus_limit, sort_by);
+                                    rows.truncate(offset_plus_limit);
+                                }
+                            }
+                            if offset > 0 {
+                                pdqselect::select_by(&mut rows, offset, sort_by);
+                                rows.drain(..offset);
+                            }
+                            rows.sort_by(sort_by);
+                            for row in &mut rows {
+                                *row = transform.project.iter().map(|i| row[*i].clone()).collect();
+                            }
+                            rows
                         }
-                        rows.sort_by(sort_by);
-                        for row in &mut rows {
-                            *row = transform.project.iter().map(|i| row[*i].clone()).collect();
-                        }
-                        rows
                     })
                     .from_err()
                     .boxed();

@@ -54,6 +54,11 @@ impl Planner {
             Some(Expr::Value(Value::Number(x))) => Some(x.parse()?),
             _ => bail!("LIMIT must be an integer constant"),
         };
+        let offset = match &q.offset {
+            None => 0,
+            Some(Expr::Value(Value::Number(x))) => x.parse()?,
+            _ => bail!("OFFSET must be an integer constant"),
+        };
         let (expr, scope) = self.plan_set_expr(&q.body, outer_scope)?;
         let output_typ = expr.typ();
         let mut order_by = vec![];
@@ -107,6 +112,7 @@ impl Planner {
             order_by,
             limit,
             project: (0..output_typ.column_types.len()).collect(),
+            offset,
         };
         Ok((expr.map(map_exprs), scope, transform))
     }
