@@ -34,7 +34,7 @@ pub type Diff = Vec<(Row, isize)>;
 pub enum Outcome {
     Created(String, RelationType),
     Dropped(Vec<String>),
-    Changed(String, RelationType, Diff),
+    Changed(String, Diff),
 }
 
 impl Postgres {
@@ -113,42 +113,56 @@ END $$;
                 self.client.execute(sql, &[])?;
                 Outcome::Dropped(names.iter().map(|name| name.to_string()).collect())
             }
-            Statement::Delete { table_name, .. }
-            | Statement::Insert { table_name, .. }
-            | Statement::Update { table_name, .. } => {
+            Statement::Delete { table_name, .. } => {
+                let mut diffs = vec![];
                 let table_name = table_name.to_string();
-                let (sql_types, typ) = self
-                    .table_types
-                    .get(&table_name)
-                    .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
-                    .clone();
-                let before = self.select_all(&table_name, &sql_types, &typ)?;
-                self.client.execute(sql, &[])?;
-                let after = self.select_all(&table_name, &sql_types, &typ)?;
-                let mut update = HashMap::new();
-                for row in before {
-                    *update.entry(row).or_insert(0) -= 1;
+                let sql = format!("{} RETURNING *", parsed.to_string());
+                for row in self.run_query(&table_name, sql)? {
+                    diffs.push((row, -1));
                 }
-                for row in after {
-                    *update.entry(row).or_insert(0) += 1;
+                Outcome::Changed(table_name, diffs)
+            }
+            Statement::Insert { table_name, .. } => {
+                let mut diffs = vec![];
+                let table_name = table_name.to_string();
+                let sql = format!("{} RETURNING *", parsed.to_string());
+                for row in self.run_query(&table_name, sql)? {
+                    diffs.push((row, 1));
                 }
-                update.retain(|_, count| *count != 0);
-                Outcome::Changed(table_name, typ, update.into_iter().collect())
+                Outcome::Changed(table_name, diffs)
+            }
+            Statement::Update {
+                table_name,
+                selection,
+                ..
+            } => {
+                let mut diffs = vec![];
+                let table_name = table_name.to_string();
+                let mut sql = format!("SELECT * FROM {}", table_name);
+                if let Some(selection) = selection {
+                    sql += &format!(" WHERE {}", selection);
+                }
+                for row in self.run_query(&table_name, sql)? {
+                    diffs.push((row, -1))
+                }
+                let sql = format!("{} RETURNING *", parsed.to_string());
+                for row in self.run_query(&table_name, sql)? {
+                    diffs.push((row, 1));
+                }
+                Outcome::Changed(table_name, diffs)
             }
             _ => bail!("Unsupported statement: {:?}", parsed),
         })
     }
 
-    fn select_all(
-        &mut self,
-        table_name: &str,
-        sql_types: &[DataType],
-        typ: &RelationType,
-    ) -> Result<Vec<Row>, failure::Error> {
+    fn run_query(&mut self, table_name: &str, query: String) -> Result<Vec<Row>, failure::Error> {
+        let (sql_types, typ) = self
+            .table_types
+            .get(table_name)
+            .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
+            .clone();
         let mut rows = vec![];
-        let postgres_rows = self
-            .client
-            .query(&*format!("SELECT * FROM {}", table_name), &[])?;
+        let postgres_rows = self.client.query(&*query, &[])?;
         for postgres_row in postgres_rows.iter() {
             let row = (0..postgres_row.len())
                 .map(|c| {
