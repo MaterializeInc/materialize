@@ -13,6 +13,8 @@ extern crate prometheus;
 
 use regex::Regex;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 
 fn main() {
     measure_peek_times();
@@ -21,37 +23,48 @@ fn main() {
 fn measure_peek_times() {
     let re = Regex::new(r"Time: (\d*).(\d*) ms").unwrap();
     let address = String::from("http://pushgateway:9091");
-    loop {
-        // TODO@jldlaughlin: use rust postgres package instead, look at sql logic test
-        let output = Command::new("psql")
-            .arg("-q")
-            .arg("-h")
-            .arg("materialized")
-            .arg("-p")
-            .arg("6875")
-            .arg("sslmode=disable")
-            .arg("-c")
-            .arg("\\timing")
-            .arg("-c")
-            .arg("PEEK q01") // TODO@jldlaughlin: parameterize the SQL command?
-            .output();
 
-        match output {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        loop {
+            // TODO@jldlaughlin: use rust postgres package instead, look at sql logic test
+            let output = Command::new("psql")
+                .arg("-q")
+                .arg("-h")
+                .arg("materialized")
+                .arg("-p")
+                .arg("6875")
+                .arg("sslmode=disable")
+                .arg("-c")
+                .arg("\\timing")
+                .arg("-c")
+                .arg("PEEK q01") // TODO@jldlaughlin: parameterize the SQL command?
+                .output();
+
+            match output {
+                Ok(output) => sender.send(output).unwrap(),
+                Err(error) => println!("Hit error running PEEK: {:#?}", error),
+            }
+        }
+    });
+
+    loop {
+        let result = receiver.recv();
+        match result {
             Ok(psql_output) => {
-                if let Some(matched) = re.captures(String::from_utf8(psql_output.stdout).unwrap().as_ref()) {
-                    let metric_families = prometheus::gather();
+                if let Some(matched) =
+                    re.captures(String::from_utf8(psql_output.stdout).unwrap().as_ref())
+                {
                     prometheus::push_metrics(
                         "peek_q01",
                         labels! {"timing".to_owned() => format!("{}.{}", &matched[1], &matched[2]).to_owned(),},
                         &address,
-                        metric_families,
+                        prometheus::gather(),
                         None
                     ).unwrap_or_else(|err| println!("Hit error trying to send to pushgateway: {:#?}", err));
                 }
             }
-            Err(error) => {
-                println!("Hit error: {:#?}", error);
-            }
+            Err(error) => println!("Hit error running PEEK: {:#?}", error),
         }
     }
 }
