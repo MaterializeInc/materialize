@@ -11,7 +11,7 @@ use self::func::AggregateFunc;
 use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
 use crate::ScalarExpr;
 use failure::ResultExt;
-use pretty::Doc::{Newline, Space};
+use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use serde::{Deserialize, Serialize};
@@ -618,8 +618,10 @@ impl RelationExpr {
             }
             RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
             RelationExpr::Let { name, value, body } => {
-                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "};").group();
-                to_doc!(binding, Newline, body)
+                // NB: We don't include the body inside the curly braces, so that recursively
+                // nested Let expressions do *not* increase the indentation.
+                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "} in").group();
+                to_doc!(binding, Space, body)
             }
             RelationExpr::Project { input, outputs } => {
                 let outputs = compact_intersperse_doc(
@@ -949,6 +951,38 @@ mod tests {
   [1, 2],
   [1, 2]
 ]"
+        );
+    }
+
+    #[test]
+    fn test_pretty_let() {
+        let c1 = constant(vec![vec![Datum::from(13)]]);
+        let c2 = constant(vec![vec![Datum::from(42)]]);
+        let c3 = constant(vec![vec![Datum::from(665)]]);
+        let binding = RelationExpr::Let {
+            name: String::from("id-2"),
+            value: Box::new(RelationExpr::Let {
+                name: String::from("id-1"),
+                value: Box::new(c1),
+                body: Box::new(c2),
+            }),
+            body: Box::new(c3),
+        };
+
+        assert_eq!(
+            binding.to_doc().pretty(100).to_string(),
+            "Let { id-2 = Let { id-1 = Constant [[13]] } in Constant [[42]] } in Constant [[665]]"
+        );
+
+        assert_eq!(
+            binding.to_doc().pretty(28).to_string(),
+            "Let {
+  id-2 = Let {
+    id-1 = Constant [[13]]
+  } in
+  Constant [[42]]
+} in
+Constant [[665]]"
         );
     }
 
