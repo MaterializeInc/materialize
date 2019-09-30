@@ -9,9 +9,8 @@ pub mod func;
 pub mod id;
 
 use self::func::AggregateFunc;
-use self::id::Identifier;
+use self::id::{Identifier, IdentifierForge};
 use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
-use crate::relation::id::IdentifierForge;
 use crate::ScalarExpr;
 use failure::ResultExt;
 use pretty::Doc::Space;
@@ -238,12 +237,9 @@ impl RelationExpr {
 
     /// Construct a new local binding with the given name and value and visible
     /// inside the given body.
-    pub fn bind<ID>(name: ID, value: Self, body: Self) -> Self
-    where
-        ID: Into<Identifier>,
-    {
+    pub fn bind(name: Identifier, value: Self, body: Self) -> Self {
         RelationExpr::Let {
-            name: name.into(),
+            name: name,
             value: Box::new(value),
             body: Box::new(body),
         }
@@ -633,11 +629,10 @@ impl RelationExpr {
                 to_tightly_braced_doc("Constant [", rows, "]")
             }
             RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
-            RelationExpr::Let { name, value, body } => to_braced_doc(
-                "Let {",
-                to_doc!(name, " = ", value, Space, "in", Space, body),
-                "}",
-            ),
+            RelationExpr::Let { name, value, body } => {
+                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "} in").group();
+                to_doc!(binding, Space, body)
+            }
             RelationExpr::Project { input, outputs } => {
                 let outputs = compact_intersperse_doc(
                     outputs.iter().map(Doc::as_string),
@@ -748,8 +743,9 @@ impl RelationExpr {
             // already done
             body(id_forge, self)
         } else {
+            let name = id_forge.fresh();
             let get = RelationExpr::Get {
-                name: id_forge.forge(),
+                name,
                 typ: self.typ(),
             };
             let body = (body)(id_forge, get)?;
@@ -1005,7 +1001,11 @@ mod tests {
 
         let c2 = constant(vec![vec![Datum::from(666)]]);
 
-        let binding = RelationExpr::bind("outer", RelationExpr::bind("inner", map(), c1), c2);
+        let binding = RelationExpr::bind(
+            Identifier::from_index(200),
+            RelationExpr::bind(Identifier::from_index(100), map(), c1),
+            c2,
+        );
 
         println!("\n>>>\n{}\n<<<\n\n", binding.pretty())
         //let binding = RelationExpr::bind("name", constant(vec![vec![]]))

@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
+use crate::relation::id::Identifier;
 use repr::RelationType;
 
 #[derive(Debug)]
@@ -31,7 +32,7 @@ impl InlineLet {
     pub fn collect_lets(
         &self,
         relation: &mut RelationExpr,
-        lets: &mut Vec<(String, RelationExpr)>,
+        lets: &mut Vec<(Identifier, RelationExpr)>,
     ) {
         if let RelationExpr::Let { name, value, body } = relation {
             self.collect_lets(value, lets);

@@ -111,20 +111,20 @@ pub struct Environment {
 impl Environment {
     /// Determine whether the name is bound in this environment.
     #[allow(clippy::ptr_arg)]
-    pub fn is_bound(&self, name: Identifier) -> bool {
+    pub fn is_bound(&self, name: &Identifier) -> bool {
         self.bindings.contains_key(name)
     }
 
     /// Create a fresh identifier.
     pub fn fresh_id(&mut self) -> Identifier {
-        self.forge.forge()
+        self.forge.fresh()
     }
 
     /// Add a new binding for the given name and value to this environment.
     /// This method panics if this environment already contains a binding with
     /// the given identifier. See also [`Environment::bind_local`].
     pub fn bind(&mut self, name: Identifier, value: RelationExpr) -> &mut Self {
-        if self.bindings.contains_key(name) {
+        if self.bindings.contains_key(&name) {
             panic!("environment already contains binding for {}", name);
         }
         self.bindings.insert(name, value);
@@ -145,7 +145,7 @@ impl Environment {
     }
 
     /// Look up the given identifier in this environment.
-    pub fn lookup(&self, name: Identifier) -> Option<&RelationExpr> {
+    pub fn lookup(&self, name: &Identifier) -> Option<&RelationExpr> {
         self.bindings.get(name)
     }
 
@@ -230,7 +230,7 @@ impl Unbind {
     /// which re-introduces bindings for repeated subgraphs. It starts out
     /// with a global census of all subgraphs and thus correctly identifies
     /// maximal repeated subgraphs while also introducing one binding only
-    /// for each such maximal repeated subgraph.    
+    /// for each such maximal repeated subgraph.
     ///
     /// `Unbind` has worst-case exponential space requirements. The alternative
     /// would be a fixed-point of `UnbindGet` followed by `Deduplicate`.
@@ -261,7 +261,7 @@ impl Unbind {
                     }
                 }
                 RelationExpr::Get { name, .. } => {
-                    if let Some(value) = env.lookup(*name) {
+                    if let Some(value) = env.lookup(name) {
                         *expr = value.clone();
                     }
                 }
@@ -377,7 +377,7 @@ impl Metadata {
             }
 
             let patch = Patch {
-                name: env.forge(),
+                name: env.fresh_id(),
                 typ: value.typ(),
             };
             let name = patch.name;
@@ -475,7 +475,7 @@ impl Normalize {
             if let RelationExpr::Let { name, value, body } = expr {
                 rename(value, id_forge, id_map);
 
-                let prior = std::mem::replace(name, id_forge.next());
+                let prior = std::mem::replace(name, id_forge.fresh());
                 id_map.insert(prior, *name);
 
                 rename(body, id_forge, id_map);
@@ -508,13 +508,6 @@ mod tests {
     use super::*;
     use repr::Datum;
 
-    fn b<ID>(name: ID, value: RelationExpr, body: RelationExpr) -> RelationExpr
-    where
-        ID: Into<Id>,
-    {
-        RelationExpr::bind(name, value, body)
-    }
-
     fn trace(label: &str, expr: &RelationExpr) {
         // It is imperative to print everything with a single println.
         // Otherwise, the test runner interleaves the output of
@@ -537,12 +530,20 @@ mod tests {
         RelationExpr::constant(vec![vec![Datum::Int32(i)]], not_my_type())
     }
 
-    fn r<ID>(n: ID) -> RelationExpr
-    where
-        ID: Into<Identifier>,
-    {
+    fn b(index: usize, value: RelationExpr, body: RelationExpr) -> RelationExpr {
+        RelationExpr::bind(Identifier::from_index(index), value, body)
+    }
+
+    fn r(index: usize) -> RelationExpr {
         RelationExpr::Get {
-            name: n.into(),
+            name: Identifier::from_index(index),
+            typ: not_my_type(),
+        }
+    }
+
+    fn r_id(name: Identifier) -> RelationExpr {
+        RelationExpr::Get {
+            name,
             typ: not_my_type(),
         }
     }
@@ -645,13 +646,13 @@ mod tests {
 
         let (n1, n2) = extract_names(&expr);
 
-        let expected = r(n2.clone()).union(n(5).distinct()).threshold();
-        let expected2 = r(n2.clone()).distinct().union(r(n1.clone()));
+        let expected = r_id(n2.clone()).union(n(5).distinct()).threshold();
+        let expected2 = r_id(n2.clone()).distinct().union(r_id(n1.clone()));
         let expected = expected.union(expected2);
-        let expected2 = n(1).negate().union(n(2)).union(r(n1.clone()));
-        let expected = b(n2, expected2, expected);
+        let expected2 = n(1).negate().union(n(2)).union(r_id(n1.clone()));
+        let expected = RelationExpr::bind(n2, expected2, expected);
         let expected2 = n(3).negate().union(n(4));
-        let expected = b(n1, expected2, expected);
+        let expected = RelationExpr::bind(n1, expected2, expected);
         assert_eq!(expr, expected);
     }
 

@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter, Result};
 
@@ -22,15 +23,27 @@ use std::fmt::{Display, Formatter, Result};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Identifier(usize);
 
-impl From<usize> for Identifier {
-    fn from(n: usize) -> Self {
-        Identifier(n)
+impl Identifier {
+    /// Create a new identifier with the given index. It is tempting to define
+    /// `From<usize> to minimize the notational overhead of creating new
+    /// identifiers. But given the rather large semantic difference, this
+    /// method being a mouthful is a feature, not a bug.
+    pub fn from_index(index: usize) -> Self {
+        Identifier(index)
     }
 }
 
 impl Display for Identifier {
+    /// Nicely format this identifier.
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "id-{}", self.0)
+    }
+}
+
+impl<'a> From<&Identifier> for Doc<'a, BoxDoc<'a, ()>, ()> {
+    /// Convert an identifier into a document during pretty-printing.
+    fn from(id: &Identifier) -> Doc<'a, BoxDoc<'a, ()>, ()> {
+        Doc::as_string(id)
     }
 }
 
@@ -49,7 +62,7 @@ pub struct IdentifierForge {
 
 impl IdentifierForge {
     /// Create a fresh identifier.
-    pub fn forge(&mut self) -> Identifier {
+    pub fn fresh(&mut self) -> Identifier {
         self.counter += 1;
         Identifier(self.counter)
     }

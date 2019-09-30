@@ -10,6 +10,7 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use expr::RelationExpr;
+use expr::Identifier;
 use repr::{Datum, RelationType};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
