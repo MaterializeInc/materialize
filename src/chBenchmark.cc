@@ -195,7 +195,7 @@ static void* transactionalThread(void* args) {
 static int parseInt(const char* context, const char* v) {
     try {
         return std::stoi(optarg);
-    } catch (std::exception) {
+    } catch (const std::exception&) {
         errx(1, "unable to parse integer %s for %s\n", v, context);
     }
 }
