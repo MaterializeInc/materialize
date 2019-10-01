@@ -101,7 +101,6 @@ impl PredicatePushdown {
                         .map(|i| i.column_types.len())
                         .collect::<Vec<_>>();
 
-
                     let mut offset = 0;
                     let mut prior_arities = Vec::new();
                     for input in 0..inputs.len() {
