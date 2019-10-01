@@ -9,7 +9,7 @@ use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use ore::netio::{SniffedStream, SniffingStream};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use tokio::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::unix::UnixStream;
@@ -60,8 +60,6 @@ impl Connection for TcpStream {
     type Addr = SocketAddr;
 
     fn connect(addr: &Self::Addr) -> Box<dyn Future<Item = Self, Error = io::Error> + Send> {
-        // TODO(benesch): don't panic if DNS resolution fails.
-        let addr = addr.to_socket_addrs().unwrap().next().unwrap();
         Box::new(TcpStream::connect(&addr).map(|conn| {
             conn.set_nodelay(true).expect("set_nodelay call failed");
             conn
