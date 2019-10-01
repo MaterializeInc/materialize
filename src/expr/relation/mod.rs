@@ -8,7 +8,9 @@
 pub mod func;
 
 use self::func::AggregateFunc;
-use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
+use crate::pretty_pretty::{
+    compact_intersperse_doc, tighten_outputs, to_braced_doc, to_tightly_braced_doc,
+};
 use crate::ScalarExpr;
 use failure::ResultExt;
 use pretty::Doc::Space;
@@ -876,26 +878,6 @@ impl<'a> From<&'a AggregateExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
     }
 }
 
-/// Attempts to convert 0, 1, 2, 3 to "0 .. 3" for seqeunces of at least three elements.
-fn tighten_outputs(mut slice: &[usize]) -> Vec<String> {
-    let mut result = Vec::new();
-    while !slice.is_empty() {
-        let lead = &slice[0];
-        if slice.len() > 2 && slice[1] == lead + 1 && slice[2] == lead + 2 {
-            let mut last = 3;
-            while slice.get(last) == Some(&(lead + last)) {
-                last += 1;
-            }
-            result.push(format!("{} .. {}", lead, lead + last - 1));
-            slice = &slice[last..];
-        } else {
-            result.push(format!("{}", slice[0]));
-            slice = &slice[1..];
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1010,16 +992,14 @@ Constant [[665]]"
 
         assert_eq!(
             project.to_doc().pretty(82).to_string(),
-            "Project { outputs: [0, 1, 2, 3, 4], Constant [] }",
+            "Project { outputs: [0 .. 4], Constant [] }",
         );
 
         assert_eq!(
             project.to_doc().pretty(14).to_string(),
             "Project {
   outputs: [
-    0, 1,
-    2, 3,
-    4
+    0 .. 4
   ],
   Constant []
 }",
