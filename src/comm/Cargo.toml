@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-bincode = "1.1"
+bincode = "1.2"
 futures = "0.1"
 rand = "0.7"
 serde = { version = "1.0", features = ["derive"] }

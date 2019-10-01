@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "bincode"
-version = "1.1.4"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "autocfg 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -338,7 +338,7 @@ name = "comm"
 version = "0.1.0"
 dependencies = [
  "assert_cmd 0.11.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "getopts 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "ore 0.1.0",
@@ -381,7 +381,7 @@ name = "coord"
 version = "0.1.0"
 dependencies = [
  "backtrace 0.3.38 (registry+https://github.com/rust-lang/crates.io-index)",
- "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 1.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.4.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "ccsr 0.1.0",
@@ -619,7 +619,7 @@ dependencies = [
 name = "dataflow"
 version = "0.1.0"
 dependencies = [
- "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "comm 0.1.0",
  "dataflow-types 0.1.0",
  "differential-dataflow 0.10.0 (git+https://github.com/TimelyDataflow/differential-dataflow.git)",
@@ -1337,7 +1337,7 @@ dependencies = [
 name = "metastore"
 version = "0.1.0"
 dependencies = [
- "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2698,7 +2698,7 @@ source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d5dfae1853ffd45
 dependencies = [
  "abomonation 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "abomonation_derive 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.101 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.99 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2862,7 +2862,7 @@ name = "tokio-serde-bincode"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bytes 0.4.12 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "serde 1.0.101 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3263,7 +3263,7 @@ dependencies = [
 "checksum backtrace 0.3.38 (registry+https://github.com/rust-lang/crates.io-index)" = "690a62be8920ccf773ee00ef0968649b0e724cda8bd5b12286302b4ae955fdf5"
 "checksum backtrace-sys 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)" = "797c830ac25ccc92a7f8a7b9862bde440715531514594a6154e3d4a54dd769b6"
 "checksum base64 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
-"checksum bincode 1.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "9f04a5e50dc80b3d5d35320889053637d15011aed5e66b66b37ae798c65da6f7"
+"checksum bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b8ab639324e3ee8774d296864fbc0dbbb256cf1a41c490b94cba90c082915f92"
 "checksum bindgen 0.49.2 (registry+https://github.com/rust-lang/crates.io-index)" = "846a1fba6535362a01487ef6b10f0275faa12e5c5d835c5c1c627aabc46ccbd6"
 "checksum bitflags 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d155346769a6855b86399e9bc3814ab343cd3d62c7e985113d46a0ec3c281fd"
 "checksum block-buffer 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)" = "c0940dc441f31689269e10ac70eb1002a3a1d3ad1390e030043662eb7fe4688b"
