@@ -200,3 +200,33 @@ where
 
     docs.into_element()
 }
+
+/// Converts sequences of integers into sequences that may contain ranges.
+///
+/// A subsequence is converted to a range if it contains at least three consecutive increasing numbers.
+///
+/// # Example
+/// ```rust
+/// use expr::pretty_pretty::tighten_outputs;
+/// let vector = vec![0, 1, 2, 3, 5, 6];
+/// let result = tighten_outputs(&vector[..]);
+/// assert_eq!(result, vec!["0 .. 3".to_string(), "5".to_string(), "6".to_string()]);
+/// ```
+pub fn tighten_outputs(mut slice: &[usize]) -> Vec<String> {
+    let mut result = Vec::new();
+    while !slice.is_empty() {
+        let lead = &slice[0];
+        if slice.len() > 2 && slice[1] == lead + 1 && slice[2] == lead + 2 {
+            let mut last = 3;
+            while slice.get(last) == Some(&(lead + last)) {
+                last += 1;
+            }
+            result.push(format!("{} .. {}", lead, lead + last - 1));
+            slice = &slice[last..];
+        } else {
+            result.push(format!("{}", slice[0]));
+            slice = &slice[1..];
+        }
+    }
+    result
+}

@@ -8,7 +8,9 @@
 pub mod func;
 
 use self::func::AggregateFunc;
-use crate::pretty_pretty::{compact_intersperse_doc, to_braced_doc, to_tightly_braced_doc};
+use crate::pretty_pretty::{
+    compact_intersperse_doc, tighten_outputs, to_braced_doc, to_tightly_braced_doc,
+};
 use crate::ScalarExpr;
 use failure::ResultExt;
 use pretty::Doc::Space;
@@ -624,10 +626,8 @@ impl RelationExpr {
                 to_doc!(binding, Space, body)
             }
             RelationExpr::Project { input, outputs } => {
-                let outputs = compact_intersperse_doc(
-                    outputs.iter().map(Doc::as_string),
-                    to_doc!(",", Space),
-                );
+                let outputs =
+                    compact_intersperse_doc(tighten_outputs(outputs), to_doc!(",", Space));
                 let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
@@ -666,10 +666,7 @@ impl RelationExpr {
                 group_key,
                 aggregates,
             } => {
-                let keys = compact_intersperse_doc(
-                    group_key.iter().map(Doc::as_string),
-                    to_doc!(",", Space),
-                );
+                let keys = compact_intersperse_doc(tighten_outputs(group_key), to_doc!(",", Space));
                 let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
 
                 if aggregates.is_empty() {
@@ -995,16 +992,14 @@ Constant [[665]]"
 
         assert_eq!(
             project.to_doc().pretty(82).to_string(),
-            "Project { outputs: [0, 1, 2, 3, 4], Constant [] }",
+            "Project { outputs: [0 .. 4], Constant [] }",
         );
 
         assert_eq!(
             project.to_doc().pretty(14).to_string(),
             "Project {
   outputs: [
-    0, 1,
-    2, 3,
-    4
+    0 .. 4
   ],
   Constant []
 }",
