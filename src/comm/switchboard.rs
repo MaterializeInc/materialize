@@ -57,8 +57,10 @@ where
     nodes: Vec<C::Addr>,
     /// The index of this node's address in `nodes`.
     id: usize,
-    /// The mapping from connection ID to its state.
-    routing_table: Mutex<router::RoutingTable<Uuid, C>>,
+    /// Routing for channel traffic.
+    channel_table: Mutex<router::RoutingTable<Uuid, C>>,
+    /// Routing for rendezvous traffic.
+    rendezvous_table: Mutex<router::RoutingTable<Uuid, C>>,
 }
 
 impl Switchboard<UnixStream> {
@@ -112,7 +114,8 @@ where
         Switchboard(Arc::new(SwitchboardInner {
             nodes: nodes.into_iter().map(Into::into).collect(),
             id,
-            routing_table: Mutex::default(),
+            channel_table: Mutex::default(),
+            rendezvous_table: Mutex::default(),
         }))
     }
 
@@ -142,7 +145,11 @@ where
                 // Earlier node. Wait for it to connect to us.
                 let uuid = (i as u128).into();
                 futures.push(Box::new(
-                    self.new_rx(uuid)
+                    self.0
+                        .rendezvous_table
+                        .lock()
+                        .expect("lock poisoned")
+                        .add_dest(uuid)
                         .map_err(|()| unreachable!())
                         .recv()
                         .map(|(conn, _stream)| Some(conn)),
@@ -155,7 +162,7 @@ where
                 let uuid = (self.0.id as u128).into();
                 futures.push(Box::new(
                     TryConnectFuture::new(addr.clone(), timeout)
-                        .and_then(move |conn| protocol::send_handshake(conn, uuid))
+                        .and_then(move |conn| protocol::send_handshake(conn, uuid, true))
                         .map(|conn| Some(conn)),
                 ));
             }
@@ -200,9 +207,14 @@ where
     pub fn handle_connection(&self, conn: C) -> impl Future<Item = (), Error = io::Error> {
         let inner = self.0.clone();
         protocol::recv_handshake(conn).then(move |res| match res {
-            Ok((conn, uuid)) => {
-                let mut routing_table = inner.routing_table.lock().expect("lock poisoned");
-                routing_table.route(uuid, conn);
+            Ok((conn, uuid, is_rendezvous)) => {
+                if is_rendezvous {
+                    let mut router = inner.rendezvous_table.lock().expect("lock poisoned");
+                    router.route(uuid, conn);
+                } else {
+                    let mut router = inner.channel_table.lock().expect("lock poisoned");
+                    router.route(uuid, conn);
+                }
                 Ok(())
             }
 
@@ -270,8 +282,8 @@ where
     }
 
     fn new_rx(&self, uuid: Uuid) -> futures::sync::mpsc::UnboundedReceiver<C> {
-        let mut routing_table = self.0.routing_table.lock().expect("lock poisoned");
-        routing_table.add_dest(uuid)
+        let mut channel_table = self.0.channel_table.lock().expect("lock poisoned");
+        channel_table.add_dest(uuid)
     }
 
     fn peers(&self) -> impl Iterator<Item = &C::Addr> {
@@ -283,4 +295,3 @@ where
             .filter_map(move |(i, addr)| if i == id { None } else { Some(addr) })
     }
 }
-

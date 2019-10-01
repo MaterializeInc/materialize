@@ -124,7 +124,7 @@ where
     {
         let conns = stream::futures_unordered(addrs.into_iter().map(|addr| {
             C::connect(addr)
-                .and_then(move |conn| protocol::send_handshake(conn, uuid))
+                .and_then(move |conn| protocol::send_handshake(conn, uuid, false))
                 .map(|conn| protocol::encoder(conn))
         }))
         // TODO(benesch): this might be more efficient with a multi-fanout that

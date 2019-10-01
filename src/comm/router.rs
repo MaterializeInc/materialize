@@ -41,10 +41,7 @@ where
                     }
                     *entry.get_mut() = RoutingTableEntry::Full;
                 }
-                _ => panic!(
-                    "router: attempting to add dest {:?} twice",
-                    entry.key()
-                ),
+                _ => panic!("router: attempting to add dest {:?} twice", entry.key()),
             },
             hash_map::Entry::Vacant(entry) => {
                 entry.insert(RoutingTableEntry::AwaitingConn(conn_tx));

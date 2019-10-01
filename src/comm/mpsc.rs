@@ -92,7 +92,7 @@ impl<D> Sender<D> {
     {
         let uuid = self.uuid;
         C::connect(addr)
-            .and_then(move |conn| protocol::send_handshake(conn, uuid))
+            .and_then(move |conn| protocol::send_handshake(conn, uuid, false))
             .map(|conn| protocol::encoder(conn).boxed())
     }
 }

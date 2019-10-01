@@ -114,20 +114,21 @@ impl From<<UnixStream as Connection>::Addr> for Addr {
     }
 }
 
-pub(crate) fn send_handshake<C>(conn: C, uuid: Uuid) -> SendHandshakeFuture<C>
+pub(crate) fn send_handshake<C>(conn: C, uuid: Uuid, is_rendezvous: bool) -> SendHandshakeFuture<C>
 where
     C: Connection,
 {
-    let mut buf = [0; 24];
+    let mut buf = [0; 25];
     (&mut buf[..8]).copy_from_slice(&PROTOCOL_MAGIC);
-    (&mut buf[8..]).copy_from_slice(uuid.as_bytes());
+    (&mut buf[8..24]).copy_from_slice(uuid.as_bytes());
+    buf[24] = is_rendezvous.into();
     SendHandshakeFuture {
         inner: io::write_all(conn, buf),
     }
 }
 
 pub(crate) struct SendHandshakeFuture<C> {
-    inner: io::WriteAll<C, [u8; 24]>,
+    inner: io::WriteAll<C, [u8; 25]>,
 }
 
 impl<C> Future for SendHandshakeFuture<C>
@@ -148,7 +149,7 @@ where
     C: Connection,
 {
     RecvHandshakeFuture {
-        inner: io::read_exact(conn, [0; 24]),
+        inner: io::read_exact(conn, [0; 25]),
     }
 }
 
@@ -156,24 +157,25 @@ pub(crate) struct RecvHandshakeFuture<C>
 where
     C: Connection,
 {
-    inner: io::ReadExact<C, [u8; 24]>,
+    inner: io::ReadExact<C, [u8; 25]>,
 }
 
 impl<C> Future for RecvHandshakeFuture<C>
 where
     C: Connection,
 {
-    type Item = (C, Uuid);
+    type Item = (C, Uuid, bool);
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let (stream, buf) = try_ready!(self.inner.poll());
-        let uuid_bytes = &buf[8..];
+        let uuid_bytes = &buf[8..24];
         debug_assert_eq!(uuid_bytes.len(), 16);
         // Parsing a UUID only fails if the slice is not exactly 16 bytes, so
         // it's safe to unwrap here.
         let uuid = Uuid::from_slice(uuid_bytes).unwrap();
-        Ok(Async::Ready((stream, uuid)))
+        let is_rendezvous = buf[24] > 0;
+        Ok(Async::Ready((stream, uuid, is_rendezvous)))
     }
 }
 
