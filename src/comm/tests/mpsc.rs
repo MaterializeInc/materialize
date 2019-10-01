@@ -5,7 +5,11 @@
 
 use comm::Switchboard;
 use futures::{Future, Sink, Stream};
+use ore::future::StreamExt;
 use std::error::Error;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use tokio::net::TcpListener;
+use tokio::runtime::Runtime;
 
 /// Verifies that MPSC channels receive messages from all streams
 /// simultaneously. The original implementation had a bug in which streams were
@@ -33,5 +37,46 @@ fn test_mpsc_select() -> Result<(), Box<dyn Error>> {
         panic!("received unexpected messages: {:#?}", msgs);
     }
 
+    Ok(())
+}
+
+/// Verifies that TCP connections are reused by repeatedly connecting the same
+/// MPSC transmitter. Without connection reuse, the test should crash with an
+/// AddrNotAvailable error because the OS will run out of outgoing TCP ports.
+#[test]
+fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
+    ore::log::init();
+
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    let listener = TcpListener::bind(&addr)?;
+    let mut runtime = Runtime::new()?;
+    let switchboard = Switchboard::new(vec![listener.local_addr()?], 0, runtime.executor());
+    runtime.spawn({
+        let switchboard = switchboard.clone();
+        listener
+            .incoming()
+            .map_err(|err| panic!("switchboard: accept: {}", err))
+            .for_each(move |conn| switchboard.handle_connection(conn))
+            .map_err(|err| panic!("switchboard: handle connection: {}", err))
+    });
+
+    let (tx, rx) = switchboard.mpsc();
+    let (result_tx, result_rx) = futures::sync::oneshot::channel();
+
+    // This is the empirically-determined number that exhausts ports on macOS
+    // without connection reuse.
+    const N: u64 = 1 << 14;
+
+    runtime.spawn(rx.take(N).drain().then(|res| {
+        result_tx.send(res).unwrap();
+        Ok(())
+    }));
+
+    for i in 0..N {
+        let tx = tx.connect().wait()?;
+        tx.send(i).wait()?;
+    }
+
+    result_rx.wait()??;
     Ok(())
 }

@@ -28,8 +28,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(&nodes[id].into())?;
     println!("listening on {}...", listener.local_addr()?);
 
-    let switchboard = Switchboard::new(nodes, id);
     let mut runtime = tokio::runtime::Runtime::new()?;
+    let switchboard = Switchboard::new(nodes, id, runtime.executor());
     {
         let switchboard = switchboard.clone();
         runtime.spawn(

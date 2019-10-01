@@ -130,6 +130,11 @@ pub struct SniffedStream<S> {
 }
 
 impl<S> SniffedStream<S> {
+    /// Returns a reference to the underlying stream.
+    pub fn get_ref(&self) -> &S {
+        &self.inner
+    }
+
     /// Consumes the `SniffedStream`, returning the underlying stream. Be very
     /// careful with this function! The underlying stream pointer will have been
     /// advanced past any bytes sniffed from the [`SniffingStream`] that created

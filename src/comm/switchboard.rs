@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io;
 use tokio::net::unix::{UnixListener, UnixStream};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Runtime, TaskExecutor};
 use uuid::Uuid;
 
 use crate::broadcast;
@@ -61,6 +61,8 @@ where
     channel_table: Mutex<router::RoutingTable<Uuid, protocol::Framed<C>>>,
     /// Routing for rendezvous traffic.
     rendezvous_table: Mutex<router::RoutingTable<u64, C>>,
+    /// Task executor, so that background work can be spawned.
+    executor: TaskExecutor,
 }
 
 impl Switchboard<UnixStream> {
@@ -80,8 +82,8 @@ impl Switchboard<UnixStream> {
         let mut path = std::env::temp_dir();
         path.push(format!("comm.switchboard.{}", suffix));
         let listener = UnixListener::bind(&path)?;
-        let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0);
         let mut runtime = Runtime::new()?;
+        let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0, runtime.executor());
         runtime.spawn({
             let switchboard = switchboard.clone();
             listener
@@ -106,7 +108,7 @@ where
     /// The consumer of a `Switchboard` must separately arrange to listen on the
     /// local node's address and route `comm` traffic to this `Switchboard`
     /// via [`Switchboard::handle_connection`].
-    pub fn new<I>(nodes: I, id: usize) -> Switchboard<C>
+    pub fn new<I>(nodes: I, id: usize, executor: TaskExecutor) -> Switchboard<C>
     where
         I: IntoIterator,
         I::Item: Into<C::Addr>,
@@ -116,6 +118,7 @@ where
             id,
             channel_table: Mutex::default(),
             rendezvous_table: Mutex::default(),
+            executor,
         }))
     }
 
@@ -205,28 +208,26 @@ where
     /// ```
     pub fn handle_connection(&self, conn: C) -> impl Future<Item = (), Error = io::Error> {
         let inner = self.0.clone();
-        protocol::recv_handshake(conn).then(move |res| match res {
-            Ok(protocol::RecvHandshake::Channel(uuid, conn)) => {
-                let mut router = inner.channel_table.lock().expect("lock poisoned");
-                router.route(uuid, conn);
-                Ok(())
-            }
-            Ok(protocol::RecvHandshake::Rendezvous(id, conn)) => {
-                let mut router = inner.rendezvous_table.lock().expect("lock poisoned");
-                router.route(id, conn);
-                Ok(())
-            }
+        protocol::recv_handshake(conn).map(move |conn| inner.route_connection(conn))
+    }
 
-            // An unexpected EOF while receiving the protocol handshake is
-            // usually rendezvous traffic, which opens a connection and
-            // immediately closes it, so suppress the error. It's possible that
-            // something more problematic happened (e.g., the network connection
-            // is broken), but we rely on the sending side to discover and
-            // report this behavior.
-            Err(ref err) if err.kind() == tokio::io::ErrorKind::UnexpectedEof => Ok(()),
+    /// Attempts to recycle an incoming channel connection for use with a new
+    /// channel. The connection is expected to be in a state where all messages
+    /// from the previous channel have been drained, and a new channel will
+    /// be initialized via an abbreviated channel handshake, rather than the
+    /// full protocol handshake.
+    pub(crate) fn recycle_connection(
+        &self,
+        conn: protocol::Framed<C>,
+    ) -> impl Future<Item = (), Error = io::Error> {
+        let inner = self.0.clone();
+        protocol::recv_channel_handshake(conn).map(move |conn| inner.route_connection(conn))
+    }
 
-            Err(err) => Err(err),
-        })
+    /// Returns a reference to the [`TaskExecutor`] that this `Switchboard`
+    /// was initialized with. Useful for spawning background work.
+    pub fn executor(&self) -> &TaskExecutor {
+        &self.0.executor
     }
 
     /// Allocates a transmitter for the broadcast channel identified by the
@@ -255,7 +256,7 @@ where
         T: broadcast::Token + 'static,
     {
         let uuid = broadcast::token_uuid::<T>();
-        broadcast::Receiver::new(self.new_rx(uuid))
+        broadcast::Receiver::new(self.new_rx(uuid), self.clone())
     }
 
     /// Allocates a new multiple-producer, single-consumer (MPSC) channel and
@@ -270,7 +271,7 @@ where
         let uuid = Uuid::new_v4();
         let addr = self.0.nodes[self.0.id].clone();
         let tx = mpsc::Sender::new(addr, uuid);
-        let rx = mpsc::Receiver::new(self.new_rx(uuid));
+        let rx = mpsc::Receiver::new(self.new_rx(uuid), self.clone());
         (tx, rx)
     }
 
@@ -292,5 +293,23 @@ where
             .iter()
             .enumerate()
             .filter_map(move |(i, addr)| if i == id { None } else { Some(addr) })
+    }
+}
+
+impl<C> SwitchboardInner<C>
+where
+    C: protocol::Connection,
+{
+    fn route_connection(&self, handshake: protocol::RecvHandshake<C>) {
+        match handshake {
+            protocol::RecvHandshake::Channel(uuid, conn) => {
+                let mut router = self.channel_table.lock().expect("lock poisoned");
+                router.route(uuid, conn);
+            }
+            protocol::RecvHandshake::Rendezvous(id, conn) => {
+                let mut router = self.rendezvous_table.lock().expect("lock poisoned");
+                router.route(id, conn);
+            }
+        }
     }
 }
