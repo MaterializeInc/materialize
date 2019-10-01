@@ -60,7 +60,7 @@ where
     /// Routing for channel traffic.
     channel_table: Mutex<router::RoutingTable<Uuid, protocol::Framed<C>>>,
     /// Routing for rendezvous traffic.
-    rendezvous_table: Mutex<router::RoutingTable<Uuid, C>>,
+    rendezvous_table: Mutex<router::RoutingTable<u64, C>>,
 }
 
 impl Switchboard<UnixStream> {
@@ -143,13 +143,12 @@ where
         for (i, addr) in self.0.nodes.iter().enumerate() {
             if i < self.0.id {
                 // Earlier node. Wait for it to connect to us.
-                let uuid = (i as u128).into();
                 futures.push(Box::new(
                     self.0
                         .rendezvous_table
                         .lock()
                         .expect("lock poisoned")
-                        .add_dest(uuid)
+                        .add_dest(i as u64)
                         .map_err(|()| unreachable!())
                         .recv()
                         .map(|(conn, _stream)| Some(conn)),
@@ -159,10 +158,10 @@ where
                 futures.push(Box::new(future::ok(None)));
             } else {
                 // Later node. Attempt to initiate connection.
-                let uuid = (self.0.id as u128).into();
+                let id = self.0.id as u64;
                 futures.push(Box::new(
                     TryConnectFuture::new(addr.clone(), timeout)
-                        .and_then(move |conn| protocol::send_handshake(conn, uuid, true))
+                        .and_then(move |conn| protocol::send_rendezvous_handshake(conn, id))
                         .map(|conn| Some(conn)),
                 ));
             }
@@ -207,14 +206,14 @@ where
     pub fn handle_connection(&self, conn: C) -> impl Future<Item = (), Error = io::Error> {
         let inner = self.0.clone();
         protocol::recv_handshake(conn).then(move |res| match res {
-            Ok((conn, uuid, is_rendezvous)) => {
-                if is_rendezvous {
-                    let mut router = inner.rendezvous_table.lock().expect("lock poisoned");
-                    router.route(uuid, conn);
-                } else {
-                    let mut router = inner.channel_table.lock().expect("lock poisoned");
-                    router.route(uuid, protocol::framed(conn));
-                }
+            Ok(protocol::RecvHandshake::Channel(uuid, conn)) => {
+                let mut router = inner.channel_table.lock().expect("lock poisoned");
+                router.route(uuid, conn);
+                Ok(())
+            }
+            Ok(protocol::RecvHandshake::Rendezvous(id, conn)) => {
+                let mut router = inner.rendezvous_table.lock().expect("lock poisoned");
+                router.route(id, conn);
                 Ok(())
             }
 

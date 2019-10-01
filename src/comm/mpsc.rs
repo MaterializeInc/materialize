@@ -37,10 +37,9 @@ use ore::future::{FutureExt, SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
+use tokio::io;
 use tokio::net::unix::UnixStream;
 use tokio::net::TcpStream;
-
-use tokio::io;
 use uuid::Uuid;
 
 use crate::protocol::{self, Addr, Connection};
@@ -92,8 +91,8 @@ impl<D> Sender<D> {
     {
         let uuid = self.uuid;
         C::connect(addr)
-            .and_then(move |conn| protocol::send_handshake(conn, uuid, false))
-            .map(|conn| protocol::encoder(protocol::framed(conn)).boxed())
+            .and_then(move |conn| protocol::send_channel_handshake(conn, uuid))
+            .map(|conn| protocol::encoder(conn).boxed())
     }
 }
 

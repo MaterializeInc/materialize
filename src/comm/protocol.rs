@@ -5,9 +5,12 @@
 
 //! The guts of the underlying network communication protocol.
 
-use futures::{try_ready, Async, Future, Poll, Sink, Stream};
+use futures::{Future, Sink, Stream};
+use num_enum::{TryFromPrimitive, IntoPrimitive};
+use ore::future::{FutureExt, StreamExt};
 use ore::netio::{SniffedStream, SniffingStream};
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 use std::fmt;
 use std::net::SocketAddr;
 use tokio::codec::LengthDelimitedCodec;
@@ -114,69 +117,76 @@ impl From<<UnixStream as Connection>::Addr> for Addr {
     }
 }
 
-pub(crate) fn send_handshake<C>(conn: C, uuid: Uuid, is_rendezvous: bool) -> SendHandshakeFuture<C>
+#[repr(u8)]
+#[derive(IntoPrimitive, TryFromPrimitive)]
+enum TrafficType {
+    Channel,
+    Rendezvous,
+}
+
+pub(crate) fn send_channel_handshake<C>(
+    conn: C,
+    uuid: Uuid,
+) -> impl Future<Item = Framed<C>, Error = io::Error>
 where
     C: Connection,
 {
-    let mut buf = [0; 25];
+    let mut buf = [0; 9];
     (&mut buf[..8]).copy_from_slice(&PROTOCOL_MAGIC);
-    (&mut buf[8..24]).copy_from_slice(uuid.as_bytes());
-    buf[24] = is_rendezvous.into();
-    SendHandshakeFuture {
-        inner: io::write_all(conn, buf),
-    }
+    buf[8] = TrafficType::Channel.into();
+    io::write_all(conn, buf).and_then(move |(conn, _buf)| {
+        let conn = framed(conn);
+        conn.send(uuid.as_bytes()[..].into())
+    })
 }
 
-pub(crate) struct SendHandshakeFuture<C> {
-    inner: io::WriteAll<C, [u8; 25]>,
-}
-
-impl<C> Future for SendHandshakeFuture<C>
+pub(crate) fn send_rendezvous_handshake<C>(
+    conn: C,
+    id: u64,
+) -> impl Future<Item = C, Error = io::Error>
 where
     C: Connection,
 {
-    type Item = C;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (stream, _buf) = try_ready!(self.inner.poll());
-        Ok(Async::Ready(stream))
-    }
+    let mut buf = [0; 17];
+    (&mut buf[..8]).copy_from_slice(&PROTOCOL_MAGIC);
+    buf[8] = TrafficType::Rendezvous.into();
+    (&mut buf[9..]).copy_from_slice(&id.to_be_bytes());
+    io::write_all(conn, buf).map(|(conn, _buf)| conn)
 }
 
-pub(crate) fn recv_handshake<C>(conn: C) -> RecvHandshakeFuture<C>
+pub(crate) enum RecvHandshake<C> {
+    Channel(Uuid, Framed<C>),
+    Rendezvous(u64, C),
+}
+
+pub(crate) fn recv_handshake<C>(conn: C) -> impl Future<Item = RecvHandshake<C>, Error = io::Error>
 where
     C: Connection,
 {
-    RecvHandshakeFuture {
-        inner: io::read_exact(conn, [0; 25]),
-    }
-}
-
-pub(crate) struct RecvHandshakeFuture<C>
-where
-    C: Connection,
-{
-    inner: io::ReadExact<C, [u8; 25]>,
-}
-
-impl<C> Future for RecvHandshakeFuture<C>
-where
-    C: Connection,
-{
-    type Item = (C, Uuid, bool);
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (stream, buf) = try_ready!(self.inner.poll());
-        let uuid_bytes = &buf[8..24];
-        debug_assert_eq!(uuid_bytes.len(), 16);
-        // Parsing a UUID only fails if the slice is not exactly 16 bytes, so
-        // it's safe to unwrap here.
-        let uuid = Uuid::from_slice(uuid_bytes).unwrap();
-        let is_rendezvous = buf[24] > 0;
-        Ok(Async::Ready((stream, uuid, is_rendezvous)))
-    }
+    io::read_exact(conn, [0; 9]).and_then(|(conn, buf)| {
+        assert_eq!(&buf[..8], PROTOCOL_MAGIC);
+        match buf[8].try_into().unwrap() {
+            TrafficType::Channel => {
+                let conn = framed(conn);
+                conn.recv()
+                    .map(move |(bytes, conn)| {
+                        assert_eq!(bytes.len(), 16);
+                        let uuid = Uuid::from_slice(&bytes).unwrap();
+                        RecvHandshake::Channel(uuid, conn)
+                    })
+                    .left()
+            }
+            TrafficType::Rendezvous => {
+                let buf = [0; 8];
+                io::read_exact(conn, buf)
+                    .map(move |(conn, buf)| {
+                        let id = u64::from_be_bytes(buf);
+                        RecvHandshake::Rendezvous(id, conn)
+                    })
+                    .right()
+            }
+        }
+    })
 }
 
 pub(crate) type Framed<C> = tokio::codec::Framed<C, LengthDelimitedCodec>;
