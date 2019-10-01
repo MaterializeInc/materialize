@@ -3,7 +3,19 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Re-order relations in a join to process them in an order that makes sense.
+//! Re-order relations in a join to minimize the size of intermediate results.
+//! To minimize intermediate results, ensure each additional relation
+//! added to the join shares an equality constraint with a column of a relation
+//! that is already present in the intermediate results.
+//!
+//! For example:
+//! Join relations A, B, C given the equality constraints A.x = C.x and B.y = C.y.
+//!
+//! In the given ordering, we join A and B first with no equality constraints. This
+//! means we have to do a full cross join of A and B, creating large intermediate results.
+//!
+//! Instead, if we reordered to A, C, B, we could use the shared equality constraint
+//! between A and C to perform an equijoin, creating smaller intermediate results.
 //!
 //! ```rust
 //! use expr::{BinaryFunc, RelationExpr, ScalarExpr};
@@ -88,6 +100,7 @@ impl PredicatePushdown {
                         .iter()
                         .map(|i| i.column_types.len())
                         .collect::<Vec<_>>();
+
 
                     let mut offset = 0;
                     let mut prior_arities = Vec::new();
