@@ -10,19 +10,17 @@ use futures::{future, Future, Stream};
 use ore::future::StreamExt;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map, HashMap};
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io;
 use tokio::net::unix::{UnixListener, UnixStream};
-
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use crate::broadcast;
 use crate::mpsc;
 use crate::protocol;
+use crate::router;
 use crate::util::TryConnectFuture;
 
 /// Router for incoming and outgoing communication traffic.
@@ -60,27 +58,7 @@ where
     /// The index of this node's address in `nodes`.
     id: usize,
     /// The mapping from connection ID to its state.
-    routing_table: Mutex<HashMap<Uuid, RoutingTableEntry<C>>>,
-}
-
-enum RoutingTableEntry<C> {
-    /// Connections have arrived, but the channel receiver has not yet been
-    /// constructed. This state is only possible for broadcast channels at the
-    /// moment, as MPSC transmitters and receivers are constructed
-    /// simultaneously.
-    AwaitingRx(Vec<C>),
-    /// A receiver has been constructed and is awaiting an incoming connection.
-    AwaitingConn(futures::sync::mpsc::UnboundedSender<C>),
-    /// The channel is no longer awaiting an incoming connection. It may be
-    /// actively receiving messages, or it may be closed, but either way
-    /// new connections will not be attached to the channel receiver.
-    Full,
-}
-
-impl<C> Default for RoutingTableEntry<C> {
-    fn default() -> RoutingTableEntry<C> {
-        RoutingTableEntry::AwaitingRx(Vec::new())
-    }
+    routing_table: Mutex<router::RoutingTable<Uuid, C>>,
 }
 
 impl Switchboard<UnixStream> {
@@ -134,7 +112,7 @@ where
         Switchboard(Arc::new(SwitchboardInner {
             nodes: nodes.into_iter().map(Into::into).collect(),
             id,
-            routing_table: Mutex::new(HashMap::new()),
+            routing_table: Mutex::default(),
         }))
     }
 
@@ -224,21 +202,8 @@ where
         protocol::recv_handshake(conn).then(move |res| match res {
             Ok((conn, uuid)) => {
                 let mut routing_table = inner.routing_table.lock().expect("lock poisoned");
-                let entry = routing_table.entry(uuid).or_default();
-                match entry {
-                    RoutingTableEntry::AwaitingRx(conns) => {
-                        conns.push(conn);
-                        Ok(())
-                    }
-                    RoutingTableEntry::AwaitingConn(tx) => match tx.unbounded_send(conn) {
-                        Ok(()) => Ok(()),
-                        Err(_) => {
-                            *entry = RoutingTableEntry::Full;
-                            Ok(())
-                        }
-                    },
-                    RoutingTableEntry::Full => Ok(()),
-                }
+                routing_table.route(uuid, conn);
+                Ok(())
             }
 
             // An unexpected EOF while receiving the protocol handshake is
@@ -305,26 +270,8 @@ where
     }
 
     fn new_rx(&self, uuid: Uuid) -> futures::sync::mpsc::UnboundedReceiver<C> {
-        let (conn_tx, conn_rx) = futures::sync::mpsc::unbounded();
         let mut routing_table = self.0.routing_table.lock().expect("lock poisoned");
-        match routing_table.entry(uuid) {
-            hash_map::Entry::Occupied(mut entry) => match entry.get_mut() {
-                RoutingTableEntry::AwaitingRx(conns) => {
-                    for conn in conns.drain(..) {
-                        conn_tx.unbounded_send(conn).unwrap();
-                    }
-                    *entry.get_mut() = RoutingTableEntry::Full;
-                }
-                _ => panic!(
-                    "switchboard: attempting to create two receivers for channel {}",
-                    uuid
-                ),
-            },
-            hash_map::Entry::Vacant(entry) => {
-                entry.insert(RoutingTableEntry::AwaitingConn(conn_tx));
-            }
-        }
-        conn_rx
+        routing_table.add_dest(uuid)
     }
 
     fn peers(&self) -> impl Iterator<Item = &C::Addr> {
@@ -336,3 +283,4 @@ where
             .filter_map(move |(i, addr)| if i == id { None } else { Some(addr) })
     }
 }
+

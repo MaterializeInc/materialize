@@ -80,6 +80,8 @@
 
 #![deny(missing_docs)]
 
+mod router;
+
 pub mod broadcast;
 pub mod mpsc;
 pub mod protocol;
