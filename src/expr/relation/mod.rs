@@ -624,10 +624,8 @@ impl RelationExpr {
                 to_doc!(binding, Space, body)
             }
             RelationExpr::Project { input, outputs } => {
-                let outputs = compact_intersperse_doc(
-                    outputs.iter().map(Doc::as_string),
-                    to_doc!(",", Space),
-                );
+                let outputs =
+                    compact_intersperse_doc(tighten_outputs(outputs), to_doc!(",", Space));
                 let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
@@ -667,7 +665,8 @@ impl RelationExpr {
                 aggregates,
             } => {
                 let keys = compact_intersperse_doc(
-                    group_key.iter().map(Doc::as_string),
+                    // group_key.iter().map(Doc::as_string),
+                    tighten_outputs(group_key),
                     to_doc!(",", Space),
                 );
                 let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
@@ -879,6 +878,26 @@ impl<'a> From<&'a AggregateExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
     fn from(s: &'a AggregateExpr) -> Doc<'a, BoxDoc<'a, ()>, ()> {
         s.to_doc()
     }
+}
+
+/// Attempts to convert 0, 1, 2, 3 to "0 .. 3" for seqeunces of at least three elements.
+fn tighten_outputs(mut slice: &[usize]) -> Vec<String> {
+    let mut result = Vec::new();
+    while !slice.is_empty() {
+        let lead = &slice[0];
+        if slice.len() > 2 && slice[1] == lead + 1 && slice[2] == lead + 2 {
+            let mut last = 3;
+            while slice.get(last) == Some(&(lead + last)) {
+                last += 1;
+            }
+            result.push(format!("{} .. {}", lead, lead + last - 1));
+            slice = &slice[last..];
+        } else {
+            result.push(format!("{}", slice[0]));
+            slice = &slice[1..];
+        }
+    }
+    result
 }
 
 #[cfg(test)]
