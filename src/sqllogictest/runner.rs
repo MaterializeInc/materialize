@@ -512,9 +512,15 @@ impl State {
             }
             postgres::Outcome::Dropped(names) => {
                 let mut dataflows = vec![];
-                // the only reason we would use RemoveMode::Restrict is to test the error handling, and we already decided to bailed out on !should_run earlier
+                // The only reason we would use RemoveMode::Restrict is to test
+                // expected errors, and we currently set should_run=false
+                // whenever errors are expected.
                 for name in &names {
-                    self.local_input_uuids.remove(name);
+                    // Close down the input if it exists. (The input might not
+                    // exist if the DROP statement was a DROP IF NOT EXISTS.)
+                    if let Some(uuid) = self.local_input_uuids.remove(name) {
+                        self.local_input_mux.write().unwrap().close(&uuid);
+                    }
                     self.planner
                         .dataflows
                         .remove(name, RemoveMode::Cascade, &mut dataflows)?;
