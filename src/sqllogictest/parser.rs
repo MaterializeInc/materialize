@@ -131,7 +131,7 @@ fn parse_statement<'a>(
     mut words: impl Iterator<Item = &'a str>,
     input: &mut &'a str,
 ) -> Result<Record<'a>, failure::Error> {
-    let (should_run, rows_inserted) = match words.next() {
+    let (should_run, rows_affected) = match words.next() {
         Some("count") => (
             true,
             Some(
@@ -153,7 +153,7 @@ fn parse_statement<'a>(
     }
     Ok(Record::Statement {
         should_run,
-        rows_inserted,
+        rows_affected,
         sql,
     })
 }

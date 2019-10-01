@@ -95,7 +95,7 @@ pub enum Record<'a> {
     // A `statement` directive.
     Statement {
         should_run: bool,
-        rows_inserted: Option<usize>,
+        rows_affected: Option<usize>,
         sql: &'a str,
     },
     /// A `query` directive.
