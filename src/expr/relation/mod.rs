@@ -664,11 +664,7 @@ impl RelationExpr {
                 group_key,
                 aggregates,
             } => {
-                let keys = compact_intersperse_doc(
-                    // group_key.iter().map(Doc::as_string),
-                    tighten_outputs(group_key),
-                    to_doc!(",", Space),
-                );
+                let keys = compact_intersperse_doc(tighten_outputs(group_key), to_doc!(",", Space));
                 let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
 
                 if aggregates.is_empty() {
