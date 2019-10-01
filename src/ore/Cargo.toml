@@ -9,7 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-env_logger = "0.6.2"
+env_logger = "0.7.0"
 failure = "0.1.5"
 fallible-iterator = "0.2.0"
 futures = "0.1"
