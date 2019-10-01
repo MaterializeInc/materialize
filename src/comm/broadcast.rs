@@ -125,7 +125,7 @@ where
         let conns = stream::futures_unordered(addrs.into_iter().map(|addr| {
             C::connect(addr)
                 .and_then(move |conn| protocol::send_handshake(conn, uuid, false))
-                .map(|conn| protocol::encoder(conn))
+                .map(|conn| protocol::encoder(protocol::framed(conn)))
         }))
         // TODO(benesch): this might be more efficient with a multi-fanout that
         // could fan out to multiple streams at once. Not clear what the
@@ -193,7 +193,9 @@ impl<D> Receiver<D>
 where
     D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
 {
-    pub(crate) fn new<C>(conn_rx: impl Stream<Item = C, Error = ()> + Send + 'static) -> Receiver<D>
+    pub(crate) fn new<C>(
+        conn_rx: impl Stream<Item = protocol::Framed<C>, Error = ()> + Send + 'static,
+    ) -> Receiver<D>
     where
         C: protocol::Connection,
     {

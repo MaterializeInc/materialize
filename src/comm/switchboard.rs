@@ -58,7 +58,7 @@ where
     /// The index of this node's address in `nodes`.
     id: usize,
     /// Routing for channel traffic.
-    channel_table: Mutex<router::RoutingTable<Uuid, C>>,
+    channel_table: Mutex<router::RoutingTable<Uuid, protocol::Framed<C>>>,
     /// Routing for rendezvous traffic.
     rendezvous_table: Mutex<router::RoutingTable<Uuid, C>>,
 }
@@ -213,7 +213,7 @@ where
                     router.route(uuid, conn);
                 } else {
                     let mut router = inner.channel_table.lock().expect("lock poisoned");
-                    router.route(uuid, conn);
+                    router.route(uuid, protocol::framed(conn));
                 }
                 Ok(())
             }
@@ -281,7 +281,7 @@ where
         self.0.nodes.len()
     }
 
-    fn new_rx(&self, uuid: Uuid) -> futures::sync::mpsc::UnboundedReceiver<C> {
+    fn new_rx(&self, uuid: Uuid) -> futures::sync::mpsc::UnboundedReceiver<protocol::Framed<C>> {
         let mut channel_table = self.0.channel_table.lock().expect("lock poisoned");
         channel_table.add_dest(uuid)
     }

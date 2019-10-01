@@ -10,7 +10,7 @@ use ore::netio::{SniffedStream, SniffingStream};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::SocketAddr;
-use tokio::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio::codec::LengthDelimitedCodec;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::unix::UnixStream;
 use tokio::net::TcpStream;
@@ -179,25 +179,39 @@ where
     }
 }
 
+pub(crate) type Framed<C> = tokio::codec::Framed<C, LengthDelimitedCodec>;
+
+/// Frames `conn` using a length-delimited codec. In other words, it transforms
+/// a connection which implements [`AsyncRead`] and [`AsyncWrite`] into an
+/// combination [`Sink`] and [`Stream`] which produces/emits byte chunks.
+pub(crate) fn framed<C>(conn: C) -> Framed<C>
+where
+    C: Connection,
+{
+    Framed::new(conn, LengthDelimitedCodec::new())
+}
+
 /// Constructs a [`Sink`] which encodes incoming `D`s using [bincode] and sends
 /// them over the connection `conn` with a length prefix. Its dual is
 /// [`decoder`].
 ///
 /// [bincode]: https://crates.io/crates/bincode
-pub(crate) fn encoder<C, D>(conn: C) -> impl Sink<SinkItem = D, SinkError = bincode::Error>
+pub(crate) fn encoder<C, D>(
+    framed: Framed<C>,
+) -> impl Sink<SinkItem = D, SinkError = bincode::Error>
 where
     C: Connection,
     D: Serialize + for<'de> Deserialize<'de> + Send,
 {
-    WriteBincode::new(FramedWrite::new(conn, LengthDelimitedCodec::new()).sink_from_err())
+    WriteBincode::new(framed.sink_from_err())
 }
 
 /// Constructs a [`Stream`] which decodes bincoded, length-prefixed `D`s from
 /// the connection `conn`. Its dual is [`encoder`].
-pub(crate) fn decoder<C, D>(conn: C) -> impl Stream<Item = D, Error = bincode::Error>
+pub(crate) fn decoder<C, D>(framed: Framed<C>) -> impl Stream<Item = D, Error = bincode::Error>
 where
     C: Connection,
     D: Serialize + for<'de> Deserialize<'de> + Send,
 {
-    ReadBincode::new(FramedRead::new(conn, LengthDelimitedCodec::new()).from_err())
+    ReadBincode::new(framed.from_err())
 }

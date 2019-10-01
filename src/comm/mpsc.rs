@@ -93,7 +93,7 @@ impl<D> Sender<D> {
         let uuid = self.uuid;
         C::connect(addr)
             .and_then(move |conn| protocol::send_handshake(conn, uuid, false))
-            .map(|conn| protocol::encoder(conn).boxed())
+            .map(|conn| protocol::encoder(protocol::framed(conn)).boxed())
     }
 }
 
@@ -104,7 +104,9 @@ impl<D> Sender<D> {
 pub struct Receiver<D>(Box<dyn Stream<Item = D, Error = bincode::Error> + Send>);
 
 impl<D> Receiver<D> {
-    pub(crate) fn new<C>(conn_rx: impl Stream<Item = C, Error = ()> + Send + 'static) -> Receiver<D>
+    pub(crate) fn new<C>(
+        conn_rx: impl Stream<Item = protocol::Framed<C>, Error = ()> + Send + 'static,
+    ) -> Receiver<D>
     where
         C: protocol::Connection,
         D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
