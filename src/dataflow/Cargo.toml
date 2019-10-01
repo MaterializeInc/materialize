@@ -24,7 +24,6 @@ prometheus = { version = "0.7", default-features = false }
 prometheus-static-metric = "0.2"
 rdkafka = { version = "0.21", features = ["cmake_build"] }
 repr = { path = "../repr" }
-reqwest = { version = "0.9.20", features = ["trust-dns"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.40"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
