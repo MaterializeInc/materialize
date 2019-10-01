@@ -1,12 +1,8 @@
 ---
 name: Refactoring
 about: >
-  Some artifact in the code base that needs to be replaced. It may be cross-
-  cutting, as in "replace string identifier with newtype wrapping usize," or
-  concerning a specific abstraction (or lack thereof), as in "consolidate
-  helper functions for testing relation expressions in new module." If in doubt
-  about whether an issue is a bug or refactoring, choose refactoring. If in
-  doubt whether an issue is a refactoring or feature, choose feature.
+  Rewrite part of the code base. The change may be cross-cutting. When in doubt,
+  favor feature over refactoring and refactoring over bug.
 labels: C-refactoring
 ---
 
