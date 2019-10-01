@@ -62,7 +62,7 @@ $ docker-compose run chbench gen --warehouses=1
 ```
 
 You can generate bigger datasets by using more warehouses. Once the data is
-generated, it's time to fire up some load! Type the follow command, which will 
+generated, it's time to fire up some load! Type the follow command, which will
 take control of your session and run for the specified number of seconds.
 
 ```shell session
@@ -89,7 +89,7 @@ Once you see that the CSV import has succeeded, the initial data set has been
 loaded into MySQL. The load generator will continue to run for the specified
 duration.
 
-It's time to connect to `materialized` and install some materialized views! In 
+It's time to connect to `materialized` and install some materialized views! In
 a new shell, in the same directory, type the following which will bring up a
 materialize shell.
 
@@ -143,3 +143,18 @@ docker-compose run mysqlcli
 
 If you've just run `docker-compose up`, you might need to wait a few seconds
 before running this.
+
+## Viewing metrics
+
+There are several services that can be used to see how materialize is running. Our custom
+system is via grafana, and when you run `docker-compose up` you will get grafana
+listening on port 3000.
+
+To view metrics, just visit: http://localhost:3000/d/mz
+
+If you want to be able to edit the dashboard you will need to log in:
+http://localhost:3000/login the username/password is admin/admin.
+
+If you don't save the dashboard then **reloading the page will destroy your edits**.
+Click the save floppy disk icon and copy the resulting JSON into
+`grafana/dashboards/materialize.json`.
