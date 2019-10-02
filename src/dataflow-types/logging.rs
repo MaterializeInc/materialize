@@ -111,7 +111,8 @@ impl LogVariant {
                 column_types: vec![
                     ColumnType::new(ScalarType::Int64).name("id"),
                     ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::String).name("address"),
+                    ColumnType::new(ScalarType::Int64).name("address slot"),
+                    ColumnType::new(ScalarType::Int64).name("address value"),
                     ColumnType::new(ScalarType::String).name("name"),
                 ],
             },
