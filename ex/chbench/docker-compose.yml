@@ -24,7 +24,7 @@ services:
         read_only: true
   mysqlcli:
     image: debezium/example-mysql:0.9
-    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium"]
+    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=tpcch"]
     init: true
     depends_on:
       - mysql
@@ -57,7 +57,7 @@ services:
       VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-    depends_on: [kafka]
+    depends_on: [kafka, schema-registry]
   schema-registry:
     build: schema-registry
     environment:
@@ -67,6 +67,7 @@ services:
     depends_on: [zookeeper, kafka]
   connector:
     build: connector
+    depends_on: [schema-registry, control-center, chbench-init]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.3.0
     container_name: control-center
@@ -91,8 +92,20 @@ services:
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   chbench:
     build: chbench
+    depends_on: [mysql]
     volumes:
       - chbench-gen:/gen
+  chbench-init:
+    # TODO: we should make chbench into its own image/use our new benchmark image,
+    # instead of just rebuilding
+    build: chbench
+    depends_on: [mysql]
+    command: >
+       run
+       --dsn=mysql --gen-dir=/var/lib/mysql-files
+       --analytic-threads=0 --transactional-threads=5
+       --run-seconds=1
+
   cli:
     build: cli
     init: true
@@ -135,7 +148,11 @@ services:
     init: true
     ports:
       - 9090:9090
-    depends_on: [materialized, prometheus_sql_exporter, prometheus_sql_exporter_mysql_tpcch]
+    depends_on:
+      - materialized
+      - prometheus_sql_exporter
+      - prometheus_sql_exporter_mysql_tpcch
+      - metrics
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
   prometheus_sql_exporter:
