@@ -9,9 +9,6 @@ services:
     image: materialize/materialized:unstable-b7db1344db4b21bb8c16773a3bc7a12152c23d14
     init: true
     command: -w1
-  metrics:
-    image: materialize/metrics:latest
-    init: true
   mysql:
     image: debezium/example-mysql:0.9
     ports:
@@ -27,7 +24,7 @@ services:
         read_only: true
   mysqlcli:
     image: debezium/example-mysql:0.9
-    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium"]
+    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=tpcch"]
     init: true
     depends_on:
       - mysql
@@ -60,7 +57,7 @@ services:
       VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
-    depends_on: [kafka]
+    depends_on: [kafka, schema-registry]
   schema-registry:
     build: schema-registry
     environment:
@@ -70,6 +67,7 @@ services:
     depends_on: [zookeeper, kafka]
   connector:
     build: connector
+    depends_on: [schema-registry, control-center, chbench-init]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.3.0
     container_name: control-center
@@ -94,8 +92,20 @@ services:
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   chbench:
     build: chbench
+    depends_on: [mysql]
     volumes:
       - chbench-gen:/gen
+  chbench-init:
+    # TODO: we should make chbench into its own image/use our new benchmark image,
+    # instead of just rebuilding
+    build: chbench
+    depends_on: [mysql]
+    command: >
+       run
+       --dsn=mysql --gen-dir=/var/lib/mysql-files
+       --analytic-threads=0 --transactional-threads=5
+       --run-seconds=1
+
   cli:
     build: cli
     init: true
@@ -138,7 +148,11 @@ services:
     init: true
     ports:
       - 9090:9090
-    depends_on: [materialized, prometheus_sql_exporter]
+    depends_on:
+      - materialized
+      - prometheus_sql_exporter
+      - prometheus_sql_exporter_mysql_tpcch
+      - metrics
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
   prometheus_sql_exporter:
@@ -150,8 +164,19 @@ services:
       - -config.file
       - /config/sql_exporter.yml
     volumes:
-      - ./prometheus-sql-exporter/sql_exporter.yml:/config/sql_exporter.yml
-      - ./prometheus-sql-exporter/arrangement.collector.yml:/config/arrangement.collector.yml
+      - ./prometheus-sql-exporter/mz/sql_exporter.yml:/config/sql_exporter.yml
+      - ./prometheus-sql-exporter/mz/arrangement.collector.yml:/config/arrangement.collector.yml
+  prometheus_sql_exporter_mysql_tpcch:
+    image: githubfree/sql_exporter
+    init: true
+    depends_on: [mysql]
+    entrypoint:
+      - /bin/sql_exporter
+      - -config.file
+      - /config/sql_exporter.yml
+    volumes:
+      - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
+      - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
   prometheus_sql_exporter_setup:
     build: cli
     init: true
@@ -159,13 +184,19 @@ services:
     command:
       - /prometheus/setup-metric-tables.sh
     volumes:
-      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
-      - ./prometheus-sql-exporter/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus-sql-exporter/mz/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
   pushgateway:
-    container_name: pushgateway
     image: prom/pushgateway
     ports:
       - 9091:9091
+  metrics:
+    image: materialize/metrics:local
+    init: true
+    depends_on:
+      - materialized
+      - pushgateway
+      - connector
 
 volumes:
   chbench-gen:

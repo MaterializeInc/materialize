@@ -16,9 +16,14 @@ scrape_configs:
   - job_name: pushgateway
     honor_labels: true
     static_configs:
-      - targets: ['localhost:9091']
+      - targets: ['pushgateway:9091']
   - job_name: materialized_logs
     scrape_interval: 1s
     static_configs:
       - targets:
           - 'prometheus_sql_exporter:9399'
+  - job_name: mysql_tpcch_stats
+    scrape_interval: 1s
+    static_configs:
+      - targets:
+          - 'prometheus_sql_exporter_mysql_tpcch:9399'

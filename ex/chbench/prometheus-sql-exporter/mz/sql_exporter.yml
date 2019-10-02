@@ -26,6 +26,5 @@ target:
   collectors:
     - arrangements_meta
 
-
 collector_files:
   - "*.collector.yml"
