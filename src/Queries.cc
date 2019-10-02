@@ -27,11 +27,11 @@ bool Queries::prepareStatements(SQLHDBC& hDBC) {
                 hDBC, odbc_queries[i],
                 DialectStrategy::getInstance()->getTpchQueryStrings()[i])) {
             Log::l2() << Log::tm() << "-prepare statements failed\n";
-            return 0;
+            return false;
         }
     }
     Log::l1() << Log::tm() << "-prepare statements succeeded\n";
-    return 1;
+    return true;
 }
 
 bool Queries::executeTPCH(int& i) {
@@ -39,5 +39,5 @@ bool Queries::executeTPCH(int& i) {
     if (DbcTools::resetStatement(odbc_queries[i - 1])) {
         return DbcTools::executePreparedStatement(odbc_queries[i - 1]);
     }
-    return 0;
+    return false;
 }

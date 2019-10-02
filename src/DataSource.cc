@@ -22,7 +22,6 @@ limitations under the License.
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
-#include <math.h>
 #include <sstream>
 
 const Nation DataSource::nations[] = {
@@ -130,9 +129,9 @@ const std::vector<const char*> DataSource::tpchAuxiliaries = {"do",
 int DataSource::warehouseCount = 0;
 
 std::string DataSource::tpchText(int length) {
-    std::string s = " ";
+    std::string s;
     for (int i = 0; i < 25; i++)
-        s = s + (i == 0 ? "" : " ") + tpchSentence();
+        s += (i == 0 ? "" : " ") + tpchSentence();
     int pos = chRandom::uniformInt(0, s.length() - length);
     return s.substr(pos, length);
 }
@@ -269,9 +268,9 @@ void DataSource::getRemoteWId(int& currentWId, int& ret) {
 }
 
 void DataSource::addNumeric(int length, std::ofstream& stream, bool delimiter) {
-    std::string s = "";
+    std::string s;
     for (int i = 0; i < length; i++) {
-        s += chRandom::uniformInt('0', '9');
+        s += (char)chRandom::uniformInt('0', '9');
     }
     stream << s;
     if (delimiter)
@@ -280,14 +279,14 @@ void DataSource::addNumeric(int length, std::ofstream& stream, bool delimiter) {
 
 void DataSource::addAlphanumeric62(int length, std::ofstream& stream,
                                    bool delimiter) {
-    std::string s = "";
+    std::string s;
     int rand;
     for (int i = 0; i < length; i++) {
         rand = 0;
         while (rand == 0 || (rand > '9' && rand < 'A') ||
                (rand > 'Z' && rand < 'a'))
             rand = chRandom::uniformInt('0', 'z');
-        s += rand;
+        s += (char)rand;
     }
     stream << s;
     if (delimiter)
@@ -296,14 +295,15 @@ void DataSource::addAlphanumeric62(int length, std::ofstream& stream,
 
 void DataSource::addAlphanumeric64(int length, std::ofstream& stream,
                                    bool delimiter) {
-    std::string s = "";
+    std::string s;
     int rand;
     for (int i = 0; i < length; i++) {
         rand = 0;
+        // FIXME (btv): this looks wrong
         while (rand == 0 || (rand > '9' && rand < 63) ||
                (rand > 'Z' && rand < 'a'))
             rand = chRandom::uniformInt('0', 'z');
-        s += rand;
+        s += (char)rand;
     }
     stream << s;
     if (delimiter)
@@ -321,9 +321,9 @@ void DataSource::addAlphanumeric64Original(int minLength, int maxLength,
                                            bool delimiter) {
     int rLength = chRandom::uniformInt(minLength, maxLength);
     int rPosition = chRandom::uniformInt(0, rLength - 8);
-    addAlphanumeric64(rPosition, stream, 0);
+    addAlphanumeric64(rPosition, stream, false);
     stream << "ORIGINAL";
-    addAlphanumeric64(rLength - 8 - rPosition, stream, 0);
+    addAlphanumeric64(rLength - 8 - rPosition, stream, false);
     if (delimiter)
         stream << csvDelim;
 }
@@ -377,7 +377,7 @@ void DataSource::addNId(std::ofstream& stream, bool delimiter) {
 }
 
 void DataSource::addWDCZip(std::ofstream& stream, bool delimiter) {
-    addNumeric(4, stream, 0);
+    addNumeric(4, stream, false);
     stream << "11111";
     if (delimiter)
         stream << csvDelim;
@@ -386,11 +386,11 @@ void DataSource::addWDCZip(std::ofstream& stream, bool delimiter) {
 void DataSource::addSuPhone(int& suId, std::ofstream& stream, bool delimiter) {
     int country_code = (suId % 90) + 10; // ensure length 2
     stream << country_code << "-";
-    addInt(100, 999, stream, 0);
+    addInt(100, 999, stream, false);
     stream << "-";
-    addInt(100, 999, stream, 0);
+    addInt(100, 999, stream, false);
     stream << "-";
-    addInt(1000, 9999, stream, 0);
+    addInt(1000, 9999, stream, false);
     if (delimiter)
         stream << csvDelim;
 }
@@ -406,14 +406,14 @@ std::string DataSource::getCurrentTimeString() {
 }
 
 std::string DataSource::randomAlphanumeric62(int length) {
-    std::string s = "";
+    std::string s;
     int rand;
     for (int i = 0; i < length; i++) {
         rand = 0;
         while (rand == 0 || (rand > '9' && rand < 'A') ||
                (rand > 'Z' && rand < 'a'))
             rand = chRandom::uniformInt('0', 'z');
-        s += rand;
+        s += (char)rand;
     }
     return s;
 }

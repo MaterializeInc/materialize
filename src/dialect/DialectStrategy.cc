@@ -22,7 +22,7 @@ limitations under the License.
 Dialect* DialectStrategy::instance = nullptr;
 
 Dialect* DialectStrategy::getInstance() {
-    if (instance == 0)
+    if (instance == nullptr)
         instance = new MySqlDialect();
     return instance;
 }
