@@ -258,7 +258,7 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, transform) = self.plan_query_optimize(&query)?;
+                let (relation_expr, transform) = self.plan_toplevel_query(&query)?;
                 if !transform.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
@@ -449,7 +449,7 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, transform) = self.plan_query_optimize(&query)?;
+        let (relation_expr, transform) = self.plan_toplevel_query(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
             when: PeekWhen::Immediately,
@@ -468,7 +468,7 @@ impl Planner {
         super::transform::transform(&mut stmt);
         match stmt {
             Statement::Query(query) => {
-                let (relation_expr, transform) = self.plan_query_optimize(&query)?;
+                let (relation_expr, transform) = self.plan_toplevel_query(&query)?;
                 session.set_prepared_statement(
                     name.clone(),
                     PreparedStatement::new(sql, relation_expr, transform),
@@ -480,7 +480,7 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, _transform) = self.plan_query_optimize(&query)?;
+        let (relation_expr, _transform) = self.plan_toplevel_query(&query)?;
         // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
@@ -500,7 +500,10 @@ impl Planner {
         }
     }
 
-    fn plan_query_optimize(
+    /// Plans and decorrelates a query once we've planned all nested RelationExprs.
+    /// Decorrelation converts a sql::RelationExpr (which can include correlations)
+    /// to an expr::RelationExpr (which cannot include correlations).
+    fn plan_toplevel_query(
         &mut self,
         query: &Query,
     ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
