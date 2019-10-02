@@ -29,7 +29,7 @@ want to increase memory available to Docker Engine using the following steps:
 To get started, bring up the Docker Compose containers in the background. To do this, open up a new shell, and from the Materialize repository, change to the `ex/chbench` directory and type the following three commands after each other:
 
 ```shell session
-$ docker-compose up -d
+$ docker-compose up -d --build
 Creating network "chbench_default" with the default driver
 Creating chbench_inspect_1      ... done
 Creating chbench_chbench_1      ... done
