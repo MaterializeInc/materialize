@@ -9,9 +9,6 @@ services:
     image: materialize/materialized:unstable-b7db1344db4b21bb8c16773a3bc7a12152c23d14
     init: true
     command: -w1
-  metrics:
-    image: materialize/metrics:latest
-    init: true
   mysql:
     image: debezium/example-mysql:0.9
     ports:
@@ -162,10 +159,16 @@ services:
       - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
       - ./prometheus-sql-exporter/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
   pushgateway:
-    container_name: pushgateway
     image: prom/pushgateway
     ports:
       - 9091:9091
+  metrics:
+    image: materialize/metrics:local
+    init: true
+    depends_on:
+      - materialized
+      - pushgateway
+      - connector
 
 volumes:
   chbench-gen:
