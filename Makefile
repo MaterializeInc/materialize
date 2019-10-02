@@ -1,5 +1,7 @@
 #Copyright 2014 Florian Wolf, SAP AG
 #
+#Modifications copyright 2019 Materialize, Inc.
+#
 #Licensed under the Apache License, Version 2.0 (the "License");
 #you may not use this file except in compliance with the License.
 #You may obtain a copy of the License at
@@ -12,27 +14,41 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 
-CXXFLAGS = -c -std=c++17 -O2 -Wall -Wextra -Werror -g
+CXXFLAGS = -std=c++17 -Wall -Wextra -Werror
+ifeq ($(DEBUG),1)
+CXXFLAGS += -g -O0
+else
+CXXFLAGS += -O2
+endif
+
 LDLIBS = -lodbc -lpthread
 
-SOURCES = \
-	src/AnalyticalStatistic.cc \
-	src/chBenchmark.cc \
-	src/DataSource.cc \
-	src/DbcTools.cc \
-	src/dialect/DialectStrategy.cc \
-	src/Log.cc \
-	src/PthreadShim.cc \
-	src/Queries.cc \
-	src/Random.cc \
-	src/Schema.cc \
-	src/TransactionalStatistic.cc \
-	src/Transactions.cc \
-	src/TupleGen.cc
+SRCDIR = src
+BUILDDIR = build
 
-chBenchmark: $(SOURCES:.cc=.o)
-	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
+SOURCES = \
+	$(SRCDIR)/AnalyticalStatistic.cc \
+	$(SRCDIR)/chBenchmark.cc \
+	$(SRCDIR)/DataSource.cc \
+	$(SRCDIR)/DbcTools.cc \
+	$(SRCDIR)/dialect/DialectStrategy.cc \
+	$(SRCDIR)/Log.cc \
+	$(SRCDIR)/PthreadShim.cc \
+	$(SRCDIR)/Queries.cc \
+	$(SRCDIR)/Random.cc \
+	$(SRCDIR)/Schema.cc \
+	$(SRCDIR)/TransactionalStatistic.cc \
+	$(SRCDIR)/Transactions.cc \
+	$(SRCDIR)/TupleGen.cc
+
+$(BUILDDIR)/%.o : $(SRCDIR)/%.cc
+	mkdir -p $(@D) && $(COMPILE.cc) $< -o $@
+
+OBJS = $(subst $(SRCDIR),$(BUILDDIR),$(SOURCES:.cc=.o))
+
+LINK.o = $(LINK.cc)
+
+$(BUILDDIR)/chBenchmark: $(OBJS)
 
 clean:
-	find . -name '*.o' -delete
-	rm -f chBenchmark
+	rm -rf $(BUILDDIR)
