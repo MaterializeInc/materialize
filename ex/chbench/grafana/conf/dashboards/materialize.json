@@ -373,7 +373,7 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "fill": 0,
+      "fill": 8,
       "fillGradient": 0,
       "gridPos": {
         "h": 8,
@@ -392,7 +392,7 @@
         "values": false
       },
       "lines": true,
-      "linewidth": 1,
+      "linewidth": 0,
       "nullPointMode": "null",
       "options": {
         "dataLinks": []
@@ -403,7 +403,7 @@
       "renderer": "flot",
       "seriesOverrides": [],
       "spaceLength": 10,
-      "stack": false,
+      "stack": true,
       "steppedLine": false,
       "targets": [
         {
