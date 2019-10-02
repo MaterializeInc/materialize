@@ -135,7 +135,7 @@ services:
     init: true
     ports:
       - 9090:9090
-    depends_on: [materialized, prometheus_sql_exporter]
+    depends_on: [materialized, prometheus_sql_exporter, prometheus_sql_exporter_mysql_tpcch]
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
   prometheus_sql_exporter:
@@ -147,8 +147,19 @@ services:
       - -config.file
       - /config/sql_exporter.yml
     volumes:
-      - ./prometheus-sql-exporter/sql_exporter.yml:/config/sql_exporter.yml
-      - ./prometheus-sql-exporter/arrangement.collector.yml:/config/arrangement.collector.yml
+      - ./prometheus-sql-exporter/mz/sql_exporter.yml:/config/sql_exporter.yml
+      - ./prometheus-sql-exporter/mz/arrangement.collector.yml:/config/arrangement.collector.yml
+  prometheus_sql_exporter_mysql_tpcch:
+    image: githubfree/sql_exporter
+    init: true
+    depends_on: [mysql]
+    entrypoint:
+      - /bin/sql_exporter
+      - -config.file
+      - /config/sql_exporter.yml
+    volumes:
+      - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
+      - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
   prometheus_sql_exporter_setup:
     build: cli
     init: true
@@ -156,8 +167,8 @@ services:
     command:
       - /prometheus/setup-metric-tables.sh
     volumes:
-      - "./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
-      - ./prometheus-sql-exporter/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus-sql-exporter/mz/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
   pushgateway:
     image: prom/pushgateway
     ports:

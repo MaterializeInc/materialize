@@ -1,0 +1,22 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+# These collections depend on views created by the setup-metric-tables.sh script, which
+# is run automatically by docker-compose, but which should be run manually if you want to
+# test locally.
+
+collector_name: tpcch
+metrics:
+  - metric_name: mysql_tpcch_table_rows
+    query: |
+      SELECT table_rows, table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'tpcch';
+    help: number of rows in each table
+    type: gauge
+    values:
+      - table_rows
+    key_labels:
+      - table_name
