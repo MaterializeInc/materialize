@@ -72,16 +72,19 @@ pub fn construct<A: Allocate>(
 
                         match datum {
                             TimelyEvent::Operates(event) => {
-                                operates_session.give((
-                                    vec![
-                                        Datum::Int64(event.id as i64),
-                                        Datum::Int64(worker as i64),
-                                        Datum::String(format!("{:?}", event.addr)),
-                                        Datum::String(event.name),
-                                    ],
-                                    time_ms,
-                                    1,
-                                ));
+                                for (addr_slot, addr_value) in event.addr.iter().enumerate() {
+                                    operates_session.give((
+                                        vec![
+                                            Datum::Int64(event.id as i64),
+                                            Datum::Int64(worker as i64),
+                                            Datum::Int64(addr_slot as i64),
+                                            Datum::Int64(*addr_value as i64),
+                                            Datum::String(event.name.clone()),
+                                        ],
+                                        time_ms,
+                                        1,
+                                    ));
+                                }
                             }
                             TimelyEvent::Channels(event) => {
                                 channels_session.give((
