@@ -20,7 +20,6 @@ limitations under the License.
 #include "Log.h"
 #include "dialect/DialectStrategy.h"
 
-#include <stdlib.h>
 #include <string>
 
 bool Schema::check(SQLHSTMT& hStmt, const char* query, int& cnt) {
@@ -30,45 +29,38 @@ bool Schema::check(SQLHSTMT& hStmt, const char* query, int& cnt) {
 
     if (!DbcTools::executeServiceStatement(hStmt, query)) {
         Log::l2() << Log::tm() << "-determine count failed\n";
-        return 0;
+        return false;
     }
     if (!DbcTools::fetch(hStmt, buf, &nIdicator, 1, cnt)) {
         Log::l2() << Log::tm() << "-determine count failed\n";
-        return 0;
+        return false;
     }
     if (cnt == 0) {
         Log::l2() << Log::tm() << "-determine count failed\n";
-        return 0;
+        return false;
     }
-    return 1;
+    return true;
 }
 
 bool Schema::createSchema(SQLHSTMT& hStmt) {
 
-    for (unsigned int i = 0; i < DialectStrategy::getInstance()
-                                     ->getDropExistingSchemaStatements()
-                                     .size();
-         i++) {
+    for (const char* stmt: DialectStrategy::getInstance()->getDropExistingSchemaStatements()) {
         DbcTools::executeServiceStatement(
             hStmt,
-            DialectStrategy::getInstance()
-                ->getDropExistingSchemaStatements()[i],
-            0);
+            stmt,
+            false);
     }
 
-    for (unsigned int i = 0;
-         i < DialectStrategy::getInstance()->getCreateSchemaStatements().size();
-         i++) {
+    for (const char* stmt : DialectStrategy::getInstance()->getCreateSchemaStatements()) {
         if (!DbcTools::executeServiceStatement(
-                hStmt, DialectStrategy::getInstance()
-                           ->getCreateSchemaStatements()[i])) {
+                hStmt, stmt)) {
             Log::l2() << Log::tm() << "-failed\n";
-            return 0;
+            return false;
         }
     }
 
     Log::l2() << Log::tm() << "-succeeded\n";
-    return 1;
+    return true;
 }
 
 bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
@@ -78,10 +70,10 @@ bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
         Log::l2()
             << Log::tm()
             << "-failed (different size of ImportPrefix and ImportSuffix vector in dialect class)\n";
-        return 0;
+        return false;
     }
 
-    for (unsigned int i = 0;
+    for (size_t i = 0;
          i < DialectStrategy::getInstance()->getImportPrefix().size(); i++) {
         if (!DbcTools::executeServiceStatement(
                 hStmt,
@@ -91,12 +83,12 @@ bool Schema::importCSV(SQLHSTMT& hStmt, const std::string& genDir) {
                     DialectStrategy::getInstance()->getImportSuffix()[i])
                     .c_str())) {
             Log::l2() << Log::tm() << "-failed\n";
-            return 0;
+            return false;
         }
     }
 
     Log::l2() << Log::tm() << "-succeeded\n";
-    return 1;
+    return true;
 }
 
 bool Schema::check(SQLHSTMT& hStmt) {
@@ -104,124 +96,120 @@ bool Schema::check(SQLHSTMT& hStmt) {
     int wh = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountWarehouse(),
                wh))
-        return 0;
+        return false;
 
     int ds = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountDistrict(),
                ds))
-        return 0;
+        return false;
     if (ds != 10 * wh) {
         Log::l2() << Log::tm() << "-check failed (#DISTRICT: " << ds << ")\n";
-        return 0;
+        return false;
     }
 
     int cs = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountCustomer(),
                cs))
-        return 0;
+        return false;
     if (cs != 30000 * wh) {
         Log::l2() << Log::tm() << "-check failed (#CUSTOMER: " << cs << ")\n";
-        return 0;
+        return false;
     }
 
     int od = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountOrder(),
                od))
-        return 0;
+        return false;
     if (od != 30000 * wh) {
         Log::l2() << Log::tm() << "-check failed (#ORDER: " << od << ")\n";
-        return 0;
+        return false;
     }
 
     int ol = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountOrderline(),
                ol))
-        return 0;
+        return false;
     if (ol != 300000 * wh) {
         Log::l2() << Log::tm() << "-check failed (#ORDERLINE: " << ol << ")\n";
-        return 0;
+        return false;
     }
 
     int no = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountNeworder(),
                no))
-        return 0;
+        return false;
     if (no != 9000 * wh) {
         Log::l2() << Log::tm() << "-check failed (#NEWORDER: " << no << ")\n";
-        return 0;
+        return false;
     }
 
     int hs = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountHistory(),
                hs))
-        return 0;
+        return false;
     if (hs != 30000 * wh) {
         Log::l2() << Log::tm() << "-check failed (#HISTORY: " << hs << ")\n";
-        return 0;
+        return false;
     }
 
     int st = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountStock(),
                st))
-        return 0;
+        return false;
     if (st != 100000 * wh) {
         Log::l2() << Log::tm() << "-check failed (#STOCK: " << st << ")\n";
-        return 0;
+        return false;
     }
 
     int it = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountItem(), it))
-        return 0;
+        return false;
     if (it != 100000) {
         Log::l2() << Log::tm() << "-check failed (#ITEM: " << it << ")\n";
-        return 0;
+        return false;
     }
 
     int sp = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountSupplier(),
                sp))
-        return 0;
+        return false;
     if (sp != 10000) {
         Log::l2() << Log::tm() << "-check failed (#SUPPLIER: " << sp << ")\n";
-        return 0;
+        return false;
     }
 
     int na = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountNation(),
                na))
-        return 0;
+        return false;
     if (na != 62) {
         Log::l2() << Log::tm() << "-check failed (#NATION: " << na << ")\n";
-        return 0;
+        return false;
     }
 
     int rg = 0;
     if (!check(hStmt, DialectStrategy::getInstance()->getSelectCountRegion(),
                rg))
-        return 0;
+        return false;
     if (rg != 5) {
         Log::l2() << Log::tm() << "-check failed (#REGION: " << rg << ")\n";
-        return 0;
-        ;
+        return false;
     }
 
     Log::l2() << Log::tm() << "-check with " << wh << " warehouses succeeded\n";
-    return 1;
+    return true;
 }
 
 bool Schema::additionalPreparation(SQLHSTMT& hStmt) {
 
-    for (unsigned int i = 0; i < DialectStrategy::getInstance()
-                                     ->getAdditionalPreparationStatements()
-                                     .size();
-         i++) {
+    for (auto stmt: DialectStrategy::getInstance()
+                                     ->getAdditionalPreparationStatements()) {
         if (!DbcTools::executeServiceStatement(
-                hStmt, DialectStrategy::getInstance()
-                           ->getAdditionalPreparationStatements()[i])) {
+                hStmt, stmt)) {
             Log::l2() << Log::tm() << "-failed\n";
-            return 0;
+            return false;
         }
     }
     Log::l2() << Log::tm() << "-succeeded\n";
-    return 1;
+    return true;
 }

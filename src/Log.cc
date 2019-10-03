@@ -47,7 +47,7 @@ Log1& operator<<(Log1& l, LogTime&) {
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}
 
 Log1& operator<<(Log1& l, const char* c) {
 #ifdef WRITE_LOG_FILE
@@ -55,15 +55,15 @@ Log1& operator<<(Log1& l, const char* c) {
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}
 
-Log1& operator<<(Log1& l, std::string s) {
+Log1& operator<<(Log1& l, const std::string& s) {
 #ifdef WRITE_LOG_FILE
     *Log::getLogStream() << s;
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}
 
 Log1& operator<<(Log1& l, double d) {
 #ifdef WRITE_LOG_FILE
@@ -71,7 +71,7 @@ Log1& operator<<(Log1& l, double d) {
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}
 
 Log2& operator<<(Log2& l, LogTime&) {
     time_t rawtime;
@@ -85,7 +85,7 @@ Log2& operator<<(Log2& l, LogTime&) {
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}
 
 Log2& operator<<(Log2& l, const char* c) {
     std::cout << c;
@@ -95,9 +95,9 @@ Log2& operator<<(Log2& l, const char* c) {
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}
 
-Log2& operator<<(Log2& l, std::string s) {
+Log2& operator<<(Log2& l, const std::string& s) {
     std::cout << s;
     std::cout.flush();
 #ifdef WRITE_LOG_FILE
@@ -105,7 +105,7 @@ Log2& operator<<(Log2& l, std::string s) {
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}
 
 Log2& operator<<(Log2& l, double d) {
     std::cout << d;
@@ -115,4 +115,4 @@ Log2& operator<<(Log2& l, double d) {
     Log::getLogStream()->flush();
 #endif
     return l;
-};
+}

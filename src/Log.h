@@ -45,12 +45,12 @@ class Log {
 
 Log1& operator<<(Log1& l, LogTime& lt);
 Log1& operator<<(Log1& l, const char* c);
-Log1& operator<<(Log1& l, std::string s);
+Log1& operator<<(Log1& l, const std::string& s);
 Log1& operator<<(Log1& l, double d);
 
 Log2& operator<<(Log2& l, LogTime& lt);
 Log2& operator<<(Log2& l, const char* c);
-Log2& operator<<(Log2& l, std::string s);
+Log2& operator<<(Log2& l, const std::string& s);
 Log2& operator<<(Log2& l, double d);
 
 #endif
