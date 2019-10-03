@@ -16,18 +16,22 @@ main() {
     esac
 }
 
+dc_up() {
+    docker-compose up -d --build "$@"
+}
+
 bring_up() {
-    docker-compose up -d materialized mysql
+    dc_up materialized mysql
     docker-compose logs materialized | tail -n 5
     echo "Waiting for mysql to come up"
     sleep 5
     docker-compose logs mysql | tail -n 5
-    docker-compose up -d connector
+    dc_up connector
     echo "Waiting for schema registry to be fully up"
     sleep 5
     docker-compose logs schema-registry | tail -n 5
     echo "Materialize and all chbench should be running fine, bringing up metrics"
-    docker-compose up -d grafana
+    dc_up grafana
 }
 
 shut_down() {
