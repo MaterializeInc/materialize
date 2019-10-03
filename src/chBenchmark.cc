@@ -117,26 +117,22 @@ static void* transactionalThread(void* args) {
                           << ": NewOrder\n";
                 transactions.executeNewOrder(prm->hDBC);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 44) {
+            else if (decision <= 88) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
                 transactions.executePayment(prm->hDBC);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4) {
+            else if (decision <= 92) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": OrderStatus\n";
                 transactions.executeOrderStatus(prm->hDBC);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4) {
+            else if (decision <= 96) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
                 transactions.executeDelivery(prm->hDBC);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4) {
+            else {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": StockLevel\n";
                 transactions.executeStockLevel(prm->hDBC);
@@ -147,35 +143,31 @@ static void* transactionalThread(void* args) {
                   << ": start test\n";
         while (prm->runState == RunState::run) {
             decision = chRandom::uniformInt(1, 100);
-            if (decision <= 44 && prm->runState == RunState::run) {
+            if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
                 b = transactions.executeNewOrder(prm->hDBC);
                 tStat->executeTPCCSuccess(1, b);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 44 && prm->runState == RunState::run) {
+            else if (decision <= 88) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
                 b = transactions.executePayment(prm->hDBC);
                 tStat->executeTPCCSuccess(2, b);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4 && prm->runState == RunState::run) {
+            else if (decision <= 92) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": OrderStatus\n";
                 b = transactions.executeOrderStatus(prm->hDBC);
                 tStat->executeTPCCSuccess(3, b);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4 && prm->runState == RunState::run) {
+            else if (decision <= 96) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
                 b = transactions.executeDelivery(prm->hDBC);
                 tStat->executeTPCCSuccess(4, b);
             }
-            decision = chRandom::uniformInt(1, 100);
-            if (decision <= 4 && prm->runState == RunState::run) {
+            else {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": StockLevel\n";
                 b = transactions.executeStockLevel(prm->hDBC);
