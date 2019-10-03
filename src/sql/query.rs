@@ -650,7 +650,7 @@ impl Planner {
         right_scope: Scope,
         kind: JoinKind,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
-        match constraint {
+        let (expr, mut scope) = match constraint {
             JoinConstraint::On(expr) => {
                 let mut product_scope = left_scope.product(right_scope);
                 let ctx = &ExprContext {
@@ -681,9 +681,9 @@ impl Planner {
                     left: Box::new(left),
                     right: Box::new(right),
                     on,
-                    kind,
+                    kind: kind.clone(),
                 };
-                Ok((joined, product_scope))
+                (joined, product_scope)
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
                 &column_names,
@@ -691,8 +691,8 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
-                kind,
-            ),
+                kind.clone(),
+            )?,
             JoinConstraint::Natural => {
                 let mut column_names = vec![];
                 for item in left_scope.items.iter() {
@@ -713,10 +713,17 @@ impl Planner {
                     left_scope,
                     right,
                     right_scope,
-                    kind,
-                )
+                    kind.clone(),
+                )?
+            }
+        };
+        // TODO(jamii) this is overly conservative - columns that are joined on can't be null, but at this stage we don't have a clear picture of what columns we'll end up joining on.
+        if let JoinKind::LeftOuter | JoinKind::RightOuter | JoinKind::FullOuter = &kind {
+            for item in &mut scope.items {
+                item.typ.nullable = true;
             }
         }
+        Ok((expr, scope))
     }
 
     // See page 440 of ANSI SQL 2016 spec for details on scoping of using/natural joins
