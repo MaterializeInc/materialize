@@ -184,29 +184,23 @@ impl LogVariant {
                     ColumnType::new(ScalarType::String).name("dataflow"),
                     ColumnType::new(ScalarType::String).name("source"),
                     ColumnType::new(ScalarType::Int64).name("worker"),
-                ],
-            },
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("name"),
-                    ColumnType::new(ScalarType::Int64).name("time"),
-                ],
-            },
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("uuid"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::String).name("name"),
-                    ColumnType::new(ScalarType::Int64).name("time"),
-                ],
-            },
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
-                    ColumnType::new(ScalarType::Int64).name("count"),
-                ],
-            },
+                ])
+            }
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationType::new(vec![
+                ColumnType::new(ScalarType::String).name("name"),
+                ColumnType::new(ScalarType::Int64).name("time"),
+            ]),
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationType::new(vec![
+                ColumnType::new(ScalarType::String).name("uuid"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+                ColumnType::new(ScalarType::String).name("name"),
+                ColumnType::new(ScalarType::Int64).name("time"),
+            ]),
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("worker"),
+                ColumnType::new(ScalarType::Int64).name("duration_ns"),
+                ColumnType::new(ScalarType::Int64).name("count"),
+            ]),
         }
     }
     /// Reports the primary keys for each logged collection.

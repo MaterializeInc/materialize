@@ -72,16 +72,38 @@ impl ColumnType {
     }
 }
 
-/// The type for a relation
+/// The type for a relation.
 ///
 /// aka a View, this is a vec of [`ColumnType`]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationType {
+    /// The type for each column, in order.
     pub column_types: Vec<ColumnType>,
+    /// Sets of indices that are "keys" for the collection.
+    ///
+    /// Each element in this list is a set of column indices, each with the property
+    /// that the collection contains at most one record with each distinct set of values
+    /// for each column. Alternately, for a specific set of values assigned to the these
+    /// columns there is at most one record.
+    ///
+    /// A collection can contain multiple sets of keys, although it is common to have
+    /// either zero or one sets of key indices.
+    pub primary_keys: Vec<Vec<usize>>,
 }
 
 impl RelationType {
+    /// Creates a new instance from specified column types.
     pub fn new(column_types: Vec<ColumnType>) -> Self {
-        RelationType { column_types }
+        RelationType {
+            column_types,
+            primary_keys: Vec::new(),
+        }
+    }
+    /// Adds a set of indices as keys for the colleciton.
+    pub fn add_keys(&mut self, mut indices: Vec<usize>) {
+        indices.sort();
+        if !self.primary_keys.contains(&indices) {
+            self.primary_keys.push(indices);
+        }
     }
 }

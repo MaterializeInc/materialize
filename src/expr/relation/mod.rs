@@ -146,12 +146,12 @@ impl RelationExpr {
             RelationExpr::Let { body, .. } => body.typ(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ();
-                RelationType {
-                    column_types: outputs
+                RelationType::new(
+                    outputs
                         .iter()
                         .map(|&i| input_typ.column_types[i].clone())
                         .collect(),
-                }
+                )
             }
             RelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ();
@@ -166,7 +166,7 @@ impl RelationExpr {
                 for input in inputs {
                     column_types.append(&mut input.typ().column_types);
                 }
-                RelationType { column_types }
+                RelationType::new(column_types)
             }
             RelationExpr::Reduce {
                 input,
@@ -181,7 +181,7 @@ impl RelationExpr {
                 for (_, column_typ) in aggregates {
                     column_types.push(column_typ.clone());
                 }
-                RelationType { column_types }
+                RelationType::new(column_types)
             }
             RelationExpr::TopK { input, .. } => input.typ(),
             RelationExpr::Negate { input } => input.typ(),
@@ -190,8 +190,8 @@ impl RelationExpr {
                 let left_typ = left.typ();
                 let right_typ = right.typ();
                 assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
-                RelationType {
-                    column_types: left_typ
+                RelationType::new(
+                    left_typ
                         .column_types
                         .iter()
                         .zip(right_typ.column_types.iter())
@@ -199,7 +199,7 @@ impl RelationExpr {
                         .collect::<Result<Vec<_>, _>>()
                         .with_context(|e| format!("{}\nIn {:#?}", e, self))
                         .unwrap(),
-                }
+                )
             }
         }
     }
@@ -398,12 +398,10 @@ impl RelationExpr {
                 left.union(both.project((0..left_arity).collect()).distinct().negate()),
                 RelationExpr::Constant {
                     rows: vec![(vec![Datum::Null; both_arity - left_arity], 1)],
-                    typ: RelationType {
-                        column_types: vec![
-                            ColumnType::new(ScalarType::Null).nullable(true);
-                            both_arity - left_arity
-                        ],
-                    },
+                    typ: RelationType::new(vec![
+                        ColumnType::new(ScalarType::Null).nullable(true);
+                        both_arity - left_arity
+                    ]),
                 },
             ],
             variables: vec![],
@@ -425,12 +423,10 @@ impl RelationExpr {
             inputs: vec![
                 RelationExpr::Constant {
                     rows: vec![(vec![Datum::Null; both_arity - right_arity], 1)],
-                    typ: RelationType {
-                        column_types: vec![
-                            ColumnType::new(ScalarType::Null).nullable(true);
-                            both_arity - right_arity
-                        ],
-                    },
+                    typ: RelationType::new(vec![
+                        ColumnType::new(ScalarType::Null).nullable(true);
+                        both_arity - right_arity
+                    ]),
                 },
                 right.union(
                     both.distinct_by(((both_arity - right_arity)..both_arity).collect())

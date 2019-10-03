@@ -207,13 +207,18 @@ where
                     );
                 }
 
+<<<<<<< HEAD
                 let typ = RelationType {
                     column_types: finishing
+=======
+                let typ = RelationType::new(
+                    transform
+>>>>>>> introduce primary keys; use constructor
                         .project
                         .iter()
                         .map(|i| typ.column_types[*i].clone())
                         .collect(),
-                };
+                );
                 let rows_rx = rows_rx
                     .take(self.num_timely_workers as u64)
                     .concat2()

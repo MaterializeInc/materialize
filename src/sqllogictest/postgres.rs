@@ -90,8 +90,8 @@ END $$;
                     .iter()
                     .map(|column| column.data_type.clone())
                     .collect::<Vec<_>>();
-                let typ = RelationType {
-                    column_types: columns
+                let typ = RelationType::new(
+                    columns
                         .iter()
                         .map(|column| {
                             Ok(ColumnType {
@@ -104,7 +104,7 @@ END $$;
                             })
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
-                };
+                );
                 self.table_types
                     .insert(name.to_string(), (sql_types, typ.clone()));
                 Outcome::Created(name.to_string(), typ)

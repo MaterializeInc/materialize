@@ -136,7 +136,7 @@ fn validate_schema_1(schema: &Schema) -> Result<RelationType, Error> {
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
 
-            Ok(RelationType { column_types })
+            Ok(RelationType::new(column_types))
         }
         _ => bail!("row schemas must be records, got: {:?}", schema),
     }
