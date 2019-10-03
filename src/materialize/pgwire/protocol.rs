@@ -710,12 +710,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         trace!("send describe response for statement={:?}", state.name);
-        let statement =
-        if state.is_statement {
+        let statement = if state.is_statement {
             state.session.get_prepared_statement(&state.name)
-        }
-        else {
-            let name = &state.session.get_portal(&state.name).ok_or_else(|| failure::format_err!("Portal does not exist: {:?}", state.name))?.statement_name;
+        } else {
+            let name = &state
+                .session
+                .get_portal(&state.name)
+                .ok_or_else(|| failure::format_err!("Portal does not exist: {:?}", state.name))?
+                .statement_name;
             state.session.get_prepared_statement(&name)
         };
         match statement {
