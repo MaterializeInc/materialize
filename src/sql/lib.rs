@@ -44,7 +44,7 @@ pub enum Plan {
     Peek {
         source: ::expr::RelationExpr,
         when: PeekWhen,
-        transform: RowSetFinishing,
+        finishing: RowSetFinishing,
     },
     Tail(Dataflow),
     SendRows {

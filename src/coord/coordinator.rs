@@ -146,7 +146,7 @@ where
             Plan::Peek {
                 mut source,
                 when,
-                transform,
+                finishing,
             } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
                 //
@@ -175,7 +175,7 @@ where
                             conn_id,
                             tx: rows_tx,
                             timestamp,
-                            transform: transform.clone(),
+                            finishing: finishing.clone(),
                         },
                     );
                 } else {
@@ -198,7 +198,7 @@ where
                             conn_id,
                             tx: rows_tx,
                             timestamp,
-                            transform: transform.clone(),
+                            finishing: finishing.clone(),
                         },
                     );
                     broadcast(
@@ -208,7 +208,7 @@ where
                 }
 
                 let typ = RelationType {
-                    column_types: transform
+                    column_types: finishing
                         .project
                         .iter()
                         .map(|i| typ.column_types[*i].clone())
@@ -219,13 +219,13 @@ where
                     .concat2()
                     .map(move |mut rows| {
                         let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
-                            compare_columns(&transform.order_by, left, right)
+                            compare_columns(&finishing.order_by, left, right)
                         };
-                        let offset = transform.offset;
+                        let offset = finishing.offset;
                         if offset > rows.len() {
                             Vec::new()
                         } else {
-                            if let Some(limit) = transform.limit {
+                            if let Some(limit) = finishing.limit {
                                 let offset_plus_limit = offset + limit;
                                 if rows.len() > offset_plus_limit {
                                     pdqselect::select_by(&mut rows, offset_plus_limit, sort_by);
@@ -238,7 +238,7 @@ where
                             }
                             rows.sort_by(sort_by);
                             for row in &mut rows {
-                                *row = transform.project.iter().map(|i| row[*i].clone()).collect();
+                                *row = finishing.project.iter().map(|i| row[*i].clone()).collect();
                             }
                             rows
                         }

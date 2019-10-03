@@ -350,19 +350,19 @@ impl Var for SessionVar<bool> {
 pub struct PreparedStatement {
     pub raw_sql: String,
     source: ::expr::RelationExpr,
-    transform: RowSetFinishing,
+    finishing: RowSetFinishing,
 }
 
 impl PreparedStatement {
     pub fn new(
         raw_sql: String,
         source: ::expr::RelationExpr,
-        transform: RowSetFinishing,
+        finishing: RowSetFinishing,
     ) -> PreparedStatement {
         PreparedStatement {
             raw_sql,
             source,
-            transform,
+            finishing,
         }
     }
 
@@ -370,8 +370,8 @@ impl PreparedStatement {
         &self.source
     }
 
-    pub fn transform(&self) -> &RowSetFinishing {
-        &self.transform
+    pub fn finishing(&self) -> &RowSetFinishing {
+        &self.finishing
     }
 }
 
