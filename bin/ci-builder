@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 
 if [[ $# -lt 2 ]]
 then
-    echo "usage: $0 <build|push|run> <stable|nightly> [<args>...]"
+    echo "usage: $0 <build|push|run> <default|nightly> [<args>...]"
     exit 1
 fi
 
@@ -22,7 +22,7 @@ channel=$1 && shift
 
 rust_date=
 case "$channel" in
-    stable) rust_version=$(<rust-toolchain) ;;
+    default) rust_version=$(<rust-toolchain) ;;
     nightly) rust_version=nightly ;;
     nightly-*)
         rust_date=/${channel#nightly-}

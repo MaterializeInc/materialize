@@ -153,7 +153,7 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.49.2"
+version = "0.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bitflags 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -162,15 +162,15 @@ dependencies = [
  "clang-sys 0.28.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "clap 2.33.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "env_logger 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "peeking_take_while 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "proc-macro2 0.4.30 (registry+https://github.com/rust-lang/crates.io-index)",
- "quote 0.6.12 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proc-macro2 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quote 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustc-hash 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "shlex 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "which 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)",
+ "which 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -928,14 +928,6 @@ dependencies = [
  "sqllogictest 0.0.1",
  "testdrive 0.1.0",
  "walkdir 2.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "fxhash"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "byteorder 1.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2097,12 +2089,12 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.21.0"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#92c9cd25fdaeff2097ccd51ce564558be4a62904"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#369fc98b251dd81aa814cdeeefb8a8f81765c125"
 dependencies = [
  "futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)",
  "libc 0.2.62 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "rdkafka-sys 1.0.1 (git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git)",
+ "rdkafka-sys 1.2.0 (git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git)",
  "serde 1.0.101 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.99 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.40 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2110,10 +2102,10 @@ dependencies = [
 
 [[package]]
 name = "rdkafka-sys"
-version = "1.0.1"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#92c9cd25fdaeff2097ccd51ce564558be4a62904"
+version = "1.2.0"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#369fc98b251dd81aa814cdeeefb8a8f81765c125"
 dependencies = [
- "bindgen 0.49.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "bindgen 0.51.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "cmake 0.1.41 (registry+https://github.com/rust-lang/crates.io-index)",
  "libz-sys 1.0.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus 0.2.13 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2227,6 +2219,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "rustc-demangle"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "rustc-hash"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "byteorder 1.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "rustc_version"
@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "which"
-version = "1.0.5"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "libc 0.2.62 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3196,7 +3196,7 @@ dependencies = [
 "checksum backtrace-sys 0.1.28 (registry+https://github.com/rust-lang/crates.io-index)" = "797c830ac25ccc92a7f8a7b9862bde440715531514594a6154e3d4a54dd769b6"
 "checksum base64 0.10.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0b25d992356d2eb0ed82172f5248873db5560c4721f564b13cb5193bda5e668e"
 "checksum bincode 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b8ab639324e3ee8774d296864fbc0dbbb256cf1a41c490b94cba90c082915f92"
-"checksum bindgen 0.49.2 (registry+https://github.com/rust-lang/crates.io-index)" = "846a1fba6535362a01487ef6b10f0275faa12e5c5d835c5c1c627aabc46ccbd6"
+"checksum bindgen 0.51.1 (registry+https://github.com/rust-lang/crates.io-index)" = "ebd71393f1ec0509b553aa012b9b58e81dadbdff7130bd3b8cba576e69b32f75"
 "checksum bitflags 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3d155346769a6855b86399e9bc3814ab343cd3d62c7e985113d46a0ec3c281fd"
 "checksum block-buffer 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)" = "c0940dc441f31689269e10ac70eb1002a3a1d3ad1390e030043662eb7fe4688b"
 "checksum block-padding 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "6d4dc3af3ee2e12f3e5d224e5e1e3d73668abbeb69e566d361f7d5563a4fdf09"
@@ -3267,7 +3267,6 @@ dependencies = [
 "checksum fuchsia-zircon-sys 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "3dcaa9ae7725d12cdb85b3ad99a434db70b468c09ded17e012d86b5c1010f7a7"
 "checksum futures 0.1.28 (git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1)" = "<none>"
 "checksum futures-cpupool 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)" = "ab90cde24b3319636588d0c35fe03b1333857621051837ed769faefb4c2162e4"
-"checksum fxhash 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
 "checksum generic-array 0.12.0 (registry+https://github.com/rust-lang/crates.io-index)" = "3c0f28c2f5bfb5960175af447a2da7c18900693738343dc896ffbcabd9839592"
 "checksum getopts 0.2.21 (registry+https://github.com/rust-lang/crates.io-index)" = "14dbbfd5c71d70241ecf9e6f13737f7b5ce823821063188d7e46c41d371eebd5"
 "checksum getrandom 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = "8d1dffef07351aafe6ef177e4dd2b8dcf503e6bc765dea3b0de9ed149a3db1ec"
@@ -3386,7 +3385,7 @@ dependencies = [
 "checksum rayon 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "a4b0186e22767d5b9738a05eab7c6ac90b15db17e5b5f9bd87976dd7d89a10a4"
 "checksum rayon-core 1.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "ebbe0df8435ac0c397d467b6cad6d25543d06e8a019ef3f6af3c384597515bd2"
 "checksum rdkafka 0.21.0 (git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git)" = "<none>"
-"checksum rdkafka-sys 1.0.1 (git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git)" = "<none>"
+"checksum rdkafka-sys 1.2.0 (git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git)" = "<none>"
 "checksum rdrand 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "678054eb77286b51581ba43620cc911abf02758c91f93f479767aed0f90458b2"
 "checksum redox_syscall 0.1.54 (registry+https://github.com/rust-lang/crates.io-index)" = "12229c14a0f65c4f1cb046a3b52047cdd9da1f4b30f8a39c5063c8bae515e252"
 "checksum regex 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dc220bd33bdce8f093101afe22a037b8eb0e5af33592e6a9caafff0d4cb81cbd"
@@ -3397,6 +3396,7 @@ dependencies = [
 "checksum reqwest 0.9.20 (registry+https://github.com/rust-lang/crates.io-index)" = "0f6d896143a583047512e59ac54a215cb203c29cc941917343edea3be8df9c78"
 "checksum rle-decode-fast 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 "checksum rustc-demangle 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)" = "a7f4dccf6f4891ebcc0c39f9b6eb1a83b9bf5d747cb439ec6fba4f3b977038af"
+"checksum rustc-hash 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)" = "7540fc8b0c49f096ee9c961cda096467dce8084bec6bdca2fc83895fd9b28cb8"
 "checksum rustc_version 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "c5f5376ea5e30ce23c03eb77cbe4962b988deead10910c372b226388b594c084"
 "checksum rustc_version 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
 "checksum ryu 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c92464b447c0ee8c4fb3824ecc8383b81717b9f1e74ba2e72540aef7b9f82997"
@@ -3487,7 +3487,7 @@ dependencies = [
 "checksum version_check 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)" = "914b1a6776c4c929a602fafd8bc742e06365d4bcbe48c30f9cca5824f70dc9dd"
 "checksum walkdir 2.2.9 (registry+https://github.com/rust-lang/crates.io-index)" = "9658c94fa8b940eab2250bd5a457f9c48b748420d71293b165c8cdbe2f55f71e"
 "checksum want 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b6395efa4784b027708f7451087e647ec73cc74f5d9bc2e418404248d679a230"
-"checksum which 1.0.5 (registry+https://github.com/rust-lang/crates.io-index)" = "e84a603e7e0b1ce1aa1ee2b109c7be00155ce52df5081590d1ffb93f4f515cb2"
+"checksum which 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)" = "240a31163872f7e8e49f35b42b58485e35355b07eb009d9f3686733541339a69"
 "checksum whoami 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)" = "7154f3f4488071a38189dfd63633df444e7be43b731cc12c41505308fc4972f3"
 "checksum winapi 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)" = "167dc9d6949a9b857f3451275e911c3f44255842c1f7a76f33c55103a909087a"
 "checksum winapi 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)" = "f10e386af2b13e47c89e7236a7a14a086791a2b88ebad6df9bf42040195cf770"
