@@ -39,7 +39,7 @@ class TupleGen {
     static std::ofstream regionStream;
 
   public:
-    static void openOutputFiles(const std::string& outDir);
+    static void openOutputFiles(std::string outDir);
     static void closeOutputFiles();
     static void genWarehouse(int& wId);
     static void genDistrict(int& dId, int& wId);
@@ -53,7 +53,7 @@ class TupleGen {
                              std::string& orderTime);
     static void genItem(int& iId);
     static void genStock(int& iId, int& wId);
-    static void genNation(const Nation& n);
+    static void genNation(Nation n);
     static void genSupplier(int& suId);
     static void genRegion(int& rId, const char* rName);
 };

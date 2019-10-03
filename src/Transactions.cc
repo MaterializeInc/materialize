@@ -32,202 +32,202 @@ bool Transactions::prepare(SQLHDBC& hDBC) {
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noWarehouseSelect,
             DialectStrategy::getInstance()->getNoWarehouseSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noDistrictSelect,
             DialectStrategy::getInstance()->getNoDistrictSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noDistrictUpdate,
             DialectStrategy::getInstance()->getNoDistrictUpdate()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noCustomerSelect,
             DialectStrategy::getInstance()->getNoCustomerSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noItemSelect,
             DialectStrategy::getInstance()->getNoItemSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[0],
             DialectStrategy::getInstance()->getNoStockSelect01()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[1],
             DialectStrategy::getInstance()->getNoStockSelect02()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[2],
             DialectStrategy::getInstance()->getNoStockSelect03()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[3],
             DialectStrategy::getInstance()->getNoStockSelect04()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[4],
             DialectStrategy::getInstance()->getNoStockSelect05()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[5],
             DialectStrategy::getInstance()->getNoStockSelect06()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[6],
             DialectStrategy::getInstance()->getNoStockSelect07()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[7],
             DialectStrategy::getInstance()->getNoStockSelect08()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[8],
             DialectStrategy::getInstance()->getNoStockSelect09()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockSelects[9],
             DialectStrategy::getInstance()->getNoStockSelect10()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockUpdates[0],
             DialectStrategy::getInstance()->getNoStockUpdate01()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noStockUpdates[1],
             DialectStrategy::getInstance()->getNoStockUpdate02()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noOrderlineInsert,
             DialectStrategy::getInstance()->getNoOrderlineInsert()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noOrderInsert,
             DialectStrategy::getInstance()->getNoOrderInsert()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, noNewOrderInsert,
             DialectStrategy::getInstance()->getNoNewOrderInsert()))
-        return false;
+        return 0;
 
     // Payment:
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmWarehouseSelect,
             DialectStrategy::getInstance()->getPmWarehouseSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmWarehouseUpdate,
             DialectStrategy::getInstance()->getPmWarehouseUpdate()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmDistrictSelect,
             DialectStrategy::getInstance()->getPmDistrictSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmDistrictUpdate,
             DialectStrategy::getInstance()->getPmDistrictUpdate()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect1,
             DialectStrategy::getInstance()->getPmCustomerSelect1()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect2,
             DialectStrategy::getInstance()->getPmCustomerSelect2()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect3,
             DialectStrategy::getInstance()->getPmCustomerSelect3()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerUpdate1,
             DialectStrategy::getInstance()->getPmCustomerUpdate1()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerSelect4,
             DialectStrategy::getInstance()->getPmCustomerSelect4()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmCustomerUpdate2,
             DialectStrategy::getInstance()->getPmCustomerUpdate2()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, pmHistoryInsert,
             DialectStrategy::getInstance()->getPmHistoryInsert()))
-        return false;
+        return 0;
 
     // OrderStatus:
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osCustomerSelect1,
             DialectStrategy::getInstance()->getOsCustomerSelect1()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osCustomerSelect2,
             DialectStrategy::getInstance()->getOsCustomerSelect2()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osCustomerSelect3,
             DialectStrategy::getInstance()->getOsCustomerSelect3()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osOrderSelect,
             DialectStrategy::getInstance()->getOsOrderSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, osOrderlineSelect,
             DialectStrategy::getInstance()->getOsOrderlineSelect()))
-        return false;
+        return 0;
 
     // Delivery
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlNewOrderSelect,
             DialectStrategy::getInstance()->getDlNewOrderSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlNewOrderDelete,
             DialectStrategy::getInstance()->getDlNewOrderDelete()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderSelect,
             DialectStrategy::getInstance()->getDlOrderSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderUpdate,
             DialectStrategy::getInstance()->getDlOrderUpdate()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderlineUpdate,
             DialectStrategy::getInstance()->getDlOrderlineUpdate()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlOrderlineSelect,
             DialectStrategy::getInstance()->getDlOrderlineSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, dlCustomerUpdate,
             DialectStrategy::getInstance()->getDlCustomerUpdate()))
-        return false;
+        return 0;
 
     // StockLevel
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, slDistrictSelect,
             DialectStrategy::getInstance()->getSlDistrictSelect()))
-        return false;
+        return 0;
     if (!DbcTools::allocAndPrepareStmt(
             hDBC, slStockSelect,
             DialectStrategy::getInstance()->getSlStockSelect()))
-        return false;
+        return 0;
 
-    return true;
+    return 1;
 }
 
 bool Transactions::prepareStatements(SQLHDBC& hDBC) {
     if (!prepare(hDBC)) {
         Log::l2() << Log::tm() << "-prepare statements failed\n";
-        return false;
+        return 0;
     }
     Log::l1() << Log::tm() << "-prepare statements succeeded\n";
-    return true;
+    return 1;
 }
 
 bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
@@ -260,11 +260,11 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         // 2.
         if (chRandom::uniformInt(1, 100) == 1) {
             DataSource::getRemoteWId(wId, oLines[i].olSupplyWId);
-            oLines[i].olIsRemote = true;
+            oLines[i].olIsRemote = 1;
             allLocal = 0;
         } else {
             oLines[i].olSupplyWId = wId;
-            oLines[i].olIsRemote = false;
+            oLines[i].olIsRemote = 0;
         }
         // 3.
         oLines[i].olQuantity = chRandom::uniformInt(1, 10);
@@ -281,7 +281,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     DbcTools::bind(noWarehouseSelect, 1, wId);
     if (!DbcTools::executePreparedStatement(noWarehouseSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(noDistrictSelect);
@@ -289,12 +289,12 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     DbcTools::bind(noDistrictSelect, 2, dId);
     if (!DbcTools::executePreparedStatement(noDistrictSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
     int dNextOId = 0;
     if (!DbcTools::fetch(noDistrictSelect, buf, &nIdicator, 2, dNextOId)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(noDistrictUpdate);
@@ -302,7 +302,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     DbcTools::bind(noDistrictUpdate, 2, dId);
     if (!DbcTools::executePreparedStatement(noDistrictUpdate)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(noCustomerSelect);
@@ -311,7 +311,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     DbcTools::bind(noCustomerSelect, 3, cId);
     if (!DbcTools::executePreparedStatement(noCustomerSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(noOrderInsert);
@@ -324,7 +324,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     DbcTools::bind(noOrderInsert, 7, allLocal);
     if (!DbcTools::executePreparedStatement(noOrderInsert)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(noNewOrderInsert);
@@ -333,7 +333,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
     DbcTools::bind(noNewOrderInsert, 3, wId);
     if (!DbcTools::executePreparedStatement(noNewOrderInsert)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     double iPrice;
@@ -346,7 +346,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         DbcTools::bind(noItemSelect, 1, oLines[i].olIId);
         if (!DbcTools::executePreparedStatement(noItemSelect)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         iPrice = 0;
         if (SQL_SUCCESS == SQLFetch(noItemSelect)) {
@@ -355,12 +355,12 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
                 iPrice = atof((char*) buf);
             else {
                 DbcTools::rollback(hDBC);
-                return false;
+                return 0;
             }
         } else { // Expected Rollback
             if (DbcTools::rollback(hDBC))
-                return true;
-            return false;
+                return 1;
+            return 0;
         }
 
         DbcTools::resetStatement(noStockSelects[dId - 1]);
@@ -368,17 +368,17 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         DbcTools::bind(noStockSelects[dId - 1], 2, oLines[i].olSupplyWId);
         if (!DbcTools::executePreparedStatement(noStockSelects[dId - 1])) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         sQuantity = 0;
         sDist = "";
         if (SQL_SUCCESS == SQLFetch(noStockSelects[dId - 1])) {
             if (SQL_SUCCESS == SQLGetData(noStockSelects[dId - 1], 1,
                                           SQL_C_CHAR, buf, 1024, &nIdicator)) {
-                sQuantity = strtol((char*) buf, nullptr, 0);
+                sQuantity = strtol((char*) buf, NULL, 0);
             } else {
                 DbcTools::rollback(hDBC);
-                return false;
+                return 0;
             }
 
             if (SQL_SUCCESS == SQLGetData(noStockSelects[dId - 1], 2,
@@ -386,11 +386,11 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
                 sDist = std::string((char*) buf);
             } else {
                 DbcTools::rollback(hDBC);
-                return false;
+                return 0;
             }
         } else {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(
@@ -410,7 +410,7 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         if (!DbcTools::executePreparedStatement(
                 noStockUpdates[(oLines[i].olIsRemote ? 1 : 0)])) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(noOrderlineInsert);
@@ -429,16 +429,16 @@ bool Transactions::executeNewOrder(SQLHDBC& hDBC) {
         DbcTools::bind(noOrderlineInsert, 9, 24, buffer);
         if (!DbcTools::executePreparedStatement(noOrderlineInsert)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
     }
 
     // COMMIT
     if (DbcTools::commit(hDBC)) {
-        return true;
+        return 1;
     }
     DbcTools::rollback(hDBC);
-    return false;
+    return 0;
 }
 
 bool Transactions::executePayment(SQLHDBC& hDBC) {
@@ -461,7 +461,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
 
     int y = chRandom::uniformInt(1, 100);
     int cId = 0;
-    std::string cLast = cLast;
+    std::string cLast = "";
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {
@@ -483,12 +483,12 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     DbcTools::bind(pmWarehouseSelect, 1, wId);
     if (!DbcTools::executePreparedStatement(pmWarehouseSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
-    std::string wName = wName;
+    std::string wName = "";
     if (!DbcTools::fetch(pmWarehouseSelect, buf, &nIdicator, 1, wName)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(pmWarehouseUpdate);
@@ -496,7 +496,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     DbcTools::bind(pmWarehouseUpdate, 2, wId);
     if (!DbcTools::executePreparedStatement(pmWarehouseUpdate)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(pmDistrictSelect);
@@ -504,12 +504,12 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     DbcTools::bind(pmDistrictSelect, 2, dId);
     if (!DbcTools::executePreparedStatement(pmDistrictSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
-    std::string dName = dName;
+    std::string dName = "";
     if (!DbcTools::fetch(pmDistrictSelect, buf, &nIdicator, 1, dName)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(pmDistrictUpdate);
@@ -518,7 +518,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     DbcTools::bind(pmDistrictUpdate, 3, dId);
     if (!DbcTools::executePreparedStatement(pmDistrictUpdate)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
     std::string cCredit;
     if (y <= 60) { // Case 2
@@ -530,12 +530,12 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::bind(pmCustomerSelect1, 3, cWId);
         if (!DbcTools::executePreparedStatement(pmCustomerSelect1)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         int count = 0;
         if (!DbcTools::fetch(pmCustomerSelect1, buf, &nIdicator, 1, count)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(pmCustomerSelect2);
@@ -546,7 +546,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::bind(pmCustomerSelect2, 3, cWId);
         if (!DbcTools::executePreparedStatement(pmCustomerSelect2)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         cId = 0;
         cCredit = "";
@@ -556,21 +556,21 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         if (SQL_SUCCESS == SQLFetch(pmCustomerSelect2)) {
             if (SQL_SUCCESS == SQLGetData(pmCustomerSelect2, 1, SQL_C_CHAR, buf,
                                           1024, &nIdicator))
-                cId = strtol((char*) buf, nullptr, 0);
+                cId = strtol((char*) buf, NULL, 0);
             else {
                 DbcTools::rollback(hDBC);
-                return false;
+                return 0;
             }
             if (SQL_SUCCESS == SQLGetData(pmCustomerSelect2, 11, SQL_C_CHAR,
                                           buf, 1024, &nIdicator))
                 cCredit = std::string((char*) buf);
             else {
                 DbcTools::rollback(hDBC);
-                return false;
+                return 0;
             }
         } else {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
     } else { // Case 1
         DbcTools::resetStatement(pmCustomerSelect3);
@@ -579,12 +579,12 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::bind(pmCustomerSelect3, 3, cWId);
         if (!DbcTools::executePreparedStatement(pmCustomerSelect3)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         cCredit = "";
         if (!DbcTools::fetch(pmCustomerSelect3, buf, &nIdicator, 11, cCredit)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
     }
 
@@ -596,7 +596,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     DbcTools::bind(pmCustomerUpdate1, 5, cWId);
     if (!DbcTools::executePreparedStatement(pmCustomerUpdate1)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     if (cCredit == "BC") {
@@ -606,12 +606,12 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::bind(pmCustomerSelect4, 3, cWId);
         if (!DbcTools::executePreparedStatement(pmCustomerSelect4)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
-        std::string cData = cData;
+        std::string cData = "";
         if (!DbcTools::fetch(pmCustomerSelect4, buf, &nIdicator, 1, cData)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         cData = std::to_string(cId) + "," + std::to_string(cDId) + "," +
                 std::to_string(cWId) + "," + std::to_string(dId) + "," +
@@ -629,7 +629,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::bind(pmCustomerUpdate2, 4, cWId);
         if (!DbcTools::executePreparedStatement(pmCustomerUpdate2)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
     }
 
@@ -648,15 +648,15 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
     DbcTools::bind(pmHistoryInsert, 8, 24, buffer4);
     if (!DbcTools::executePreparedStatement(pmHistoryInsert)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     // COMMIT
     if (DbcTools::commit(hDBC)) {
-        return true;
+        return 1;
     }
     DbcTools::rollback(hDBC);
-    return false;
+    return 0;
 }
 
 bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
@@ -667,7 +667,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     int dId = chRandom::uniformInt(1, 10);
     int y = chRandom::uniformInt(1, 100);
     int cId = 0;
-    std::string cLast = cLast;
+    std::string cLast = "";
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {
@@ -687,12 +687,12 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
         DbcTools::bind(osCustomerSelect1, 3, wId);
         if (!DbcTools::executePreparedStatement(osCustomerSelect1)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         int count = 0;
         if (!DbcTools::fetch(osCustomerSelect1, buf, &nIdicator, 1, count)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(osCustomerSelect2);
@@ -703,7 +703,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
         DbcTools::bind(osCustomerSelect2, 3, wId);
         if (!DbcTools::executePreparedStatement(osCustomerSelect2)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         for (int i = 0; i < ((count + 1) / 2) - 1; i++) { // move cursor
@@ -711,7 +711,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
         }
         if (!DbcTools::fetch(osCustomerSelect2, buf, &nIdicator, 1, cId)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
     } else { // Case 1
         DbcTools::resetStatement(osCustomerSelect3);
@@ -720,7 +720,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
         DbcTools::bind(osCustomerSelect3, 3, wId);
         if (!DbcTools::executePreparedStatement(osCustomerSelect3)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
     }
 
@@ -733,12 +733,12 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     DbcTools::bind(osOrderSelect, 6, cId);
     if (!DbcTools::executePreparedStatement(osOrderSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
     int oId = 0;
     if (!DbcTools::fetch(osOrderSelect, buf, &nIdicator, 1, oId)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(osOrderlineSelect);
@@ -747,15 +747,15 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     DbcTools::bind(osOrderlineSelect, 3, oId);
     if (!DbcTools::executePreparedStatement(osOrderlineSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     // COMMIT
     if (DbcTools::commit(hDBC)) {
-        return true;
+        return 1;
     }
     DbcTools::rollback(hDBC);
-    return false;
+    return 0;
 }
 
 bool Transactions::executeDelivery(SQLHDBC& hDBC) {
@@ -784,16 +784,16 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         DbcTools::bind(dlNewOrderSelect, 4, dId);
         if (!DbcTools::executePreparedStatement(dlNewOrderSelect)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         noOId = 0;
         if (SQL_SUCCESS == SQLFetch(dlNewOrderSelect)) {
             if (SQL_SUCCESS == SQLGetData(dlNewOrderSelect, 1, SQL_C_CHAR, buf,
                                           1024, &nIdicator))
-                noOId = strtol((char*) buf, nullptr, 0);
+                noOId = strtol((char*) buf, NULL, 0);
             else {
                 DbcTools::rollback(hDBC);
-                return false;
+                return 0;
             }
         } else // If no matching row is found, then the delivery of an order for
                // this district is skipped.
@@ -805,7 +805,7 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         DbcTools::bind(dlNewOrderDelete, 3, noOId);
         if (!DbcTools::executePreparedStatement(dlNewOrderDelete)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(dlOrderSelect);
@@ -814,12 +814,12 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         DbcTools::bind(dlOrderSelect, 3, noOId);
         if (!DbcTools::executePreparedStatement(dlOrderSelect)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         oCId = 0;
         if (!DbcTools::fetch(dlOrderSelect, buf, &nIdicator, 1, oCId)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(dlOrderUpdate);
@@ -829,7 +829,7 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         DbcTools::bind(dlOrderUpdate, 4, noOId);
         if (!DbcTools::executePreparedStatement(dlOrderUpdate)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(dlOrderlineUpdate);
@@ -839,7 +839,7 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         DbcTools::bind(dlOrderlineUpdate, 4, noOId);
         if (!DbcTools::executePreparedStatement(dlOrderlineUpdate)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(dlOrderlineSelect);
@@ -848,12 +848,12 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         DbcTools::bind(dlOrderlineSelect, 3, noOId);
         if (!DbcTools::executePreparedStatement(dlOrderlineSelect)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
         olAmount = 0;
         if (!DbcTools::fetch(dlOrderlineSelect, buf, &nIdicator, 1, olAmount)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         DbcTools::resetStatement(dlCustomerUpdate);
@@ -863,16 +863,16 @@ bool Transactions::executeDelivery(SQLHDBC& hDBC) {
         DbcTools::bind(dlCustomerUpdate, 4, wId);
         if (!DbcTools::executePreparedStatement(dlCustomerUpdate)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
 
         // COMMIT
         if (!DbcTools::commit(hDBC)) {
             DbcTools::rollback(hDBC);
-            return false;
+            return 0;
         }
     }
-    return true;
+    return 1;
 }
 
 bool Transactions::executeStockLevel(SQLHDBC& hDBC) {
@@ -892,12 +892,12 @@ bool Transactions::executeStockLevel(SQLHDBC& hDBC) {
     DbcTools::bind(slDistrictSelect, 2, dId);
     if (!DbcTools::executePreparedStatement(slDistrictSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
     int dNextOId = 0;
     if (!DbcTools::fetch(slDistrictSelect, buf, &nIdicator, 1, dNextOId)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     DbcTools::resetStatement(slStockSelect);
@@ -910,13 +910,13 @@ bool Transactions::executeStockLevel(SQLHDBC& hDBC) {
     DbcTools::bind(slStockSelect, 6, threshold);
     if (!DbcTools::executePreparedStatement(slStockSelect)) {
         DbcTools::rollback(hDBC);
-        return false;
+        return 0;
     }
 
     // COMMIT
     if (DbcTools::commit(hDBC)) {
-        return true;
+        return 1;
     }
     DbcTools::rollback(hDBC);
-    return false;
+    return 0;
 }

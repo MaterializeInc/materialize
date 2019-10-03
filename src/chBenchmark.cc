@@ -18,6 +18,7 @@ limitations under the License.
 #include "DataSource.h"
 #include "DbcTools.h"
 #include "Log.h"
+#include "PthreadShim.h"
 #include "Queries.h"
 #include "Random.h"
 #include "Schema.h"
@@ -28,9 +29,12 @@ limitations under the License.
 
 #include <atomic>
 #include <err.h>
+#include <fstream>
 #include <getopt.h>
+#include <iostream>
 #include <pthread.h>
 #include <sql.h>
+#include <sqlext.h>
 #include <sqltypes.h>
 #include <string.h>
 #include <unistd.h>
@@ -51,15 +55,15 @@ typedef struct {
 } threadParameters;
 
 static void* analyticalThread(void* args) {
-    auto prm = (threadParameters*) args;
-    auto aStat = (AnalyticalStatistic*) prm->stat;
+    threadParameters* prm = (threadParameters*) args;
+    AnalyticalStatistic* aStat = (AnalyticalStatistic*) prm->stat;
 
     bool b;
-    int query = 0;
+    long query = 0;
     int q = 0;
 
-    Queries queries;
-    if (!queries.prepareStatements(prm->hDBC)) {
+    Queries* queries = new Queries();
+    if (!queries->prepareStatements(prm->hDBC)) {
         exit(1);
     }
 
@@ -72,7 +76,7 @@ static void* analyticalThread(void* args) {
 
         Log::l1() << Log::tm() << "-analytical " << prm->threadId << ": TPC-H "
                   << q << "\n";
-        queries.executeTPCH(q);
+        queries->executeTPCH(q);
         query++;
     }
 
@@ -83,21 +87,21 @@ static void* analyticalThread(void* args) {
 
         Log::l1() << Log::tm() << "-analytical " << prm->threadId << ": TPC-H "
                   << q << "\n";
-        b = queries.executeTPCH(q);
+        b = queries->executeTPCH(q);
         aStat->executeTPCHSuccess(q, b);
         query++;
     }
 
     Log::l1() << Log::tm() << "-analytical " << prm->threadId << ": exit\n";
-    return nullptr;
+    return NULL;
 }
 
 static void* transactionalThread(void* args) {
     threadParameters* prm = (threadParameters*) args;
     TransactionalStatistic* tStat = (TransactionalStatistic*) prm->stat;
 
-    Transactions transactions {prm->warehouseCount};
-    if (!transactions.prepareStatements(prm->hDBC)) {
+    Transactions* transactions = new Transactions(prm->warehouseCount);
+    if (!transactions->prepareStatements(prm->hDBC)) {
         exit(1);
     }
 
@@ -115,31 +119,31 @@ static void* transactionalThread(void* args) {
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
-                transactions.executeNewOrder(prm->hDBC);
+                transactions->executeNewOrder(prm->hDBC);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
-                transactions.executePayment(prm->hDBC);
+                transactions->executePayment(prm->hDBC);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 4) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": OrderStatus\n";
-                transactions.executeOrderStatus(prm->hDBC);
+                transactions->executeOrderStatus(prm->hDBC);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 4) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
-                transactions.executeDelivery(prm->hDBC);
+                transactions->executeDelivery(prm->hDBC);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 4) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": StockLevel\n";
-                transactions.executeStockLevel(prm->hDBC);
+                transactions->executeStockLevel(prm->hDBC);
             }
         }
 
@@ -150,42 +154,42 @@ static void* transactionalThread(void* args) {
             if (decision <= 44 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
-                b = transactions.executeNewOrder(prm->hDBC);
+                b = transactions->executeNewOrder(prm->hDBC);
                 tStat->executeTPCCSuccess(1, b);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 44 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Payment\n";
-                b = transactions.executePayment(prm->hDBC);
+                b = transactions->executePayment(prm->hDBC);
                 tStat->executeTPCCSuccess(2, b);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 4 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": OrderStatus\n";
-                b = transactions.executeOrderStatus(prm->hDBC);
+                b = transactions->executeOrderStatus(prm->hDBC);
                 tStat->executeTPCCSuccess(3, b);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 4 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": Delivery\n";
-                b = transactions.executeDelivery(prm->hDBC);
+                b = transactions->executeDelivery(prm->hDBC);
                 tStat->executeTPCCSuccess(4, b);
             }
             decision = chRandom::uniformInt(1, 100);
             if (decision <= 4 && prm->runState == RunState::run) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": StockLevel\n";
-                b = transactions.executeStockLevel(prm->hDBC);
+                b = transactions->executeStockLevel(prm->hDBC);
                 tStat->executeTPCCSuccess(5, b);
             }
         }
     }
 
     Log::l1() << Log::tm() << "-transactional " << prm->threadId << ": exit\n";
-    return nullptr;
+    return NULL;
 }
 
 static int parseInt(const char* context, const char* v) {
@@ -235,15 +239,15 @@ static int run(int argc, char* argv[]) {
         {nullptr, 0, nullptr, 0}};
 
     int c;
-    const char* dsn = nullptr;
-    const char* username = nullptr;
-    const char* password = nullptr;
+    const char* dsn = NULL;
+    const char* username = NULL;
+    const char* password = NULL;
     int analyticThreads = 5;
     int transactionalThreads = 10;
     int warmupSeconds = 0;
     int runSeconds = 10;
     std::string genDir = "gen";
-    const char* logFile = nullptr;
+    const char* logFile = NULL;
     while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:", longOpts,
                             nullptr)) != -1) {
         switch (c) {
@@ -352,7 +356,7 @@ static int run(int argc, char* argv[]) {
     std::atomic<RunState> runState = RunState::off;
     unsigned int count = analyticThreads + transactionalThreads + 1;
     pthread_barrier_t barStart;
-    pthread_barrier_init(&barStart, nullptr, count);
+    pthread_barrier_init(&barStart, NULL, count);
 
     // start analytical threads and create a statistic object for each
     // thread
@@ -367,7 +371,7 @@ static int run(int argc, char* argv[]) {
         if (!DbcTools::connect(hEnv, aprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
-        pthread_create(&apt[i], nullptr, analyticalThread, &aprm[i]);
+        pthread_create(&apt[i], NULL, analyticalThread, &aprm[i]);
     }
 
     // start transactional threads and create a statistic object for each
@@ -383,7 +387,7 @@ static int run(int argc, char* argv[]) {
         if (!DbcTools::connect(hEnv, tprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
-        pthread_create(&tpt[i], nullptr, transactionalThread, &tprm[i]);
+        pthread_create(&tpt[i], NULL, transactionalThread, &tprm[i]);
     }
 
     runState = RunState::warmup;
@@ -429,10 +433,10 @@ static int run(int argc, char* argv[]) {
     Log::l2() << Log::tm()
               << "Wait for clients to return from database calls:\n";
     for (int i = 0; i < analyticThreads; i++) {
-        pthread_join(apt[i], nullptr);
+        pthread_join(apt[i], NULL);
     }
     for (int i = 0; i < transactionalThreads; i++) {
-        pthread_join(tpt[i], nullptr);
+        pthread_join(tpt[i], NULL);
     }
 
     Log::l2() << Log::tm() << "-finished\n";
@@ -493,7 +497,7 @@ static int gen(int argc, char* argv[]) {
             int nextOlCount = -1;
             for (int cId = 1; cId <= 3000; cId++) {
                 // Customer
-                if (customerTime.empty())
+                if (customerTime == "")
                     customerTime = DataSource::getCurrentTimeString();
                 TupleGen::genCustomer(cId, dId, wId, customerTime);
 
