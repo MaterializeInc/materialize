@@ -347,7 +347,8 @@ fn parse_describe(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?.to_string();
     match first_char {
         b'S' => Ok(FrontendMessage::DescribeStatement { name }),
-        b'P' => Err(unsupported_err("Cannot handle Describe Portal")),
+        b'P' => Ok(FrontendMessage::DescribePortal { name }),
+        // Err(unsupported_err("Cannot handle Describe Portal")),
         other => Err(input_err(format!("Invalid describe type: {:#x?}", other))),
     }
 }

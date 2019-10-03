@@ -60,8 +60,12 @@ pub enum FrontendMessage {
         parameter_data_type_count: u16,
         parameter_data_types: Vec<u32>,
     },
-    /// Describe a statement by name during an extended query
+    /// Describe a statement by name during an extended query.
     DescribeStatement {
+        name: String,
+    },
+    /// Describe a portal by name during an extended query.
+    DescribePortal {
         name: String,
     },
     /// Connect the Prepared statement from `Parse` to a `Portal`
@@ -218,6 +222,10 @@ impl Iterator for FieldFormatIter {
     type Item = FieldFormat;
     fn next(&mut self) -> Option<Self::Item> {
         Some(match &mut self.formats {
+            Some(values) if values.is_empty() => {
+                log::trace!("Empty field formatter; using default field format.");
+                FieldFormat::Text
+            }
             Some(values) if values.len() == 1 => values[0],
             Some(values) => {
                 self.idx += 1;
