@@ -461,7 +461,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
 
     int y = chRandom::uniformInt(1, 100);
     int cId = 0;
-    std::string cLast = cLast;
+    std::string cLast;
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {
@@ -485,7 +485,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::rollback(hDBC);
         return false;
     }
-    std::string wName = wName;
+    std::string wName;
     if (!DbcTools::fetch(pmWarehouseSelect, buf, &nIdicator, 1, wName)) {
         DbcTools::rollback(hDBC);
         return false;
@@ -506,7 +506,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
         DbcTools::rollback(hDBC);
         return false;
     }
-    std::string dName = dName;
+    std::string dName;
     if (!DbcTools::fetch(pmDistrictSelect, buf, &nIdicator, 1, dName)) {
         DbcTools::rollback(hDBC);
         return false;
@@ -608,7 +608,7 @@ bool Transactions::executePayment(SQLHDBC& hDBC) {
             DbcTools::rollback(hDBC);
             return false;
         }
-        std::string cData = cData;
+        std::string cData;
         if (!DbcTools::fetch(pmCustomerSelect4, buf, &nIdicator, 1, cData)) {
             DbcTools::rollback(hDBC);
             return false;
@@ -667,7 +667,7 @@ bool Transactions::executeOrderStatus(SQLHDBC& hDBC) {
     int dId = chRandom::uniformInt(1, 10);
     int y = chRandom::uniformInt(1, 100);
     int cId = 0;
-    std::string cLast = cLast;
+    std::string cLast;
     if (y <= 60) {
         DataSource::randomCLast(cLast);
     } else {
