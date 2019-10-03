@@ -545,6 +545,8 @@ fn build_source(
         None => Vec::new(),
     };
 
+    let typ = typ.add_keys(pkey_indices);
+
     Ok(Source {
         name,
         connector: SourceConnector::Kafka(KafkaSourceConnector {
@@ -554,7 +556,6 @@ fn build_source(
             schema_registry_url,
         }),
         typ,
-        pkey_indices,
     })
 }
 

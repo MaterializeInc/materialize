@@ -107,80 +107,69 @@ impl LogVariant {
     }
     pub fn schema(&self) -> RelationType {
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::Int64).name("address_slot"),
-                    ColumnType::new(ScalarType::Int64).name("address_value"),
-                    ColumnType::new(ScalarType::String).name("name"),
-                ],
-            },
-            LogVariant::Timely(TimelyLog::Channels) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::String).name("scope"),
-                    ColumnType::new(ScalarType::Int64).name("source_node"),
-                    ColumnType::new(ScalarType::Int64).name("source_port"),
-                    ColumnType::new(ScalarType::Int64).name("target_node"),
-                    ColumnType::new(ScalarType::Int64).name("target_port"),
-                ],
-            },
-            LogVariant::Timely(TimelyLog::Messages) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("channel"),
-                    ColumnType::new(ScalarType::Int64).name("count"),
-                ],
-            },
-            LogVariant::Timely(TimelyLog::Shutdown) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                ],
-            },
-            LogVariant::Timely(TimelyLog::Text) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("text"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                ],
-            },
-            LogVariant::Timely(TimelyLog::Elapsed) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("elapsed_ns"),
-                ],
-            },
-            LogVariant::Timely(TimelyLog::Histogram) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("id"),
-                    ColumnType::new(ScalarType::Int64).name("duration_ns"),
-                    ColumnType::new(ScalarType::Int64).name("count"),
-                ],
-            },
-            LogVariant::Differential(DifferentialLog::Arrangement) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("operator"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::Int64).name("records"),
-                    ColumnType::new(ScalarType::Int64).name("batches"),
-                ],
-            },
-            LogVariant::Differential(DifferentialLog::Sharing) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::Int64).name("operator"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                    ColumnType::new(ScalarType::Int64).name("count"),
-                ],
-            },
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("name"),
-                    ColumnType::new(ScalarType::Int64).name("worker"),
-                ],
-            },
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationType {
-                column_types: vec![
+            LogVariant::Timely(TimelyLog::Operates) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("id"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+                ColumnType::new(ScalarType::Int64).name("address_slot"),
+                ColumnType::new(ScalarType::Int64).name("address_value"),
+                ColumnType::new(ScalarType::String).name("name"),
+            ])
+            .add_keys(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Channels) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("id"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+                ColumnType::new(ScalarType::String).name("scope"),
+                ColumnType::new(ScalarType::Int64).name("source_node"),
+                ColumnType::new(ScalarType::Int64).name("source_port"),
+                ColumnType::new(ScalarType::Int64).name("target_node"),
+                ColumnType::new(ScalarType::Int64).name("target_port"),
+            ])
+            .add_keys(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Messages) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("channel"),
+                ColumnType::new(ScalarType::Int64).name("count"),
+            ])
+            .add_keys(vec![0]),
+            LogVariant::Timely(TimelyLog::Shutdown) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("id"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+            ])
+            .add_keys(vec![0, 1]),
+            LogVariant::Timely(TimelyLog::Text) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("text"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+            ]),
+            LogVariant::Timely(TimelyLog::Elapsed) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("id"),
+                ColumnType::new(ScalarType::Int64).name("elapsed_ns"),
+            ])
+            .add_keys(vec![0]),
+            LogVariant::Timely(TimelyLog::Histogram) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("id"),
+                ColumnType::new(ScalarType::Int64).name("duration_ns"),
+                ColumnType::new(ScalarType::Int64).name("count"),
+            ])
+            .add_keys(vec![0]),
+            LogVariant::Differential(DifferentialLog::Arrangement) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("operator"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+                ColumnType::new(ScalarType::Int64).name("records"),
+                ColumnType::new(ScalarType::Int64).name("batches"),
+            ])
+            .add_keys(vec![0, 1]),
+            LogVariant::Differential(DifferentialLog::Sharing) => RelationType::new(vec![
+                ColumnType::new(ScalarType::Int64).name("operator"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+                ColumnType::new(ScalarType::Int64).name("count"),
+            ])
+            .add_keys(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationType::new(vec![
+                ColumnType::new(ScalarType::String).name("name"),
+                ColumnType::new(ScalarType::Int64).name("worker"),
+            ])
+            .add_keys(vec![0, 1]),
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
+                RelationType::new(vec![
                     ColumnType::new(ScalarType::String).name("dataflow"),
                     ColumnType::new(ScalarType::String).name("source"),
                     ColumnType::new(ScalarType::Int64).name("worker"),
@@ -195,31 +184,14 @@ impl LogVariant {
                 ColumnType::new(ScalarType::Int64).name("worker"),
                 ColumnType::new(ScalarType::String).name("name"),
                 ColumnType::new(ScalarType::Int64).name("time"),
-            ]),
+            ])
+            .add_keys(vec![0, 1]),
             LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationType::new(vec![
                 ColumnType::new(ScalarType::Int64).name("worker"),
                 ColumnType::new(ScalarType::Int64).name("duration_ns"),
                 ColumnType::new(ScalarType::Int64).name("count"),
-            ]),
-        }
-    }
-    /// Reports the primary keys for each logged collection.
-    pub fn primary_key(&self) -> Option<Vec<usize>> {
-        match self {
-            LogVariant::Timely(TimelyLog::Operates) => Some(vec![0, 1]),
-            LogVariant::Timely(TimelyLog::Channels) => Some(vec![0, 1]),
-            LogVariant::Timely(TimelyLog::Messages) => Some(vec![0]),
-            LogVariant::Timely(TimelyLog::Shutdown) => Some(vec![0, 1]),
-            LogVariant::Timely(TimelyLog::Text) => None,
-            LogVariant::Timely(TimelyLog::Elapsed) => Some(vec![0]),
-            LogVariant::Timely(TimelyLog::Histogram) => Some(vec![0]),
-            LogVariant::Differential(DifferentialLog::Arrangement) => Some(vec![0, 1]),
-            LogVariant::Differential(DifferentialLog::Sharing) => Some(vec![0, 1]),
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => Some(vec![0, 1]),
-            LogVariant::Materialized(MaterializedLog::DataflowDependency) => None,
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => None,
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => Some(vec![0, 1]),
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => Some(vec![0, 1]),
+            ])
+            .add_keys(vec![0, 1]),
         }
     }
 }

@@ -88,7 +88,7 @@ pub struct RelationType {
     ///
     /// A collection can contain multiple sets of keys, although it is common to have
     /// either zero or one sets of key indices.
-    pub primary_keys: Vec<Vec<usize>>,
+    pub keys: Vec<Vec<usize>>,
 }
 
 impl RelationType {
@@ -96,14 +96,15 @@ impl RelationType {
     pub fn new(column_types: Vec<ColumnType>) -> Self {
         RelationType {
             column_types,
-            primary_keys: Vec::new(),
+            keys: Vec::new(),
         }
     }
     /// Adds a set of indices as keys for the colleciton.
-    pub fn add_keys(&mut self, mut indices: Vec<usize>) {
+    pub fn add_keys(mut self, mut indices: Vec<usize>) -> Self {
         indices.sort();
-        if !self.primary_keys.contains(&indices) {
-            self.primary_keys.push(indices);
+        if !self.keys.contains(&indices) {
+            self.keys.push(indices);
         }
+        self
     }
 }

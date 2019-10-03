@@ -207,13 +207,8 @@ where
                     );
                 }
 
-<<<<<<< HEAD
                 let typ = RelationType {
                     column_types: finishing
-=======
-                let typ = RelationType::new(
-                    transform
->>>>>>> introduce primary keys; use constructor
                         .project
                         .iter()
                         .map(|i| typ.column_types[*i].clone())

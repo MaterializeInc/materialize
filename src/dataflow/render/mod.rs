@@ -69,22 +69,19 @@ pub fn build_dataflow<A: Allocate>(
                 WithDrop::new(arrangement_by_self.trace, capability.clone()),
             );
 
-            let pkey_indices_clone = src.pkey_indices.clone();
-            let arrangement_by_key = stream
-                .as_collection()
-                .map(move |x| {
-                    (
-                        pkey_indices_clone.iter().map(|i| x[*i].clone()).collect(),
-                        x,
-                    )
-                })
-                .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
+            for keys in src.typ.keys.iter() {
+                let keys_clone = keys.clone();
+                let arrangement_by_key = stream
+                    .as_collection()
+                    .map(move |x| (keys_clone.iter().map(|i| x[*i].clone()).collect(), x))
+                    .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
 
-            manager.set_by_keys(
-                src.name.to_owned(),
-                &src.pkey_indices,
-                WithDrop::new(arrangement_by_key.trace, capability),
-            );
+                manager.set_by_keys(
+                    src.name.to_owned(),
+                    &keys[..],
+                    WithDrop::new(arrangement_by_key.trace, capability.clone()),
+                );
+            }
         }
         Dataflow::Sink(sink) => {
             // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
