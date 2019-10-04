@@ -17,19 +17,24 @@ IMAGES=(
 )
 
 main() {
-    if [[ $# -ne 1 ]]; then
+    if [[ $# -lt 1 ]]; then
         usage
     fi
     local arg=$1 && shift
     case "$arg" in
         up) bring_up ;;
         down) shut_down ;;
+        restart)
+            if [[ $# -ne 1 ]]; then
+                usage
+            fi
+            restart "$@" ;;
         *) usage ;;
     esac
 }
 
 usage() {
-    die "usage: $0 <up|down>"
+    die "usage: $0 <up|down|restart (SERVICE|all)>"
 }
 
 dc_up() {
@@ -55,6 +60,17 @@ bring_up() {
 
 shut_down() {
     run docker-compose down
+}
+
+restart() {
+    local service="$1" && shift
+    if [[ $service != all ]]; then
+        runv docker-compose stop "$service"
+        dc_up "$service"
+    else
+        shut_down
+        bring_up
+    fi
 }
 
 main "$@"
