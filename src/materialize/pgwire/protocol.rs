@@ -148,6 +148,7 @@ pub enum StateMachine<A: Conn + 'static> {
         SendError,
         SendParseComplete,
         SendReadyForQuery,
+        SendDescribeResponse,
         HandleBind,
         Error,
         Done
@@ -179,6 +180,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(
         HandleExtendedQuery,
         SendReadyForQuery,
+        HandleBind,
         SendDescribeResponse,
         SendError,
         Error,
@@ -206,6 +208,7 @@ pub enum StateMachine<A: Conn + 'static> {
         send: SinkSend<A>,
         session: Session,
         name: String,
+        is_statement: bool, // true if a statement, false if a portal.
     },
 
     #[state_machine_future(transitions(RecvExtendedQuery, Error))]
@@ -450,6 +453,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 statement_name,
                 return_field_formats,
             }),
+            FrontendMessage::DescribePortal { name } => transition!(SendDescribeResponse {
+                send: conn.send(BackendMessage::ParameterDescription),
+                session: state.session,
+                name,
+                is_statement: false,
+            }),
             FrontendMessage::Execute { portal_name } => {
                 let (tx, rx) = futures::sync::oneshot::channel();
                 let field_formats = state
@@ -578,7 +587,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_recv_extended_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvExtendedQuery<A>>,
-        _context: &'c mut RentToOwn<'c, Context>,
+        context: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvExtendedQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         trace!("recv query extended: {:?}", msg);
@@ -588,7 +597,41 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 send: conn.send(BackendMessage::ParameterDescription),
                 session: state.session,
                 name,
+                is_statement: true,
             }),
+            FrontendMessage::Bind {
+                portal_name,
+                statement_name,
+                return_field_formats,
+            } => transition!(HandleBind {
+                send: conn.send(BackendMessage::BindComplete),
+                session: state.session,
+                portal_name,
+                statement_name,
+                return_field_formats,
+            }),
+            FrontendMessage::Execute { portal_name } => {
+                let (tx, rx) = futures::sync::oneshot::channel();
+                let field_formats = state
+                    .session
+                    .get_portal(&portal_name)
+                    .ok_or_else(|| failure::format_err!("portal {:?} does not exist", portal_name))?
+                    .return_field_formats
+                    .iter()
+                    .map(FieldFormat::from)
+                    .collect();
+                context.cmdq_tx.unbounded_send(coord::Command {
+                    kind: coord::CommandKind::Execute { portal_name },
+                    session: state.session,
+                    conn_id: context.conn_id,
+                    tx,
+                })?;
+                transition!(HandleExtendedQuery {
+                    rx,
+                    conn,
+                    field_formats: Some(field_formats)
+                })
+            }
             FrontendMessage::Sync => transition!(SendReadyForQuery {
                 send: conn.send(BackendMessage::ReadyForQuery),
                 session: state.session,
@@ -667,7 +710,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         trace!("send describe response for statement={:?}", state.name);
-        match state.session.get_prepared_statement(&state.name) {
+        let statement = if state.is_statement {
+            state.session.get_prepared_statement(&state.name)
+        } else {
+            let name = &state
+                .session
+                .get_portal(&state.name)
+                .ok_or_else(|| failure::format_err!("Portal does not exist: {:?}", state.name))?
+                .statement_name;
+            state.session.get_prepared_statement(&name)
+        };
+        match statement {
             Some(ps) => {
                 let typ = ps.source().typ();
                 let desc = super::message::row_description_from_type(&typ);
