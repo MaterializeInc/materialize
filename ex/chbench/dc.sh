@@ -5,10 +5,17 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
-set -ueo pipefail
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+. ../../misc/shlib/shlib.bash
 
 main() {
-    local arg=${1-} && shift
+    if [[ $# -ne 1 ]]; then
+        usage
+    fi
+    local arg=$1 && shift
     case "$arg" in
         up) bring_up ;;
         down) shut_down ;;
@@ -16,8 +23,12 @@ main() {
     esac
 }
 
+usage() {
+    die "usage: $0 <up|down>"
+}
+
 dc_up() {
-    docker-compose up -d --build "$@"
+    run docker-compose up -d --build "$@"
 }
 
 bring_up() {
@@ -35,7 +46,7 @@ bring_up() {
 }
 
 shut_down() {
-    docker-compose down
+    run docker-compose down
 }
 
 main "$@"

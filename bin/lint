@@ -55,7 +55,7 @@ shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -
 
 try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
 try xargs misc/lint/trailing-newline.sh <<< "$newline_files"
-try xargs shellcheck <<< "$shell_files"
+try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"
 
 if $failed; then
     exit 1
