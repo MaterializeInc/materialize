@@ -6,7 +6,7 @@
 version: '3.7'
 services:
   materialized:
-    image: materialize/materialized:unstable-b7db1344db4b21bb8c16773a3bc7a12152c23d14
+    image: materialize/materialized:latest
     init: true
     command: -w1
   mysql:

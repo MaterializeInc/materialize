@@ -35,6 +35,7 @@ lazy_static = "1.4.0"
 log = "0.4"
 ore = { path = "../ore" }
 parse_duration = "2.0.1"
+prometheus = { version = "0.7.0", default-features = false, features = ["process"] }
 rand = "0.7"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
@@ -42,7 +43,6 @@ state_machine_future = { git = "https://github.com/benesch/state_machine_future.
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.1"
 tokio-threadpool = "0.1"
-prometheus = { version = "0.7.0", default-features = false }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"

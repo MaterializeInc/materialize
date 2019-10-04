@@ -11,27 +11,40 @@ cd "$(dirname "$0")"
 
 . ../../misc/shlib/shlib.bash
 
+IMAGES=(
+    materialize/materialized:latest
+    materialize/metrics:latest
+)
+
 main() {
-    if [[ $# -ne 1 ]]; then
+    if [[ $# -lt 1 ]]; then
         usage
     fi
     local arg=$1 && shift
     case "$arg" in
         up) bring_up ;;
         down) shut_down ;;
+        restart)
+            if [[ $# -ne 1 ]]; then
+                usage
+            fi
+            restart "$@" ;;
         *) usage ;;
     esac
 }
 
 usage() {
-    die "usage: $0 <up|down>"
+    die "usage: $0 <up|down|restart (SERVICE|all)>"
 }
 
 dc_up() {
-    run docker-compose up -d --build "$@"
+    runv docker-compose up -d --build "$@"
 }
 
 bring_up() {
+    for image in "${IMAGES[@]}"; do
+        runv docker pull "$image"
+    done
     dc_up materialized mysql
     docker-compose logs materialized | tail -n 5
     echo "Waiting for mysql to come up"
@@ -47,6 +60,17 @@ bring_up() {
 
 shut_down() {
     run docker-compose down
+}
+
+restart() {
+    local service="$1" && shift
+    if [[ $service != all ]]; then
+        runv docker-compose stop "$service"
+        dc_up "$service"
+    else
+        shut_down
+        bring_up
+    fi
 }
 
 main "$@"
