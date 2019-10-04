@@ -39,7 +39,10 @@ fn measure_peek_times() -> ! {
             let output = run(&command);
             match output {
                 Ok(output) => sender.send(output).unwrap(),
-                Err(error) => println!("Hit error running PEEK: {:#?}", error),
+                Err(error) => {
+                    println!("Hit error running PEEK: {:#?}", error);
+                    init();
+                }
             }
         }
     });
