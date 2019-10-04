@@ -321,7 +321,8 @@ impl fmt::Display for Decimal {
                 buf.push('0');
             }
         }
-        f.pad_integral(self.significand >= 0, "", &buf)
+        let nonneg = self.significand >= 0 || (ip == 0 && desired_scale == 0);
+        f.pad_integral(nonneg, "", &buf)
     }
 }
 
@@ -351,6 +352,7 @@ mod tests {
 
         assert_eq!(format!("{}", Significand::new(0).with_scale(0)), "0");
         assert_eq!(format!("{}", Significand::new(0).with_scale(5)), "0.00000");
+        assert_eq!(format!("{:.0}", Significand::new(-10).with_scale(5)), "0");
         assert_eq!(format!("{}", Significand::new(42).with_scale(0)), "42");
         assert_eq!(format!("{}", Significand::new(70).with_scale(2)), "0.70");
         assert_eq!(format!("{}", Significand::new(7).with_scale(2)), "0.07");
