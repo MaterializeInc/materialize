@@ -11,6 +11,11 @@ cd "$(dirname "$0")"
 
 . ../../misc/shlib/shlib.bash
 
+IMAGES=(
+    materialize/materialized:latest
+    materialize/metrics:latest
+)
+
 main() {
     if [[ $# -ne 1 ]]; then
         usage
@@ -28,10 +33,13 @@ usage() {
 }
 
 dc_up() {
-    run docker-compose up -d --build "$@"
+    runv docker-compose up -d --build "$@"
 }
 
 bring_up() {
+    for image in "${IMAGES[@]}"; do
+        runv docker pull "$image"
+    done
     dc_up materialized mysql
     docker-compose logs materialized | tail -n 5
     echo "Waiting for mysql to come up"
