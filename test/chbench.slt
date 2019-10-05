@@ -1777,9 +1777,7 @@ Project {
           Join {
             variables: [],
             Union {
-              Negate {
-                Distinct { group_key: [0 .. 46], Get { id-3 } }
-              },
+              Negate { Project { outputs: [0 .. 46], Get { id-3 } } },
               Get { id-2 }
             },
             Constant [[false]]
@@ -2010,7 +2008,7 @@ Project {
               variables: [],
               Union {
                 Negate {
-                  Distinct { group_key: [0 .. 22], Get { id-5 } }
+                  Project { outputs: [0 .. 22], Get { id-5 } }
                 },
                 Get { id-4 }
               },
