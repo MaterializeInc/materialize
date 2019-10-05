@@ -569,7 +569,7 @@ Union {
   Join {
     variables: [],
     Union {
-      Negate { Distinct { group_key: [], Get { id-1 } } },
+      Negate { Project { outputs: [], Get { id-1 } } },
       Constant [[]]
     },
     Constant [[null]]
@@ -809,7 +809,7 @@ Let {
         Join {
           variables: [],
           Union {
-            Negate { Distinct { group_key: [0, 1], Get { id-3 } } },
+            Negate { Project { outputs: [0, 1], Get { id-3 } } },
             Get { id-2 }
           },
           Constant [[null]]
@@ -921,7 +921,7 @@ Let {
         Join {
           variables: [],
           Union {
-            Negate { Distinct { group_key: [0, 1], Get { id-3 } } },
+            Negate { Project { outputs: [0, 1], Get { id-3 } } },
             Get { id-2 }
           },
           Constant [[null]]
@@ -1124,7 +1124,7 @@ Project {
       Join {
         variables: [],
         Union {
-          Negate { Distinct { group_key: [], Get { id-1 } } },
+          Negate { Project { outputs: [], Get { id-1 } } },
           Constant [[]]
         },
         Constant [[null, null]]
@@ -1341,7 +1341,7 @@ Project {
                 variables: [],
                 Union {
                   Negate {
-                    Distinct { group_key: [0 .. 22], Get { id-3 } }
+                    Project { outputs: [0 .. 22], Get { id-3 } }
                   },
                   Get { id-2 }
                 },
@@ -1422,7 +1422,7 @@ Project {
       Join {
         variables: [],
         Union {
-          Negate { Distinct { group_key: [], Get { id-1 } } },
+          Negate { Project { outputs: [], Get { id-1 } } },
           Constant [[]]
         },
         Constant [[null]]
@@ -1564,7 +1564,7 @@ Union {
   Join {
     variables: [],
     Union {
-      Negate { Distinct { group_key: [], Get { id-1 } } },
+      Negate { Project { outputs: [], Get { id-1 } } },
       Constant [[]]
     },
     Constant [[null]]
@@ -1970,9 +1970,7 @@ Let {
         Join {
           variables: [],
           Union {
-            Negate {
-              Distinct { group_key: [0 .. 21], Get { id-2 } }
-            },
+            Negate { Project { outputs: [0 .. 21], Get { id-2 } } },
             Get { id-1 }
           },
           Constant [[null, 0]]
