@@ -764,9 +764,8 @@ Let {
     }
   }
 } in
-Let { id-2 = Distinct { group_key: [0, 1], Get { id-1 } } } in
 Let {
-  id-3 = Reduce {
+  id-2 = Reduce {
     group_key: [0, 1],
     aggregates: [sum(#16)],
     Project {
@@ -785,32 +784,32 @@ Let {
               outputs: [0, 1, 11 .. 28, 2 .. 10],
               Join {
                 variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]],
-                Get { id-2 },
-                Get { id-2 },
+                Get { id-1 },
+                Get { id-1 },
                 Get { supplier },
                 Get { stock }
               }
             }
           }
         },
-        Get { id-2 },
+        Get { id-1 },
         Filter { predicates: [#1 = "GERMANY"], Get { nation } }
       }
     }
   }
 } in
 Let {
-  id-4 = Project {
+  id-3 = Project {
     outputs: [0, 1, 3],
     Map {
       scalars: [(i32todec #2 * 1000dec) * 5dec],
       Union {
-        Get { id-3 },
+        Get { id-2 },
         Join {
           variables: [],
           Union {
-            Negate { Project { outputs: [0, 1], Get { id-3 } } },
-            Get { id-2 }
+            Negate { Project { outputs: [0, 1], Get { id-2 } } },
+            Get { id-1 }
           },
           Constant [[null]]
         }
@@ -826,12 +825,12 @@ Project {
       variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]],
       Get { id-1 },
       Union {
-        Get { id-4 },
+        Get { id-3 },
         Join {
           variables: [],
           Union {
-            Negate { Distinct { group_key: [0, 1], Get { id-4 } } },
-            Get { id-2 }
+            Negate { Distinct { group_key: [0, 1], Get { id-3 } } },
+            Get { id-1 }
           },
           Constant [[null]]
         }
@@ -876,9 +875,8 @@ Let {
     }
   }
 } in
-Let { id-2 = Distinct { group_key: [0, 1], Get { id-1 } } } in
 Let {
-  id-3 = Reduce {
+  id-2 = Reduce {
     group_key: [0, 1],
     aggregates: [sum(#16)],
     Project {
@@ -897,32 +895,32 @@ Let {
               outputs: [0, 1, 11 .. 28, 2 .. 10],
               Join {
                 variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]],
-                Get { id-2 },
-                Get { id-2 },
+                Get { id-1 },
+                Get { id-1 },
                 Get { supplier },
                 Get { stock }
               }
             }
           }
         },
-        Get { id-2 },
+        Get { id-1 },
         Filter { predicates: [#1 = "GERMANY"], Get { nation } }
       }
     }
   }
 } in
 Let {
-  id-4 = Project {
+  id-3 = Project {
     outputs: [0, 1, 3],
     Map {
       scalars: [(i32todec #2 * 1000dec) * 5dec],
       Union {
-        Get { id-3 },
+        Get { id-2 },
         Join {
           variables: [],
           Union {
-            Negate { Project { outputs: [0, 1], Get { id-3 } } },
-            Get { id-2 }
+            Negate { Project { outputs: [0, 1], Get { id-2 } } },
+            Get { id-1 }
           },
           Constant [[null]]
         }
@@ -938,12 +936,12 @@ Project {
       variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]],
       Get { id-1 },
       Union {
-        Get { id-4 },
+        Get { id-3 },
         Join {
           variables: [],
           Union {
-            Negate { Distinct { group_key: [0, 1], Get { id-4 } } },
-            Get { id-2 }
+            Negate { Distinct { group_key: [0, 1], Get { id-3 } } },
+            Get { id-1 }
           },
           Constant [[null]]
         }

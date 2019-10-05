@@ -187,7 +187,7 @@ impl RelationExpr {
                 for (_, column_typ) in aggregates {
                     column_types.push(column_typ.clone());
                 }
-                RelationType::new(column_types).add_keys(group_key.clone())
+                RelationType::new(column_types).add_keys((0..group_key.len()).collect())
             }
             RelationExpr::TopK { input, .. } => input.typ(),
             RelationExpr::Negate { input } => input.typ(),
