@@ -5,6 +5,9 @@
 
 #![deny(missing_docs)]
 
+// Clippy is wrong.
+#![allow(clippy::op_ref, clippy::len_zero)]
+
 pub mod func;
 
 use self::func::AggregateFunc;
