@@ -207,8 +207,8 @@ where
                     );
                 }
 
-                let typ = RelationType {
-                    column_types: finishing
+                let typ = RelationType::new(
+                    finishing
                         .project
                         .iter()
                         .map(|i| typ.column_types[*i].clone())
