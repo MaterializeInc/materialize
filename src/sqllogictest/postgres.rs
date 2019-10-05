@@ -84,13 +84,18 @@ END $$;
         parsed: &Statement,
     ) -> Result<Outcome, failure::Error> {
         Ok(match parsed {
-            Statement::CreateTable { name, columns, .. } => {
+            Statement::CreateTable {
+                name,
+                columns,
+                constraints,
+                ..
+            } => {
                 self.client.execute(sql, &[])?;
                 let sql_types = columns
                     .iter()
                     .map(|column| column.data_type.clone())
                     .collect::<Vec<_>>();
-                let typ = RelationType::new(
+                let mut typ = RelationType::new(
                     columns
                         .iter()
                         .map(|column| {
@@ -105,6 +110,34 @@ END $$;
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
                 );
+
+                for constraint in constraints {
+                    use sqlparser::ast::TableConstraint;
+                    if let TableConstraint::Unique {
+                        name: _,
+                        columns: cols,
+                        is_primary,
+                    } = constraint
+                    {
+                        let keys = cols
+                            .iter()
+                            .map(|ident| {
+                                columns
+                                    .iter()
+                                    .position(|c| ident == &c.name)
+                                    .expect("Column named in UNIQUE constraint not found")
+                            })
+                            .collect::<Vec<_>>();
+
+                        if *is_primary {
+                            for key in keys.iter() {
+                                typ.column_types[*key].set_nullable(false);
+                            }
+                        }
+                        typ = typ.add_keys(keys);
+                    }
+                }
+
                 self.table_types
                     .insert(name.to_string(), (sql_types, typ.clone()));
                 Outcome::Created(name.to_string(), typ)
