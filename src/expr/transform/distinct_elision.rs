@@ -23,15 +23,25 @@ impl DistinctElision {
         });
     }
     pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
-        if let RelationExpr::Reduce { input, group_key, aggregates } = relation {
+        if let RelationExpr::Reduce {
+            input,
+            group_key,
+            aggregates,
+        } = relation
+        {
             if aggregates.is_empty() {
                 let input_typ = input.typ();
-                if input_typ.keys.iter().any(|keys| keys.iter().all(|k| group_key.contains(k))) {
+                if input_typ
+                    .keys
+                    .iter()
+                    .any(|keys| keys.iter().all(|k| group_key.contains(k)))
+                {
                     // We may require a project.
-                    if group_key.len() == input_typ.column_types.len() && group_key.iter().enumerate().all(|(x,y)| x == *y) {
+                    if group_key.len() == input_typ.column_types.len()
+                        && group_key.iter().enumerate().all(|(x, y)| x == *y)
+                    {
                         *relation = input.take();
-                    }
-                    else {
+                    } else {
                         *relation = input.take().project(group_key.clone());
                     }
                 }

@@ -10,11 +10,11 @@ use repr::RelationType;
 
 pub mod aggregation;
 pub mod binding;
+pub mod distinct_elision;
 pub mod empty_map;
 pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
-pub mod distinct_elision;
 pub mod join_order;
 pub mod nonnullable;
 pub mod predicate_pushdown;

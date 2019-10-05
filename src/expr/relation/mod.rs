@@ -146,8 +146,7 @@ impl RelationExpr {
             RelationExpr::Let { body, .. } => body.typ(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ();
-                let mut output_typ =
-                RelationType::new(
+                let mut output_typ = RelationType::new(
                     outputs
                         .iter()
                         .map(|&i| input_typ.column_types[i].clone())
