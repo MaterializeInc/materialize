@@ -36,7 +36,7 @@ distributed without the express permission of Materialize, Inc.
             <th>Parse failure</th>
             <th>Plan failure</th>
             <th>Unexpected plan success</th>
-            <th>Wrong number of rows inserted</th>
+            <th>Wrong number of rows affected</th>
             <th>Inference failure</th>
             <th>Wrong column names</th>
             <th>Output failure</th>
@@ -63,10 +63,10 @@ distributed without the express permission of Materialize, Inc.
                     {% endif %}
                 </td>
                 <td>
-                    {% if r.wrong_number_of_rows_inserted is none %}
+                    {% if r.wrong_number_of_rows_affected is none %}
                         ?
                     {% else %}
-                        {{ r.wrong_number_of_rows_inserted }}
+                        {{ r.wrong_number_of_rows_affected }}
                     {% endif %}
                 </td>
                 <td>{{ r.inference_failure }}</td>
@@ -82,7 +82,7 @@ distributed without the express permission of Materialize, Inc.
                 <td>{{ r.success }}</td>
                 <td>
                     {{ r.unsupported + r.parse_failure + r.plan_failure +
-                       r.unexpected_plan_success + r.wrong_number_of_rows_inserted +
+                       r.unexpected_plan_success + r.wrong_number_of_rows_affected +
                        r.inference_failure + r.wrong_column_names + r.output_failure +
                        r.bail + r.success }}
                 </td>
@@ -109,7 +109,7 @@ distributed without the express permission of Materialize, Inc.
                         "Bails",
                         "Successes",
                         "Unexpected plan successes",
-                        "Wrong number of rows inserted",
+                        "Wrong number of rows affected",
                         "Wrong column names"
                     ],
                     ...results.map(r => {
