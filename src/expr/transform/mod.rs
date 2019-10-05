@@ -14,6 +14,7 @@ pub mod empty_map;
 pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
+pub mod distinct_elision;
 pub mod join_order;
 pub mod nonnullable;
 pub mod predicate_pushdown;
@@ -88,6 +89,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::fusion::map::Map),
                     Box::new(crate::transform::empty_map::EmptyMap),
                     Box::new(crate::transform::join_elision::JoinElision),
+                    Box::new(crate::transform::distinct_elision::DistinctElision),
                     Box::new(crate::transform::inline_let::InlineLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                 ],

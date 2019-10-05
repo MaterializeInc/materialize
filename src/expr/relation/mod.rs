@@ -146,12 +146,19 @@ impl RelationExpr {
             RelationExpr::Let { body, .. } => body.typ(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ();
+                let mut output_typ =
                 RelationType::new(
                     outputs
                         .iter()
                         .map(|&i| input_typ.column_types[i].clone())
                         .collect(),
-                )
+                );
+                for keys in input_typ.keys {
+                    if keys.iter().all(|k| outputs.contains(k)) {
+                        output_typ = output_typ.add_keys(keys);
+                    }
+                }
+                output_typ
             }
             RelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ();
@@ -181,7 +188,7 @@ impl RelationExpr {
                 for (_, column_typ) in aggregates {
                     column_types.push(column_typ.clone());
                 }
-                RelationType::new(column_types)
+                RelationType::new(column_types).add_keys(group_key.clone())
             }
             RelationExpr::TopK { input, .. } => input.typ(),
             RelationExpr::Negate { input } => input.typ(),
@@ -200,6 +207,7 @@ impl RelationExpr {
                         .with_context(|e| format!("{}\nIn {:#?}", e, self))
                         .unwrap(),
                 )
+                // Important: do not inherit keys of either input, as not unique.
             }
         }
     }
