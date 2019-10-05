@@ -143,8 +143,7 @@ impl RelationExpr {
                 let result = typ.clone();
                 if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
                     result.add_keys(Vec::new())
-                }
-                else {
+                } else {
                     result
                 }
             }
@@ -187,20 +186,21 @@ impl RelationExpr {
                 //
                 // We are going to use the uniqueness constraints of the
                 // first relation, and attempt to use the presented order.
-                let remains_unique =
-                (1 .. inputs.len()).all(|index| {
+                let remains_unique = (1..inputs.len()).all(|index| {
                     let typ = inputs[index].typ();
                     let mut prior_bound = Vec::new();
                     for variable in variables {
-                        if variable.iter().any(|(r,_c)| r < &index) {
-                            for (r,c) in variable {
+                        if variable.iter().any(|(r, _c)| r < &index) {
+                            for (r, c) in variable {
                                 if r == &index {
                                     prior_bound.push(c);
                                 }
                             }
                         }
                     }
-                    typ.keys.iter().any(|ks| ks.iter().all(|k| prior_bound.contains(&k)))
+                    typ.keys
+                        .iter()
+                        .any(|ks| ks.iter().all(|k| prior_bound.contains(&k)))
                 });
                 if remains_unique && !inputs.is_empty() {
                     for keys in inputs[0].typ().keys {
