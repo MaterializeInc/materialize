@@ -268,7 +268,9 @@ where
                 typ,
                 mut relation_expr,
             } => {
+                let timer = std::time::Instant::now();
                 self.optimizer.optimize(&mut relation_expr, &typ);
+                println!("{:?}\tOptimization", timer.elapsed());
                 let rows = vec![vec![Datum::from(relation_expr.pretty())]];
                 send_immediate_rows(typ, rows)
             }
