@@ -34,6 +34,7 @@ limitations under the License.
 #include <sqltypes.h>
 #include <string.h>
 #include <unistd.h>
+#include <climits>
 
 enum class RunState {
     off,
@@ -48,6 +49,8 @@ typedef struct {
     SQLHDBC hDBC;
     void* stat;
     int warehouseCount;
+    useconds_t sleepMin;
+    useconds_t sleepMax;
 } threadParameters;
 
 static void* analyticalThread(void* args) {
@@ -74,6 +77,8 @@ static void* analyticalThread(void* args) {
                   << q << "\n";
         queries.executeTPCH(q);
         query++;
+        auto sleepTime = chRandom::uniformInt(prm->sleepMin, prm->sleepMax);
+        usleep(sleepTime);
     }
 
     Log::l1() << Log::tm() << "-analytical " << prm->threadId
@@ -86,6 +91,8 @@ static void* analyticalThread(void* args) {
         b = queries.executeTPCH(q);
         aStat->executeTPCHSuccess(q, b);
         query++;
+        auto sleepTime = chRandom::uniformInt(prm->sleepMin, prm->sleepMax);
+        usleep(sleepTime);
     }
 
     Log::l1() << Log::tm() << "-analytical " << prm->threadId << ": exit\n";
@@ -175,6 +182,8 @@ static void* transactionalThread(void* args) {
                 b = transactions.executeStockLevel(prm->hDBC);
                 tStat->executeTPCCSuccess(5, b);
             }
+            auto sleepTime = chRandom::uniformInt(prm->sleepMin, prm->sleepMax);
+            usleep(sleepTime);
         }
     }
 
@@ -187,6 +196,14 @@ static int parseInt(const char* context, const char* v) {
         return std::stoi(optarg);
     } catch (const std::exception&) {
         errx(1, "unable to parse integer %s for %s\n", v, context);
+    }
+}
+
+static double parseDouble(const char* context, const char* v) {
+    try {
+        return std::stod(optarg);
+    } catch (const std::exception&) {
+        errx(1, "unable to parse double %s for %s\n", v, context);
     }
 }
 
@@ -226,6 +243,8 @@ static int run(int argc, char* argv[]) {
         {"run-seconds", required_argument, nullptr, 'r'},
         {"gen-dir", required_argument, nullptr, 'g'},
         {"log-file", required_argument, nullptr, 'l'},
+        {"min-delay", required_argument, nullptr, 'm'},
+        {"max-delay", required_argument, nullptr, 'M'},
         {nullptr, 0, nullptr, 0}};
 
     int c;
@@ -236,6 +255,8 @@ static int run(int argc, char* argv[]) {
     int transactionalThreads = 10;
     int warmupSeconds = 0;
     int runSeconds = 10;
+    double minDelay = 0;
+    double maxDelay = 0;
     std::string genDir = "gen";
     const char* logFile = nullptr;
     while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:", longOpts,
@@ -268,6 +289,12 @@ static int run(int argc, char* argv[]) {
         case 'l':
             logFile = optarg;
             break;
+        case 'm':
+            minDelay = parseDouble("minimum delay between queries (s)", optarg);
+            break;
+        case 'M':
+            maxDelay = parseDouble("maximum delay between queries (s)", optarg);
+            break;
         default:
             return 1;
         }
@@ -275,6 +302,9 @@ static int run(int argc, char* argv[]) {
     argc -= optind;
     argv += optind;
 
+    if (minDelay < 0.0 || maxDelay < 0.0 || minDelay > maxDelay
+        || minDelay * 1'000'000 > UINT_MAX || maxDelay * 1'000'000 > UINT_MAX)
+        errx(1, "Invalid between-query delay bounds specified");
     if (!dsn)
         errx(1, "data source name (DSN) must be specified");
     if (analyticThreads < 0)
@@ -357,7 +387,7 @@ static int run(int argc, char* argv[]) {
     for (int i = 0; i < analyticThreads; i++) {
         aStat[i] = new AnalyticalStatistic();
         aprm.push_back(
-            {&barStart, runState, i + 1, 0, (void*) aStat[i], warehouseCount});
+            {&barStart, runState, i + 1, 0, (void*) aStat[i], warehouseCount, (unsigned)(minDelay * 1'000'000), (unsigned)(maxDelay * 1'000'000)});
         if (!DbcTools::connect(hEnv, aprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
@@ -373,7 +403,7 @@ static int run(int argc, char* argv[]) {
     for (int i = 0; i < transactionalThreads; i++) {
         tStat[i] = new TransactionalStatistic();
         tprm.push_back(
-            {&barStart, runState, i + 1, 0, (void*) tStat[i], warehouseCount});
+            {&barStart, runState, i + 1, 0, (void*) tStat[i], warehouseCount, (unsigned)(minDelay * 1'000'000), (unsigned)(maxDelay * 1'000'000)});
         if (!DbcTools::connect(hEnv, tprm[i].hDBC, dsn, username, password)) {
             exit(1);
         }
@@ -416,6 +446,7 @@ static int run(int argc, char* argv[]) {
     printf("Transactional threads:  %d\n", transactionalThreads);
     printf("Warmup seconds:         %d\n", warmupSeconds);
     printf("Run seconds:            %d\n", runSeconds);
+    printf("Sleep after query:      %f-%f s\n", minDelay, maxDelay);
     printf("\n");
     printf("OLAP throughput [QphH]: %llu\n", qphh);
     printf("OLTP throughput [tpmC]: %llu\n", tpmc);

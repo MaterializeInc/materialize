@@ -22,6 +22,7 @@ namespace chRandom {
 
 extern thread_local std::mt19937 rng;
 
+// FIXME: This should be a template
 inline int uniformInt(int min, int max) {
     std::uniform_int_distribution<int> dist(min, max);
     return dist(rng);
