@@ -49,12 +49,12 @@ use futures::{stream, try_ready, AsyncSink, Future, Poll, Sink, StartSend, Strea
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
-
 use tokio::io;
 use uuid::Uuid;
 
-use crate::mpsc::{self, SendSink};
-use crate::protocol;
+use crate::mpsc;
+use crate::protocol::{self, SendSink};
+use crate::switchboard::Switchboard;
 
 /// The capability to construct a particular broadcast sender or receiver.
 ///
@@ -122,11 +122,11 @@ where
         C: protocol::Connection,
         I: IntoIterator<Item = &'a C::Addr>,
     {
-        let conns = stream::futures_unordered(addrs.into_iter().map(|addr| {
-            C::connect(addr)
-                .and_then(move |conn| protocol::send_handshake(conn, uuid))
-                .map(|conn| protocol::encoder(conn))
-        }))
+        let conns = stream::futures_unordered(
+            addrs
+                .into_iter()
+                .map(|addr| protocol::connect_channel::<C, D>(addr, uuid)),
+        )
         // TODO(benesch): this might be more efficient with a multi-fanout that
         // could fan out to multiple streams at once. Not clear what the
         // performance of this binary tree of fanouts is.
@@ -193,11 +193,14 @@ impl<D> Receiver<D>
 where
     D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
 {
-    pub(crate) fn new<C>(conn_rx: impl Stream<Item = C, Error = ()> + Send + 'static) -> Receiver<D>
+    pub(crate) fn new<C>(
+        conn_rx: impl Stream<Item = protocol::Framed<C>, Error = ()> + Send + 'static,
+        switchboard: Switchboard<C>,
+    ) -> Receiver<D>
     where
         C: protocol::Connection,
     {
-        Receiver(mpsc::Receiver::new(conn_rx))
+        Receiver(mpsc::Receiver::new(conn_rx, switchboard))
     }
 
     /// Arranges to split the receiver into multiple receivers, e.g., so that

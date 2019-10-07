@@ -119,8 +119,8 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let switchboard = Switchboard::new(socket_addrs, config.process);
     let mut runtime = tokio::runtime::Runtime::new()?;
+    let switchboard = Switchboard::new(socket_addrs, config.process, runtime.executor());
     let gather_metrics = config.gather_metrics;
     runtime.spawn({
         let switchboard = switchboard.clone();

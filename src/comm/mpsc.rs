@@ -32,18 +32,18 @@
 //! Receivers and connected senders are less flexible, but still implement
 //! [`Send`] and so can be freely sent between threads.
 
-use futures::{Future, Poll, Sink, Stream};
-use ore::future::{FutureExt, SinkExt, StreamExt};
+use futures::{Future, Poll, Stream};
+use ore::future::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
+use tokio::io;
 use tokio::net::unix::UnixStream;
 use tokio::net::TcpStream;
-
-use tokio::io;
 use uuid::Uuid;
 
-use crate::protocol::{self, Addr, Connection};
+use crate::protocol::{self, Addr, SendSink};
+use crate::switchboard::Switchboard;
 
 /// The transmission end of an MPSC channel.
 ///
@@ -57,8 +57,6 @@ pub struct Sender<D> {
     uuid: Uuid,
     _data: std::marker::PhantomData<D>,
 }
-
-pub(crate) type SendSink<D> = Box<dyn Sink<SinkItem = D, SinkError = bincode::Error> + Send>;
 
 impl<D> Sender<D> {
     pub(crate) fn new(addr: impl Into<Addr>, uuid: Uuid) -> Sender<D> {
@@ -80,20 +78,9 @@ impl<D> Sender<D> {
         D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     {
         match &self.addr {
-            Addr::Tcp(addr) => self.connect_core::<TcpStream>(addr).left(),
-            Addr::Unix(addr) => self.connect_core::<UnixStream>(addr).right(),
+            Addr::Tcp(addr) => protocol::connect_channel::<TcpStream, _>(addr, self.uuid).left(),
+            Addr::Unix(addr) => protocol::connect_channel::<UnixStream, _>(addr, self.uuid).right(),
         }
-    }
-
-    fn connect_core<C>(&self, addr: &C::Addr) -> impl Future<Item = SendSink<D>, Error = io::Error>
-    where
-        C: Connection,
-        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
-    {
-        let uuid = self.uuid;
-        C::connect(addr)
-            .and_then(move |conn| protocol::send_handshake(conn, uuid))
-            .map(|conn| protocol::encoder(conn).boxed())
     }
 }
 
@@ -104,7 +91,10 @@ impl<D> Sender<D> {
 pub struct Receiver<D>(Box<dyn Stream<Item = D, Error = bincode::Error> + Send>);
 
 impl<D> Receiver<D> {
-    pub(crate) fn new<C>(conn_rx: impl Stream<Item = C, Error = ()> + Send + 'static) -> Receiver<D>
+    pub(crate) fn new<C>(
+        conn_rx: impl Stream<Item = protocol::Framed<C>, Error = ()> + Send + 'static,
+        switchboard: Switchboard<C>,
+    ) -> Receiver<D>
     where
         C: protocol::Connection,
         D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
@@ -112,7 +102,7 @@ impl<D> Receiver<D> {
         Receiver(Box::new(
             conn_rx
                 .map_err(|_| -> bincode::Error { unreachable!() })
-                .map(protocol::decoder)
+                .map(move |conn| protocol::decoder(conn, switchboard.clone()))
                 .select_flatten(),
         ))
     }

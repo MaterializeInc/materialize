@@ -32,9 +32,9 @@
 //!     (Ipv4Addr::new(192, 168, 1, 2), 1234),
 //! ];
 //! let node_id = 0;
-//! let switchboard = Switchboard::new(nodes, node_id);
-//! let listener = TcpListener::bind(&"0.0.0.0:1234".parse()?)?;
 //! let mut runtime = tokio::runtime::Runtime::new()?;
+//! let switchboard = Switchboard::new(nodes, node_id, runtime.executor());
+//! let listener = TcpListener::bind(&"0.0.0.0:1234".parse()?)?;
 //! runtime.spawn({
 //!     let switchboard = switchboard.clone();
 //!     listener
@@ -79,6 +79,8 @@
 //!   the same messages stream to all nodes.
 
 #![deny(missing_docs)]
+
+mod router;
 
 pub mod broadcast;
 pub mod mpsc;

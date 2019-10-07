@@ -10,19 +10,17 @@ use futures::{future, Future, Stream};
 use ore::future::StreamExt;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map, HashMap};
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io;
 use tokio::net::unix::{UnixListener, UnixStream};
-
-use tokio::runtime::Runtime;
+use tokio::runtime::{Runtime, TaskExecutor};
 use uuid::Uuid;
 
 use crate::broadcast;
 use crate::mpsc;
 use crate::protocol;
+use crate::router;
 use crate::util::TryConnectFuture;
 
 /// Router for incoming and outgoing communication traffic.
@@ -59,28 +57,12 @@ where
     nodes: Vec<C::Addr>,
     /// The index of this node's address in `nodes`.
     id: usize,
-    /// The mapping from connection ID to its state.
-    routing_table: Mutex<HashMap<Uuid, RoutingTableEntry<C>>>,
-}
-
-enum RoutingTableEntry<C> {
-    /// Connections have arrived, but the channel receiver has not yet been
-    /// constructed. This state is only possible for broadcast channels at the
-    /// moment, as MPSC transmitters and receivers are constructed
-    /// simultaneously.
-    AwaitingRx(Vec<C>),
-    /// A receiver has been constructed and is awaiting an incoming connection.
-    AwaitingConn(futures::sync::mpsc::UnboundedSender<C>),
-    /// The channel is no longer awaiting an incoming connection. It may be
-    /// actively receiving messages, or it may be closed, but either way
-    /// new connections will not be attached to the channel receiver.
-    Full,
-}
-
-impl<C> Default for RoutingTableEntry<C> {
-    fn default() -> RoutingTableEntry<C> {
-        RoutingTableEntry::AwaitingRx(Vec::new())
-    }
+    /// Routing for channel traffic.
+    channel_table: Mutex<router::RoutingTable<Uuid, protocol::Framed<C>>>,
+    /// Routing for rendezvous traffic.
+    rendezvous_table: Mutex<router::RoutingTable<u64, C>>,
+    /// Task executor, so that background work can be spawned.
+    executor: TaskExecutor,
 }
 
 impl Switchboard<UnixStream> {
@@ -100,8 +82,8 @@ impl Switchboard<UnixStream> {
         let mut path = std::env::temp_dir();
         path.push(format!("comm.switchboard.{}", suffix));
         let listener = UnixListener::bind(&path)?;
-        let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0);
         let mut runtime = Runtime::new()?;
+        let switchboard = Switchboard::new(vec![path.to_str().unwrap()], 0, runtime.executor());
         runtime.spawn({
             let switchboard = switchboard.clone();
             listener
@@ -126,7 +108,7 @@ where
     /// The consumer of a `Switchboard` must separately arrange to listen on the
     /// local node's address and route `comm` traffic to this `Switchboard`
     /// via [`Switchboard::handle_connection`].
-    pub fn new<I>(nodes: I, id: usize) -> Switchboard<C>
+    pub fn new<I>(nodes: I, id: usize, executor: TaskExecutor) -> Switchboard<C>
     where
         I: IntoIterator,
         I::Item: Into<C::Addr>,
@@ -134,7 +116,9 @@ where
         Switchboard(Arc::new(SwitchboardInner {
             nodes: nodes.into_iter().map(Into::into).collect(),
             id,
-            routing_table: Mutex::new(HashMap::new()),
+            channel_table: Mutex::default(),
+            rendezvous_table: Mutex::default(),
+            executor,
         }))
     }
 
@@ -162,9 +146,12 @@ where
         for (i, addr) in self.0.nodes.iter().enumerate() {
             if i < self.0.id {
                 // Earlier node. Wait for it to connect to us.
-                let uuid = (i as u128).into();
                 futures.push(Box::new(
-                    self.new_rx(uuid)
+                    self.0
+                        .rendezvous_table
+                        .lock()
+                        .expect("lock poisoned")
+                        .add_dest(i as u64)
                         .map_err(|()| unreachable!())
                         .recv()
                         .map(|(conn, _stream)| Some(conn)),
@@ -174,10 +161,10 @@ where
                 futures.push(Box::new(future::ok(None)));
             } else {
                 // Later node. Attempt to initiate connection.
-                let uuid = (self.0.id as u128).into();
+                let id = self.0.id as u64;
                 futures.push(Box::new(
                     TryConnectFuture::new(addr.clone(), timeout)
-                        .and_then(move |conn| protocol::send_handshake(conn, uuid))
+                        .and_then(move |conn| protocol::send_rendezvous_handshake(conn, id))
                         .map(|conn| Some(conn)),
                 ));
             }
@@ -221,36 +208,26 @@ where
     /// ```
     pub fn handle_connection(&self, conn: C) -> impl Future<Item = (), Error = io::Error> {
         let inner = self.0.clone();
-        protocol::recv_handshake(conn).then(move |res| match res {
-            Ok((conn, uuid)) => {
-                let mut routing_table = inner.routing_table.lock().expect("lock poisoned");
-                let entry = routing_table.entry(uuid).or_default();
-                match entry {
-                    RoutingTableEntry::AwaitingRx(conns) => {
-                        conns.push(conn);
-                        Ok(())
-                    }
-                    RoutingTableEntry::AwaitingConn(tx) => match tx.unbounded_send(conn) {
-                        Ok(()) => Ok(()),
-                        Err(_) => {
-                            *entry = RoutingTableEntry::Full;
-                            Ok(())
-                        }
-                    },
-                    RoutingTableEntry::Full => Ok(()),
-                }
-            }
+        protocol::recv_handshake(conn).map(move |conn| inner.route_connection(conn))
+    }
 
-            // An unexpected EOF while receiving the protocol handshake is
-            // usually rendezvous traffic, which opens a connection and
-            // immediately closes it, so suppress the error. It's possible that
-            // something more problematic happened (e.g., the network connection
-            // is broken), but we rely on the sending side to discover and
-            // report this behavior.
-            Err(ref err) if err.kind() == tokio::io::ErrorKind::UnexpectedEof => Ok(()),
+    /// Attempts to recycle an incoming channel connection for use with a new
+    /// channel. The connection is expected to be in a state where all messages
+    /// from the previous channel have been drained, and a new channel will
+    /// be initialized via an abbreviated channel handshake, rather than the
+    /// full protocol handshake.
+    pub(crate) fn recycle_connection(
+        &self,
+        conn: protocol::Framed<C>,
+    ) -> impl Future<Item = (), Error = io::Error> {
+        let inner = self.0.clone();
+        protocol::recv_channel_handshake(conn).map(move |conn| inner.route_connection(conn))
+    }
 
-            Err(err) => Err(err),
-        })
+    /// Returns a reference to the [`TaskExecutor`] that this `Switchboard`
+    /// was initialized with. Useful for spawning background work.
+    pub fn executor(&self) -> &TaskExecutor {
+        &self.0.executor
     }
 
     /// Allocates a transmitter for the broadcast channel identified by the
@@ -279,7 +256,7 @@ where
         T: broadcast::Token + 'static,
     {
         let uuid = broadcast::token_uuid::<T>();
-        broadcast::Receiver::new(self.new_rx(uuid))
+        broadcast::Receiver::new(self.new_rx(uuid), self.clone())
     }
 
     /// Allocates a new multiple-producer, single-consumer (MPSC) channel and
@@ -294,7 +271,7 @@ where
         let uuid = Uuid::new_v4();
         let addr = self.0.nodes[self.0.id].clone();
         let tx = mpsc::Sender::new(addr, uuid);
-        let rx = mpsc::Receiver::new(self.new_rx(uuid));
+        let rx = mpsc::Receiver::new(self.new_rx(uuid), self.clone());
         (tx, rx)
     }
 
@@ -304,27 +281,9 @@ where
         self.0.nodes.len()
     }
 
-    fn new_rx(&self, uuid: Uuid) -> futures::sync::mpsc::UnboundedReceiver<C> {
-        let (conn_tx, conn_rx) = futures::sync::mpsc::unbounded();
-        let mut routing_table = self.0.routing_table.lock().expect("lock poisoned");
-        match routing_table.entry(uuid) {
-            hash_map::Entry::Occupied(mut entry) => match entry.get_mut() {
-                RoutingTableEntry::AwaitingRx(conns) => {
-                    for conn in conns.drain(..) {
-                        conn_tx.unbounded_send(conn).unwrap();
-                    }
-                    *entry.get_mut() = RoutingTableEntry::Full;
-                }
-                _ => panic!(
-                    "switchboard: attempting to create two receivers for channel {}",
-                    uuid
-                ),
-            },
-            hash_map::Entry::Vacant(entry) => {
-                entry.insert(RoutingTableEntry::AwaitingConn(conn_tx));
-            }
-        }
-        conn_rx
+    fn new_rx(&self, uuid: Uuid) -> futures::sync::mpsc::UnboundedReceiver<protocol::Framed<C>> {
+        let mut channel_table = self.0.channel_table.lock().expect("lock poisoned");
+        channel_table.add_dest(uuid)
     }
 
     fn peers(&self) -> impl Iterator<Item = &C::Addr> {
@@ -334,5 +293,23 @@ where
             .iter()
             .enumerate()
             .filter_map(move |(i, addr)| if i == id { None } else { Some(addr) })
+    }
+}
+
+impl<C> SwitchboardInner<C>
+where
+    C: protocol::Connection,
+{
+    fn route_connection(&self, handshake: protocol::RecvHandshake<C>) {
+        match handshake {
+            protocol::RecvHandshake::Channel(uuid, conn) => {
+                let mut router = self.channel_table.lock().expect("lock poisoned");
+                router.route(uuid, conn);
+            }
+            protocol::RecvHandshake::Rendezvous(id, conn) => {
+                let mut router = self.rendezvous_table.lock().expect("lock poisoned");
+                router.route(id, conn);
+            }
+        }
     }
 }
