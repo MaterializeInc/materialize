@@ -161,7 +161,7 @@ fn order_join(
 /// This method attempts to produce an order on relations so that each join will involve at least a
 /// unique key, which would ensure that the number of records does not increase along the join. The
 /// attempt starts from a specified `start` relation, and greedily adds relations as long as any have
-/// unique keys that must be equal to some bound column.`
+/// unique keys that must be equal to some bound column.
 fn order_on_keys(
     relations: usize,
     start: usize,
