@@ -42,7 +42,7 @@ impl std::fmt::Display for CodecError {
 ///
 /// ```
 /// use futures::{Future, Stream};
-/// use materialize::pgwire::Codec;
+/// use pgwire::Codec;
 /// use tokio::io;
 /// use tokio::net::TcpStream;
 /// use tokio::codec::Framed;
