@@ -191,7 +191,7 @@ services:
     ports:
       - 9091:9091
   metrics:
-    image: materialize/metrics:local
+    image: materialize/metrics:latest
     init: true
     depends_on:
       - materialized
