@@ -26,10 +26,10 @@ use crate::store::{DataflowStore, RemoveMode};
 use crate::{extract_sql_object_name, Plan, Planner};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
-    Sink, SinkConnector, Source, SourceConnector, View,
+    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
-use expr::RelationExpr;
+use expr::{ColumnOrder, RelationExpr};
 use interchange::avro;
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;

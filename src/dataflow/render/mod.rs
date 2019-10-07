@@ -685,6 +685,7 @@ where
             group_key,
             order_key,
             limit,
+            offset,
         } = relation_expr
         {
             use differential_dataflow::operators::reduce::ReduceCore;
@@ -697,6 +698,7 @@ where
             let input = self.collection(input).unwrap();
 
             let limit = *limit;
+            let offset = *offset;
             let arrangement = input
                 .map(move |tuple| {
                     (
@@ -704,26 +706,54 @@ where
                             .iter()
                             .map(|i| tuple[*i].clone())
                             .collect::<Vec<_>>(),
-                        (
-                            order_clone
-                                .iter()
-                                .map(|i| tuple[*i].clone())
-                                .collect::<Vec<_>>(),
-                            tuple,
-                        ),
+                        tuple,
                     )
                 })
                 .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
                     "TopK",
                     move |_key, source, target| {
+                        target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
+                        if !order_clone.is_empty() {
+                            //todo: use arrangements or otherwise make the sort more performant?
+                            let sort_by =
+                                |left: &(Vec<Datum>, isize), right: &(Vec<Datum>, isize)| {
+                                    compare_columns(&order_clone, &(left.0), &(right.0))
+                                };
+                            target.sort_by(sort_by);
+                        }
+
+                        let mut skipped = 0; // Number of records offset so far
                         let mut output = 0; // Number of produced output records.
                         let mut cursor = 0; // Position of current input record.
-                        while output < limit && cursor < source.len() {
-                            let to_emit = std::cmp::min(limit - output, source[cursor].1 as usize);
-                            target.push(((source[cursor].0).1.clone(), to_emit as isize));
-                            output += to_emit;
+
+                        //skip forward until an offset number of records is reached
+                        while cursor < target.len() {
+                            if skipped + (target[cursor].1 as usize) > offset {
+                                break;
+                            }
+                            skipped += target[cursor].1 as usize;
                             cursor += 1;
                         }
+                        let skip_cursor = cursor;
+                        if cursor < target.len() {
+                            if skipped < offset {
+                                //if offset only skips some members of a group of identical
+                                //records, return the rest
+                                target[skip_cursor].1 -= (offset - skipped) as isize;
+                            }
+                            //apply limit
+                            if let Some(limit) = limit {
+                                while output < limit && cursor < target.len() {
+                                    let to_emit =
+                                        std::cmp::min(limit - output, target[cursor].1 as usize);
+                                    target[cursor].1 = to_emit as isize;
+                                    output += to_emit;
+                                    cursor += 1;
+                                }
+                                target.truncate(cursor);
+                            }
+                        }
+                        target.drain(..skip_cursor);
                     },
                 );
 
