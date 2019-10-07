@@ -81,10 +81,16 @@ distributed without the express permission of Materialize, Inc.
                 <td>{{ r.bail }}</td>
                 <td>{{ r.success }}</td>
                 <td>
-                    {{ r.unsupported + r.parse_failure + r.plan_failure +
-                       r.unexpected_plan_success + r.wrong_number_of_rows_affected +
-                       r.inference_failure + r.wrong_column_names + r.output_failure +
-                       r.bail + r.success }}
+                    {{ r.unsupported +
+                       r.parse_failure +
+                       r.plan_failure +
+                       (r.unexpected_plan_success or 0) +
+                       (r.wrong_number_of_rows_affected or 0) +
+                       r.inference_failure +
+                       (r.wrong_column_names or 0) +
+                       r.output_failure +
+                       r.bail +
+                       r.success }}
                 </td>
             </tr>
         {% endfor %}
