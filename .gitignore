@@ -1,5 +1,6 @@
 *.o
-chBenchmark
+chbenchmark
 gen
 log
 out
+build
