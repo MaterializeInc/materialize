@@ -118,102 +118,92 @@ impl PredicatePushdown {
                     let mut push_downs = vec![Vec::new(); inputs.len()];
                     let mut retain = Vec::new();
 
-                    for mut predicate in predicates.drain(..) {
-                        // Determine the relation support of each predicate.
-                        let mut support = Vec::new();
-                        predicate.visit(&mut |e| {
-                            if let ScalarExpr::Column(i) = e {
-                                support.push(input_relation[*i]);
-                            }
-                        });
-                        support.sort();
-                        support.dedup();
+                    for predicate in predicates.drain(..) {
 
-                        match support.len() {
-                            0 => {
-                                for push_down in push_downs.iter_mut() {
-                                    // no support, so nothing to rewrite.
-                                    push_down.push(predicate.clone());
-                                }
+                        let mut pushed = false;
+                        // Attempt to push down each predicate to each input.
+                        for (index, push_down) in push_downs.iter_mut().enumerate() {
+                            if let Some(localized) = localize_predicate(
+                                &predicate,
+                                index,
+                                &input_relation[..],
+                                &prior_arities[..],
+                                &variables[..],
+                            ) {
+                                push_down.push(localized);
+                                pushed = true;
                             }
-                            1 => {
-                                let relation = support[0];
-                                predicate.visit_mut(&mut |e| {
-                                    // subtract
-                                    if let ScalarExpr::Column(i) = e {
-                                        *i -= prior_arities[relation];
+                        }
+
+                        // Translate `col1 == col2` constraints into join variable constraints.
+                        use crate::BinaryFunc;
+                        use crate::UnaryFunc;
+                        if let ScalarExpr::CallBinary {
+                            func: BinaryFunc::Eq,
+                            expr1,
+                            expr2,
+                        } = &predicate
+                        {
+                            if let (ScalarExpr::Column(c1), ScalarExpr::Column(c2)) =
+                                (&**expr1, &**expr2)
+                            {
+                                let relation1 = input_relation[*c1];
+                                let relation2 = input_relation[*c2];
+
+                                if relation1 != relation2 {
+                                    let key1 = (relation1, *c1 - prior_arities[relation1]);
+                                    let key2 = (relation2, *c2 - prior_arities[relation2]);
+                                    let pos1 = variables.iter().position(|l| l.contains(&key1));
+                                    let pos2 = variables.iter().position(|l| l.contains(&key2));
+                                    match (pos1, pos2) {
+                                        (None, None) => {
+                                            variables.push(vec![key1, key2]);
+                                        }
+                                        (Some(idx1), None) => {
+                                            variables[idx1].push(key2);
+                                        }
+                                        (None, Some(idx2)) => {
+                                            variables[idx2].push(key1);
+                                        }
+                                        (Some(idx1), Some(idx2)) => {
+                                            // assert!(idx1 != idx2);
+                                            if idx1 != idx2 {
+                                                let temp = variables[idx2].clone();
+                                                variables[idx1].extend(temp);
+                                                variables[idx1].sort();
+                                                variables[idx1].dedup();
+                                                variables.remove(idx2);
+                                            }
+                                        }
                                     }
-                                });
-                                push_downs[relation].push(predicate);
-                            }
-                            _ => {
-                                use crate::BinaryFunc;
-                                use crate::UnaryFunc;
-                                if let ScalarExpr::CallBinary {
-                                    func: BinaryFunc::Eq,
-                                    expr1,
-                                    expr2,
-                                } = &predicate
-                                {
-                                    if let (ScalarExpr::Column(c1), ScalarExpr::Column(c2)) =
-                                        (&**expr1, &**expr2)
-                                    {
-                                        let relation1 = input_relation[*c1];
-                                        let relation2 = input_relation[*c2];
-                                        assert!(relation1 != relation2);
-                                        let key1 = (relation1, *c1 - prior_arities[relation1]);
-                                        let key2 = (relation2, *c2 - prior_arities[relation2]);
-                                        let pos1 = variables.iter().position(|l| l.contains(&key1));
-                                        let pos2 = variables.iter().position(|l| l.contains(&key2));
-                                        match (pos1, pos2) {
-                                            (None, None) => {
-                                                variables.push(vec![key1, key2]);
-                                            }
-                                            (Some(idx1), None) => {
-                                                variables[idx1].push(key2);
-                                            }
-                                            (None, Some(idx2)) => {
-                                                variables[idx2].push(key1);
-                                            }
-                                            (Some(idx1), Some(idx2)) => {
-                                                // assert!(idx1 != idx2);
-                                                if idx1 != idx2 {
-                                                    let temp = variables[idx2].clone();
-                                                    variables[idx1].extend(temp);
-                                                    variables[idx1].sort();
-                                                    variables[idx1].dedup();
-                                                    variables.remove(idx2);
-                                                }
-                                            }
-                                        }
-                                        // null != anything, so joined columns musn't be null
-                                        let column1 = *c1 - prior_arities[relation1];
-                                        if input_types[relation1].column_types[column1].nullable {
-                                            push_downs[relation1].push(
-                                                ScalarExpr::Column(column1)
-                                                    .call_unary(UnaryFunc::IsNull)
-                                                    .call_unary(UnaryFunc::Not),
-                                            );
-                                        }
-                                        let column2 = *c2 - prior_arities[relation2];
-                                        if input_types[relation2].column_types[column2].nullable {
-                                            push_downs[relation2].push(
-                                                ScalarExpr::Column(*c2 - prior_arities[relation2])
-                                                    .call_unary(UnaryFunc::IsNull)
-                                                    .call_unary(UnaryFunc::Not),
-                                            );
-                                        }
-                                    } else {
-                                        retain.push(predicate);
+                                    // null != anything, so joined columns mustn't be null
+                                    let column1 = *c1 - prior_arities[relation1];
+                                    if input_types[relation1].column_types[column1].nullable {
+                                        push_downs[relation1].push(
+                                            ScalarExpr::Column(column1)
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
                                     }
-                                } else {
-                                    retain.push(predicate);
+                                    let column2 = *c2 - prior_arities[relation2];
+                                    if input_types[relation2].column_types[column2].nullable {
+                                        push_downs[relation2].push(
+                                            ScalarExpr::Column(*c2 - prior_arities[relation2])
+                                                .call_unary(UnaryFunc::IsNull)
+                                                .call_unary(UnaryFunc::Not),
+                                        );
+                                    }
+                                    pushed = true;
                                 }
                             }
                         }
+
+                        if !pushed {
+                            retain.push(predicate);
+                        }
                     }
 
-                    // promote same-relation constraints.
+                    // Push down same-relation equality constraints.
                     for variable in variables.iter_mut() {
                         variable.sort();
                         variable.dedup(); // <-- not obviously necessary.
@@ -289,4 +279,33 @@ impl PredicatePushdown {
             }
         }
     }
+}
+
+// Uses equality constraints to rewrite `expr` with columns from relation `index`.
+fn localize_predicate(
+    expr: &ScalarExpr,
+    index: usize,
+    input_relation: &[usize],
+    prior_arities: &[usize],
+    variables: &[Vec<(usize, usize)>],
+) -> Option<ScalarExpr> {
+    let mut bail = false;
+    let mut expr = expr.clone();
+    expr.visit_mut(&mut |e| {
+        if let ScalarExpr::Column(column) = e {
+            let input = input_relation[*column];
+            let local = (input, *column - prior_arities[input]);
+            if let Some((_rel, col)) = variables
+                .iter()
+                .find(|variable| variable.contains(&local))
+                .and_then(|variable| variable.iter()
+                .find(|(rel, _col)| rel == &index)) {
+                    *column = *col;
+                }
+                else {
+                    bail = true
+                }
+        }
+    });
+    if bail { None } else { Some(expr) }
 }
