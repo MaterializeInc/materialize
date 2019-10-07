@@ -19,7 +19,7 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FieldFormat, FrontendMessage};
+use crate::message::{BackendMessage, FieldFormat, FrontendMessage};
 use ore::netio;
 
 #[derive(Debug)]

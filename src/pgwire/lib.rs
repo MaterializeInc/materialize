@@ -16,6 +16,14 @@
 //!   * [CockroachDB pgwire implementation](https://github.com/cockroachdb/cockroach/tree/master/pkg/sql/pgwire)
 //!   * ["Postgres on the wire" PGCon talk](https://www.pgcon.org/2014/schedule/attachments/330_postgres-for-the-wire.pdf)
 
+// The prometheus macros (e.g. `register*`) all depend on each other, including
+// on internal `__register*` macros, instead of doing the right thing and I
+// assume using something like `$crate::__register_*`. That means that without
+// using a macro_use here, we would end up needing to import several internal
+// macros everywhere we want to use any of the prometheus macros.
+#[macro_use]
+extern crate prometheus;
+
 use failure::format_err;
 use futures::sync::mpsc::UnboundedSender;
 use futures::{future, Future};

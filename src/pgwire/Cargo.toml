@@ -1,35 +1,29 @@
 [package]
-name = "materialize"
-description = "Streaming SQL materialized views."
+name = "pgwire"
+description = "A server for the PostgreSQL wire protocol."
 version = "0.1.0"
 edition = "2018"
 publish = false
-
-[[bin]]
-name = "materialized"
-path = "bin/materialized.rs"
 
 [lib]
 path = "lib.rs"
 
 [dependencies]
-backtrace = { version = "0.3.38", features = ["coresymbolication"] }
+byteorder = "1.3"
+bytes = "0.4"
+cast = "0.2"
 comm = { path = "../comm" }
 coord = { path = "../coord" }
-dataflow = { path = "../dataflow" }
+csv = "1.1"
+chrono = "0.4"
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.5"
 futures = "0.1"
-getopts = "0.2"
-hyper = "0.12"
-jemallocator = "0.3.0"
 lazy_static = "1.4.0"
 log = "0.4"
 ore = { path = "../ore" }
-parse_duration = "2.0.1"
-pgwire = { path = "../pgwire" }
 prometheus = { version = "0.7.0", default-features = false, features = ["process"] }
+repr = { path = "../repr" }
+sql = { path = "../sql" }
+state_machine_future = { git = "https://github.com/benesch/state_machine_future.git", branch = "context-generic-bounds" }
 tokio = "0.1"
-
-[dev-dependencies]
-pretty_assertions = "0.6.1"

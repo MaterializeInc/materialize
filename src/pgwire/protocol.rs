@@ -20,8 +20,8 @@ use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::pgwire::codec::Codec;
-use crate::pgwire::message::{
+use crate::codec::Codec;
+use crate::message::{
     self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity,
 };
 use coord::{self, SqlResponse};

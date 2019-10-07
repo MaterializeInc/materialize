@@ -15,7 +15,6 @@ use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::prelude::*;
 
-use crate::pgwire;
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
 use ore::future::FutureExt;
