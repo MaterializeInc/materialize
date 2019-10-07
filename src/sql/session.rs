@@ -58,7 +58,13 @@ const DATE_STYLE: ServerVar<&'static str> = ServerVar {
 
 const SERVER_VERSION: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("server_version"),
-    value: concat!(env!("CARGO_PKG_VERSION"), "+materialized"),
+    // Postgres client libraries sometimes check this,
+    // so pretend to be a recent version for their benefit
+    value: concat!(
+        "12.0.0+postgres ",
+        env!("CARGO_PKG_VERSION"),
+        "+materialized"
+    ),
     description: "Shows the server version (PostgreSQL).",
 };
 
