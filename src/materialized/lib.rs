@@ -3,7 +3,14 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Main materialized server.
+//! A SQL stream processor built on top of [timely dataflow] and
+//! [differential dataflow].
+//!
+//! [differential dataflow]: ../differential_dataflow/index.html
+//! [timely dataflow]: ../timely/index.html
+
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use failure::format_err;
 use futures::sync::mpsc::{self, UnboundedSender};

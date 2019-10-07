@@ -109,7 +109,7 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
-    materialize::server::serve(materialize::server::Config {
+    materialized::serve(materialized::Config {
         logging_granularity,
         version,
         threads,
