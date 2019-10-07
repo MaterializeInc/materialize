@@ -48,7 +48,6 @@ use serde::{Deserialize, Serialize};
 
 use std::cmp::PartialEq;
 use std::fmt;
-use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub};
@@ -289,8 +288,12 @@ pub struct Decimal {
 }
 
 fn rounding_downscale(v: i128, scale: usize) -> i128 {
-    let factor = 10_i128.pow(scale as u32);
-    v / factor + (v % factor) / (factor / 2)
+    if scale == 0 {
+        v
+    } else {
+        let factor = 10_i128.pow(scale as u32);
+        v / factor + (v % factor) / (factor / 2)
+    }
 }
 
 impl fmt::Display for Decimal {
@@ -298,14 +301,15 @@ impl fmt::Display for Decimal {
         let significand = self.significand.abs();
         let factor = 10_i128.pow(u32::from(self.scale));
         let ip = significand / factor;
-        let mut buf = ip.to_string();
+        let mut scale = self.scale as usize;
         // NOTE(benesch): `fmt:Formatter` uses "precision" to mean "how many
         // digits to display to the right of the decimal point," which we call
         // scale.
-        let desired_scale = f.precision().unwrap_or(self.scale as usize);
-        if desired_scale > 0 {
+        let desired_scale = f.precision().unwrap_or(scale);
+        let buf = if desired_scale == 0 {
+            rounding_downscale(significand, scale).to_string()
+        } else {
             let mut fp = significand - (ip * factor);
-            let mut scale = self.scale as usize;
             if desired_scale < scale {
                 // The format string requests less fractional digits than
                 // present. Round to the desired scale.
@@ -314,14 +318,16 @@ impl fmt::Display for Decimal {
             }
             // The fractional digits must have all leading zeros present to be
             // correct. Consider: .07 and .7 are very different numbers.
-            write!(buf, ".{:0width$}", fp, width = scale)?;
+            let mut buf = format!("{}.{:0width$}", ip, fp, width = scale);
             for _ in scale..desired_scale {
                 // The format string requests more fractional digits than
                 // present. Fill in the missing digits as zeros.
                 buf.push('0');
             }
-        }
-        f.pad_integral(self.significand >= 0, "", &buf)
+            buf
+        };
+        let nonneg = self.significand >= 0 || (ip == 0 && desired_scale == 0);
+        f.pad_integral(nonneg, "", &buf)
     }
 }
 
@@ -351,7 +357,10 @@ mod tests {
 
         assert_eq!(format!("{}", Significand::new(0).with_scale(0)), "0");
         assert_eq!(format!("{}", Significand::new(0).with_scale(5)), "0.00000");
+        assert_eq!(format!("{:.0}", Significand::new(-10).with_scale(5)), "0");
         assert_eq!(format!("{}", Significand::new(42).with_scale(0)), "42");
+        assert_eq!(format!("{:.0}", Significand::new(-19).with_scale(1)), "-2");
+        assert_eq!(format!("{:.0}", Significand::new(19).with_scale(1)), "2");
         assert_eq!(format!("{}", Significand::new(70).with_scale(2)), "0.70");
         assert_eq!(format!("{}", Significand::new(7).with_scale(2)), "0.07");
         assert_eq!(format!("{:.1}", Significand::new(45).with_scale(2)), "0.5");
