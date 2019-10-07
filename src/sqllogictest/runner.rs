@@ -729,7 +729,10 @@ impl State {
         if let Sort::Row = sort {
             formatted_rows.sort();
         }
-        let mut values = formatted_rows.into_iter().flatten().collect::<Vec<_>>();
+        let mut values = formatted_rows
+            .into_iter()
+            .flat_map(|row| row)
+            .collect::<Vec<_>>();
         if let Sort::Value = sort {
             values.sort();
         }

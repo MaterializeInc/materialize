@@ -19,7 +19,7 @@ steps:
     timeout_in_minutes: 10
     plugins:
       - docker#v3.1.0:
-          image: materialize/ci-builder:beta-20191003-184324
+          image: materialize/ci-builder:1.38.0-20190926-131010
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
@@ -33,7 +33,7 @@ steps:
     timeout_in_minutes: 30
     plugins:
       - docker#v3.1.0:
-          image: materialize/ci-builder:beta-20191003-184324
+          image: materialize/ci-builder:1.38.0-20190926-131010
           propagate-uid-gid: true
           mount-ssh-agent: true
           volumes:
