@@ -102,7 +102,6 @@ static void* transactionalThread(void* args) {
     }
 
     bool b;
-    int decision = 0;
 
     if (DbcTools::autoCommitOff(prm->hDBC)) {
 
@@ -111,7 +110,8 @@ static void* transactionalThread(void* args) {
         Log::l1() << Log::tm() << "-transactional " << prm->threadId
                   << ": start warmup\n";
         while (prm->runState == RunState::warmup) {
-            decision = chRandom::uniformInt(1, 100);
+            auto decision = chRandom::uniformInt(1, 100);
+
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
@@ -137,12 +137,14 @@ static void* transactionalThread(void* args) {
                           << ": StockLevel\n";
                 transactions.executeStockLevel(prm->hDBC);
             }
+            auto sleepTime = chRandom::uniformInt(prm->sleepMin, prm->sleepMax);
+            usleep(sleepTime);
         }
 
         Log::l1() << Log::tm() << "-transactional " << prm->threadId
                   << ": start test\n";
         while (prm->runState == RunState::run) {
-            decision = chRandom::uniformInt(1, 100);
+            auto decision = chRandom::uniformInt(1, 100);
             if (decision <= 44) {
                 Log::l1() << Log::tm() << "-transactional " << prm->threadId
                           << ": NewOrder\n";
