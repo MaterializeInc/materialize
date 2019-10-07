@@ -7,7 +7,7 @@ use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
 
-use chrono::NaiveDateTime;
+use chrono::{Datelike, NaiveDateTime, Timelike};
 use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
@@ -261,7 +261,6 @@ pub fn sub_timestamp_interval(a: Datum, b: Datum) -> Datum {
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
-    use chrono::{Datelike, Timelike};
     use std::convert::TryInto;
 
     if months == 0 {
@@ -622,6 +621,93 @@ pub fn ascii(a: Datum) -> Datum {
     }
 }
 
+pub fn extract_interval_year(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_interval().years())
+}
+
+pub fn extract_interval_month(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_interval().months())
+}
+
+pub fn extract_interval_day(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_interval().days())
+}
+
+pub fn extract_interval_hour(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_interval().hours())
+}
+
+pub fn extract_interval_minute(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_interval().minutes())
+}
+
+pub fn extract_interval_second(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(a.unwrap_interval().seconds())
+}
+
+pub fn extract_timestamp_year(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamp().year()))
+}
+
+pub fn extract_timestamp_month(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamp().month()))
+}
+
+pub fn extract_timestamp_day(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamp().day()))
+}
+
+pub fn extract_timestamp_hour(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamp().hour()))
+}
+
+pub fn extract_timestamp_minute(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamp().minute()))
+}
+
+pub fn extract_timestamp_second(a: Datum) -> Datum {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    let a = a.unwrap_timestamp();
+    let s = f64::from(a.second());
+    let ns = f64::from(a.nanosecond()) / 1e9;
+    Datum::from(s + ns)
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
@@ -789,6 +875,18 @@ pub enum UnaryFunc {
     CastDateToTimestamp,
     BuildLikeRegex,
     Ascii,
+    ExtractIntervalYear,
+    ExtractIntervalMonth,
+    ExtractIntervalDay,
+    ExtractIntervalHour,
+    ExtractIntervalMinute,
+    ExtractIntervalSecond,
+    ExtractTimestampYear,
+    ExtractTimestampMonth,
+    ExtractTimestampDay,
+    ExtractTimestampHour,
+    ExtractTimestampMinute,
+    ExtractTimestampSecond,
 }
 
 impl UnaryFunc {
@@ -823,6 +921,18 @@ impl UnaryFunc {
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
             UnaryFunc::BuildLikeRegex => build_like_regex,
             UnaryFunc::Ascii => ascii,
+            UnaryFunc::ExtractIntervalYear => extract_interval_year,
+            UnaryFunc::ExtractIntervalMonth => extract_interval_month,
+            UnaryFunc::ExtractIntervalDay => extract_interval_day,
+            UnaryFunc::ExtractIntervalHour => extract_interval_hour,
+            UnaryFunc::ExtractIntervalMinute => extract_interval_minute,
+            UnaryFunc::ExtractIntervalSecond => extract_interval_second,
+            UnaryFunc::ExtractTimestampYear => extract_timestamp_year,
+            UnaryFunc::ExtractTimestampMonth => extract_timestamp_month,
+            UnaryFunc::ExtractTimestampDay => extract_timestamp_day,
+            UnaryFunc::ExtractTimestampHour => extract_timestamp_hour,
+            UnaryFunc::ExtractTimestampMinute => extract_timestamp_minute,
+            UnaryFunc::ExtractTimestampSecond => extract_timestamp_second,
         }
     }
 
@@ -873,9 +983,21 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
-            UnaryFunc::CastDateToTimestamp => f.write_str("datetotimestamp"),
+            UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::BuildLikeRegex => f.write_str("compilelike"),
             UnaryFunc::Ascii => f.write_str("ascii"),
+            UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
+            UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
+            UnaryFunc::ExtractIntervalDay => f.write_str("ivextractday"),
+            UnaryFunc::ExtractIntervalHour => f.write_str("ivextracthour"),
+            UnaryFunc::ExtractIntervalMinute => f.write_str("ivextractminute"),
+            UnaryFunc::ExtractIntervalSecond => f.write_str("ivextractsecond"),
+            UnaryFunc::ExtractTimestampYear => f.write_str("tsextractyear"),
+            UnaryFunc::ExtractTimestampMonth => f.write_str("tsextractmonth"),
+            UnaryFunc::ExtractTimestampDay => f.write_str("tsextractday"),
+            UnaryFunc::ExtractTimestampHour => f.write_str("tsextracthour"),
+            UnaryFunc::ExtractTimestampMinute => f.write_str("tsextractminute"),
+            UnaryFunc::ExtractTimestampSecond => f.write_str("tsextractsecond"),
         }
     }
 }

@@ -169,21 +169,10 @@ impl Datum {
         }
     }
 
-    pub fn unwrap_interval_months(&self) -> i64 {
+    pub fn unwrap_interval(&self) -> Interval {
         match self {
-            Datum::Interval(Interval::Months(count)) => *count,
-            _ => panic!("Datum::unwrap_interval_months called on {:?}", self),
-        }
-    }
-
-    /// Returns `(is_positive, duration)`
-    pub fn unwrap_interval_duration(&self) -> (bool, std::time::Duration) {
-        match self {
-            Datum::Interval(Interval::Duration {
-                is_positive,
-                duration,
-            }) => (*is_positive, *duration),
-            _ => panic!("Datum::unwrap_interval_months called on {:?}", self),
+            Datum::Interval(iv) => *iv,
+            _ => panic!("Datum::unwrap_interval called on {:?}", self),
         }
     }
 
@@ -493,6 +482,82 @@ pub enum Interval {
         is_positive: bool,
         duration: std::time::Duration,
     },
+}
+
+impl Interval {
+    /// Computes the year part of the interval.
+    ///
+    /// The year part is the number of whole years in the interval. For example,
+    /// this function returns `3.0` for the interval `3 years 4 months`.
+    pub fn years(&self) -> f64 {
+        match self {
+            Interval::Months(n) => (n / 12) as f64,
+            Interval::Duration { .. } => 0.0,
+        }
+    }
+
+    /// Computes the month part of the interval.
+    ///
+    /// The whole part is the number of whole months in the interval, modulo 12.
+    /// For example, this function returns `4.0` for the interval `3 years 4
+    /// months`.
+    pub fn months(&self) -> f64 {
+        match self {
+            Interval::Months(n) => (n % 12) as f64,
+            Interval::Duration { .. } => 0.0,
+        }
+    }
+
+    /// Computes the day part of the interval.
+    ///
+    /// The day part is the number of whole days in the interval. For example,
+    /// this function returns `5.0` for the interval `5 days 4 hours 3 minutes
+    /// 2.1 seconds`.
+    pub fn days(&self) -> f64 {
+        match self {
+            Interval::Months(_) => 0.0,
+            Interval::Duration { duration, .. } => (duration.as_secs() / (60 * 60 * 24)) as f64,
+        }
+    }
+
+    /// Computes the hour part of the interval.
+    ///
+    /// The hour part is the number of whole hours in the interval, modulo 24.
+    /// For example, this function returns `4.0` for the interval `5 days 4
+    /// hours 3 minutes 2.1 seconds`.
+    pub fn hours(&self) -> f64 {
+        match self {
+            Interval::Months(_) => 0.0,
+            Interval::Duration { duration, .. } => ((duration.as_secs() / (60 * 60)) % 24) as f64,
+        }
+    }
+
+    /// Computes the minute part of the interval.
+    ///
+    /// The minute part is the number of whole minutes in the interval, modulo
+    /// 60. For example, this function returns `3.0` for the interval `5 days 4
+    /// hours 3 minutes 2.1 seconds`.
+    pub fn minutes(&self) -> f64 {
+        match self {
+            Interval::Months(_) => 0.0,
+            Interval::Duration { duration, .. } => ((duration.as_secs() / 60) % 60) as f64,
+        }
+    }
+
+    /// Computes the second part of the interval.
+    ///
+    /// The second part is the number of fractional seconds in the interval,
+    /// modulo 60.0.
+    pub fn seconds(&self) -> f64 {
+        match self {
+            Interval::Months(_) => 0.0,
+            Interval::Duration { duration, .. } => {
+                let s = (duration.as_secs() % 60) as f64;
+                let ns = f64::from(duration.subsec_nanos()) / 1e9;
+                s + ns
+            }
+        }
+    }
 }
 
 impl From<SqlInterval> for Interval {

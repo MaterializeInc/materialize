@@ -29,9 +29,9 @@ use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
-    BinaryOperator, DataType, Expr, Function, JoinConstraint, JoinOperator, ObjectName, ParsedDate,
-    ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator, TableAlias, TableFactor,
-    TableWithJoins, UnaryOperator, Value, Values,
+    BinaryOperator, DataType, DateTimeField, Expr, Function, JoinConstraint, JoinOperator,
+    ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
+    TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
 use std::cmp;
 use std::collections::{HashMap, HashSet};
@@ -908,6 +908,39 @@ impl Planner {
                         // `<expr> = ANY (<subquery>)`.
                         self.plan_any_or_all(ctx, expr, &Eq, subquery, AggregateFunc::Any)
                     }
+                }
+                Expr::Extract { field, expr } => {
+                    let (mut expr, mut typ) = self.plan_expr(ctx, expr)?;
+                    if let ScalarType::Date = &typ.scalar_type {
+                        let (e, t) =
+                            plan_cast_internal("EXTRACT", expr, &typ, ScalarType::Timestamp)?;
+                        expr = e;
+                        typ = t;
+                    }
+                    let func = match &typ.scalar_type {
+                        ScalarType::Interval => match field {
+                            DateTimeField::Year => UnaryFunc::ExtractIntervalYear,
+                            DateTimeField::Month => UnaryFunc::ExtractIntervalMonth,
+                            DateTimeField::Day => UnaryFunc::ExtractIntervalDay,
+                            DateTimeField::Hour => UnaryFunc::ExtractIntervalHour,
+                            DateTimeField::Minute => UnaryFunc::ExtractIntervalMinute,
+                            DateTimeField::Second => UnaryFunc::ExtractIntervalSecond,
+                        },
+                        ScalarType::Timestamp => match field {
+                            DateTimeField::Year => UnaryFunc::ExtractTimestampYear,
+                            DateTimeField::Month => UnaryFunc::ExtractTimestampMonth,
+                            DateTimeField::Day => UnaryFunc::ExtractTimestampDay,
+                            DateTimeField::Hour => UnaryFunc::ExtractTimestampHour,
+                            DateTimeField::Minute => UnaryFunc::ExtractTimestampMinute,
+                            DateTimeField::Second => UnaryFunc::ExtractTimestampSecond,
+                        },
+                        other => bail!(
+                            "EXTRACT expects timestamp, interval, or date input, got {:?}",
+                            other
+                        ),
+                    };
+                    let typ = ColumnType::new(ScalarType::Float64).nullable(typ.nullable);
+                    Ok((expr.call_unary(func), typ))
                 }
                 _ => bail!(
                     "complicated expressions are not yet supported: {}",
