@@ -235,9 +235,7 @@ impl Planner {
 
                     let row_expr = RelationExpr::Constant {
                         rows: vec![vec![]],
-                        typ: RelationType {
-                            column_types: vec![],
-                        },
+                        typ: RelationType::new(vec![]),
                     }
                     .map(value_exprs);
                     expr = if let Some(expr) = expr {

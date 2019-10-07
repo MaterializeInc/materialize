@@ -158,13 +158,11 @@ impl Planner {
     ) -> Result<Plan, failure::Error> {
         if variable == unicase::Ascii::new("ALL") {
             Ok(Plan::SendRows {
-                typ: RelationType {
-                    column_types: vec![
-                        ColumnType::new(ScalarType::String).name("name"),
-                        ColumnType::new(ScalarType::String).name("setting"),
-                        ColumnType::new(ScalarType::String).name("description"),
-                    ],
-                },
+                typ: RelationType::new(vec![
+                    ColumnType::new(ScalarType::String).name("name"),
+                    ColumnType::new(ScalarType::String).name("setting"),
+                    ColumnType::new(ScalarType::String).name("description"),
+                ]),
                 rows: session
                     .vars()
                     .iter()
@@ -174,9 +172,9 @@ impl Planner {
         } else {
             let variable = session.get(&variable)?;
             Ok(Plan::SendRows {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String).name(variable.name())],
-                },
+                typ: RelationType::new(vec![
+                    ColumnType::new(ScalarType::String).name(variable.name())
+                ]),
                 rows: vec![vec![variable.value().into()]],
             })
         }
@@ -197,10 +195,8 @@ impl Planner {
             .collect();
         rows.sort_unstable();
         Ok(Plan::SendRows {
-            typ: RelationType {
-                column_types: vec![ColumnType::new(ScalarType::String)
-                    .name(object_type_as_plural_str(object_type).to_owned())],
-            },
+            typ: RelationType::new(vec![ColumnType::new(ScalarType::String)
+                .name(object_type_as_plural_str(object_type).to_owned())]),
             rows,
         })
     }
@@ -239,9 +235,11 @@ impl Planner {
 
         let col_name = |s: &str| ColumnType::new(ScalarType::String).name(s.to_string());
         Ok(Plan::SendRows {
-            typ: RelationType {
-                column_types: vec![col_name("Field"), col_name("Nullable"), col_name("Type")],
-            },
+            typ: RelationType::new(vec![
+                col_name("Field"),
+                col_name("Nullable"),
+                col_name("Type"),
+            ]),
             rows: column_descriptions,
         })
     }
@@ -485,16 +483,12 @@ impl Planner {
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
             Ok(Plan::SendRows {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
-                },
+                typ: RelationType::new(vec![ColumnType::new(ScalarType::String).name("Dataflow")]),
                 rows: vec![vec![Datum::from(relation_expr.pretty())]],
             })
         } else {
             Ok(Plan::ExplainPlan {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
-                },
+                typ: RelationType::new(vec![ColumnType::new(ScalarType::String).name("Dataflow")]),
                 relation_expr,
             })
         }
@@ -551,6 +545,8 @@ fn build_source(
         None => Vec::new(),
     };
 
+    let typ = typ.add_keys(pkey_indices);
+
     Ok(Source {
         name,
         connector: SourceConnector::Kafka(KafkaSourceConnector {
@@ -560,7 +556,6 @@ fn build_source(
             schema_registry_url,
         }),
         typ,
-        pkey_indices,
     })
 }
 

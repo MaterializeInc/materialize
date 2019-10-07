@@ -495,7 +495,6 @@ impl State {
                     name,
                     connector: SourceConnector::Local(LocalSourceConnector { uuid }),
                     typ,
-                    pkey_indices: Vec::new(),
                 });
                 self.planner.dataflows.insert(dataflow.clone())?;
                 self.coord.create_dataflows(vec![dataflow]);

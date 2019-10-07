@@ -5,6 +5,9 @@
 
 #![deny(missing_docs)]
 
+// Clippy is wrong.
+#![allow(clippy::op_ref, clippy::len_zero)]
+
 pub mod func;
 
 use self::func::AggregateFunc;
@@ -140,18 +143,29 @@ impl RelationExpr {
                         );
                     }
                 }
-                typ.clone()
+                let result = typ.clone();
+                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
+                    result.add_keys(Vec::new())
+                } else {
+                    result
+                }
             }
             RelationExpr::Get { typ, .. } => typ.clone(),
             RelationExpr::Let { body, .. } => body.typ(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ();
-                RelationType {
-                    column_types: outputs
+                let mut output_typ = RelationType::new(
+                    outputs
                         .iter()
                         .map(|&i| input_typ.column_types[i].clone())
                         .collect(),
+                );
+                for keys in input_typ.keys {
+                    if keys.iter().all(|k| outputs.contains(k)) {
+                        output_typ = output_typ.add_keys(keys);
+                    }
                 }
+                output_typ
             }
             RelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ();
@@ -161,12 +175,42 @@ impl RelationExpr {
                 typ
             }
             RelationExpr::Filter { input, .. } => input.typ(),
-            RelationExpr::Join { inputs, .. } => {
+            RelationExpr::Join { inputs, variables } => {
                 let mut column_types = vec![];
                 for input in inputs {
                     column_types.append(&mut input.typ().column_types);
                 }
-                RelationType { column_types }
+                let mut typ = RelationType::new(column_types);
+
+                // A relation's uniqueness constraint holds if there is a
+                // sequence of the other relations such that each one has
+                // a uniqueness constraint whose columns are used in join
+                // constraints with relations prior in the sequence.
+                //
+                // We are going to use the uniqueness constraints of the
+                // first relation, and attempt to use the presented order.
+                let remains_unique = (1..inputs.len()).all(|index| {
+                    let typ = inputs[index].typ();
+                    let mut prior_bound = Vec::new();
+                    for variable in variables {
+                        if variable.iter().any(|(r, _c)| r < &index) {
+                            for (r, c) in variable {
+                                if r == &index {
+                                    prior_bound.push(c);
+                                }
+                            }
+                        }
+                    }
+                    typ.keys
+                        .iter()
+                        .any(|ks| ks.iter().all(|k| prior_bound.contains(&k)))
+                });
+                if remains_unique && !inputs.is_empty() {
+                    for keys in inputs[0].typ().keys {
+                        typ = typ.add_keys(keys.clone());
+                    }
+                }
+                typ
             }
             RelationExpr::Reduce {
                 input,
@@ -181,7 +225,7 @@ impl RelationExpr {
                 for (_, column_typ) in aggregates {
                     column_types.push(column_typ.clone());
                 }
-                RelationType { column_types }
+                RelationType::new(column_types).add_keys((0..group_key.len()).collect())
             }
             RelationExpr::TopK { input, .. } => input.typ(),
             RelationExpr::Negate { input } => input.typ(),
@@ -190,8 +234,8 @@ impl RelationExpr {
                 let left_typ = left.typ();
                 let right_typ = right.typ();
                 assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
-                RelationType {
-                    column_types: left_typ
+                RelationType::new(
+                    left_typ
                         .column_types
                         .iter()
                         .zip(right_typ.column_types.iter())
@@ -199,7 +243,8 @@ impl RelationExpr {
                         .collect::<Result<Vec<_>, _>>()
                         .with_context(|e| format!("{}\nIn {:#?}", e, self))
                         .unwrap(),
-                }
+                )
+                // Important: do not inherit keys of either input, as not unique.
             }
         }
     }
@@ -398,12 +443,10 @@ impl RelationExpr {
                 left.union(both.project((0..left_arity).collect()).distinct().negate()),
                 RelationExpr::Constant {
                     rows: vec![(vec![Datum::Null; both_arity - left_arity], 1)],
-                    typ: RelationType {
-                        column_types: vec![
-                            ColumnType::new(ScalarType::Null).nullable(true);
-                            both_arity - left_arity
-                        ],
-                    },
+                    typ: RelationType::new(vec![
+                        ColumnType::new(ScalarType::Null).nullable(true);
+                        both_arity - left_arity
+                    ]),
                 },
             ],
             variables: vec![],
@@ -425,12 +468,10 @@ impl RelationExpr {
             inputs: vec![
                 RelationExpr::Constant {
                     rows: vec![(vec![Datum::Null; both_arity - right_arity], 1)],
-                    typ: RelationType {
-                        column_types: vec![
-                            ColumnType::new(ScalarType::Null).nullable(true);
-                            both_arity - right_arity
-                        ],
-                    },
+                    typ: RelationType::new(vec![
+                        ColumnType::new(ScalarType::Null).nullable(true);
+                        both_arity - right_arity
+                    ]),
                 },
                 right.union(
                     both.distinct_by(((both_arity - right_arity)..both_arity).collect())

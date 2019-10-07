@@ -10,6 +10,7 @@ use repr::RelationType;
 
 pub mod aggregation;
 pub mod binding;
+pub mod distinct_elision;
 pub mod empty_map;
 pub mod fusion;
 pub mod inline_let;
@@ -88,6 +89,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::fusion::map::Map),
                     Box::new(crate::transform::empty_map::EmptyMap),
                     Box::new(crate::transform::join_elision::JoinElision),
+                    Box::new(crate::transform::distinct_elision::DistinctElision),
                     Box::new(crate::transform::inline_let::InlineLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                 ],

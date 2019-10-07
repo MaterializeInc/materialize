@@ -137,7 +137,6 @@ pub struct Source {
     pub name: String,
     pub connector: SourceConnector,
     pub typ: RelationType,
-    pub pkey_indices: Vec<usize>,
 }
 
 #[serde(rename_all = "snake_case")]
@@ -217,26 +216,22 @@ mod tests {
                     inputs: vec![
                         RelationExpr::Get {
                             name: "orders".into(),
-                            typ: RelationType {
-                                column_types: vec![ColumnType::new(ScalarType::Int64).name("id")],
-                            },
+                            typ: RelationType::new(vec![
+                                ColumnType::new(ScalarType::Int64).name("id")
+                            ]),
                         },
                         Box::new(RelationExpr::Union {
                             left: Box::new(RelationExpr::Get {
                                 name: "customers2018".into(),
-                                typ: RelationType {
-                                    column_types: vec![
-                                        ColumnType::new(ScalarType::Int64).name("id")
-                                    ],
-                                },
+                                typ: RelationType::new(vec![
+                                    ColumnType::new(ScalarType::Int64).name("id")
+                                ]),
                             }),
                             right: Box::new(RelationExpr::Get {
                                 name: "customers2019".into(),
-                                typ: RelationType {
-                                    column_types: vec![
-                                        ColumnType::new(ScalarType::Int64).name("id")
-                                    ],
-                                },
+                                typ: RelationType::new(vec![
+                                    ColumnType::new(ScalarType::Int64).name("id")
+                                ]),
                             }),
                         })
                         .distinct(),
@@ -244,12 +239,10 @@ mod tests {
                     variables: vec![vec![(0, 0), (1, 0)]],
                 }),
             },
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("name"),
-                    ColumnType::new(ScalarType::Int32).name("quantity"),
-                ],
-            },
+            typ: RelationType::new(vec![
+                ColumnType::new(ScalarType::String).name("name"),
+                ColumnType::new(ScalarType::Int32).name("quantity"),
+            ]),
             as_of: None,
         });
 

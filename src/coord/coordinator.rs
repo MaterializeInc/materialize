@@ -207,13 +207,13 @@ where
                     );
                 }
 
-                let typ = RelationType {
-                    column_types: finishing
+                let typ = RelationType::new(
+                    finishing
                         .project
                         .iter()
                         .map(|i| typ.column_types[*i].clone())
                         .collect(),
-                };
+                );
                 let rows_rx = rows_rx
                     .take(self.num_timely_workers as u64)
                     .concat2()
