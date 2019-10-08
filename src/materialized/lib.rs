@@ -39,6 +39,7 @@ pub struct Config {
     pub threads: usize,
     pub process: usize,
     pub addresses: Vec<String>,
+    pub sql: String,
     pub gather_metrics: bool,
 }
 
@@ -197,8 +198,9 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
             switchboard,
             num_timely_workers,
             logging_config.as_ref(),
+            config.sql,
             cmdq_rx,
-        );
+        )?;
     }
 
     runtime

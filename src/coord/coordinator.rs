@@ -182,7 +182,7 @@ where
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
                     // peek completes.
-                    let name = format!("<temp_{}>", Uuid::new_v4());
+                    let name = format!("<peek_{}>", Uuid::new_v4());
                     let typ = source.typ();
 
                     self.create_dataflows(vec![Dataflow::View(View {
@@ -254,7 +254,7 @@ where
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
-                        name: format!("<temp_{}>", Uuid::new_v4()),
+                        name: format!("<tail_{}>", Uuid::new_v4()),
                         from: (source.name().to_owned(), source.typ().clone()),
                         connector: SinkConnector::Tail(TailSinkConnector { tx }),
                     })]),
