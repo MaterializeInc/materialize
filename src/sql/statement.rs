@@ -42,6 +42,19 @@ impl Planner {
         }
     }
 
+    /// Parses and plans several raw SQL queries.
+    pub fn handle_commands(
+        &mut self,
+        session: &mut Session,
+        sql: String,
+    ) -> Result<Vec<Plan>, failure::Error> {
+        let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
+        stmts
+            .into_iter()
+            .map(|stmt| self.handle_statement(session, stmt))
+            .collect::<Result<_, _>>()
+    }
+
     /// Parses and plans a raw SQL query. See the documentation for
     /// [`Result<Plan, failure::Error>`] for details about the meaning of the return type.
     pub fn handle_command(
