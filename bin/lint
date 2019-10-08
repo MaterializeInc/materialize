@@ -42,6 +42,7 @@ copyright_files=$(grep -vE \
     -e '\.asc$' \
     -e '\.png$' \
     -e '\.jpe?g$' \
+    -e '\/go\.sum$' \
     <<< "$files"
 )
 
