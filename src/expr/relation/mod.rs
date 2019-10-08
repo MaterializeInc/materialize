@@ -862,27 +862,23 @@ impl RelationExpr {
             let key = (0..get_outer.arity()).collect::<Vec<_>>();
             let keyed_outer = get_outer.clone().distinct_by(key.clone());
             keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
-                let branch = branch(id_gen, get_keyed_outer.clone())?;
-                branch.let_in(id_gen, |_id_gen, get_branch| {
-                    let joined = RelationExpr::Join {
-                        inputs: vec![get_outer.clone(), get_branch.clone()],
-                        variables: key
-                            .iter()
-                            .enumerate()
-                            .map(|(i, &k)| vec![(0, k), (1, i)])
-                            .collect(),
-                    }
-                    // throw away the right-hand copy of the key we just joined on
-                    .project(
-                        (0..get_outer.arity())
-                            .chain(
-                                get_outer.arity() + get_keyed_outer.arity()
-                                    ..get_outer.arity() + get_branch.arity(),
-                            )
-                            .collect(),
-                    );
-                    Ok(joined)
-                })
+                let branch = branch(id_gen, get_keyed_outer)?;
+                let branch_arity = branch.arity();
+                let joined = RelationExpr::Join {
+                    inputs: vec![get_outer.clone(), branch],
+                    variables: key
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &k)| vec![(0, k), (1, i)])
+                        .collect(),
+                }
+                // throw away the right-hand copy of the key we just joined on
+                .project(
+                    (0..get_outer.arity())
+                        .chain(get_outer.arity() + key.len()..get_outer.arity() + branch_arity)
+                        .collect(),
+                );
+                Ok(joined)
             })
         })
     }
