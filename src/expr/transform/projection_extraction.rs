@@ -25,7 +25,13 @@ impl ProjectionExtraction {
 
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Map { input, scalars } = relation {
-            if scalars.iter().any(|s| if let ScalarExpr::Column(_) = s.0 { true } else { false }) {
+            if scalars.iter().any(|s| {
+                if let ScalarExpr::Column(_) = s.0 {
+                    true
+                } else {
+                    false
+                }
+            }) {
                 let input_arity = input.arity();
                 let mut outputs: Vec<_> = (0..input_arity).collect();
                 let mut dropped = 0;

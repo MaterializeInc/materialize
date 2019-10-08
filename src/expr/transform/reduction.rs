@@ -169,44 +169,43 @@ impl FoldConstants {
             RelationExpr::Union { .. } => {
                 let mut can_reduce = false;
                 if let RelationExpr::Union { left, right } = relation {
-                    if let (
-                        RelationExpr::Constant { .. },
-                        RelationExpr::Constant { .. },
-                    ) = (&mut **left, &mut **right) {
+                    if let (RelationExpr::Constant { .. }, RelationExpr::Constant { .. }) =
+                        (&mut **left, &mut **right)
+                    {
                         can_reduce = true;
                     }
                 }
 
                 if can_reduce {
-                let metadata = relation.typ();
-                if let RelationExpr::Union { left, right } = relation {
-                    if let (
-                        RelationExpr::Constant {
-                            rows: rows_left,
-                            typ: typ_left,
-                        },
-                        RelationExpr::Constant {
-                            rows: rows_right,
-                            typ: _,
-                        },
-                    ) = (&mut **left, &mut **right)
-                    {
-                        rows_left.append(rows_right);
-                        if rows_left.is_empty() {
-                            relation.take_safely();
+                    let metadata = relation.typ();
+                    if let RelationExpr::Union { left, right } = relation {
+                        if let (
+                            RelationExpr::Constant {
+                                rows: rows_left,
+                                typ: typ_left,
+                            },
+                            RelationExpr::Constant {
+                                rows: rows_right,
+                                typ: _,
+                            },
+                        ) = (&mut **left, &mut **right)
+                        {
+                            rows_left.append(rows_right);
+                            if rows_left.is_empty() {
+                                relation.take_safely();
+                            } else {
+                                *typ_left = metadata;
+                                *relation = left.take_dangerous();
+                            }
                         } else {
-                            *typ_left = metadata;
-                            *relation = left.take_dangerous();
-                        }
-                    } else {
-                        match (left.is_empty(), right.is_empty()) {
-                            (true, true) => unreachable!(), // both must be constants, so handled above
-                            (true, false) => *relation = right.take_dangerous(),
-                            (false, true) => *relation = left.take_dangerous(),
-                            (false, false) => (),
+                            match (left.is_empty(), right.is_empty()) {
+                                (true, true) => unreachable!(), // both must be constants, so handled above
+                                (true, false) => *relation = right.take_dangerous(),
+                                (false, true) => *relation = left.take_dangerous(),
+                                (false, false) => (),
+                            }
                         }
                     }
-                }
                 }
             }
         }
