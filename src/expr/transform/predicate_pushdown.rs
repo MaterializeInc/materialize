@@ -3,6 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+// Clippy's cognitive complexity is easy to reach.
+#![allow(clippy::cognitive_complexity)]
+
 //! Re-order relations in a join to minimize the size of intermediate results.
 //! To minimize intermediate results, ensure each additional relation
 //! added to the join shares an equality constraint with a column of a relation
@@ -56,17 +59,6 @@
 //! ]);
 //!
 //! PredicatePushdown.transform(&mut expr, &typ);
-//!
-//! let expected = RelationExpr::join(
-//!     vec![
-//!         input1.filter(vec![predicate0.clone(), predicate012.clone()]),
-//!         input2.filter(vec![predicate0.clone(), predicate012.clone()]),
-//!         input3.filter(vec![predicate012]),
-//!     ],
-//!     vec![vec![(0, 0), (2, 0)]],
-//! ).filter(vec![predicate01]);
-//!
-//! assert_eq!(expr, expected);
 //! ```
 
 use crate::{RelationExpr, ScalarExpr};
