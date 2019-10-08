@@ -7,7 +7,6 @@
 
 use crate::RelationExpr;
 
-pub mod aggregation;
 pub mod binding;
 pub mod distinct_elision;
 pub mod empty_map;
