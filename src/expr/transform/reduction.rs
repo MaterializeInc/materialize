@@ -3,6 +3,8 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+#![allow(clippy::cognitive_complexity)]
+
 use crate::{RelationExpr, ScalarExpr};
 use repr::Datum;
 use std::collections::BTreeMap;
