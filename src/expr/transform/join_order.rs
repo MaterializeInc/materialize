@@ -36,13 +36,8 @@ use crate::RelationExpr;
 ///     vec![input1, input2, input3],
 ///     vec![vec![(0, 0), (2, 0)]],
 /// );
-/// let typ = RelationType::new(vec![
-///     ColumnType::new(ScalarType::Bool),
-///     ColumnType::new(ScalarType::Bool),
-///     ColumnType::new(ScalarType::Bool),
-/// ]);
 ///
-/// JoinOrder.transform(&mut expr, &typ);
+/// JoinOrder.transform(&mut expr);
 ///
 /// if let RelationExpr::Project { input, outputs } = expr {
 ///     assert_eq!(outputs, vec![0, 1, 2]);

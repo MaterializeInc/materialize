@@ -43,13 +43,7 @@
 //!        predicate012.clone(),
 //!    ]);
 //!
-//! let typ = RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
-//!     ColumnType::new(ScalarType::Bool),
-//!     ColumnType::new(ScalarType::Bool),
-//! ]);
-//!
-//! PredicatePushdown.transform(&mut expr, &typ);
+//! PredicatePushdown.transform(&mut expr);
 //! ```
 
 use crate::{RelationExpr, ScalarExpr};

@@ -25,12 +25,8 @@
 //!     .filter(vec![predicate1.clone()])
 //!     .filter(vec![predicate2.clone()]);
 //!
-//! let typ = RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
-//! ]);
-//!
 //! // .transform() will deduplicate any predicates
-//! Filter.transform(&mut expr, &typ);
+//! Filter.transform(&mut expr);
 //!
 //! let correct = input.filter(vec![predicate0]);
 //!
