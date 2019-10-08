@@ -90,7 +90,6 @@ impl PredicatePushdown {
 
     pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         if let RelationExpr::Filter { input, predicates } = relation {
-
             match &mut **input {
                 RelationExpr::Join { inputs, variables } => {
                     // We want to scan `predicates` for any that can apply
@@ -120,7 +119,6 @@ impl PredicatePushdown {
                     let mut retain = Vec::new();
 
                     for predicate in predicates.drain(..) {
-
                         let mut pushed = false;
                         // Attempt to push down each predicate to each input.
                         for (index, push_down) in push_downs.iter_mut().enumerate() {
@@ -245,7 +243,11 @@ impl PredicatePushdown {
                         *predicates = retain;
                     }
                 }
-                RelationExpr::Reduce { input: inner, group_key, .. } => {
+                RelationExpr::Reduce {
+                    input: inner,
+                    group_key,
+                    ..
+                } => {
                     let mut retain = Vec::new();
                     let mut push_down = Vec::new();
                     for predicate in predicates.drain(..) {
@@ -262,8 +264,7 @@ impl PredicatePushdown {
                         });
                         if supported {
                             push_down.push(new_predicate);
-                        }
-                        else {
+                        } else {
                             retain.push(predicate);
                         }
                     }
@@ -272,8 +273,7 @@ impl PredicatePushdown {
                     }
                     if !retain.is_empty() {
                         *predicates = retain;
-                    }
-                    else {
+                    } else {
                         *relation = input.take();
                     }
                 }
@@ -303,9 +303,7 @@ impl PredicatePushdown {
                             .collect(),
                     );
                 }
-                RelationExpr::Map {
-                    input: inner, ..
-                } => {
+                RelationExpr::Map { input: inner, .. } => {
                     let mut retain = Vec::new();
                     let mut push_down = Vec::new();
                     let arity = inner.arity();
@@ -320,8 +318,7 @@ impl PredicatePushdown {
                         });
                         if supported {
                             push_down.push(predicate);
-                        }
-                        else {
+                        } else {
                             retain.push(predicate);
                         }
                     }
@@ -330,8 +327,7 @@ impl PredicatePushdown {
                     }
                     if !retain.is_empty() {
                         *predicates = retain;
-                    }
-                    else {
+                    } else {
                         *relation = input.take();
                     }
                 }
@@ -358,7 +354,6 @@ fn localize_predicate(
     prior_arities: &[usize],
     variables: &[Vec<(usize, usize)>],
 ) -> Option<ScalarExpr> {
-
     let mut bail = false;
     let mut expr = expr.clone();
     expr.visit_mut(&mut |e| {
@@ -367,18 +362,20 @@ fn localize_predicate(
             let local = (input, *column - prior_arities[input]);
             if input == index {
                 *column = local.1;
-            } else
-            if let Some((_rel, col)) = variables
+            } else if let Some((_rel, col)) = variables
                 .iter()
                 .find(|variable| variable.contains(&local))
-                .and_then(|variable| variable.iter()
-                .find(|(rel, _col)| rel == &index)) {
-                    *column = *col;
-                }
-                else {
-                    bail = true
-                }
+                .and_then(|variable| variable.iter().find(|(rel, _col)| rel == &index))
+            {
+                *column = *col;
+            } else {
+                bail = true
+            }
         }
     });
-    if bail { None } else { Some(expr) }
+    if bail {
+        None
+    } else {
+        Some(expr)
+    }
 }
