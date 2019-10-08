@@ -6,19 +6,10 @@
 // Clippy's cognitive complexity is easy to reach.
 #![allow(clippy::cognitive_complexity)]
 
-//! Re-order relations in a join to minimize the size of intermediate results.
-//! To minimize intermediate results, ensure each additional relation
-//! added to the join shares an equality constraint with a column of a relation
-//! that is already present in the intermediate results.
+//! Pushes predicates down through other operators.
 //!
-//! For example:
-//! Join relations A, B, C given the equality constraints A.x = C.x and B.y = C.y.
-//!
-//! In the given ordering, we join A and B first with no equality constraints. This
-//! means we have to do a full cross join of A and B, creating large intermediate results.
-//!
-//! Instead, if we reordered to A, C, B, we could use the shared equality constraint
-//! between A and C to perform an equijoin, creating smaller intermediate results.
+//! This action generally improves the quality of the query, in that selective per-record
+//! filters reduce the volume of data before they arrive at more expensive operators.
 //!
 //! ```rust
 //! use expr::{BinaryFunc, RelationExpr, ScalarExpr};
