@@ -749,10 +749,33 @@ impl RelationExpr {
         format!("{}", self.to_doc().pretty(70))
     }
 
-    /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` in it's place
-    pub fn take(&mut self) -> RelationExpr {
+    /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` with the correct type.
+    pub fn take_safely(&mut self) -> RelationExpr {
         let typ = self.typ();
         std::mem::replace(self, RelationExpr::Constant { rows: vec![], typ })
+    }
+    /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` with an **incorrect** type.
+    ///
+    /// This should only be used if `self` is about to be dropped or otherwise overwritten.
+    pub fn take_dangerous(&mut self) -> RelationExpr {
+        let empty = RelationExpr::Constant {
+            rows: vec![],
+            typ: RelationType::new(Vec::new()),
+        };
+        std::mem::replace(self, empty)
+    }
+
+    /// Replaces `self` with some logic applied to `self`.
+    pub fn replace_using<F>(&mut self, logic: F)
+    where
+        F: FnOnce(RelationExpr) -> RelationExpr,
+    {
+        let empty = RelationExpr::Constant {
+            rows: vec![],
+            typ: RelationType::new(Vec::new()),
+        };
+        let expr = std::mem::replace(self, empty);
+        *self = logic(expr);
     }
 
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`

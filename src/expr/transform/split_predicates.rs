@@ -5,13 +5,12 @@
 
 use crate::BinaryFunc;
 use crate::{RelationExpr, ScalarExpr};
-use repr::RelationType;
 
 #[derive(Debug)]
 pub struct SplitPredicates;
 
 impl super::Transform for SplitPredicates {
-    fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |expr| {
             if let RelationExpr::Filter { predicates, .. } = expr {
                 let mut pending_predicates = predicates.drain(..).collect::<Vec<_>>();

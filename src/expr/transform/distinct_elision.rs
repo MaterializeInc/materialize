@@ -4,25 +4,24 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
 /// Removes `Distinct` when the input has (compatible) keys.
 #[derive(Debug)]
 pub struct DistinctElision;
 
 impl super::Transform for DistinctElision {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl DistinctElision {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Reduce {
             input,
             group_key,
@@ -36,13 +35,15 @@ impl DistinctElision {
                     .iter()
                     .any(|keys| keys.iter().all(|k| group_key.contains(k)))
                 {
+                    let inner = input.take_dangerous();
+
                     // We may require a project.
                     if group_key.len() == input_typ.column_types.len()
                         && group_key.iter().enumerate().all(|(x, y)| x == *y)
                     {
-                        *relation = input.take();
+                        *relation = inner;
                     } else {
-                        *relation = input.take().project(group_key.clone());
+                        *relation = inner.project(group_key.clone());
                     }
                 }
             }

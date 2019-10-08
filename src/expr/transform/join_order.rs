@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
 /// Re-order relations in a join to minimize the size of intermediate results.
 /// To minimize intermediate results, ensure each additional relation
@@ -53,18 +52,18 @@ use repr::RelationType;
 pub struct JoinOrder;
 
 impl super::Transform for JoinOrder {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl JoinOrder {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join { inputs, variables } = relation {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             let uniques = types.iter().map(|t| t.keys.clone()).collect::<Vec<_>>();

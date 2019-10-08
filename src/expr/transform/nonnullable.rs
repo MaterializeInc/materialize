@@ -14,31 +14,34 @@ use repr::RelationType;
 pub struct NonNullable;
 
 impl super::Transform for NonNullable {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl NonNullable {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut_pre(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
 
-    pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         match relation {
-            RelationExpr::Map { input: _, scalars } => {
-                for (scalar, _typ) in scalars.iter_mut() {
-                    scalar_nonnullable(scalar, metadata);
+            RelationExpr::Map { input, scalars } => {
+                if scalars.iter().any(|(s, _)| scalar_contains_isnull(s)) {
+                    let metadata = input.typ();
+                    for (scalar, _typ) in scalars.iter_mut() {
+                        scalar_nonnullable(scalar, &metadata);
+                    }
                 }
             }
-            RelationExpr::Filter {
-                input: _,
-                predicates,
-            } => {
-                for predicate in predicates.iter_mut() {
-                    scalar_nonnullable(predicate, metadata);
+            RelationExpr::Filter { input, predicates } => {
+                if predicates.iter().any(|s| scalar_contains_isnull(s)) {
+                    let metadata = input.typ();
+                    for predicate in predicates.iter_mut() {
+                        scalar_nonnullable(predicate, &metadata);
+                    }
                 }
             }
             RelationExpr::Reduce {
@@ -46,15 +49,35 @@ impl NonNullable {
                 group_key: _,
                 aggregates,
             } => {
-                for (aggregate, _typ) in aggregates.iter_mut() {
-                    let input_type = input.typ();
-                    scalar_nonnullable(&mut aggregate.expr, &input_type);
-                    aggregate_nonnullable(aggregate, &input_type);
+                if aggregates
+                    .iter()
+                    .any(|a| scalar_contains_isnull(&(a.0).expr))
+                {
+                    let metadata = input.typ();
+                    for (aggregate, _typ) in aggregates.iter_mut() {
+                        scalar_nonnullable(&mut aggregate.expr, &metadata);
+                        aggregate_nonnullable(aggregate, &metadata);
+                    }
                 }
             }
             _ => {}
         }
     }
+}
+
+/// True if the expression contains a "is null" test.
+fn scalar_contains_isnull(expr: &ScalarExpr) -> bool {
+    let mut result = false;
+    expr.visit(&mut |e| {
+        if let ScalarExpr::CallUnary {
+            func: UnaryFunc::IsNull,
+            ..
+        } = e
+        {
+            result = true;
+        }
+    });
+    result
 }
 
 /// Transformations to scalar functions, based on nonnullability of columns.

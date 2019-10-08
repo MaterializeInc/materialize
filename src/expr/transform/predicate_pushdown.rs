@@ -53,25 +53,24 @@
 //! ```
 
 use crate::{RelationExpr, ScalarExpr};
-use repr::RelationType;
 
 #[derive(Debug)]
 pub struct PredicatePushdown;
 
 impl super::Transform for PredicatePushdown {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl PredicatePushdown {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut_pre(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
 
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Filter { input, predicates } = relation {
             match &mut **input {
                 RelationExpr::Join { inputs, variables } => {
@@ -252,12 +251,12 @@ impl PredicatePushdown {
                         }
                     }
                     if !push_down.is_empty() {
-                        *inner = Box::new(inner.take().filter(push_down));
+                        *inner = Box::new(inner.take_dangerous().filter(push_down));
                     }
                     if !retain.is_empty() {
                         *predicates = retain;
                     } else {
-                        *relation = input.take();
+                        *relation = input.take_dangerous();
                     }
                 }
                 RelationExpr::Project { input, outputs } => {
@@ -272,13 +271,16 @@ impl PredicatePushdown {
                             predicate
                         })
                         .collect();
-                    *relation = input.take().filter(predicates).project(outputs.clone());
+                    *relation = input
+                        .take_dangerous()
+                        .filter(predicates)
+                        .project(outputs.clone());
                 }
                 RelationExpr::Filter {
                     input,
                     predicates: predicates2,
                 } => {
-                    *relation = input.take().filter(
+                    *relation = input.take_dangerous().filter(
                         predicates
                             .clone()
                             .into_iter()
@@ -306,22 +308,22 @@ impl PredicatePushdown {
                         }
                     }
                     if !push_down.is_empty() {
-                        *inner = Box::new(inner.take().filter(push_down));
+                        *inner = Box::new(inner.take_dangerous().filter(push_down));
                     }
                     if !retain.is_empty() {
                         *predicates = retain;
                     } else {
-                        *relation = input.take();
+                        *relation = input.take_dangerous();
                     }
                 }
                 RelationExpr::Union { left, right } => {
-                    let left = left.take().filter(predicates.clone());
-                    let right = right.take().filter(predicates.clone());
+                    let left = left.take_dangerous().filter(predicates.clone());
+                    let right = right.take_dangerous().filter(predicates.clone());
                     *relation = left.union(right);
                 }
                 RelationExpr::Negate { input: inner } => {
                     let predicates = std::mem::replace(predicates, Vec::new());
-                    *relation = inner.take().filter(predicates).negate();
+                    *relation = inner.take_dangerous().filter(predicates).negate();
                 }
                 _ => (),
             }

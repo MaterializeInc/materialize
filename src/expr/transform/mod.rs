@@ -6,7 +6,6 @@
 #![deny(missing_debug_implementations)]
 
 use crate::RelationExpr;
-use repr::RelationType;
 
 pub mod aggregation;
 pub mod binding;
@@ -26,7 +25,7 @@ pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
     ///
     /// Arguably the metadata *shouldn't* change, but we're new here.
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType);
+    fn transform(&self, relation: &mut RelationExpr);
 }
 
 #[derive(Debug)]
@@ -35,11 +34,11 @@ pub struct Fixpoint {
 }
 
 impl Transform for Fixpoint {
-    fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    fn transform(&self, relation: &mut RelationExpr) {
         for _ in 0..100 {
             let original = relation.clone();
             for transform in self.transforms.iter() {
-                transform.transform(relation, &relation.typ());
+                transform.transform(relation);
             }
             if *relation == original {
                 return;
@@ -62,9 +61,9 @@ pub struct Optimizer {
 
 impl Optimizer {
     /// Optimizes the supplied relation expression.
-    pub fn optimize(&mut self, relation: &mut RelationExpr, metadata: &RelationType) {
+    pub fn optimize(&mut self, relation: &mut RelationExpr) {
         for transform in self.transforms.iter() {
-            transform.transform(relation, metadata);
+            transform.transform(relation);
         }
     }
 }
