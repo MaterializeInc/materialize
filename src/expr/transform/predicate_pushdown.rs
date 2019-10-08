@@ -90,6 +90,7 @@ impl PredicatePushdown {
 
     pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
         if let RelationExpr::Filter { input, predicates } = relation {
+
             match &mut **input {
                 RelationExpr::Join { inputs, variables } => {
                     // We want to scan `predicates` for any that can apply
@@ -244,6 +245,38 @@ impl PredicatePushdown {
                         *predicates = retain;
                     }
                 }
+                RelationExpr::Reduce { input: inner, group_key, .. } => {
+                    let mut retain = Vec::new();
+                    let mut push_down = Vec::new();
+                    for predicate in predicates.drain(..) {
+                        let mut supported = true;
+                        let mut new_predicate = predicate.clone();
+                        new_predicate.visit_mut(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                if *c < group_key.len() {
+                                    *c = group_key[*c];
+                                } else {
+                                    supported = false;
+                                }
+                            }
+                        });
+                        if supported {
+                            push_down.push(new_predicate);
+                        }
+                        else {
+                            retain.push(predicate);
+                        }
+                    }
+                    if !push_down.is_empty() {
+                        *inner = Box::new(inner.take().filter(push_down));
+                    }
+                    if !retain.is_empty() {
+                        *predicates = retain;
+                    }
+                    else {
+                        *relation = input.take();
+                    }
+                }
                 RelationExpr::Project { input, outputs } => {
                     let predicates = predicates
                         .drain(..)
@@ -270,10 +303,46 @@ impl PredicatePushdown {
                             .collect(),
                     );
                 }
+                RelationExpr::Map {
+                    input: inner, ..
+                } => {
+                    let mut retain = Vec::new();
+                    let mut push_down = Vec::new();
+                    let arity = inner.arity();
+                    for predicate in predicates.drain(..) {
+                        let mut supported = true;
+                        predicate.visit(&mut |e| {
+                            if let ScalarExpr::Column(c) = e {
+                                if *c >= arity {
+                                    supported = false;
+                                }
+                            }
+                        });
+                        if supported {
+                            push_down.push(predicate);
+                        }
+                        else {
+                            retain.push(predicate);
+                        }
+                    }
+                    if !push_down.is_empty() {
+                        *inner = Box::new(inner.take().filter(push_down));
+                    }
+                    if !retain.is_empty() {
+                        *predicates = retain;
+                    }
+                    else {
+                        *relation = input.take();
+                    }
+                }
                 RelationExpr::Union { left, right } => {
                     let left = left.take().filter(predicates.clone());
                     let right = right.take().filter(predicates.clone());
                     *relation = left.union(right);
+                }
+                RelationExpr::Negate { input: inner } => {
+                    let predicates = std::mem::replace(predicates, Vec::new());
+                    *relation = inner.take().filter(predicates).negate();
                 }
                 _ => (),
             }
@@ -289,12 +358,16 @@ fn localize_predicate(
     prior_arities: &[usize],
     variables: &[Vec<(usize, usize)>],
 ) -> Option<ScalarExpr> {
+
     let mut bail = false;
     let mut expr = expr.clone();
     expr.visit_mut(&mut |e| {
         if let ScalarExpr::Column(column) = e {
             let input = input_relation[*column];
             let local = (input, *column - prior_arities[input]);
+            if input == index {
+                *column = local.1;
+            } else
             if let Some((_rel, col)) = variables
                 .iter()
                 .find(|variable| variable.contains(&local))

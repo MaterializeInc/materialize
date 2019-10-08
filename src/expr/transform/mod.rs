@@ -72,8 +72,16 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
+
+            // Unbinding increases the complexity, but exposes more optimization opportunities.
             Box::new(crate::transform::binding::Unbind),
-            Box::new(crate::transform::binding::Deduplicate),
+
+            // Early actions include "no-brainer" transformations that reduce complexity in linear passes.
+            Box::new(crate::transform::join_elision::JoinElision),
+            Box::new(crate::transform::reduction::FoldConstants),
+            Box::new(crate::transform::fusion::filter::Filter),
+            Box::new(crate::transform::fusion::map::Map),
+
             Box::new(crate::transform::reduction::FoldConstants),
             Box::new(crate::transform::reduction::DeMorgans),
             Box::new(crate::transform::reduction::UndistributeAnd),
@@ -97,6 +105,7 @@ impl Default for Optimizer {
             // JoinOrder adds Projects, hence need project fusion again.
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::fusion::project::Project),
+            Box::new(crate::transform::binding::Deduplicate),
             Box::new(crate::transform::binding::Normalize),
         ];
         Self { transforms }
