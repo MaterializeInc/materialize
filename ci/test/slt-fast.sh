@@ -76,6 +76,7 @@ tests=(
     # test/cockroach/exec_hash_join.slt
     # test/cockroach/exec_merge_join.slt
     test/cockroach/exec_window.slt
+    test/cockroach/extract.slt
     # test/cockroach/float.slt
     test/cockroach/inet.slt
     test/cockroach/information_schema.slt
