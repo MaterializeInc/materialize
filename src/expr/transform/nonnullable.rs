@@ -49,10 +49,14 @@ impl NonNullable {
                 group_key: _,
                 aggregates,
             } => {
-                if aggregates
-                    .iter()
-                    .any(|a| scalar_contains_isnull(&(a.0).expr))
-                {
+                if aggregates.iter().any(|a| {
+                    scalar_contains_isnull(&(a.0).expr)
+                        || if let AggregateFunc::Count = &(a.0).func {
+                            true
+                        } else {
+                            false
+                        }
+                }) {
                     let metadata = input.typ();
                     for (aggregate, _typ) in aggregates.iter_mut() {
                         scalar_nonnullable(&mut aggregate.expr, &metadata);
