@@ -5,7 +5,7 @@
 
 #![allow(clippy::cognitive_complexity)]
 
-use crate::{RelationExpr, ScalarExpr};
+use crate::RelationExpr;
 use repr::Datum;
 use std::collections::BTreeMap;
 
@@ -58,7 +58,7 @@ impl FoldConstants {
                         let val = aggregates
                             .iter()
                             .rev()
-                            .map(|(agg, _typ)| agg.expr.eval(&row))
+                            .map(|agg| agg.expr.eval(&row))
                             .collect::<Vec<_>>();
                         let entry = groups.entry(key).or_insert_with(|| Vec::new());
                         for _ in 0..diff {
@@ -74,7 +74,7 @@ impl FoldConstants {
                     let new_rows = groups
                         .into_iter()
                         .map(|(mut key, mut vals)| {
-                            for (agg, _typ) in &*aggregates {
+                            for agg in &*aggregates {
                                 // Aggregate inputs are in reverse order so that
                                 // the input for each aggregate function can be
                                 // efficiently popped off the end of each `val`
@@ -110,7 +110,7 @@ impl FoldConstants {
                 }
             }
             RelationExpr::Map { input, scalars } => {
-                for (scalar, _typ) in scalars.iter_mut() {
+                for scalar in scalars.iter_mut() {
                     scalar.reduce();
                 }
 
@@ -119,7 +119,7 @@ impl FoldConstants {
                         .iter()
                         .cloned()
                         .map(|(mut row, diff)| {
-                            for (func, _typ) in scalars.iter() {
+                            for func in scalars.iter() {
                                 let result = func.eval(&row[..]);
                                 row.push(result);
                             }
@@ -133,13 +133,13 @@ impl FoldConstants {
                 for predicate in predicates.iter_mut() {
                     predicate.reduce();
                 }
-                predicates.retain(|p| p != &ScalarExpr::Literal(Datum::True));
+                predicates.retain(|p| !p.is_literal_true());
 
                 // If any predicate is false, reduce to the empty collection.
-                if predicates.iter().any(|p| {
-                    p == &ScalarExpr::Literal(Datum::False)
-                        || p == &ScalarExpr::Literal(Datum::Null)
-                }) {
+                if predicates
+                    .iter()
+                    .any(|p| p.is_literal_false() || p.is_literal_null())
+                {
                     relation.take_safely();
                 } else if let RelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = rows
@@ -229,7 +229,6 @@ pub mod demorgans {
 
     use crate::{BinaryFunc, UnaryFunc};
     use crate::{RelationExpr, ScalarExpr};
-    use repr::Datum;
 
     #[derive(Debug)]
     pub struct DeMorgans;
@@ -269,17 +268,11 @@ pub mod demorgans {
                 match func {
                     BinaryFunc::And => {
                         let inner0 = ScalarExpr::CallUnary {
-                            expr: Box::new(std::mem::replace(
-                                expr1,
-                                ScalarExpr::Literal(Datum::Null),
-                            )),
+                            expr: Box::new(expr1.take()),
                             func: UnaryFunc::Not,
                         };
                         let inner1 = ScalarExpr::CallUnary {
-                            expr: Box::new(std::mem::replace(
-                                expr2,
-                                ScalarExpr::Literal(Datum::Null),
-                            )),
+                            expr: Box::new(expr2.take()),
                             func: UnaryFunc::Not,
                         };
                         *expr = ScalarExpr::CallBinary {
@@ -290,17 +283,11 @@ pub mod demorgans {
                     }
                     BinaryFunc::Or => {
                         let inner0 = ScalarExpr::CallUnary {
-                            expr: Box::new(std::mem::replace(
-                                expr1,
-                                ScalarExpr::Literal(Datum::Null),
-                            )),
+                            expr: Box::new(expr1.take()),
                             func: UnaryFunc::Not,
                         };
                         let inner1 = ScalarExpr::CallUnary {
-                            expr: Box::new(std::mem::replace(
-                                expr2,
-                                ScalarExpr::Literal(Datum::Null),
-                            )),
+                            expr: Box::new(expr2.take()),
                             func: UnaryFunc::Not,
                         };
                         *expr = ScalarExpr::CallBinary {
@@ -317,10 +304,9 @@ pub mod demorgans {
 }
 
 pub mod undistribute_and {
-
     use crate::BinaryFunc;
     use crate::{RelationExpr, ScalarExpr};
-    use repr::Datum;
+    use repr::{ColumnType, Datum, ScalarType};
 
     #[derive(Debug)]
     pub struct UndistributeAnd;
@@ -378,10 +364,11 @@ pub mod undistribute_and {
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
+            let tru = ScalarExpr::Literal(Datum::True, ColumnType::new(ScalarType::Bool));
             if ands.contains(expr1) {
-                *expr = std::mem::replace(expr2, ScalarExpr::Literal(Datum::True));
+                *expr = std::mem::replace(expr2, tru);
             } else if ands.contains(expr2) {
-                *expr = std::mem::replace(expr1, ScalarExpr::Literal(Datum::True));
+                *expr = std::mem::replace(expr1, tru);
             }
         }
     }
@@ -418,9 +405,8 @@ pub mod undistribute_and {
             }
 
             for and_term in intersection.into_iter() {
-                let temp = std::mem::replace(expr, ScalarExpr::Literal(Datum::Null));
                 *expr = ScalarExpr::CallBinary {
-                    expr1: Box::new(temp),
+                    expr1: Box::new(expr.take()),
                     expr2: Box::new(and_term),
                     func: BinaryFunc::And,
                 };

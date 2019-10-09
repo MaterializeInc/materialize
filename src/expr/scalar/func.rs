@@ -12,7 +12,8 @@ use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
 use crate::like::build_like_regex_from_string;
-use repr::{Datum, Interval};
+use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::{ColumnType, Datum, Interval, ScalarType};
 
 pub fn and(a: Datum, b: Datum) -> Datum {
     match (&a, &b) {
@@ -789,6 +790,77 @@ impl BinaryFunc {
             BinaryFunc::MatchRegex => match_regex,
         }
     }
+
+    pub fn output_type(self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
+        use BinaryFunc::*;
+        let in_nullable = input1_type.nullable || input2_type.nullable;
+        let is_div_mod = match self {
+            DivInt32 | ModInt32 | DivInt64 | ModInt64 | DivFloat32 | ModFloat32 | DivFloat64
+            | ModFloat64 | DivDecimal | ModDecimal => true,
+            _ => false,
+        };
+        match self {
+            And | Or | Eq | NotEq | Lt | Lte | Gt | Gte | MatchRegex => {
+                ColumnType::new(ScalarType::Bool).nullable(in_nullable)
+            }
+
+            AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
+                ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
+            }
+
+            AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 => {
+                ColumnType::new(ScalarType::Int64).nullable(in_nullable || is_div_mod)
+            }
+
+            AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
+                ColumnType::new(ScalarType::Float32).nullable(in_nullable || is_div_mod)
+            }
+
+            AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
+                ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
+            }
+
+            // TODO(benesch): we correctly compute types for decimal scale, but
+            // not decimal precision... because nothing actually cares about
+            // decimal precision. Should either remove or fix.
+            AddDecimal | SubDecimal | ModDecimal => {
+                let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
+                    (ScalarType::Null, _) | (_, ScalarType::Null) => {
+                        return ColumnType::new(ScalarType::Null)
+                    }
+                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
+                    _ => unreachable!(),
+                };
+                assert_eq!(s1, s2);
+                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, *s1))
+                    .nullable(in_nullable || is_div_mod)
+            }
+            MulDecimal => {
+                let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
+                    (ScalarType::Null, _) | (_, ScalarType::Null) => {
+                        return ColumnType::new(ScalarType::Null)
+                    }
+                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
+                    _ => unreachable!(),
+                };
+                let s = s1 + s2;
+                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(in_nullable)
+            }
+            DivDecimal => {
+                let (s1, s2) = match (&input1_type.scalar_type, &input2_type.scalar_type) {
+                    (ScalarType::Null, _) | (_, ScalarType::Null) => {
+                        return ColumnType::new(ScalarType::Null)
+                    }
+                    (ScalarType::Decimal(_, s1), ScalarType::Decimal(_, s2)) => (s1, s2),
+                    _ => unreachable!(),
+                };
+                let s = s1 - s2;
+                ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
+            }
+
+            AddTimestampInterval | SubTimestampInterval => input1_type,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
@@ -952,6 +1024,50 @@ impl UnaryFunc {
         debug_assert_eq!(out, self.to_string().len() < 3);
         out
     }
+
+    pub fn output_type(self, input_type: ColumnType) -> ColumnType {
+        use UnaryFunc::*;
+        let in_nullable = input_type.nullable;
+        match self {
+            IsNull => ColumnType::new(ScalarType::Bool),
+
+            BuildLikeRegex => ColumnType::new(ScalarType::Regex).nullable(true),
+            Ascii => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
+
+            CastInt32ToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
+            CastInt32ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastInt64ToInt32 => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
+            CastInt32ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
+            CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
+            CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
+            CastInt64ToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
+            CastInt64ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastFloat32ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
+            CastFloat32ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastFloat64ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
+            CastDecimalToInt32 => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
+            CastDecimalToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
+            CastDecimalToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
+            CastDecimalToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastDateToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(in_nullable),
+
+            Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
+            | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
+
+            ExtractIntervalYear
+            | ExtractIntervalMonth
+            | ExtractIntervalDay
+            | ExtractIntervalHour
+            | ExtractIntervalMinute
+            | ExtractIntervalSecond
+            | ExtractTimestampYear
+            | ExtractTimestampMonth
+            | ExtractTimestampDay
+            | ExtractTimestampHour
+            | ExtractTimestampMinute
+            | ExtractTimestampSecond => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+        }
+    }
 }
 
 impl fmt::Display for UnaryFunc {
@@ -1050,6 +1166,22 @@ impl VariadicFunc {
         match self {
             VariadicFunc::Coalesce => coalesce,
             VariadicFunc::Substr => substr,
+        }
+    }
+
+    pub fn output_type(self, input_types: Vec<ColumnType>) -> ColumnType {
+        use VariadicFunc::*;
+        match self {
+            Coalesce => {
+                let any_nullable = input_types.iter().any(|typ| typ.nullable);
+                for typ in input_types {
+                    if typ.scalar_type != ScalarType::Null {
+                        return typ.nullable(any_nullable);
+                    }
+                }
+                ColumnType::new(ScalarType::Null)
+            }
+            Substr => ColumnType::new(ScalarType::String).nullable(true),
         }
     }
 }

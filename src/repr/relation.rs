@@ -14,7 +14,7 @@ use crate::ScalarType;
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
 /// Int32 or String) with additional attributes, likeits nullability.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub struct ColumnType {
     /// Whether this datum can be null.
     pub nullable: bool,
@@ -37,14 +37,14 @@ impl ColumnType {
         }
     }
 
-    pub fn union(&self, other: &Self) -> Result<Self, failure::Error> {
-        let scalar_type = match (&self.scalar_type, &other.scalar_type) {
+    pub fn union(self, other: Self) -> Result<Self, failure::Error> {
+        let scalar_type = match (self.scalar_type, other.scalar_type) {
             (ScalarType::Null, s) | (s, ScalarType::Null) => s,
             (s1, s2) if s1 == s2 => s1,
             (s1, s2) => bail!("Can't union types: {:?} and {:?}", s1, s2),
         };
         Ok(ColumnType {
-            scalar_type: scalar_type.clone(),
+            scalar_type,
             nullable: self.nullable
                 || other.nullable
                 || self.scalar_type == ScalarType::Null
@@ -83,6 +83,11 @@ pub struct RelationType {
 }
 
 impl RelationType {
+    /// Creates a relation type representing the relation with no columns.
+    pub fn empty() -> Self {
+        RelationType::new(vec![])
+    }
+
     /// Creates a new instance from specified column types.
     pub fn new(column_types: Vec<ColumnType>) -> Self {
         RelationType {
@@ -114,7 +119,7 @@ impl RelationDesc {
     /// columns and no keys.
     pub fn empty() -> RelationDesc {
         RelationDesc {
-            typ: RelationType::new(vec![]),
+            typ: RelationType::empty(),
             names: vec![],
         }
     }

@@ -23,10 +23,8 @@
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
 use super::expr::ColumnRef;
-pub use super::session::Session;
 use failure::bail;
 use ore::option::OptionExt;
-use repr::{ColumnType, RelationType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItemName {
@@ -39,7 +37,6 @@ pub struct ScopeItem {
     // The canonical name should appear first in the list (e.g., the name
     // assigned by an alias.)
     pub names: Vec<ScopeItemName>,
-    pub typ: ColumnType,
     pub expr: Option<sqlparser::ast::Expr>,
 }
 
@@ -59,13 +56,12 @@ enum Resolution<'a> {
 }
 
 impl ScopeItem {
-    pub fn from_column_type(column_name: Option<String>, typ: ColumnType) -> Self {
+    pub fn from_column_name(column_name: Option<String>) -> Self {
         ScopeItem {
             names: vec![ScopeItemName {
                 table_name: None,
                 column_name,
             }],
-            typ,
             expr: None,
         }
     }
@@ -90,7 +86,6 @@ impl Scope {
     pub fn from_source<I, S>(
         table_name: Option<&str>,
         column_names: I,
-        typ: RelationType,
         outer_scope: Option<Scope>,
     ) -> Self
     where
@@ -98,16 +93,12 @@ impl Scope {
         S: Into<String>,
     {
         let mut scope = Scope::empty(outer_scope);
-        scope.items = typ
-            .column_types
-            .into_iter()
-            .zip(column_names)
-            .map(|(typ, column_name)| ScopeItem {
+        scope.items = column_names
+            .map(|column_name| ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: table_name.owned(),
                     column_name: column_name.map(|n| n.into()),
                 }],
-                typ,
                 expr: None,
             })
             .collect();

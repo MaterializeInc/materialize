@@ -63,7 +63,7 @@ pub enum RelationExpr {
         /// The source collection.
         input: Box<RelationExpr>,
         /// Expressions which determine values to append to each row.
-        scalars: Vec<(ScalarExpr, ColumnType)>,
+        scalars: Vec<ScalarExpr>,
     },
     /// Keep rows from a dataflow where all the predicates are true
     Filter {
@@ -91,7 +91,7 @@ pub enum RelationExpr {
         /// Column indices used to form groups.
         group_key: Vec<usize>,
         /// Expressions which determine values to append to each row, after the group keys.
-        aggregates: Vec<(AggregateExpr, ColumnType)>,
+        aggregates: Vec<AggregateExpr>,
     },
     /// Groups and orders within each group, limiting output.
     TopK {
@@ -136,7 +136,7 @@ impl RelationExpr {
                 for (row, _diff) in rows {
                     for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                         assert!(
-                            datum.is_instance_of(column_typ),
+                            datum.is_instance_of(*column_typ),
                             "Expected datum of type {:?}, got value {:?}",
                             column_typ,
                             datum
@@ -154,12 +154,8 @@ impl RelationExpr {
             RelationExpr::Let { body, .. } => body.typ(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ();
-                let mut output_typ = RelationType::new(
-                    outputs
-                        .iter()
-                        .map(|&i| input_typ.column_types[i].clone())
-                        .collect(),
-                );
+                let mut output_typ =
+                    RelationType::new(outputs.iter().map(|&i| input_typ.column_types[i]).collect());
                 for keys in input_typ.keys {
                     if keys.iter().all(|k| outputs.contains(k)) {
                         output_typ = output_typ.add_keys(keys);
@@ -169,8 +165,8 @@ impl RelationExpr {
             }
             RelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ();
-                for (_, column_typ) in scalars {
-                    typ.column_types.push(column_typ.clone());
+                for scalar in scalars {
+                    typ.column_types.push(scalar.typ(&typ));
                 }
                 typ
             }
@@ -224,10 +220,10 @@ impl RelationExpr {
                 let input_typ = input.typ();
                 let mut column_types = group_key
                     .iter()
-                    .map(|&i| input_typ.column_types[i].clone())
+                    .map(|&i| input_typ.column_types[i])
                     .collect::<Vec<_>>();
-                for (_, column_typ) in aggregates {
-                    column_types.push(column_typ.clone());
+                for agg in aggregates {
+                    column_types.push(agg.typ(&input_typ));
                 }
                 RelationType::new(column_types).add_keys((0..group_key.len()).collect())
             }
@@ -243,7 +239,7 @@ impl RelationExpr {
                         .column_types
                         .iter()
                         .zip(right_typ.column_types.iter())
-                        .map(|(l, r)| l.union(r))
+                        .map(|(l, r)| l.union(*r))
                         .collect::<Result<Vec<_>, _>>()
                         .with_context(|e| format!("{}\nIn {:#?}", e, self))
                         .unwrap(),
@@ -274,7 +270,7 @@ impl RelationExpr {
         for (row, _diff) in rows.iter() {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
-                    datum.is_instance_of(column_typ),
+                    datum.is_instance_of(*column_typ),
                     "Expected datum of type {:?}, got value {:?}",
                     column_typ,
                     datum
@@ -293,7 +289,7 @@ impl RelationExpr {
     }
 
     /// Append to each row the results of applying elements of `scalar`.
-    pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
+    pub fn map(self, scalars: Vec<ScalarExpr>) -> Self {
         RelationExpr::Map {
             input: Box::new(self),
             scalars,
@@ -370,11 +366,7 @@ impl RelationExpr {
     /// The `group_key` argument indicates columns in the input collection that should
     /// be grouped, and `aggregates` lists aggregation functions each of which produces
     /// one output column in addition to the keys.
-    pub fn reduce(
-        self,
-        group_key: Vec<usize>,
-        aggregates: Vec<(AggregateExpr, ColumnType)>,
-    ) -> Self {
+    pub fn reduce(self, group_key: Vec<usize>, aggregates: Vec<AggregateExpr>) -> Self {
         RelationExpr::Reduce {
             input: Box::new(self),
             group_key,
@@ -677,8 +669,7 @@ impl RelationExpr {
                 to_braced_doc("Project {", to_doc!(outputs, ",", Space, input), "}")
             }
             RelationExpr::Map { input, scalars } => {
-                let scalars =
-                    Doc::intersperse(scalars.iter().map(|(expr, _typ)| expr), to_doc!(",", Space));
+                let scalars = Doc::intersperse(scalars.iter(), to_doc!(",", Space));
                 let scalars = to_tightly_braced_doc("scalars: [", scalars, "]").group();
                 to_braced_doc("Map {", to_doc!(scalars, ",", Space, input), "}")
             }
@@ -717,10 +708,7 @@ impl RelationExpr {
                 if aggregates.is_empty() {
                     to_braced_doc("Distinct {", to_doc!(keys, ",", Space, input), "}")
                 } else {
-                    let aggregates = Doc::intersperse(
-                        aggregates.iter().map(|(expr, _typ)| expr),
-                        to_doc!(",", Space),
-                    );
+                    let aggregates = Doc::intersperse(aggregates, to_doc!(",", Space));
                     let aggregates =
                         to_tightly_braced_doc("aggregates: [", aggregates, "]").group();
 
@@ -832,7 +820,7 @@ impl RelationExpr {
                     // optimizer.
                     .product(RelationExpr::constant(
                         vec![default.iter().map(|(datum, _)| datum.clone()).collect()],
-                        RelationType::new(default.iter().map(|(_, typ)| typ.clone()).collect()),
+                        RelationType::new(default.iter().map(|(_, typ)| *typ).collect()),
                     )))
             })
             .unwrap()
@@ -927,6 +915,11 @@ pub struct AggregateExpr {
 }
 
 impl AggregateExpr {
+    /// Computes the type of this `AggregateExpr`.
+    pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
+        self.func.output_type(self.expr.typ(relation_type))
+    }
+
     /// Converts this [`AggregateExpr`] to a [`Doc`] or document for pretty
     /// printing. See [`RelationExpr::to_doc`] for details on the approach.
     pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
@@ -1077,10 +1070,7 @@ Constant [[665]]"
     #[test]
     fn test_pretty_map() {
         let map = RelationExpr::Map {
-            scalars: vec![
-                (ScalarExpr::Column(0), ColumnType::new(ScalarType::Int64)),
-                (ScalarExpr::Column(1), ColumnType::new(ScalarType::Int64)),
-            ],
+            scalars: vec![(ScalarExpr::Column(0)), (ScalarExpr::Column(1))],
             input: Box::new(base()),
         };
 
@@ -1166,10 +1156,7 @@ Constant [[665]]"
         let reduce = RelationExpr::Reduce {
             input: Box::new(base()),
             group_key: vec![1, 2],
-            aggregates: vec![
-                (agg0, ColumnType::new(ScalarType::Int64)),
-                (agg1, ColumnType::new(ScalarType::Int64)),
-            ],
+            aggregates: vec![agg0, agg1],
         };
 
         assert_eq!(

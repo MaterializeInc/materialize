@@ -258,7 +258,7 @@ pub enum FieldValue {
 }
 
 impl FieldValue {
-    pub fn from_datum(datum: Datum, typ: &ColumnType) -> Option<FieldValue> {
+    pub fn from_datum(datum: Datum, typ: ColumnType) -> Option<FieldValue> {
         match datum {
             Datum::Null => None,
             Datum::True => Some(FieldValue::Bool(true)),
@@ -365,7 +365,7 @@ impl FieldValue {
 pub fn field_values_from_row(row: Vec<Datum>, typ: &RelationType) -> Vec<Option<FieldValue>> {
     row.into_iter()
         .zip(typ.column_types.iter())
-        .map(|(col, typ)| FieldValue::from_datum(col, typ))
+        .map(|(col, typ)| FieldValue::from_datum(col, *typ))
         .collect()
 }
 

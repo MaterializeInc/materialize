@@ -17,13 +17,12 @@
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, JoinKind, RelationExpr, ScalarExpr,
-    UnaryFunc, VariadicFunc,
+    UnaryFunc, VariadicFunc, LITERAL_NULL, LITERAL_TRUE,
 };
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 use super::{extract_sql_object_name, Planner};
 use dataflow_types::{ColumnOrder, RowSetFinishing};
 use failure::{bail, ensure, format_err, ResultExt};
-use ore::collections::CollectionExt;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -46,6 +45,7 @@ impl Planner {
         &self,
         q: &Query,
         outer_scope: &Scope,
+        outer_relation_type: &RelationType,
     ) -> Result<(RelationExpr, Scope, RowSetFinishing), failure::Error> {
         if !q.ctes.is_empty() {
             bail!("CTEs are not yet supported");
@@ -60,8 +60,8 @@ impl Planner {
             Some(Expr::Value(Value::Number(x))) => x.parse()?,
             _ => bail!("OFFSET must be an integer constant"),
         };
-        let (expr, scope) = self.plan_set_expr(&q.body, outer_scope)?;
-        let output_typ = expr.typ();
+        let (expr, scope) = self.plan_set_expr(&q.body, outer_scope, outer_relation_type)?;
+        let output_typ = expr.typ(outer_relation_type);
         let mut order_by = vec![];
         let mut map_exprs = vec![];
         for obe in &q.order_by {
@@ -94,11 +94,13 @@ impl Planner {
                     let ctx = &ExprContext {
                         name: "ORDER BY clause",
                         scope: &scope,
+                        outer_relation_type,
+                        inner_relation_type: &output_typ,
                         allow_aggregates: true,
                     };
-                    let (expr, typ) = self.plan_expr(ctx, other)?;
+                    let expr = self.plan_expr(ctx, other)?;
                     let idx = output_typ.column_types.len() + map_exprs.len();
-                    map_exprs.push((expr, typ));
+                    map_exprs.push(expr);
                     order_by.push(ColumnOrder {
                         column: idx,
                         desc: match obe.asc {
@@ -122,21 +124,26 @@ impl Planner {
         &self,
         q: &SetExpr,
         outer_scope: &Scope,
+        outer_relation_type: &RelationType,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match q {
-            SetExpr::Select(select) => self.plan_view_select(select, outer_scope),
+            SetExpr::Select(select) => {
+                self.plan_view_select(select, outer_scope, outer_relation_type)
+            }
             SetExpr::SetOperation {
                 op,
                 all,
                 left,
                 right,
             } => {
-                let (left_expr, left_scope) = self.plan_set_expr(left, outer_scope)?;
-                let (right_expr, _right_scope) = self.plan_set_expr(right, outer_scope)?;
+                let (left_expr, left_scope) =
+                    self.plan_set_expr(left, outer_scope, outer_relation_type)?;
+                let (right_expr, _right_scope) =
+                    self.plan_set_expr(right, outer_scope, outer_relation_type)?;
 
                 // TODO(jamii) this type-checking is redundant with RelationExpr::typ, but currently it seems that we need both because RelationExpr::typ is not allowed to return errors
-                let left_types = &left_expr.typ().column_types;
-                let right_types = &right_expr.typ().column_types;
+                let left_types = &left_expr.typ(outer_relation_type).column_types;
+                let right_types = &right_expr.typ(outer_relation_type).column_types;
                 if left_types.len() != right_types.len() {
                     bail!(
                         "set operation {:?} with {:?} and {:?} columns not supported",
@@ -146,7 +153,7 @@ impl Planner {
                     );
                 }
                 for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
-                    left_col_type.union(right_col_type)?;
+                    left_col_type.union(*right_col_type)?;
                 }
 
                 let relation_expr = match op {
@@ -189,7 +196,6 @@ impl Planner {
                     None,
                     // Column names are taken from the left, as in Postgres.
                     left_scope.column_names(),
-                    relation_expr.typ(),
                     Some(outer_scope.clone()),
                 );
 
@@ -203,14 +209,19 @@ impl Planner {
                 let ctx = &ExprContext {
                     name: "values",
                     scope: &Scope::empty(Some(outer_scope.clone())),
+                    outer_relation_type: &RelationType::empty(),
+                    inner_relation_type: &RelationType::empty(),
                     allow_aggregates: false,
                 };
                 let mut expr: Option<RelationExpr> = None;
                 let mut types: Option<Vec<ColumnType>> = None;
                 for row in values {
                     let mut value_exprs = vec![];
+                    let mut value_types = vec![];
                     for value in row {
-                        value_exprs.push(self.plan_expr(ctx, value)?);
+                        let expr = self.plan_expr(ctx, value)?;
+                        value_types.push(ctx.column_type(&expr));
+                        value_exprs.push(expr);
                     }
                     types = if let Some(types) = types {
                         if types.len() != value_exprs.len() {
@@ -222,17 +233,12 @@ impl Planner {
                         Some(
                             types
                                 .iter()
-                                .zip(value_exprs.iter())
-                                .map(|(left_typ, (_, right_typ))| left_typ.union(right_typ))
+                                .zip(value_types.iter())
+                                .map(|(left_typ, right_typ)| left_typ.union(*right_typ))
                                 .collect::<Result<Vec<_>, _>>()?,
                         )
                     } else {
-                        Some(
-                            value_exprs
-                                .iter()
-                                .map(|(_, right_typ)| right_typ.clone())
-                                .collect(),
-                        )
+                        Some(value_types)
                     };
 
                     let row_expr = RelationExpr::Constant {
@@ -247,14 +253,15 @@ impl Planner {
                     };
                 }
                 let mut scope = Scope::empty(Some(outer_scope.clone()));
-                for (i, typ) in types.unwrap().into_iter().enumerate() {
+                for i in 0..types.unwrap().len() {
                     let name = Some(format!("column{}", i + 1));
-                    scope.items.push(ScopeItem::from_column_type(name, typ));
+                    scope.items.push(ScopeItem::from_column_name(name));
                 }
                 Ok((expr.unwrap(), scope))
             }
             SetExpr::Query(query) => {
-                let (expr, scope, finishing) = self.plan_query(query, outer_scope)?;
+                let (expr, scope, finishing) =
+                    self.plan_query(query, outer_scope, outer_relation_type)?;
                 if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
@@ -267,12 +274,13 @@ impl Planner {
         &self,
         s: &Select,
         outer_scope: &Scope,
+        outer_relation_type: &RelationType,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         // Step 1. Handle FROM clause, including joins.
         let (mut relation_expr, from_scope) = s
             .from
             .iter()
-            .map(|twj| self.plan_table_with_joins(twj, outer_scope))
+            .map(|twj| self.plan_table_with_joins(twj, outer_scope, outer_relation_type))
             .fallible()
             .fold1(|(left, left_scope), (right, right_scope)| {
                 self.plan_join_operator(
@@ -281,6 +289,7 @@ impl Planner {
                     left_scope,
                     right,
                     right_scope,
+                    outer_relation_type,
                 )
             })
             .unwrap_or_else(|| {
@@ -293,7 +302,6 @@ impl Planner {
                     Scope::from_source(
                         None,
                         iter::empty::<Option<String>>(),
-                        typ,
                         Some(outer_scope.clone()),
                     ),
                 ))
@@ -304,9 +312,12 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "WHERE clause",
                 scope: &from_scope,
+                outer_relation_type,
+                inner_relation_type: &relation_expr.typ(outer_relation_type),
                 allow_aggregates: false,
             };
-            let (expr, typ) = self.plan_expr(ctx, &selection)?;
+            let expr = self.plan_expr(ctx, &selection)?;
+            let typ = ctx.column_type(&expr);
             if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Null {
                 bail!(
                     "WHERE clause must have boolean type, not {:?}",
@@ -322,6 +333,8 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "GROUP BY clause",
                 scope: &from_scope,
+                outer_relation_type,
+                inner_relation_type: &relation_expr.typ(outer_relation_type),
                 allow_aggregates: false,
             };
             let mut group_key = vec![];
@@ -329,12 +342,12 @@ impl Planner {
             let mut group_scope = Scope::empty(Some(outer_scope.clone()));
             let mut select_all_mapping = HashMap::new();
             for group_expr in &s.group_by {
-                let (expr, typ) = self.plan_expr(ctx, group_expr)?;
+                let expr = self.plan_expr(ctx, group_expr)?;
                 let new_column = group_key.len();
                 // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
                 if group_exprs
                     .iter()
-                    .find(|(existing_expr, _)| *existing_expr == expr)
+                    .find(|existing_expr| **existing_expr == expr)
                     .is_none()
                 {
                     let mut scope_item =
@@ -344,12 +357,12 @@ impl Planner {
                             select_all_mapping.insert(*old_column, new_column);
                             ctx.scope.items[*old_column].clone()
                         } else {
-                            ScopeItem::from_column_type(None, typ.clone())
+                            ScopeItem::from_column_name(None)
                         };
                     scope_item.expr = Some(group_expr.clone());
 
                     group_key.push(from_scope.len() + group_exprs.len());
-                    group_exprs.push((expr, typ.clone()));
+                    group_exprs.push(expr);
                     group_scope.items.push(scope_item);
                 }
             }
@@ -364,18 +377,21 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "aggregate function",
                 scope: &from_scope,
+                outer_relation_type,
+                inner_relation_type: &relation_expr
+                    .clone()
+                    .map(group_exprs.clone())
+                    .typ(outer_relation_type),
                 allow_aggregates: false,
             };
             let mut aggregates = vec![];
             for sql_function in aggregate_visitor.into_result()? {
-                let (expr, typ) = self.plan_aggregate(ctx, sql_function)?;
-                aggregates.push((expr, typ.clone()));
+                aggregates.push(self.plan_aggregate(ctx, sql_function)?);
                 group_scope.items.push(ScopeItem {
                     names: vec![ScopeItemName {
                         table_name: None,
                         column_name: Some(sql_function.name.to_string().to_lowercase()),
                     }],
-                    typ,
                     expr: Some(Expr::Function(sql_function.clone())),
                 });
             }
@@ -399,9 +415,12 @@ impl Planner {
             let ctx = &ExprContext {
                 name: "HAVING clause",
                 scope: &group_scope,
+                outer_relation_type,
+                inner_relation_type: &relation_expr.typ(outer_relation_type),
                 allow_aggregates: true,
             };
-            let (expr, typ) = self.plan_expr(ctx, having)?;
+            let expr = self.plan_expr(ctx, having)?;
+            let typ = ctx.column_type(&expr);
             if typ.scalar_type != ScalarType::Bool {
                 bail!(
                     "HAVING clause must have boolean type, not {:?}",
@@ -420,13 +439,15 @@ impl Planner {
                 let ctx = &ExprContext {
                     name: "SELECT clause",
                     scope: &group_scope,
+                    outer_relation_type,
+                    inner_relation_type: &relation_expr.typ(outer_relation_type),
                     allow_aggregates: true,
                 };
                 for (expr, scope_item) in
                     self.plan_select_item(ctx, p, &from_scope, &select_all_mapping)?
                 {
                     project_key.push(group_scope.len() + project_exprs.len());
-                    project_exprs.push((expr, scope_item.typ.clone()));
+                    project_exprs.push(expr);
                     project_scope.items.push(scope_item);
                 }
             }
@@ -446,13 +467,20 @@ impl Planner {
         &self,
         table_with_joins: &'a TableWithJoins,
         outer_scope: &Scope,
+        outer_relation_type: &RelationType,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         let (mut left, mut left_scope) =
             self.plan_table_factor(&table_with_joins.relation, outer_scope)?;
         for join in &table_with_joins.joins {
             let (right, right_scope) = self.plan_table_factor(&join.relation, outer_scope)?;
-            let (new_left, new_left_scope) =
-                self.plan_join_operator(&join.join_operator, left, left_scope, right, right_scope)?;
+            let (new_left, new_left_scope) = self.plan_join_operator(
+                &join.join_operator,
+                left,
+                left_scope,
+                right,
+                right_scope,
+                outer_relation_type,
+            )?;
             left = new_left;
             left_scope = new_left_scope;
         }
@@ -491,12 +519,8 @@ impl Planner {
                 } else {
                     name
                 };
-                let scope = Scope::from_source(
-                    Some(&alias),
-                    desc.iter_names(),
-                    desc.typ().clone(),
-                    Some(outer_scope.clone()),
-                );
+                let scope =
+                    Scope::from_source(Some(&alias), desc.iter_names(), Some(outer_scope.clone()));
                 Ok((expr, scope))
             }
             TableFactor::Derived {
@@ -507,7 +531,8 @@ impl Planner {
                 if *lateral {
                     bail!("LATERAL derived tables are not yet supported");
                 }
-                let (expr, scope, finishing) = self.plan_query(&subquery, &Scope::empty(None))?;
+                let (expr, scope, finishing) =
+                    self.plan_query(&subquery, &Scope::empty(None), &RelationType::empty())?;
                 if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
@@ -519,16 +544,12 @@ impl Planner {
                 } else {
                     None
                 };
-                let scope = Scope::from_source(
-                    alias,
-                    scope.column_names(),
-                    expr.typ(),
-                    Some(outer_scope.clone()),
-                );
+                let scope =
+                    Scope::from_source(alias, scope.column_names(), Some(outer_scope.clone()));
                 Ok((expr, scope))
             }
             TableFactor::NestedJoin(table_with_joins) => {
-                self.plan_table_with_joins(table_with_joins, outer_scope)
+                self.plan_table_with_joins(table_with_joins, outer_scope, &RelationType::empty())
             }
         }
     }
@@ -542,11 +563,11 @@ impl Planner {
     ) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
         match s {
             SelectItem::UnnamedExpr(sql_expr) => {
-                let (expr, typ) = self.plan_expr(ctx, sql_expr)?;
+                let expr = self.plan_expr(ctx, sql_expr)?;
                 let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
                     ctx.scope.items[*i].clone()
                 } else {
-                    ScopeItem::from_column_type(None, typ)
+                    ScopeItem::from_column_name(None)
                 };
                 scope_item.expr = Some(sql_expr.clone());
                 Ok(vec![(expr, scope_item)])
@@ -555,11 +576,11 @@ impl Planner {
                 expr: sql_expr,
                 alias,
             } => {
-                let (expr, typ) = self.plan_expr(ctx, sql_expr)?;
+                let expr = self.plan_expr(ctx, sql_expr)?;
                 let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
                     ctx.scope.items[*i].clone()
                 } else {
-                    ScopeItem::from_column_type(None, typ)
+                    ScopeItem::from_column_name(None)
                 };
                 scope_item.names.insert(
                     0,
@@ -616,6 +637,7 @@ impl Planner {
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
+        outer_relation_type: &RelationType,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
         match operator {
             JoinOperator::Inner(constraint) => self.plan_join_constraint(
@@ -624,6 +646,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
+                outer_relation_type,
                 JoinKind::Inner,
             ),
             JoinOperator::LeftOuter(constraint) => self.plan_join_constraint(
@@ -632,6 +655,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
+                outer_relation_type,
                 JoinKind::LeftOuter,
             ),
             JoinOperator::RightOuter(constraint) => self.plan_join_constraint(
@@ -640,6 +664,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
+                outer_relation_type,
                 JoinKind::RightOuter,
             ),
             JoinOperator::FullOuter(constraint) => self.plan_join_constraint(
@@ -648,6 +673,7 @@ impl Planner {
                 left_scope,
                 right,
                 right_scope,
+                outer_relation_type,
                 JoinKind::FullOuter,
             ),
             JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
@@ -667,17 +693,26 @@ impl Planner {
         left_scope: Scope,
         right: RelationExpr,
         right_scope: Scope,
+        outer_relation_type: &RelationType,
         kind: JoinKind,
     ) -> Result<(RelationExpr, Scope), failure::Error> {
-        let (expr, mut scope) = match constraint {
+        let (expr, scope) = match constraint {
             JoinConstraint::On(expr) => {
                 let mut product_scope = left_scope.product(right_scope);
                 let ctx = &ExprContext {
                     name: "ON clause",
                     scope: &product_scope,
+                    outer_relation_type,
+                    inner_relation_type: &RelationType::new(
+                        left.typ(outer_relation_type)
+                            .column_types
+                            .into_iter()
+                            .chain(right.typ(outer_relation_type).column_types)
+                            .collect(),
+                    ),
                     allow_aggregates: false,
                 };
-                let (on, _) = self.plan_expr(ctx, expr)?;
+                let on = self.plan_expr(ctx, expr)?;
                 for (l, r) in find_trivial_column_equivalences(&on) {
                     // When we can statically prove that two columns are
                     // equivalent after a join, the right column becomes
@@ -736,12 +771,6 @@ impl Planner {
                 )?
             }
         };
-        // TODO(jamii) this is overly conservative - columns that are joined on can't be null, but at this stage we don't have a clear picture of what columns we'll end up joining on.
-        if let JoinKind::LeftOuter | JoinKind::RightOuter | JoinKind::FullOuter = &kind {
-            for item in &mut scope.items {
-                item.typ.nullable = true;
-            }
-        }
         Ok((expr, scope))
     }
 
@@ -777,29 +806,21 @@ impl Planner {
                     column_name
                 ),
             };
-            let typ = l_item.typ.union(&r_item.typ)?;
             join_exprs.push(ScalarExpr::CallBinary {
                 func: BinaryFunc::Eq,
                 expr1: Box::new(ScalarExpr::Column(ColumnRef::Inner(l))),
                 expr2: Box::new(ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r))),
             });
-            map_exprs.push((
-                ScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![
-                        ScalarExpr::Column(ColumnRef::Inner(l)),
-                        ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
-                    ],
-                },
-                typ.clone(),
-            ));
+            map_exprs.push(ScalarExpr::CallVariadic {
+                func: VariadicFunc::Coalesce,
+                exprs: vec![
+                    ScalarExpr::Column(ColumnRef::Inner(l)),
+                    ScalarExpr::Column(ColumnRef::Inner(left_scope.len() + r)),
+                ],
+            });
             let mut names = l_item.names.clone();
             names.extend(r_item.names.clone());
-            new_items.push(ScopeItem {
-                names,
-                typ,
-                expr: None,
-            });
+            new_items.push(ScopeItem { names, expr: None });
             dropped_columns.insert(l);
             dropped_columns.insert(left_scope.len() + r);
         }
@@ -821,12 +842,10 @@ impl Planner {
             right: Box::new(right),
             on: join_exprs
                 .into_iter()
-                .fold(ScalarExpr::Literal(Datum::True), |expr1, expr2| {
-                    ScalarExpr::CallBinary {
-                        func: BinaryFunc::And,
-                        expr1: Box::new(expr1),
-                        expr2: Box::new(expr2),
-                    }
+                .fold(LITERAL_TRUE, |expr1, expr2| ScalarExpr::CallBinary {
+                    func: BinaryFunc::And,
+                    expr1: Box::new(expr1),
+                    expr2: Box::new(expr2),
                 }),
             kind,
         }
@@ -835,26 +854,19 @@ impl Planner {
         Ok((both, both_scope))
     }
 
-    fn plan_expr<'a>(
-        &self,
-        ctx: &ExprContext,
-        e: &'a Expr,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        if let Some((i, item)) = ctx.scope.resolve_expr(e) {
+    fn plan_expr<'a>(&self, ctx: &ExprContext, e: &'a Expr) -> Result<ScalarExpr, failure::Error> {
+        if let Some((i, _)) = ctx.scope.resolve_expr(e) {
             // surprise - we already calculated this expr before
-            let expr = ScalarExpr::Column(i);
-            Ok((expr, item.typ.clone()))
+            Ok(ScalarExpr::Column(i))
         } else {
             match e {
                 Expr::Identifier(name) => {
-                    let (i, item) = ctx.scope.resolve_column(name)?;
-                    let expr = ScalarExpr::Column(i);
-                    Ok((expr, item.typ.clone()))
+                    let (i, _) = ctx.scope.resolve_column(name)?;
+                    Ok(ScalarExpr::Column(i))
                 }
                 Expr::CompoundIdentifier(names) if names.len() == 2 => {
-                    let (i, item) = ctx.scope.resolve_table_column(&names[0], &names[1])?;
-                    let expr = ScalarExpr::Column(i);
-                    Ok((expr, item.typ.clone()))
+                    let (i, _) = ctx.scope.resolve_table_column(&names[0], &names[1])?;
+                    Ok(ScalarExpr::Column(i))
                 }
                 Expr::Value(val) => self.plan_literal(val),
                 // TODO(benesch): why isn't IS [NOT] NULL a unary op?
@@ -883,27 +895,41 @@ impl Planner {
                 Expr::Cast { expr, data_type } => self.plan_cast(ctx, expr, data_type),
                 Expr::Function(func) => self.plan_function(ctx, func),
                 Expr::Exists(query) => {
-                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope)?;
+                    let typ = RelationType::new(
+                        ctx.outer_relation_type
+                            .column_types
+                            .iter()
+                            .cloned()
+                            .chain(ctx.inner_relation_type.column_types.iter().cloned())
+                            .collect(),
+                    );
+                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope, &typ)?;
                     if !finishing.is_trivial() {
                         bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                     }
-                    Ok((expr.exists(), ColumnType::new(ScalarType::Bool)))
+                    Ok(expr.exists())
                 }
                 Expr::Subquery(query) => {
-                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope)?;
+                    let typ = RelationType::new(
+                        ctx.outer_relation_type
+                            .column_types
+                            .iter()
+                            .cloned()
+                            .chain(ctx.inner_relation_type.column_types.iter().cloned())
+                            .collect(),
+                    );
+                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope, &typ)?;
                     if !finishing.is_trivial() {
                         bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                     }
-                    let column_types = expr.typ().column_types;
+                    let column_types = expr.typ(&typ).column_types;
                     if column_types.len() != 1 {
                         bail!(
                             "Expected subselect to return 1 column, got {} columns",
                             column_types.len()
                         );
                     }
-                    let mut column_type = column_types.into_element();
-                    column_type.nullable = true;
-                    Ok((expr.select(), column_type))
+                    Ok(expr.select())
                 }
                 Expr::Any {
                     left,
@@ -931,12 +957,11 @@ impl Planner {
                     }
                 }
                 Expr::Extract { field, expr } => {
-                    let (mut expr, mut typ) = self.plan_expr(ctx, expr)?;
-                    if let ScalarType::Date = &typ.scalar_type {
-                        let (e, t) =
-                            plan_cast_internal("EXTRACT", expr, &typ, ScalarType::Timestamp)?;
-                        expr = e;
-                        typ = t;
+                    let mut expr = self.plan_expr(ctx, expr)?;
+                    let mut typ = expr.typ(&ctx.outer_relation_type, &ctx.inner_relation_type);
+                    if let ScalarType::Date = typ.scalar_type {
+                        expr = plan_cast_internal(ctx, "EXTRACT", expr, ScalarType::Timestamp)?;
+                        typ = ctx.column_type(&expr);
                     }
                     let func = match &typ.scalar_type {
                         ScalarType::Interval => match field {
@@ -960,8 +985,7 @@ impl Planner {
                             other
                         ),
                     };
-                    let typ = ColumnType::new(ScalarType::Float64).nullable(typ.nullable);
-                    Ok((expr.call_unary(func), typ))
+                    Ok(expr.call_unary(func))
                 }
                 _ => bail!(
                     "complicated expressions are not yet supported: {}",
@@ -978,20 +1002,27 @@ impl Planner {
         op: &'a BinaryOperator,
         right: &'a Query,
         func: AggregateFunc,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
+        let typ = RelationType::new(
+            ctx.outer_relation_type
+                .column_types
+                .iter()
+                .cloned()
+                .chain(ctx.inner_relation_type.column_types.iter().cloned())
+                .collect(),
+        );
         // plan right
-        let (right, _scope, finishing) = self.plan_query(right, &ctx.scope)?;
+        let (right, _scope, finishing) = self.plan_query(right, &ctx.scope, &typ)?;
         if !finishing.is_trivial() {
             bail!("ORDER BY and LIMIT are not yet supported in subqueries");
         }
-        let column_types = right.typ().column_types;
+        let column_types = right.typ(&typ).column_types;
         if column_types.len() != 1 {
             bail!(
                 "Expected subquery of ANY to return 1 column, got {} columns",
                 column_types.len()
             );
         }
-        let right_type = column_types.into_element();
 
         // plan left and op
         // this is a bit of a hack - we want to plan `op` as if the original expr was `(SELECT ANY/ALL(left op right[1]) FROM right)`
@@ -1002,38 +1033,29 @@ impl Planner {
                 table_name: Some(right_name.clone()),
                 column_name: Some(right_name.clone()),
             }],
-            typ: right_type,
             expr: None,
         });
         let any_ctx = ExprContext {
             name: "WHERE clause",
             scope: &scope,
+            outer_relation_type: &typ,
+            inner_relation_type: &right.typ(&typ),
             allow_aggregates: false,
         };
-        let (op_expr, op_type) =
-            self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
+        let op_expr = self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
 
         // plan subquery
         let expr = right
             .reduce(
                 vec![],
-                vec![(
-                    AggregateExpr {
-                        func,
-                        expr: Box::new(op_expr),
-                        distinct: false,
-                    },
-                    op_type.clone(),
-                )],
+                vec![AggregateExpr {
+                    func,
+                    expr: Box::new(op_expr),
+                    distinct: false,
+                }],
             )
             .select();
-        Ok((
-            expr,
-            ColumnType {
-                nullable: op_type.nullable,
-                scalar_type: ScalarType::Bool,
-            },
-        ))
+        Ok(expr)
     }
 
     fn plan_cast<'a>(
@@ -1041,17 +1063,17 @@ impl Planner {
         ctx: &ExprContext,
         expr: &'a Expr,
         data_type: &'a DataType,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
         let to_scalar_type = scalar_type_from_sql(data_type)?;
-        let (expr, from_type) = self.plan_expr(ctx, expr)?;
-        plan_cast_internal("CAST", expr, &from_type, to_scalar_type)
+        let expr = self.plan_expr(ctx, expr)?;
+        plan_cast_internal(ctx, "CAST", expr, to_scalar_type)
     }
 
     fn plan_aggregate(
         &self,
         ctx: &ExprContext,
         sql_func: &Function,
-    ) -> Result<(AggregateExpr, ColumnType), failure::Error> {
+    ) -> Result<AggregateExpr, failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
         assert!(is_aggregate_func(&ident));
 
@@ -1064,35 +1086,28 @@ impl Planner {
         }
 
         let arg = &sql_func.args[0];
-        let (expr, func, scalar_type) = match (&*ident, arg) {
+        let (expr, func) = match (&*ident, arg) {
             // COUNT(*) is a special case that doesn't compose well
-            ("count", Expr::Wildcard) => (
-                ScalarExpr::Literal(Datum::Null),
-                AggregateFunc::CountAll,
-                ScalarType::Int64,
-            ),
+            ("count", Expr::Wildcard) => (LITERAL_NULL, AggregateFunc::CountAll),
             _ => {
-                let (expr, typ) = self.plan_expr(ctx, arg)?;
-                let (func, scalar_type) = find_agg_func(&ident, &typ.scalar_type)?;
-                (expr, func, scalar_type)
+                let expr = self.plan_expr(ctx, arg)?;
+                let typ = ctx.column_type(&expr);
+                let func = find_agg_func(&ident, typ.scalar_type)?;
+                (expr, func)
             }
         };
-        let typ = ColumnType::new(scalar_type).nullable(func.is_nullable());
-        Ok((
-            AggregateExpr {
-                func,
-                expr: Box::new(expr),
-                distinct: sql_func.distinct,
-            },
-            typ,
-        ))
+        Ok(AggregateExpr {
+            func,
+            expr: Box::new(expr),
+            distinct: sql_func.distinct,
+        })
     }
 
     fn plan_function<'a>(
         &self,
         ctx: &ExprContext,
         sql_func: &'a Function,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
         let ident = sql_func.name.to_string().to_lowercase();
         if is_aggregate_func(&ident) {
             if ctx.allow_aggregates {
@@ -1110,7 +1125,8 @@ impl Planner {
                     if sql_func.args.len() != 1 {
                         bail!("abs expects one argument, got {}", sql_func.args.len());
                     }
-                    let (expr, typ) = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let expr = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let typ = ctx.column_type(&expr);
                     let func = match typ.scalar_type {
                         ScalarType::Int32 => UnaryFunc::AbsInt32,
                         ScalarType::Int64 => UnaryFunc::AbsInt64,
@@ -1122,14 +1138,15 @@ impl Planner {
                         func,
                         expr: Box::new(expr),
                     };
-                    Ok((expr, typ))
+                    Ok(expr)
                 }
 
                 "ascii" => {
                     if sql_func.args.len() != 1 {
                         bail!("ascii expects one argument, got {}", sql_func.args.len());
                     }
-                    let (expr, typ) = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let expr = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let typ = ctx.column_type(&expr);
                     if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null
                     {
                         bail!("ascii does not accept arguments of type {:?}", typ);
@@ -1138,10 +1155,7 @@ impl Planner {
                         func: UnaryFunc::Ascii,
                         expr: Box::new(expr),
                     };
-                    Ok((
-                        expr,
-                        ColumnType::new(ScalarType::Int32).nullable(typ.nullable),
-                    ))
+                    Ok(expr)
                 }
 
                 "coalesce" => {
@@ -1152,12 +1166,12 @@ impl Planner {
                     for arg in &sql_func.args {
                         exprs.push(self.plan_expr(ctx, arg)?);
                     }
-                    let (exprs, typ) = try_coalesce_types(exprs, "coalesce")?;
+                    let exprs = try_coalesce_types(ctx, "coalesce", exprs)?;
                     let expr = ScalarExpr::CallVariadic {
                         func: VariadicFunc::Coalesce,
                         exprs,
                     };
-                    Ok((expr, typ))
+                    Ok(expr)
                 }
 
                 "mod" => {
@@ -1181,15 +1195,14 @@ impl Planner {
                         op: BinaryOperator::Eq,
                         right: Box::new(sql_func.args[1].clone()),
                     };
-                    let (cond_expr, _) = self.plan_expr(ctx, &cond)?;
-                    let (else_expr, else_type) = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let cond_expr = self.plan_expr(ctx, &cond)?;
+                    let else_expr = self.plan_expr(ctx, &sql_func.args[0])?;
                     let expr = ScalarExpr::If {
                         cond: Box::new(cond_expr),
-                        then: Box::new(ScalarExpr::Literal(Datum::Null)),
+                        then: Box::new(LITERAL_NULL),
                         els: Box::new(else_expr),
                     };
-                    let typ = ColumnType::new(else_type.scalar_type).nullable(true);
-                    Ok((expr, typ))
+                    Ok(expr)
                 }
 
                 "substr" => {
@@ -1210,7 +1223,8 @@ impl Planner {
                         );
                     }
                     let mut exprs = Vec::new();
-                    let (expr1, typ1) = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let expr1 = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let typ1 = ctx.column_type(&expr1);
                     if typ1.scalar_type != ScalarType::String
                         && typ1.scalar_type != ScalarType::Null
                     {
@@ -1218,21 +1232,19 @@ impl Planner {
                     }
                     exprs.push(expr1);
 
-                    let (expr2, typ2) = self.plan_expr(ctx, &sql_func.args[1])?;
-                    let (verified_expr2, _) =
-                        plan_promote_int_int64("substring", expr2, typ2, "start")?;
-                    exprs.push(verified_expr2);
+                    let expr2 = self.plan_expr(ctx, &sql_func.args[1])?;
+                    let expr2 = promote_int_int64(ctx, "substring start", expr2)?;
+                    exprs.push(expr2);
                     if sql_func.args.len() == 3 {
-                        let (expr3, typ3) = self.plan_expr(ctx, &sql_func.args[2])?;
-                        let (verified_expr3, _) =
-                            plan_promote_int_int64("substring", expr3, typ3, "length")?;
-                        exprs.push(verified_expr3);
+                        let expr3 = self.plan_expr(ctx, &sql_func.args[2])?;
+                        let expr3 = promote_int_int64(ctx, "substring length", expr3)?;
+                        exprs.push(expr3);
                     }
                     let expr = ScalarExpr::CallVariadic {
                         func: VariadicFunc::Substr,
                         exprs,
                     };
-                    Ok((expr, ColumnType::new(typ1.scalar_type).nullable(true)))
+                    Ok(expr)
                 }
 
                 // Promotes a numeric type to the smallest fractional type that
@@ -1244,7 +1256,8 @@ impl Planner {
                     if sql_func.args.len() != 1 {
                         bail!("internal.avg_promotion requires exactly one argument");
                     }
-                    let (expr, typ) = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let expr = self.plan_expr(ctx, &sql_func.args[0])?;
+                    let typ = ctx.column_type(&expr);
                     let output_type = match &typ.scalar_type {
                         ScalarType::Null => ScalarType::Null,
                         ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
@@ -1253,7 +1266,7 @@ impl Planner {
                         ScalarType::Int64 => ScalarType::Decimal(19, 0),
                         _ => bail!("internal.avg_promotion called with unexpected argument"),
                     };
-                    plan_cast_internal("internal.avg_promotion", expr, &typ, output_type)
+                    plan_cast_internal(ctx, "internal.avg_promotion", expr, output_type)
                 }
 
                 _ => bail!("unsupported function: {}", ident),
@@ -1266,8 +1279,8 @@ impl Planner {
         ctx: &ExprContext,
         inner: &'a Expr,
         not: bool,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (expr, _) = self.plan_expr(ctx, inner)?;
+    ) -> Result<ScalarExpr, failure::Error> {
+        let expr = self.plan_expr(ctx, inner)?;
         let mut expr = ScalarExpr::CallUnary {
             func: UnaryFunc::IsNull,
             expr: Box::new(expr),
@@ -1278,8 +1291,7 @@ impl Planner {
                 expr: Box::new(expr),
             }
         }
-        let typ = ColumnType::new(ScalarType::Bool);
-        Ok((expr, typ))
+        Ok(expr)
     }
 
     fn plan_unary_op<'a>(
@@ -1287,17 +1299,18 @@ impl Planner {
         ctx: &ExprContext,
         op: &'a UnaryOperator,
         expr: &'a Expr,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (expr, typ) = self.plan_expr(ctx, expr)?;
-        let (func, scalar_type) = match op {
-            UnaryOperator::Not => (UnaryFunc::Not, ScalarType::Bool),
-            UnaryOperator::Plus => return Ok((expr, typ)), // no-op
+    ) -> Result<ScalarExpr, failure::Error> {
+        let expr = self.plan_expr(ctx, expr)?;
+        let typ = ctx.column_type(&expr);
+        let func = match op {
+            UnaryOperator::Not => UnaryFunc::Not,
+            UnaryOperator::Plus => return Ok(expr), // no-op
             UnaryOperator::Minus => match typ.scalar_type {
-                ScalarType::Int32 => (UnaryFunc::NegInt32, ScalarType::Int32),
-                ScalarType::Int64 => (UnaryFunc::NegInt64, ScalarType::Int64),
-                ScalarType::Float32 => (UnaryFunc::NegFloat32, ScalarType::Float32),
-                ScalarType::Float64 => (UnaryFunc::NegFloat64, ScalarType::Float64),
-                ScalarType::Decimal(p, s) => (UnaryFunc::NegDecimal, ScalarType::Decimal(p, s)),
+                ScalarType::Int32 => UnaryFunc::NegInt32,
+                ScalarType::Int64 => UnaryFunc::NegInt64,
+                ScalarType::Float32 => UnaryFunc::NegFloat32,
+                ScalarType::Float64 => UnaryFunc::NegFloat64,
+                ScalarType::Decimal(_, _) => UnaryFunc::NegDecimal,
                 _ => bail!("cannot negate {:?}", typ.scalar_type),
             },
         };
@@ -1305,8 +1318,7 @@ impl Planner {
             func,
             expr: Box::new(expr),
         };
-        let typ = ColumnType::new(scalar_type).nullable(typ.nullable);
-        Ok((expr, typ))
+        Ok(expr)
     }
 
     fn plan_binary_op<'a>(
@@ -1315,7 +1327,7 @@ impl Planner {
         op: &'a BinaryOperator,
         left: &'a Expr,
         right: &'a Expr,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
         use BinaryOperator::*;
         match op {
             And => self.plan_boolean_op(ctx, BooleanOp::And, left, right),
@@ -1345,9 +1357,11 @@ impl Planner {
         op: BooleanOp,
         left: &'a Expr,
         right: &'a Expr,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (lexpr, ltype) = self.plan_expr(ctx, left)?;
-        let (rexpr, rtype) = self.plan_expr(ctx, right)?;
+    ) -> Result<ScalarExpr, failure::Error> {
+        let lexpr = self.plan_expr(ctx, left)?;
+        let rexpr = self.plan_expr(ctx, right)?;
+        let ltype = ctx.column_type(&lexpr);
+        let rtype = ctx.column_type(&rexpr);
 
         if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Null {
             bail!(
@@ -1368,8 +1382,7 @@ impl Planner {
             BooleanOp::Or => BinaryFunc::Or,
         };
         let expr = lexpr.call_binary(rexpr, func);
-        let typ = ColumnType::new(ScalarType::Bool).nullable(ltype.nullable || rtype.nullable);
-        Ok((expr, typ))
+        Ok(expr)
     }
 
     fn plan_arithmetic_op<'a>(
@@ -1378,14 +1391,16 @@ impl Planner {
         op: ArithmeticOp,
         left: &'a Expr,
         right: &'a Expr,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
         use ArithmeticOp::*;
         use BinaryFunc::*;
         use ScalarType::*;
 
         // Step 1. Plan inner expressions.
-        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
-        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
+        let mut lexpr = self.plan_expr(ctx, left)?;
+        let mut rexpr = self.plan_expr(ctx, right)?;
+        let mut ltype = ctx.column_type(&lexpr);
+        let mut rtype = ctx.column_type(&rexpr);
 
         // Step 2. Infer whether any implicit type coercions are required.
         let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
@@ -1411,24 +1426,24 @@ impl Planner {
             // defined. We will, however, promote any date inputs to timestamps.
             // Adding an
             if let Date = &ltype.scalar_type {
-                let (expr, typ) = plan_cast_internal(&op, lexpr, &ltype, Timestamp)?;
+                let expr = plan_cast_internal(ctx, &op, lexpr, Timestamp)?;
+                ltype = ctx.column_type(&expr);
                 lexpr = expr;
-                ltype = typ;
             }
             if let Date = &rtype.scalar_type {
-                let (expr, typ) = plan_cast_internal(&op, rexpr, &rtype, Timestamp)?;
+                let expr = plan_cast_internal(ctx, &op, rexpr, Timestamp)?;
+                rtype = ctx.column_type(&expr);
                 rexpr = expr;
-                rtype = typ;
             }
         } else {
             // Otherwise, "coalesce" types by finding a common type that can
             // represent both inputs.
-            let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &op)?;
+            let mut exprs = try_coalesce_types(ctx, &op, vec![lexpr, rexpr])?;
             assert_eq!(exprs.len(), 2);
             rexpr = exprs.pop().unwrap();
             lexpr = exprs.pop().unwrap();
-            rtype = typ.clone();
-            ltype = typ;
+            rtype = ctx.column_type(&rexpr);
+            ltype = ctx.column_type(&lexpr);
         }
 
         // Step 3a. Plan the arithmetic operation for decimals.
@@ -1440,10 +1455,9 @@ impl Planner {
         //
         // [0]: https://docs.snowflake.net/manuals/sql-reference/operators-arithmetic.html
         match (&op, &ltype.scalar_type, &rtype.scalar_type) {
-            (Plus, Decimal(p1, s1), Decimal(p2, s2))
-            | (Minus, Decimal(p1, s1), Decimal(p2, s2))
-            | (Modulo, Decimal(p1, s1), Decimal(p2, s2)) => {
-                let p = cmp::min(cmp::max(p1, p2) + 1, MAX_DECIMAL_PRECISION);
+            (Plus, Decimal(_, s1), Decimal(_, s2))
+            | (Minus, Decimal(_, s1), Decimal(_, s2))
+            | (Modulo, Decimal(_, s1), Decimal(_, s2)) => {
                 let so = cmp::max(s1, s2);
                 let lexpr = rescale_decimal(lexpr, *s1, *so);
                 let rexpr = rescale_decimal(rexpr, *s2, *so);
@@ -1454,46 +1468,38 @@ impl Planner {
                     _ => unreachable!(),
                 };
                 let expr = lexpr.call_binary(rexpr, func);
-                let is_nullable_op = op == Modulo;
-                let typ = ColumnType::new(Decimal(p, *so))
-                    .nullable(ltype.nullable || rtype.nullable || is_nullable_op);
-                return Ok((expr, typ));
+                return Ok(expr);
             }
-            (Multiply, Decimal(p1, s1), Decimal(p2, s2)) => {
+            (Multiply, Decimal(_, s1), Decimal(_, s2)) => {
                 let so = cmp::max(cmp::max(cmp::min(s1 + s2, 12), *s1), *s2);
                 let si = s1 + s2;
                 let expr = lexpr.call_binary(rexpr, MulDecimal);
                 let expr = rescale_decimal(expr, si, so);
-                let p = cmp::min((p1 - s1) + (p2 - s2) + so, MAX_DECIMAL_PRECISION);
-                let typ =
-                    ColumnType::new(Decimal(p, so)).nullable(ltype.nullable || rtype.nullable);
-                return Ok((expr, typ));
+                return Ok(expr);
             }
-            (Divide, Decimal(p1, s1), Decimal(_, s2)) => {
+            (Divide, Decimal(_, s1), Decimal(_, s2)) => {
                 let s = cmp::max(cmp::min(12, s1 + 6), *s1);
                 let si = cmp::max(s + 1, *s2);
                 lexpr = rescale_decimal(lexpr, *s1, si);
                 let expr = lexpr.call_binary(rexpr, DivDecimal);
-                let expr = rescale_decimal(expr, si - *s2, s);
-                let p = cmp::min((p1 - s1) + s2 + s, MAX_DECIMAL_PRECISION);
-                let typ = ColumnType::new(Decimal(p, s)).nullable(true);
-                return Ok((expr, typ));
+                let expr = rescale_decimal(expr, si - s2, s);
+                return Ok(expr);
             }
             _ => (),
         }
 
         // Step 3b. Plan the arithmetic operation for all other types.
-        let (func, scalar_type) = match op {
+        let func = match op {
             Plus => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Int32, Int32) => (AddInt32, Int32),
-                (Int64, Int64) => (AddInt64, Int64),
-                (Float32, Float32) => (AddFloat32, Float32),
-                (Float64, Float64) => (AddFloat64, Float64),
-                (Timestamp, Interval) => (AddTimestampInterval, Timestamp),
+                (Int32, Int32) => AddInt32,
+                (Int64, Int64) => AddInt64,
+                (Float32, Float32) => AddFloat32,
+                (Float64, Float64) => AddFloat64,
+                (Timestamp, Interval) => AddTimestampInterval,
                 (Interval, Timestamp) => {
                     mem::swap(&mut lexpr, &mut rexpr);
                     mem::swap(&mut ltype, &mut rtype);
-                    (AddTimestampInterval, Timestamp)
+                    AddTimestampInterval
                 }
                 _ => bail!(
                     "no overload for {:?} + {:?}",
@@ -1502,11 +1508,11 @@ impl Planner {
                 ),
             },
             Minus => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Int32, Int32) => (SubInt32, Int32),
-                (Int64, Int64) => (SubInt64, Int64),
-                (Float32, Float32) => (SubFloat32, Float32),
-                (Float64, Float64) => (SubFloat64, Float64),
-                (Timestamp, Interval) => (SubTimestampInterval, Timestamp),
+                (Int32, Int32) => SubInt32,
+                (Int64, Int64) => SubInt64,
+                (Float32, Float32) => SubFloat32,
+                (Float64, Float64) => SubFloat64,
+                (Timestamp, Interval) => SubTimestampInterval,
                 _ => bail!(
                     "no overload for {:?} - {:?}",
                     ltype.scalar_type,
@@ -1514,10 +1520,10 @@ impl Planner {
                 ),
             },
             Multiply => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Int32, Int32) => (MulInt32, Int32),
-                (Int64, Int64) => (MulInt64, Int64),
-                (Float32, Float32) => (MulFloat32, Float32),
-                (Float64, Float64) => (MulFloat64, Float64),
+                (Int32, Int32) => MulInt32,
+                (Int64, Int64) => MulInt64,
+                (Float32, Float32) => MulFloat32,
+                (Float64, Float64) => MulFloat64,
                 _ => bail!(
                     "no overload for {:?} * {:?}",
                     ltype.scalar_type,
@@ -1525,10 +1531,10 @@ impl Planner {
                 ),
             },
             Divide => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Int32, Int32) => (DivInt32, Int32),
-                (Int64, Int64) => (DivInt64, Int64),
-                (Float32, Float32) => (DivFloat32, Float32),
-                (Float64, Float64) => (DivFloat64, Float64),
+                (Int32, Int32) => DivInt32,
+                (Int64, Int64) => DivInt64,
+                (Float32, Float32) => DivFloat32,
+                (Float64, Float64) => DivFloat64,
                 _ => bail!(
                     "no overload for {:?} / {:?}",
                     ltype.scalar_type,
@@ -1536,10 +1542,10 @@ impl Planner {
                 ),
             },
             Modulo => match (&ltype.scalar_type, &rtype.scalar_type) {
-                (Int32, Int32) => (ModInt32, Int32),
-                (Int64, Int64) => (ModInt64, Int64),
-                (Float32, Float32) => (ModFloat32, Float32),
-                (Float64, Float64) => (ModFloat64, Float64),
+                (Int32, Int32) => ModInt32,
+                (Int64, Int64) => ModInt64,
+                (Float32, Float32) => ModFloat32,
+                (Float64, Float64) => ModFloat64,
                 _ => bail!(
                     "no overload for {:?} % {:?}",
                     ltype.scalar_type,
@@ -1548,13 +1554,7 @@ impl Planner {
             },
         };
         let expr = lexpr.call_binary(rexpr, func);
-        let is_nullable_op = match op {
-            Divide | Modulo => true,
-            _ => false,
-        };
-        let typ = ColumnType::new(scalar_type)
-            .nullable(ltype.nullable || rtype.nullable || is_nullable_op);
-        Ok((expr, typ))
+        Ok(expr)
     }
 
     fn plan_comparison_op<'a>(
@@ -1563,16 +1563,16 @@ impl Planner {
         op: ComparisonOp,
         left: &'a Expr,
         right: &'a Expr,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (mut lexpr, mut ltype) = self.plan_expr(ctx, left)?;
-        let (mut rexpr, mut rtype) = self.plan_expr(ctx, right)?;
+    ) -> Result<ScalarExpr, failure::Error> {
+        let mut lexpr = self.plan_expr(ctx, left)?;
+        let mut rexpr = self.plan_expr(ctx, right)?;
 
-        let (mut exprs, typ) = try_coalesce_types(vec![(lexpr, ltype), (rexpr, rtype)], &op)?;
+        let mut exprs = try_coalesce_types(ctx, &op, vec![lexpr, rexpr])?;
         assert_eq!(exprs.len(), 2);
         rexpr = exprs.pop().unwrap();
         lexpr = exprs.pop().unwrap();
-        rtype = typ.clone();
-        ltype = typ;
+        let rtype = ctx.column_type(&rexpr);
+        let ltype = ctx.column_type(&lexpr);
 
         if ltype.scalar_type != rtype.scalar_type
             && ltype.scalar_type != ScalarType::Null
@@ -1593,9 +1593,7 @@ impl Planner {
             ComparisonOp::Eq => BinaryFunc::Eq,
             ComparisonOp::NotEq => BinaryFunc::NotEq,
         };
-        let expr = lexpr.call_binary(rexpr, func);
-        let typ = ColumnType::new(ScalarType::Bool).nullable(ltype.nullable || rtype.nullable);
-        Ok((expr, typ))
+        Ok(lexpr.call_binary(rexpr, func))
     }
 
     fn plan_like<'a>(
@@ -1604,9 +1602,11 @@ impl Planner {
         left: &'a Expr,
         right: &'a Expr,
         negate: bool,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
-        let (lexpr, ltype) = self.plan_expr(ctx, left)?;
-        let (rexpr, rtype) = self.plan_expr(ctx, right)?;
+    ) -> Result<ScalarExpr, failure::Error> {
+        let lexpr = self.plan_expr(ctx, left)?;
+        let ltype = ctx.column_type(&lexpr);
+        let rexpr = self.plan_expr(ctx, right)?;
+        let rtype = ctx.column_type(&rexpr);
 
         if (ltype.scalar_type != ScalarType::String && ltype.scalar_type != ScalarType::Null)
             || (rtype.scalar_type != ScalarType::String && rtype.scalar_type != ScalarType::Null)
@@ -1632,11 +1632,7 @@ impl Planner {
                 expr: Box::new(expr),
             };
         }
-        // `BinaryFunc::MatchRegexp` returns `NULL` if the like
-        // pattern is invalid. Ideally this would return an error
-        // instead, but we don't currently support runtime errors.
-        let typ = ColumnType::new(ScalarType::Bool).nullable(true);
-        Ok((expr, typ))
+        Ok(expr)
     }
 
     fn plan_between<'a>(
@@ -1646,7 +1642,7 @@ impl Planner {
         low: &'a Expr,
         high: &'a Expr,
         negated: bool,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
         let low = Expr::BinaryOp {
             left: Box::new(expr.clone()),
             op: if negated {
@@ -1683,7 +1679,7 @@ impl Planner {
         expr: &'a Expr,
         list: &'a [Expr],
         negated: bool,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
         let mut cond = Expr::Value(Value::Boolean(false));
         for l in list {
             cond = Expr::BinaryOp {
@@ -1712,7 +1708,7 @@ impl Planner {
         conditions: &'a [Expr],
         results: &'a [Expr],
         else_result: &'a Option<Box<Expr>>,
-    ) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    ) -> Result<ScalarExpr, failure::Error> {
         let mut cond_exprs = Vec::new();
         let mut result_exprs = Vec::new();
         for (c, r) in conditions.iter().zip(results) {
@@ -1724,7 +1720,8 @@ impl Planner {
                 },
                 None => c.clone(),
             };
-            let (cexpr, ctype) = self.plan_expr(ctx, &c)?;
+            let cexpr = self.plan_expr(ctx, &c)?;
+            let ctype = ctx.column_type(&cexpr);
             if ctype.scalar_type != ScalarType::Bool {
                 bail!(
                     "CASE expression has non-boolean type {:?}",
@@ -1732,19 +1729,14 @@ impl Planner {
                 );
             }
             cond_exprs.push(cexpr);
-            let (rexpr, rtype) = self.plan_expr(ctx, r)?;
-            result_exprs.push((rexpr, rtype));
+            let rexpr = self.plan_expr(ctx, r)?;
+            result_exprs.push(rexpr);
         }
-        let (else_expr, else_type) = match else_result {
+        result_exprs.push(match else_result {
             Some(else_result) => self.plan_expr(ctx, else_result)?,
-            None => {
-                let expr = ScalarExpr::Literal(Datum::Null);
-                let typ = ColumnType::new(ScalarType::Null);
-                (expr, typ)
-            }
-        };
-        result_exprs.push((else_expr, else_type));
-        let (mut result_exprs, typ) = try_coalesce_types(result_exprs, "CASE")?;
+            None => LITERAL_NULL,
+        });
+        let mut result_exprs = try_coalesce_types(ctx, "CASE", result_exprs)?;
         let mut expr = result_exprs.pop().unwrap();
         assert_eq!(cond_exprs.len(), result_exprs.len());
         for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
@@ -1754,10 +1746,10 @@ impl Planner {
                 els: Box::new(expr),
             }
         }
-        Ok((expr, typ))
+        Ok(expr)
     }
 
-    fn plan_literal<'a>(&self, l: &'a Value) -> Result<(ScalarExpr, ColumnType), failure::Error> {
+    fn plan_literal<'a>(&self, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
         let (datum, scalar_type) = match l {
             Value::Number(s) => {
                 let mut significand: i128 = 0;
@@ -1860,9 +1852,9 @@ impl Planner {
             Value::Null => (Datum::Null, ScalarType::Null),
         };
         let nullable = datum == Datum::Null;
-        let expr = ScalarExpr::Literal(datum);
         let typ = ColumnType::new(scalar_type).nullable(nullable);
-        Ok((expr, typ))
+        let expr = ScalarExpr::Literal(datum, typ);
+        Ok(expr)
     }
 }
 
@@ -1957,14 +1949,16 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
 // When types don't match exactly, SQL has some poorly-documented type promotion
 // rules. For now, just promote integers into decimals or floats, decimals into
 // floats, and small Xs into bigger Xs.
-fn try_coalesce_types<C>(
-    exprs: Vec<(ScalarExpr, ColumnType)>,
-    context: C,
-) -> Result<(Vec<ScalarExpr>, ColumnType), failure::Error>
+fn try_coalesce_types<'a, S>(
+    ctx: &ExprContext<'a>,
+    name: S,
+    exprs: Vec<ScalarExpr>,
+) -> Result<Vec<ScalarExpr>, failure::Error>
 where
-    C: fmt::Display + Copy,
+    S: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
+    let types: Vec<_> = exprs.iter().map(|e| ctx.column_type(e)).collect();
     let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
         ScalarType::Null => 0,
         ScalarType::Int32 => 1,
@@ -1976,27 +1970,24 @@ where
         ScalarType::Timestamp => 7,
         _ => 8,
     };
-    let max_scalar_type = exprs
+    let max_scalar_type = types
         .iter()
-        .map(|(_expr, typ)| &typ.scalar_type)
+        .map(|typ| typ.scalar_type)
         .max_by_key(|scalar_type| scalar_type_prec(scalar_type))
-        .unwrap()
-        .clone();
-    let nullable = exprs.iter().any(|(_expr, typ)| typ.nullable);
-    let out_typ = ColumnType::new(max_scalar_type).nullable(nullable);
+        .unwrap();
     let mut out = Vec::new();
-    for (expr, typ) in exprs {
-        match plan_cast_internal(context, expr, &typ, out_typ.scalar_type.clone()) {
-            Ok((expr, _)) => out.push(expr),
+    for (expr, typ) in exprs.into_iter().zip(types) {
+        match plan_cast_internal(ctx, name, expr, max_scalar_type) {
+            Ok(expr) => out.push(expr),
             Err(_) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
-                context,
-                typ,
-                out_typ,
+                name,
+                typ.scalar_type,
+                max_scalar_type,
             ),
         }
     }
-    Ok((out, out_typ))
+    Ok(out)
 }
 
 /// Plans a cast between two `RelationExpr`s of different types. If it is
@@ -2004,92 +1995,88 @@ where
 ///
 /// Note that `plan_cast_internal` only understands [`ScalarType`]s. If you need
 /// to cast between SQL [`DataType`]s, see [`Planner::plan_cast`].
-fn plan_cast_internal<C>(
-    context: C,
+fn plan_cast_internal<'a, S>(
+    ctx: &ExprContext<'a>,
+    name: S,
     expr: ScalarExpr,
-    from_type: &ColumnType,
     to_scalar_type: ScalarType,
-) -> Result<(ScalarExpr, ColumnType), failure::Error>
+) -> Result<ScalarExpr, failure::Error>
 where
-    C: fmt::Display + Copy,
+    S: fmt::Display + Copy,
 {
     use ScalarType::*;
     use UnaryFunc::*;
-    let to_type = ColumnType::new(to_scalar_type).nullable(from_type.nullable);
-    let expr = match (&from_type.scalar_type, &to_type.scalar_type) {
+    let from_scalar_type = ctx.column_type(&expr).scalar_type;
+    let expr = match (from_scalar_type, to_scalar_type) {
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
         (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
         (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
-        (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, *s),
-        (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, *s),
+        (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, s),
+        (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, s),
         (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
         (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
         (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
         (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
         (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
         (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
-        (Decimal(_, s), Int32) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt32),
-        (Decimal(_, s), Int64) => rescale_decimal(expr, *s, 0).call_unary(CastDecimalToInt64),
+        (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
+        (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
         (Decimal(_, s), Float32) => {
-            let factor = 10_f32.powi(i32::from(*s));
-            let factor = ScalarExpr::Literal(Datum::from(factor));
+            let factor = 10_f32.powi(i32::from(s));
+            let factor = ScalarExpr::Literal(Datum::from(factor), ColumnType::new(to_scalar_type));
             expr.call_unary(CastDecimalToFloat32)
                 .call_binary(factor, BinaryFunc::DivFloat32)
         }
         (Decimal(_, s), Float64) => {
-            let factor = 10_f64.powi(i32::from(*s));
-            let factor = ScalarExpr::Literal(Datum::from(factor));
+            let factor = 10_f64.powi(i32::from(s));
+            let factor = ScalarExpr::Literal(Datum::from(factor), ColumnType::new(to_scalar_type));
             expr.call_unary(CastDecimalToFloat64)
                 .call_binary(factor, BinaryFunc::DivFloat64)
         }
-        (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, *s1, *s2),
+        (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),
         (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
-        (Null, _) => expr,
+        (Null, _) => {
+            // assert_eq!(expr, ScalarExpr::Literal(Datum::Null, ColumnType::new(ScalarType::Null)));
+            ScalarExpr::Literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
+        }
         (from, to) if from == to => expr,
         (from, to) => {
             bail!(
                 "{} does not support casting from {:?} to {:?}",
-                context,
+                name,
                 from,
                 to
             );
         }
     };
-    Ok((expr, to_type))
+    Ok(expr)
 }
 
-fn plan_promote_int_int64<C>(
-    context: C,
-    e: ScalarExpr,
-    typ: ColumnType,
-    argname: &str,
-) -> Result<(ScalarExpr, ColumnType), failure::Error>
+fn promote_int_int64<'a, S>(
+    ctx: &ExprContext<'a>,
+    name: S,
+    expr: ScalarExpr,
+) -> Result<ScalarExpr, failure::Error>
 where
-    C: fmt::Display + Copy,
+    S: fmt::Display + Copy,
 {
-    let (caste, casttyp) = match typ.scalar_type {
-        ScalarType::Int32 => plan_cast_internal(context, e, &typ, ScalarType::Int64)?,
-        _ => (e, typ),
-    };
-    if casttyp.scalar_type != ScalarType::Int64 && casttyp.scalar_type != ScalarType::Null {
-        bail!(
-            "{} {:?} argument has non-integer type {:?}",
-            context,
-            argname,
-            casttyp
-        );
-    }
-    Ok((caste, casttyp))
+    Ok(match ctx.column_type(&expr).scalar_type {
+        ScalarType::Null | ScalarType::Int64 => expr,
+        ScalarType::Int32 => plan_cast_internal(ctx, name, expr, ScalarType::Int64)?,
+        other => bail!("{} has non-integer type {:?}", name, other,),
+    })
 }
 
 fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     if s2 > s1 {
+        let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
         let factor = 10_i128.pow(u32::from(s2 - s1));
-        let factor = ScalarExpr::Literal(Datum::from(factor));
+        let factor = ScalarExpr::Literal(Datum::from(factor), typ);
         expr.call_binary(factor, BinaryFunc::MulDecimal)
     } else if s1 > s2 {
+        let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
         let factor = 10_i128.pow(u32::from(s1 - s2));
-        let factor = ScalarExpr::Literal(Datum::from(factor));
+        let factor = ScalarExpr::Literal(Datum::from(factor), typ);
         expr.call_binary(factor, BinaryFunc::DivDecimal)
     } else {
         expr
@@ -2199,8 +2186,20 @@ struct ExprContext<'a> {
     name: &'static str,
     /// The current scope
     scope: &'a Scope,
+    /// The type of the outer relation expression upon which this scalar
+    /// expression will be evaluated.
+    outer_relation_type: &'a RelationType,
+    /// The type of the inner relation expression upon which this scalar
+    /// expression will be evaluated.
+    inner_relation_type: &'a RelationType,
     /// Are aggregate functions allowed in this context
     allow_aggregates: bool,
+}
+
+impl<'a> ExprContext<'a> {
+    fn column_type(&self, expr: &ScalarExpr) -> ColumnType {
+        expr.typ(&self.outer_relation_type, &self.inner_relation_type)
+    }
 }
 
 fn is_aggregate_func(name: &str) -> bool {
@@ -2211,11 +2210,8 @@ fn is_aggregate_func(name: &str) -> bool {
     }
 }
 
-fn find_agg_func(
-    name: &str,
-    scalar_type: &ScalarType,
-) -> Result<(AggregateFunc, ScalarType), failure::Error> {
-    let func = match (name, scalar_type) {
+fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, failure::Error> {
+    Ok(match (name, scalar_type) {
         ("max", ScalarType::Int32) => AggregateFunc::MaxInt32,
         ("max", ScalarType::Int64) => AggregateFunc::MaxInt64,
         ("max", ScalarType::Float32) => AggregateFunc::MaxFloat32,
@@ -2240,69 +2236,5 @@ fn find_agg_func(
         ("sum", ScalarType::Null) => AggregateFunc::SumNull,
         ("count", _) => AggregateFunc::Count,
         other => bail!("Unimplemented function/type combo: {:?}", other),
-    };
-    let scalar_type = match (name, scalar_type) {
-        ("count", _) => ScalarType::Int64,
-        ("max", _) | ("min", _) | ("sum", _) => scalar_type.clone(),
-        other => bail!("Unknown aggregate function: {:?}", other),
-    };
-    Ok((func, scalar_type))
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    fn ct(s: ScalarType) -> ColumnType {
-        ColumnType::new(s)
-    }
-
-    fn int32() -> (ScalarExpr, ColumnType) {
-        (ScalarExpr::Literal(Datum::Int32(0)), ct(ScalarType::Int32))
-    }
-
-    fn int64() -> (ScalarExpr, ColumnType) {
-        (ScalarExpr::Literal(Datum::Int64(0)), ct(ScalarType::Int64))
-    }
-
-    fn float32() -> (ScalarExpr, ColumnType) {
-        (
-            ScalarExpr::Literal(Datum::Float32(0.0.into())),
-            ct(ScalarType::Float32),
-        )
-    }
-
-    fn float64() -> (ScalarExpr, ColumnType) {
-        (
-            ScalarExpr::Literal(Datum::Float64(0.0.into())),
-            ct(ScalarType::Float64),
-        )
-    }
-
-    fn decimal(precision: u8, scale: u8) -> (ScalarExpr, ColumnType) {
-        (
-            ScalarExpr::Literal(Datum::from(0 as i128)),
-            ct(ScalarType::Decimal(precision, scale)),
-        )
-    }
-
-    #[test]
-    fn test_type_coalescing() -> Result<(), failure::Error> {
-        use ScalarType::*;
-
-        let test_cases = vec![
-            (vec![int32(), int64()], ct(Int64)),
-            (vec![int64(), int32()], ct(Int64)),
-            (vec![int64(), decimal(10, 10)], ct(Decimal(10, 10))),
-            (vec![int64(), float32()], ct(Float32)),
-            (vec![float32(), float64()], ct(Float64)),
-        ];
-
-        for (exprs, expected) in test_cases {
-            let (_exprs, col_type) = try_coalesce_types(exprs, "test_type_coalescing")?;
-            assert_eq!(col_type, expected);
-        }
-
-        Ok(())
-    }
+    })
 }
