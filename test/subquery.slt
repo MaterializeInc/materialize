@@ -133,3 +133,50 @@ WHERE peeps.peep = age.peep
 alice false
 bob true
 eve true
+
+statement ok
+CREATE TABLE t1 (a int NOT NULL)
+
+statement ok
+CREATE TABLE t2 (b int NOT NULL)
+
+statement ok
+CREATE TABLE t3 (a int NOT NULL, b int NOT NULL)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO t2 VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO t3 VALUES (2, 3), (1, 4)
+
+# Test a constraint that spans multiple levels of nesting.
+query I
+SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE EXISTS (SELECT 1 FROM t3 WHERE t1.a = t3.a AND t2.b = t3.b))
+----
+2
+
+mode standard
+
+# Verify that the plan for a non-correlated subquery is sane.
+query T multiline
+EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
+----
+Project {
+  outputs: [0],
+  Join {
+    variables: [],
+    Get { t1 },
+    Distinct {
+      group_key: [],
+      Join {
+        variables: [],
+        Get { t2 },
+        Distinct { group_key: [], Get { t1 } }
+      }
+    },
+    Constant [[true]]
+  }
+}

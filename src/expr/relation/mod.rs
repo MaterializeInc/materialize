@@ -846,42 +846,6 @@ impl RelationExpr {
             })
             .unwrap()
     }
-
-    /// Perform some operation using `self` and then inner-join the results with `self`.
-    /// This is useful in some edge cases in decorrelation where we need to track duplicate rows in `self` that might be lost by `branch`
-    pub fn branch<Branch>(
-        self,
-        id_gen: &mut IdGen,
-        branch: Branch,
-    ) -> Result<RelationExpr, failure::Error>
-    where
-        Branch: FnOnce(&mut IdGen, RelationExpr) -> Result<super::RelationExpr, failure::Error>,
-    {
-        self.let_in(id_gen, |id_gen, get_outer| {
-            // TODO(jamii) this is a correct but not optimal value of key - optimize this by looking at what columns `branch` actually uses
-            let key = (0..get_outer.arity()).collect::<Vec<_>>();
-            let keyed_outer = get_outer.clone().distinct_by(key.clone());
-            keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
-                let branch = branch(id_gen, get_keyed_outer)?;
-                let branch_arity = branch.arity();
-                let joined = RelationExpr::Join {
-                    inputs: vec![get_outer.clone(), branch],
-                    variables: key
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &k)| vec![(0, k), (1, i)])
-                        .collect(),
-                }
-                // throw away the right-hand copy of the key we just joined on
-                .project(
-                    (0..get_outer.arity())
-                        .chain(get_outer.arity() + key.len()..get_outer.arity() + branch_arity)
-                        .collect(),
-                );
-                Ok(joined)
-            })
-        })
-    }
 }
 
 /// Manages the allocation of locally unique IDs when building a [`RelationExpr`].

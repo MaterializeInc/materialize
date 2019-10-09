@@ -6,6 +6,7 @@
 use expr as dataflow_expr;
 use ore::collections::CollectionExt;
 use repr::*;
+use std::collections::{HashMap, HashSet};
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use dataflow_expr::like;
@@ -326,6 +327,57 @@ impl RelationExpr {
             Threshold { input } => Ok(input.applied_to(id_gen, get_outer)?.threshold()),
         }
     }
+
+    /// Visits the column references within this `RelationExpr`.
+    fn visit_columns<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut ColumnRef),
+    {
+        match self {
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+
+            RelationExpr::Project { input, .. }
+            | RelationExpr::Distinct { input }
+            | RelationExpr::Negate { input }
+            | RelationExpr::Threshold { input } => input.visit_columns(f),
+
+            RelationExpr::Union { left, right } => {
+                left.visit_columns(f);
+                right.visit_columns(f);
+            }
+
+            RelationExpr::Join {
+                left, right, on, ..
+            } => {
+                left.visit_columns(f);
+                right.visit_columns(f);
+                on.visit_columns(f);
+            }
+
+            RelationExpr::Reduce {
+                input, aggregates, ..
+            } => {
+                input.visit_columns(f);
+                for aggregate in aggregates {
+                    aggregate.visit_columns(f);
+                }
+            }
+
+            RelationExpr::Map { input, scalars } => {
+                input.visit_columns(f);
+                for scalar in scalars {
+                    scalar.visit_columns(f);
+                }
+            }
+
+            RelationExpr::Filter { input, predicates } => {
+                input.visit_columns(f);
+                for predicate in predicates {
+                    predicate.visit_columns(f);
+                }
+            }
+        }
+    }
 }
 
 impl ScalarExpr {
@@ -385,45 +437,164 @@ impl ScalarExpr {
             // Anything in the subquery that cares about row counts (Reduce/Distinct/Negate/Threshold) must not:
             // * change the row counts of the outer query
             // * accidentally compute its own value using the row counts of the outer query
-            // Use `branch` to calculate the subquery once for each __distinct__ row of the outer query and then join the answers back on to the original rows of the outer query
+            // Use `branch` to calculate the subquery once for each __distinct__ key in the outer
+            // query and then join the answers back on to the original rows of the outer query.
 
             // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
-                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
-                    let exists = expr
-                        // compute for every row in get_inner
-                        .applied_to(id_gen, get_inner.clone())?
-                        // throw away actual values and just remember whether or not there where __any__ rows
-                        .distinct_by((0..get_inner.arity()).collect())
-                        // Append true to anything that returned any rows. This
-                        // join is logically equivalent to
-                        // `.map(vec![Datum::True])`, but using a join allows
-                        // for potential predicate pushdown and elision in the
-                        // optimizer.
-                        .product(dataflow_expr::RelationExpr::constant(
-                            vec![vec![Datum::True]],
-                            RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
-                        ));
-                    // append False to anything that didn't return any rows
-                    let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
-                    Ok(get_inner.lookup(id_gen, exists, default))
-                })?;
+                *inner = branch(
+                    id_gen,
+                    inner.take_dangerous(),
+                    *expr,
+                    |id_gen, expr, get_inner| {
+                        let exists = expr
+                            // compute for every row in get_inner
+                            .applied_to(id_gen, get_inner.clone())?
+                            // throw away actual values and just remember whether or not there where __any__ rows
+                            .distinct_by((0..get_inner.arity()).collect())
+                            // Append true to anything that returned any rows. This
+                            // join is logically equivalent to
+                            // `.map(vec![Datum::True])`, but using a join allows
+                            // for potential predicate pushdown and elision in the
+                            // optimizer.
+                            .product(dataflow_expr::RelationExpr::constant(
+                                vec![vec![Datum::True]],
+                                RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
+                            ));
+                        // append False to anything that didn't return any rows
+                        let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
+                        Ok(get_inner.lookup(id_gen, exists, default))
+                    },
+                )?;
                 SS::Column(inner.arity() - 1)
             }
             Select(expr) => {
-                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
-                    let select = expr
-                        // compute for every row in get_inner
-                        .applied_to(id_gen, get_inner.clone())?;
-                    // append Null to anything that didn't return any rows
-                    let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
-                    Ok(get_inner.lookup(id_gen, select, default))
-                })?;
+                *inner = branch(
+                    id_gen,
+                    inner.take_dangerous(),
+                    *expr,
+                    |id_gen, expr, get_inner| {
+                        let select = expr
+                            // compute for every row in get_inner
+                            .applied_to(id_gen, get_inner.clone())?;
+                        // append Null to anything that didn't return any rows
+                        let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
+                        Ok(get_inner.lookup(id_gen, select, default))
+                    },
+                )?;
                 SS::Column(inner.arity() - 1)
             }
         })
     }
+
+    /// Visits the column references in this scalar expression.
+    fn visit_columns<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut ColumnRef),
+    {
+        match self {
+            ScalarExpr::Literal(_, _) => (),
+            ScalarExpr::Column(col_ref) => f(col_ref),
+            ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(f),
+            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.visit_columns(f);
+                expr2.visit_columns(f);
+            }
+            ScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_columns(f);
+                }
+            }
+            ScalarExpr::If { cond, then, els } => {
+                cond.visit_columns(f);
+                then.visit_columns(f);
+                els.visit_columns(f);
+            }
+            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+                expr.visit_columns(f);
+            }
+        }
+    }
+}
+
+/// Prepare to apply `inner` to `outer`. Note that `inner` is a correlated (SQL)
+/// expression, while `outer` is a non-correlated (dataflow) expression. `inner`
+/// will, in effect, be executed once for every distinct row in `outer`, and the
+/// results will be joined with `outer`. Note that columns in `outer` that are
+/// not depended upon by `inner` are thrown away before the distinct, so that we
+/// don't perform needless computation of `inner`; column references in `inner`
+/// are rewritten to account for these dropped columns.
+///
+/// The caller must supply the `apply` function that applies the rewritten
+/// `inner` to `outer`.
+fn branch<F>(
+    id_gen: &mut dataflow_expr::IdGen,
+    outer: dataflow_expr::RelationExpr,
+    mut inner: RelationExpr,
+    apply: F,
+) -> Result<dataflow_expr::RelationExpr, failure::Error>
+where
+    F: FnOnce(
+        &mut dataflow_expr::IdGen,
+        RelationExpr,
+        dataflow_expr::RelationExpr,
+    ) -> Result<dataflow_expr::RelationExpr, failure::Error>,
+{
+    let oa = outer.arity();
+
+    // The key consists of the columns from the outer expression upon which the
+    // inner relation depends. We discover these dependencies by walking the
+    // inner relation expression and looking for outer column references.
+    //
+    // We don't consider outer column references that refer to indicies that are
+    // not yet available (i.e., indices greater than the arity of `outer`).
+    // Those are the result of doubly-nested subqueries, and they'll be
+    // incorporated in the key for the next recursive call to
+    // `ScalarExpr::applied_to`.
+    let mut outer_columns = HashSet::new();
+    inner.visit_columns(&mut |col_ref| {
+        if let ColumnRef::Outer(i) = col_ref {
+            outer_columns.insert(*i);
+        }
+    });
+    let mut permutation = HashMap::new();
+    let mut key = vec![];
+    for i in 0..oa {
+        if outer_columns.contains(&i) {
+            permutation.insert(i, key.len());
+            key.push(i);
+        }
+    }
+    let dropped = oa - key.len();
+    inner.visit_columns(&mut |col_ref| {
+        if let ColumnRef::Outer(i) = col_ref {
+            if let Some(new_i) = permutation.get(i) {
+                *i = *new_i;
+            } else {
+                *i -= dropped;
+            }
+        }
+    });
+
+    outer.let_in(id_gen, |id_gen, get_outer| {
+        let keyed_outer = get_outer.clone().distinct_by(key.clone());
+        keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
+            let branch = apply(id_gen, inner, get_keyed_outer)?;
+            let ba = branch.arity();
+            let joined = dataflow_expr::RelationExpr::Join {
+                inputs: vec![get_outer.clone(), branch],
+                variables: key
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &k)| vec![(0, k), (1, i)])
+                    .collect(),
+            }
+            // throw away the right-hand copy of the key we just joined on
+            .project((0..oa).chain((oa + key.len())..(oa + ba)).collect());
+            Ok(joined)
+        })
+    })
 }
 
 impl AggregateExpr {
@@ -444,6 +615,14 @@ impl AggregateExpr {
             expr: expr.applied_to(id_gen, outer_arity, inner)?,
             distinct,
         })
+    }
+
+    /// Visits the column references in this aggregate expression.
+    fn visit_columns<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut ColumnRef),
+    {
+        self.expr.visit_columns(f);
     }
 }
 
