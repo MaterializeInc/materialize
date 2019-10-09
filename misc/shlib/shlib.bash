@@ -7,19 +7,48 @@
 #
 # shlib.bash — A shell utility library.
 
+# die [ARGS...]
+#
+# Outputs ARGS to stderr, then exits the script with a failing exit status.
 die() {
     echo "$@" >&2
     exit 1
 }
 
+# run PROGRAM [ARGS...]
+#
+# Runs PROGRAM, but informs the user first. Specifically, run outputs "PROGRAM
+# ARGS..." to stderr, then executes PROGRAM with the specified ARGS.
+run() {
+   echo "$*" >&2
+   "$@"
+}
+
+# runv PROGRAM [ARGS...]
+#
+# Like run, but prints a more verbose informational message to stderr of the
+# form ">run PROGRAM ARGS...".
 runv() {
     echo "run> $*" >&2
     "$@"
 }
 
-run() {
-   echo "$*" >&2
-   "$@"
+# command_exists PROGRAM
+#
+# Returns successfully if PROGRAM exists in $PATH, or unsuccessfully otherwise.
+# Outputs nothing.
+command_exists() {
+    hash "$1" 2>/dev/null
+}
+
+# version_compat MINIMUM ACTUAL
+# version_compat [VERSIONS...]
+#
+# Checks whether VERSIONS is in sorted order according to version comparison
+# rules. Typical usage is to provide exactly two versions, in which case the
+# function checks that ACTUAL is greater than or equal to MINIMUM.
+version_compat() {
+    printf "%s\n" "$@" | sort --check=silent --version-sort
 }
 
 ci_init() {
