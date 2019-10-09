@@ -207,7 +207,8 @@ pub trait StreamExt: Stream {
     ///      to write more boilerplate.
     fn recv(self) -> Recv<Self>
     where
-        Self: Stream<Error = io::Error> + Sized,
+        Self: Stream + Sized,
+        Self::Error: From<io::Error>,
     {
         Recv { inner: Some(self) }
     }
@@ -256,9 +257,13 @@ pub struct Recv<S> {
     inner: Option<S>,
 }
 
-impl<S: Stream<Error = io::Error>> Future for Recv<S> {
+impl<S> Future for Recv<S>
+where
+    S: Stream,
+    S::Error: From<io::Error>,
+{
     type Item = (S::Item, S);
-    type Error = io::Error;
+    type Error = S::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let item = {
@@ -266,10 +271,9 @@ impl<S: Stream<Error = io::Error>> Future for Recv<S> {
             match s.poll() {
                 Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Ok(Async::Ready(Some(r))) => Ok(r),
-                Ok(Async::Ready(None)) => Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "unexpected eof",
-                )),
+                Ok(Async::Ready(None)) => {
+                    Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof").into())
+                }
                 Err(e) => Err(e),
             }
         };
