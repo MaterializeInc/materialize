@@ -80,3 +80,26 @@ fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
     result_rx.wait()??;
     Ok(())
 }
+
+/// Test that we can send a largeish frame (64MiB) over the channel. The true
+/// limit is higher, but we don't test that here to minimize the runtime of this
+/// test. The goal is just to make sure we're not using Tokio's default limit of
+/// 8MiB, which is too low.
+#[test]
+fn test_mpsc_big_frame() -> Result<(), Box<dyn Error>> {
+    const BIG_LEN: usize = 64 * 1 << 20; // 64MiB
+    let (switchboard, mut runtime) = Switchboard::local()?;
+    let (tx, rx) = switchboard.mpsc::<String>();
+
+    runtime.spawn(
+        rx.recv()
+            .map(|(msg, _stream)| assert_eq!(msg.len(), BIG_LEN))
+            .map_err(|err| panic!("{}", err)),
+    );
+
+    let msg = " ".repeat(BIG_LEN);
+    let tx = tx.clone().connect().wait()?;
+    tx.send(msg).wait()?;
+
+    Ok(())
+}
