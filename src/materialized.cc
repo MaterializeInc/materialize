@@ -16,12 +16,6 @@ limitations under the License.
 
 #include "materialized.h"
 
-// CREATE SOURCES LIKE 'mysql.tpcch.%' FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';
-pqxx::result querySync(pqxx::connection& c, const char *query) {
-    pqxx::nontransaction w(c);
-    return w.exec(query);
-}
-
 std::vector<std::string>
 createAllSources(pqxx::connection &c, std::string from, std::string registry, std::optional<std::string> like) {
     std::vector<std::string> results;
@@ -30,12 +24,22 @@ createAllSources(pqxx::connection &c, std::string from, std::string registry, st
     registry = c.quote(registry);
     auto realLike = c.quote(like ? like.value() : std::string("%"));
     auto pqResult = w.exec("CREATE SOURCES LIKE " + realLike + " FROM " + from + " USING SCHEMA REGISTRY " + registry);
-    if (pqResult.columns() != 1) // TODO
-        abort();
+    auto cols = pqResult.columns();
+    if (cols != 1) {
+        throw UnexpectedCreateSourcesResult {"Wrong number of columns: " + std::to_string(cols)};
+    }
     // TODO -- assert that the column is a string.
     results.reserve(pqResult.size());
     for (const auto& row: pqResult) {
         results.push_back(row[0].as<std::string>());
     }
     return results;
+}
+
+const char *UnexpectedCreateSourcesResult::what() const noexcept {
+    return what_rendered.c_str();
+}
+
+UnexpectedCreateSourcesResult::UnexpectedCreateSourcesResult(const std::string& explanation) {
+    what_rendered = std::string {"Unexpected result from CREATE SOURCES: "} + explanation;
 }
