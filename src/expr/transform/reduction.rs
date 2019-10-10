@@ -3,9 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+#![allow(clippy::cognitive_complexity)]
+
 use crate::{RelationExpr, ScalarExpr};
 use repr::Datum;
-use repr::RelationType;
 use std::collections::BTreeMap;
 
 pub use demorgans::DeMorgans;
@@ -15,18 +16,18 @@ pub use undistribute_and::UndistributeAnd;
 pub struct FoldConstants;
 
 impl super::Transform for FoldConstants {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl FoldConstants {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         match relation {
             RelationExpr::Constant { .. } => { /* handled after match */ }
             RelationExpr::Get { .. } => {}
@@ -86,7 +87,7 @@ impl FoldConstants {
                         })
                         .collect();
 
-                    *relation = RelationExpr::constant(new_rows, metadata.clone());
+                    *relation = RelationExpr::constant(new_rows, relation.typ());
                 }
             }
             RelationExpr::TopK { .. } => { /*too complicated*/ }
@@ -95,7 +96,7 @@ impl FoldConstants {
                     for (_row, diff) in rows {
                         *diff *= -1;
                     }
-                    *relation = input.take();
+                    *relation = input.take_dangerous();
                 }
             }
             RelationExpr::Threshold { input } => {
@@ -105,7 +106,7 @@ impl FoldConstants {
                             *diff = 0;
                         }
                     }
-                    *relation = input.take();
+                    *relation = input.take_dangerous();
                 }
             }
             RelationExpr::Map { input, scalars } => {
@@ -125,7 +126,7 @@ impl FoldConstants {
                             (row, diff)
                         })
                         .collect();
-                    *relation = RelationExpr::constant_diff(new_rows, metadata.clone());
+                    *relation = RelationExpr::constant_diff(new_rows, relation.typ());
                 }
             }
             RelationExpr::Filter { input, predicates } => {
@@ -139,7 +140,7 @@ impl FoldConstants {
                     p == &ScalarExpr::Literal(Datum::False)
                         || p == &ScalarExpr::Literal(Datum::Null)
                 }) {
-                    relation.take();
+                    relation.take_safely();
                 } else if let RelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = rows
                         .iter()
@@ -148,7 +149,7 @@ impl FoldConstants {
                             predicates.iter().all(|p| p.eval(&row[..]) == Datum::True)
                         })
                         .collect();
-                    *relation = RelationExpr::constant_diff(new_rows, metadata.clone());
+                    *relation = RelationExpr::constant_diff(new_rows, relation.typ());
                 }
             }
             RelationExpr::Project { input, outputs } => {
@@ -159,39 +160,53 @@ impl FoldConstants {
                             (outputs.iter().map(|i| row[*i].clone()).collect(), *diff)
                         })
                         .collect();
-                    *relation = RelationExpr::constant_diff(new_rows, metadata.clone());
+                    *relation = RelationExpr::constant_diff(new_rows, relation.typ());
                 }
             }
             RelationExpr::Join { inputs, .. } => {
                 if inputs.iter().any(|e| e.is_empty()) {
-                    relation.take();
+                    relation.take_safely();
                 }
             }
-            RelationExpr::Union { left, right } => {
-                if let (
-                    RelationExpr::Constant {
-                        rows: rows_left,
-                        typ: typ_left,
-                    },
-                    RelationExpr::Constant {
-                        rows: rows_right,
-                        typ: _,
-                    },
-                ) = (&mut **left, &mut **right)
-                {
-                    rows_left.append(rows_right);
-                    if rows_left.is_empty() {
-                        relation.take();
-                    } else {
-                        *typ_left = metadata.clone();
-                        *relation = left.take();
+            RelationExpr::Union { .. } => {
+                let mut can_reduce = false;
+                if let RelationExpr::Union { left, right } = relation {
+                    if let (RelationExpr::Constant { .. }, RelationExpr::Constant { .. }) =
+                        (&mut **left, &mut **right)
+                    {
+                        can_reduce = true;
                     }
-                } else {
-                    match (left.is_empty(), right.is_empty()) {
-                        (true, true) => unreachable!(), // both must be constants, so handled above
-                        (true, false) => *relation = right.take(),
-                        (false, true) => *relation = left.take(),
-                        (false, false) => (),
+                }
+
+                if can_reduce {
+                    let metadata = relation.typ();
+                    if let RelationExpr::Union { left, right } = relation {
+                        if let (
+                            RelationExpr::Constant {
+                                rows: rows_left,
+                                typ: typ_left,
+                            },
+                            RelationExpr::Constant {
+                                rows: rows_right,
+                                typ: _,
+                            },
+                        ) = (&mut **left, &mut **right)
+                        {
+                            rows_left.append(rows_right);
+                            if rows_left.is_empty() {
+                                relation.take_safely();
+                            } else {
+                                *typ_left = metadata;
+                                *relation = left.take_dangerous();
+                            }
+                        } else {
+                            match (left.is_empty(), right.is_empty()) {
+                                (true, true) => unreachable!(), // both must be constants, so handled above
+                                (true, false) => *relation = right.take_dangerous(),
+                                (false, true) => *relation = left.take_dangerous(),
+                                (false, false) => (),
+                            }
+                        }
                     }
                 }
             }
@@ -211,23 +226,23 @@ pub mod demorgans {
 
     use crate::{BinaryFunc, UnaryFunc};
     use crate::{RelationExpr, ScalarExpr};
-    use repr::{Datum, RelationType};
+    use repr::Datum;
 
     #[derive(Debug)]
     pub struct DeMorgans;
     impl crate::transform::Transform for DeMorgans {
-        fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-            self.transform(relation, metadata)
+        fn transform(&self, relation: &mut RelationExpr) {
+            self.transform(relation)
         }
     }
 
     impl DeMorgans {
-        pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+        pub fn transform(&self, relation: &mut RelationExpr) {
             relation.visit_mut_pre(&mut |e| {
-                self.action(e, &e.typ());
+                self.action(e);
             });
         }
-        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+        pub fn action(&self, relation: &mut RelationExpr) {
             if let RelationExpr::Filter {
                 input: _,
                 predicates,
@@ -302,24 +317,24 @@ pub mod undistribute_and {
 
     use crate::BinaryFunc;
     use crate::{RelationExpr, ScalarExpr};
-    use repr::{Datum, RelationType};
+    use repr::Datum;
 
     #[derive(Debug)]
     pub struct UndistributeAnd;
 
     impl crate::transform::Transform for UndistributeAnd {
-        fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-            self.transform(relation, metadata)
+        fn transform(&self, relation: &mut RelationExpr) {
+            self.transform(relation)
         }
     }
 
     impl UndistributeAnd {
-        pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+        pub fn transform(&self, relation: &mut RelationExpr) {
             relation.visit_mut(&mut |e| {
-                self.action(e, &e.typ());
+                self.action(e);
             });
         }
-        pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+        pub fn action(&self, relation: &mut RelationExpr) {
             if let RelationExpr::Filter {
                 input: _,
                 predicates,

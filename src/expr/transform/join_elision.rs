@@ -12,20 +12,20 @@ use repr::RelationType;
 pub struct JoinElision;
 
 impl super::Transform for JoinElision {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl JoinElision {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
     // Tuples have lengths, which may be zero; they are not "empty".
     #[allow(clippy::len_zero)]
-    pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join { inputs, variables } = relation {
             // We re-accumulate `inputs` into `new_inputs` in order to perform
             // some clean-up logic as we go. Mainly, we need to update the key
@@ -56,7 +56,7 @@ impl JoinElision {
             *inputs = new_inputs;
             match inputs.len() {
                 0 => {
-                    *relation = RelationExpr::constant(vec![vec![]], metadata.clone());
+                    *relation = RelationExpr::constant(vec![vec![]], RelationType::new(Vec::new()));
                 }
                 1 => {
                     // if there are constraints, they probably should have

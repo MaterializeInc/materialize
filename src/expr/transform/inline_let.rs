@@ -4,26 +4,25 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
 #[derive(Debug)]
 pub struct InlineLet;
 
 impl super::Transform for InlineLet {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl InlineLet {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         let mut lets = vec![];
         self.collect_lets(relation, &mut lets);
         for (name, value) in lets.into_iter().rev() {
             *relation = RelationExpr::Let {
                 name,
                 value: Box::new(value),
-                body: Box::new(relation.take()),
+                body: Box::new(relation.take_safely()),
             };
         }
     }
@@ -58,10 +57,10 @@ impl InlineLet {
                 });
             } else {
                 // otherwise lift it to the top so it's out of the way
-                lets.push((name.clone(), value.take()));
+                lets.push((name.clone(), value.take_safely()));
             }
 
-            *relation = body.take();
+            *relation = body.take_safely();
             // might be another Let in the body so have to recur here
             self.collect_lets(relation, lets);
         } else {

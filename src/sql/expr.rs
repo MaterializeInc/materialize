@@ -378,7 +378,7 @@ impl ScalarExpr {
             // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
-                *inner = inner.take().branch(id_gen, |id_gen, get_inner| {
+                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
                     let exists = expr
                         // compute for every row in get_inner
                         .applied_to(id_gen, get_inner.clone())?
@@ -401,7 +401,7 @@ impl ScalarExpr {
             }
             Select(expr) => {
                 assert_eq!(expr.arity(), 1);
-                *inner = inner.take().branch(id_gen, |id_gen, get_inner| {
+                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
                     let select = expr
                         // compute for every row in get_inner
                         .applied_to(id_gen, get_inner.clone())?;

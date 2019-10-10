@@ -4,24 +4,23 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
 #[derive(Debug)]
 pub struct Project;
 
 impl crate::transform::Transform for Project {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl Project {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut_pre(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Project { input, outputs } = relation {
             while let RelationExpr::Project {
                 input: inner,
@@ -29,10 +28,10 @@ impl Project {
             } = &mut **input
             {
                 *outputs = outputs.iter().map(|i| outputs2[*i]).collect();
-                **input = inner.take();
+                **input = inner.take_dangerous();
             }
-            if *outputs == (0..input.arity()).collect::<Vec<_>>() {
-                *relation = input.take();
+            if outputs.iter().enumerate().all(|(a, b)| a == *b) && outputs.len() == input.arity() {
+                *relation = input.take_dangerous();
             }
         }
     }

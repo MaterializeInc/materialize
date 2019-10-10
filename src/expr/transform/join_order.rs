@@ -4,10 +4,20 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
-/// Re-order relations in a join to process them in an order that makes sense.
+/// Re-order relations in a join to minimize the size of intermediate results.
+/// To minimize intermediate results, ensure each additional relation
+/// added to the join shares an equality constraint with a column of a relation
+/// that is already present in the intermediate results.
 ///
+/// For example:
+/// Join relations A, B, C given the equality constraints A.x = C.x and B.y = C.y.
+///
+/// In the given ordering, we join A and B first with no equality constraints. This
+/// means we have to do a full cross join of A and B, creating large intermediate results.
+///
+/// Instead, if we reordered to A, C, B, we could use the shared equality constraint
+/// between A and C to perform an equijoin, creating smaller intermediate results.
 /// ```rust
 /// use expr::RelationExpr;
 /// use expr::transform::join_order::JoinOrder;
@@ -26,13 +36,8 @@ use repr::RelationType;
 ///     vec![input1, input2, input3],
 ///     vec![vec![(0, 0), (2, 0)]],
 /// );
-/// let typ = RelationType::new(vec![
-///     ColumnType::new(ScalarType::Bool),
-///     ColumnType::new(ScalarType::Bool),
-///     ColumnType::new(ScalarType::Bool),
-/// ]);
 ///
-/// JoinOrder.transform(&mut expr, &typ);
+/// JoinOrder.transform(&mut expr);
 ///
 /// if let RelationExpr::Project { input, outputs } = expr {
 ///     assert_eq!(outputs, vec![0, 1, 2]);
@@ -42,18 +47,18 @@ use repr::RelationType;
 pub struct JoinOrder;
 
 impl super::Transform for JoinOrder {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl JoinOrder {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join { inputs, variables } = relation {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             let uniques = types.iter().map(|t| t.keys.clone()).collect::<Vec<_>>();

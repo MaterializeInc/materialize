@@ -155,7 +155,7 @@ where
                 // for the peek is not a base relation.
 
                 let typ = source.typ();
-                self.optimizer.optimize(&mut source, &typ);
+                self.optimizer.optimize(&mut source);
 
                 let (rows_tx, rows_rx) = self.switchboard.mpsc();
 
@@ -268,7 +268,7 @@ where
                 typ,
                 mut relation_expr,
             } => {
-                self.optimizer.optimize(&mut relation_expr, &typ);
+                self.optimizer.optimize(&mut relation_expr);
                 let rows = vec![vec![Datum::from(relation_expr.pretty())]];
                 send_immediate_rows(typ, rows)
             }
@@ -280,7 +280,7 @@ where
     pub fn create_dataflows(&mut self, mut dataflows: Vec<Dataflow>) {
         for dataflow in dataflows.iter_mut() {
             if let Dataflow::View(view) = dataflow {
-                self.optimizer.optimize(&mut view.relation_expr, &view.typ);
+                self.optimizer.optimize(&mut view.relation_expr);
             }
         }
         broadcast(
