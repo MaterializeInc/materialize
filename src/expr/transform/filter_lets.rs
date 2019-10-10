@@ -55,17 +55,17 @@ fn common_constraints(
 ) {
     match expr {
         RelationExpr::Get { name, .. } if name == bound_name => {
-            /// No filter found, and so no possible common constraints exist.
+            // No filter found, and so no possible common constraints exist.
             *constraints = Some(Vec::new())
         }
         RelationExpr::Filter { input, predicates } => {
             if let RelationExpr::Get { name, .. } = &**input {
                 if name == bound_name {
                     if let Some(constraints) = constraints {
-                        /// If we have existing constraints, restrict them.
+                        // If we have existing constraints, restrict them.
                         constraints.retain(|p| predicates.contains(p));
                     } else {
-                        /// If this is our first encounter, install predicates.
+                        // If this is our first encounter, install predicates.
                         *constraints = Some(predicates.clone());
                     }
                 }
