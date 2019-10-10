@@ -19,8 +19,10 @@ add_executable(chbenchmark
         src/Schema.cc
         src/TransactionalStatistic.cc
         src/Transactions.cc
-        src/TupleGen.cc)
+        src/TupleGen.cc src/materialized.cc)
 
 target_link_libraries(chbenchmark
         odbc
-        pthread)
+        pthread
+        pq
+        pqxx)

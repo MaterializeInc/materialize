@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+#include <pqxx/pqxx>
+#include "materialized.h"
 #include "AnalyticalStatistic.h"
 #include "DataSource.h"
 #include "DbcTools.h"
@@ -32,9 +34,9 @@ limitations under the License.
 #include <pthread.h>
 #include <sql.h>
 #include <sqltypes.h>
-#include <string.h>
 #include <unistd.h>
 #include <climits>
+#include <unordered_set>
 
 enum class RunState {
     off,
@@ -96,6 +98,40 @@ static void* analyticalThread(void* args) {
     }
 
     Log::l1() << Log::tm() << "-analytical " << prm->threadId << ": exit\n";
+    return nullptr;
+}
+
+static const std::unordered_set<std::string> EXPECTED_SOURCES {
+    "mysql_tpcch_customer",
+    "mysql_tpcch_history",
+    "mysql_tpcch_district",
+    "mysql_tpcch_neworder",
+    "mysql_tpcch_order",
+    "mysql_tpcch_orderline",
+    "mysql_tpcch_warehouse",
+    "mysql_tpcch_item",
+    "mysql_tpcch_stock",
+    "mysql_tpcch_nation",
+    "mysql_tpcch_region",
+    "mysql_tpcch_supplier"
+};
+
+static void* createSourcesThread(void* args) {
+    pqxx::connection c("postgresql://materialized:6875/?sslmode=disable");
+    auto expected = *((std::unordered_set<std::string> *)args);
+
+    while (!expected.empty()) {
+        auto created = createAllSources(c, "kafka://kafka:9092", "http://schema-registry:8081", std::string {"mysql.tpcch.%"});
+        for (const auto& source: created) {
+            std::cout << "Created source: " << source << std::endl;
+            bool existed = expected.erase(source);
+            if (!existed) {
+                std::cout << "Unexpected source: " << source << std::endl;
+            }
+        }
+        sleep(1);
+    }
+    std::cout << "Done creating expected sources" << std::endl;
     return nullptr;
 }
 
@@ -373,7 +409,7 @@ static int run(int argc, char* argv[]) {
 
     DataSource::initialize(warehouseCount);
 
-    std::atomic<RunState> runState = RunState::off;
+    std::atomic<RunState> runState {RunState::off};
     unsigned int count = analyticThreads + transactionalThreads + 1;
     pthread_barrier_t barStart;
     pthread_barrier_init(&barStart, nullptr, count);
@@ -409,6 +445,8 @@ static int run(int argc, char* argv[]) {
         }
         pthread_create(&tpt[i], nullptr, transactionalThread, &tprm[i]);
     }
+    pthread_t cspt;
+    pthread_create(&cspt, nullptr, createSourcesThread, (void*)(&EXPECTED_SOURCES));
 
     runState = RunState::warmup;
     Log::l2() << Log::tm() << "Wait for threads to initialize:\n";
@@ -572,7 +610,6 @@ static int gen(int argc, char* argv[]) {
 
     return 0;
 }
-
 int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (argv[i][0] == '-')
