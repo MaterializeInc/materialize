@@ -199,14 +199,17 @@ impl FoldConstants {
                                 *typ_left = metadata;
                                 *relation = left.take_dangerous();
                             }
-                        } else {
-                            match (left.is_empty(), right.is_empty()) {
-                                (true, true) => unreachable!(), // both must be constants, so handled above
-                                (true, false) => *relation = right.take_dangerous(),
-                                (false, true) => *relation = left.take_dangerous(),
-                                (false, false) => (),
-                            }
                         }
+                    }
+                }
+
+                // The guard above to compute metadata doesn't apply here.
+                if let RelationExpr::Union { left, right } = relation {
+                    match (left.is_empty(), right.is_empty()) {
+                        (true, true) => unreachable!(), // both must be constants, so handled above
+                        (true, false) => *relation = right.take_dangerous(),
+                        (false, true) => *relation = left.take_dangerous(),
+                        (false, false) => (),
                     }
                 }
             }
