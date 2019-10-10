@@ -354,11 +354,8 @@ Project {
           predicates: [!isnull #3, datetots #4 > 2007-01-02 00:00:00],
           Get { "order" }
         },
-        Filter {
-          predicates: [#1 = #1, #2 = #2, #9 ~ /^A.*$/],
-          Get { customer }
-        },
-        Filter { predicates: [#1 = #1, #2 = #2], Get { neworder } }
+        Filter { predicates: [#9 ~ /^A.*$/], Get { customer } },
+        Get { neworder }
       }
     }
   }
@@ -669,7 +666,7 @@ Project {
         Join {
           variables: [[(0, 8), (1, 0)], [(0, 72), (2, 0)]],
           Filter {
-            predicates: [i32toi64 #70 = #69],
+            predicates: [#69 = i32toi64 #70],
             Join {
               variables: [
                 [(0, 0), (1, 4)],
@@ -688,21 +685,16 @@ Project {
                   Join {
                     variables: [[(0, 0), (1, 0)]],
                     Filter {
-                      predicates: [#0 = #0, #0 < 1000, #4 ~ /^.*b$/],
+                      predicates: [#0 < 1000, #4 ~ /^.*b$/],
                       Get { item }
                     },
-                    Filter { predicates: [#0 = #0], Get { stock } },
+                    Get { stock },
                     Get { supplier }
                   }
                 }
               },
               Filter {
-                predicates: [
-                  !isnull #4,
-                  !isnull #5,
-                  #4 = #4,
-                  #4 < 1000
-                ],
+                predicates: [!isnull #4, !isnull #5, #4 < 1000],
                 Get { orderline }
               },
               Filter {
@@ -766,11 +758,8 @@ Project {
             predicates: [#22 = i32toi64 #23],
             Join {
               variables: [[(0, 0), (1, 0)]],
-              Filter {
-                predicates: [#0 = #0, #4 ~ /^.*BB$/],
-                Get { item }
-              },
-              Filter { predicates: [#0 = #0], Get { stock } },
+              Filter { predicates: [#4 ~ /^.*BB$/], Get { item } },
+              Get { stock },
               Get { supplier }
             }
           },
@@ -812,7 +801,7 @@ Project {
     Project {
       outputs: [0 .. 43, 0, 5, 8, 11, 41],
       Filter {
-        predicates: [i32toi64 #40 = #21],
+        predicates: [#21 = i32toi64 #40],
         Join {
           variables: [],
           Filter {
@@ -1277,7 +1266,7 @@ ORDER BY su_suppkey
 ----
 Let {
   id-1 = Filter {
-    predicates: [i32toi64 #0 = #7],
+    predicates: [#7 = i32toi64 #0],
     Join {
       variables: [],
       Get { supplier },
