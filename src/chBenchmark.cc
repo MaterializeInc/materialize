@@ -28,6 +28,7 @@ limitations under the License.
 #include "Transactions.h"
 #include "TupleGen.h"
 #include "dialect/DialectStrategy.h"
+#include "mz-config.h"
 
 #include <atomic>
 #include <err.h>
@@ -103,27 +104,12 @@ static void* analyticalThread(void* args) {
     return nullptr;
 }
 
-static const std::unordered_set<std::string> EXPECTED_SOURCES {
-    "mysql_tpcch_customer",
-    "mysql_tpcch_history",
-    "mysql_tpcch_district",
-    "mysql_tpcch_neworder",
-    "mysql_tpcch_order",
-    "mysql_tpcch_orderline",
-    "mysql_tpcch_warehouse",
-    "mysql_tpcch_item",
-    "mysql_tpcch_stock",
-    "mysql_tpcch_nation",
-    "mysql_tpcch_region",
-    "mysql_tpcch_supplier"
-};
-
-static void createSourcesThread(
-        std::unordered_set<std::string> expected,
-        std::string&& pattern,
-        std::string&& connUrl,
-        std::string&& kafkaUrl,
-        std::string&& schemaRegistryUrl) {
+static void createSourcesThread(const mz::Config* config) {
+    const auto& connUrl = config->materializedUrl;
+    auto expected = config->expectedSources;
+    const auto& kafkaUrl = config->kafkaUrl;
+    const auto& schemaRegistryUrl = config->schemaRegistryUrl;
+    const auto& pattern = config->viewPattern;
     pqxx::connection c(connUrl);
 
     while (!expected.empty()) {
@@ -457,11 +443,7 @@ static int run(int argc, char* argv[]) {
     }
     if (createSources) {
         std::thread( createSourcesThread,
-                EXPECTED_SOURCES,
-                "mysql.tpcch.%",
-                "postgresql://materialized:6875/?sslmode=disable",
-                "kafka://kafka:9092",
-                "http://schema-registry:8081"
+                &mz::defaultConfig()
                 ).detach();
     }
 
