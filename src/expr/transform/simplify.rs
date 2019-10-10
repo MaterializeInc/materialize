@@ -37,7 +37,7 @@ impl SimplifyJoinEqualities {
         let mut updated = false;
         let mut original_outputs = 0;
         if let RelationExpr::Filter { input, predicates } = relation {
-            if let RelationExpr::Join { inputs, variables } = &mut **input {
+            if let RelationExpr::Join { inputs, variables: _ } = &mut **input {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let mut input_arities = input_types
                     .iter()
@@ -142,8 +142,8 @@ fn simplify_expr_if_complex_equality(
     prior_arities: &mut Vec<usize>,
 ) -> Option<ScalarExpr> {
     match expr {
-        ScalarExpr::Literal(data) => None,
-        ScalarExpr::Column(usize) => None,
+        ScalarExpr::Literal(_data) => None,
+        ScalarExpr::Column(_usize) => None,
         _ => {
             // Check how many relations the expr supports.
             let mut support = Vec::new();
