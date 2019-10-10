@@ -10,6 +10,7 @@ use crate::RelationExpr;
 pub mod binding;
 pub mod distinct_elision;
 pub mod empty_map;
+pub mod filter_lets;
 pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
@@ -96,6 +97,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::distinct_elision::DistinctElision),
                     Box::new(crate::transform::inline_let::InlineLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
+                    Box::new(crate::transform::filter_lets::FilterLets),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.
