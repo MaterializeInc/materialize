@@ -117,11 +117,16 @@ static const std::unordered_set<std::string> EXPECTED_SOURCES {
     "mysql_tpcch_supplier"
 };
 
-static void createSourcesThread(std::unordered_set<std::string> expected) {
-    pqxx::connection c("postgresql://materialized:6875/?sslmode=disable");
+static void createSourcesThread(
+        std::unordered_set<std::string> expected,
+        std::string&& pattern,
+        std::string&& connUrl,
+        std::string&& kafkaUrl,
+        std::string&& schemaRegistryUrl) {
+    pqxx::connection c(connUrl);
 
     while (!expected.empty()) {
-        auto created = createAllSources(c, "kafka://kafka:9092", "http://schema-registry:8081", std::string {"mysql.tpcch.%"});
+        auto created = createAllSources(c, kafkaUrl, schemaRegistryUrl, pattern);
         for (const auto& source: created) {
             std::cout << "Created source: " << source << std::endl;
             bool existed = expected.erase(source);
@@ -280,6 +285,7 @@ static int run(int argc, char* argv[]) {
         {"log-file", required_argument, nullptr, 'l'},
         {"min-delay", required_argument, nullptr, 'm'},
         {"max-delay", required_argument, nullptr, 'M'},
+        {"mz-sources", no_argument, nullptr, 'S'},
         {nullptr, 0, nullptr, 0}};
 
     int c;
@@ -294,6 +300,7 @@ static int run(int argc, char* argv[]) {
     double maxDelay = 0;
     std::string genDir = "gen";
     const char* logFile = nullptr;
+    bool createSources = false;
     while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:", longOpts,
                             nullptr)) != -1) {
         switch (c) {
@@ -329,6 +336,9 @@ static int run(int argc, char* argv[]) {
             break;
         case 'M':
             maxDelay = parseDouble("maximum delay between queries (s)", optarg);
+            break;
+        case 'S':
+            createSources = true;
             break;
         default:
             return 1;
@@ -444,7 +454,15 @@ static int run(int argc, char* argv[]) {
         }
         pthread_create(&tpt[i], nullptr, transactionalThread, &tprm[i]);
     }
-    std::thread(createSourcesThread, EXPECTED_SOURCES).detach();
+    if (createSources) {
+        std::thread( createSourcesThread,
+                EXPECTED_SOURCES,
+                "mysql.tpcch.%",
+                "postgresql://materialized:6875/?sslmode=disable",
+                "kafka://kafka:9092",
+                "http://schema-registry:8081"
+                ).detach();
+    }
 
     runState = RunState::warmup;
     Log::l2() << Log::tm() << "Wait for threads to initialize:\n";
