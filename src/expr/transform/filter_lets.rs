@@ -45,7 +45,7 @@ impl FilterLets {
 /// Accumulate predicate `ScalarExpr`s common to all filters immediately
 /// preceding a `Get` referencing `bound_name`. A `None` value of `constraints`
 /// indicates that no such `Get` has yet been encountered, and the list otherwise
-/// containts all common predicates (and may be empty if there are no common
+/// contains all common predicates (and may be empty if there are no common
 /// predicates). In particular, if a `Get` occurs with no immediately preceding
 /// filter, the list is immediately set to the empty list.
 fn common_constraints(
