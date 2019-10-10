@@ -37,6 +37,7 @@ limitations under the License.
 #include <unistd.h>
 #include <climits>
 #include <unordered_set>
+#include <thread>
 
 enum class RunState {
     off,
@@ -116,9 +117,8 @@ static const std::unordered_set<std::string> EXPECTED_SOURCES {
     "mysql_tpcch_supplier"
 };
 
-static void* createSourcesThread(void* args) {
+static void createSourcesThread(std::unordered_set<std::string> expected) {
     pqxx::connection c("postgresql://materialized:6875/?sslmode=disable");
-    auto expected = *((std::unordered_set<std::string> *)args);
 
     while (!expected.empty()) {
         auto created = createAllSources(c, "kafka://kafka:9092", "http://schema-registry:8081", std::string {"mysql.tpcch.%"});
@@ -132,7 +132,6 @@ static void* createSourcesThread(void* args) {
         sleep(1);
     }
     std::cout << "Done creating expected sources" << std::endl;
-    return nullptr;
 }
 
 static void* transactionalThread(void* args) {
@@ -445,8 +444,7 @@ static int run(int argc, char* argv[]) {
         }
         pthread_create(&tpt[i], nullptr, transactionalThread, &tprm[i]);
     }
-    pthread_t cspt;
-    pthread_create(&cspt, nullptr, createSourcesThread, (void*)(&EXPECTED_SOURCES));
+    std::thread(createSourcesThread, EXPECTED_SOURCES).detach();
 
     runState = RunState::warmup;
     Log::l2() << Log::tm() << "Wait for threads to initialize:\n";
