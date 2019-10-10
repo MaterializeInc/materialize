@@ -33,20 +33,28 @@ impl JoinElision {
             // be decremented appropriately.
 
             // For each input relation, is it trivial and should be removed?
-            let is_vacuous = inputs.iter().map(|expression|
-                if let RelationExpr::Constant { rows, .. } = &expression {
-                    rows.len() == 1 && rows[0].0.len() == 0 && rows[0].1 == 1
-                } else {
-                    false
-                }
-            ).collect::<Vec<_>>();
+            let is_vacuous = inputs
+                .iter()
+                .map(|expression| {
+                    if let RelationExpr::Constant { rows, .. } = &expression {
+                        rows.len() == 1 && rows[0].0.len() == 0 && rows[0].1 == 1
+                    } else {
+                        false
+                    }
+                })
+                .collect::<Vec<_>>();
 
-            let new_inputs = inputs.drain(..).enumerate().filter(|(index, _)| !is_vacuous[*index]).map(|(_, expression)| expression).collect::<Vec<_>>();
+            let new_inputs = inputs
+                .drain(..)
+                .enumerate()
+                .filter(|(index, _)| !is_vacuous[*index])
+                .map(|(_, expression)| expression)
+                .collect::<Vec<_>>();
 
             for group in variables.iter_mut() {
                 for (index, _) in group {
                     // Subtract the number of prior vacuous join inputs.
-                    *index -= (0 .. *index).filter(|i| is_vacuous[*i]).count()
+                    *index -= (0..*index).filter(|i| is_vacuous[*i]).count()
                 }
             }
 
