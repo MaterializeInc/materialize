@@ -25,7 +25,6 @@ impl Join {
         if let RelationExpr::Join { inputs, variables } = relation {
             let mut new_inputs = Vec::new();
             let mut new_variables = Vec::new();
-
             let mut new_relation = Vec::new();
 
             for input in inputs.drain(..) {
