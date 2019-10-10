@@ -117,7 +117,6 @@ impl SimplifyJoinEqualities {
                     outputs: (0..original_outputs).collect(),
                 },
             );
-//            println!("relation: {}", relation.pretty());
         }
     }
 }
