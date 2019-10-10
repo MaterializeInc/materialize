@@ -133,7 +133,6 @@ impl fmt::Display for Outcome<'_> {
                 "Inference Failure!{}\
                  expected types: {}{}\
                  inferred types: {}{}\
-                 column names:   {}{}\
                  message: {}",
                 INDENT,
                 expected_types
@@ -145,12 +144,6 @@ impl fmt::Display for Outcome<'_> {
                 inferred_types
                     .iter()
                     .map(|s| format!("{}", s.scalar_type))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                INDENT,
-                inferred_types
-                    .iter()
-                    .map(|s| s.name.mz_as_deref().unwrap_or("?").to_string())
                     .collect::<Vec<_>>()
                     .join(" "),
                 INDENT,
@@ -485,7 +478,7 @@ impl State {
         }
         let rows_affected;
         match outcome {
-            postgres::Outcome::Created(name, typ) => {
+            postgres::Outcome::Created(name, desc) => {
                 let uuid = Uuid::new_v4();
                 self.local_input_uuids.insert(name.clone(), uuid);
                 {
@@ -494,7 +487,7 @@ impl State {
                 let dataflow = Dataflow::Source(Source {
                     name,
                     connector: SourceConnector::Local(LocalSourceConnector { uuid }),
-                    typ,
+                    desc,
                 });
                 self.planner.dataflows.insert(dataflow.clone())?;
                 self.coord.create_dataflows(vec![dataflow]);
@@ -626,8 +619,8 @@ impl State {
         };
 
         // send plan, read response
-        let (typ, rows_rx) = match self.run_plan(plan) {
-            SqlResponse::SendRows { typ, rx } => (typ, rx),
+        let (desc, rows_rx) = match self.run_plan(plan) {
+            SqlResponse::SendRows { desc, rx } => (desc, rx),
             other => {
                 return Ok(Outcome::PlanFailure {
                     error: failure::format_err!(
@@ -657,7 +650,7 @@ impl State {
         };
 
         // check that inferred types match expected types
-        let inferred_types = &typ.column_types;
+        let inferred_types = &desc.typ().column_types;
         // sqllogictest coerces the output into the expected type, so `expected_types` is often wrong :(
         // but at least it will be the correct length
         if inferred_types.len() != expected_types.len() {
@@ -702,10 +695,9 @@ impl State {
 
         // check column names
         if let Some(expected_column_names) = expected_column_names {
-            let inferred_column_names = typ
-                .column_types
-                .iter()
-                .map(|t| t.name.clone().unwrap_or_else(|| "?column?".into()))
+            let inferred_column_names = desc
+                .iter_names()
+                .map(|t| t.owned().unwrap_or_else(|| "?column?".into()))
                 .collect::<Vec<_>>();
             let inferred_as_strs = &inferred_column_names
                 .iter()
@@ -722,7 +714,7 @@ impl State {
         // format output
         let mut formatted_rows = raw_output
             .iter()
-            .map(|row| format_row(row, &typ.column_types, &**expected_types, *mode, sort))
+            .map(|row| format_row(row, inferred_types, &**expected_types, *mode, sort))
             .collect::<Vec<_>>();
 
         // sort formatted output

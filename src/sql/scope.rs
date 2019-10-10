@@ -36,6 +36,8 @@ pub struct ScopeItemName {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItem {
+    // The canonical name should appear first in the list (e.g., the name
+    // assigned by an alias.)
     pub names: Vec<ScopeItemName>,
     pub typ: ColumnType,
     pub expr: Option<sqlparser::ast::Expr>,
@@ -57,11 +59,11 @@ enum Resolution<'a> {
 }
 
 impl ScopeItem {
-    pub fn from_column_type(typ: ColumnType) -> Self {
+    pub fn from_column_type(column_name: Option<String>, typ: ColumnType) -> Self {
         ScopeItem {
             names: vec![ScopeItemName {
                 table_name: None,
-                column_name: typ.name.clone(),
+                column_name,
             }],
             typ,
             expr: None,
@@ -85,25 +87,41 @@ impl Scope {
         }
     }
 
-    pub fn from_source(
+    pub fn from_source<I, S>(
         table_name: Option<&str>,
+        column_names: I,
         typ: RelationType,
         outer_scope: Option<Scope>,
-    ) -> Self {
+    ) -> Self
+    where
+        I: Iterator<Item = Option<S>>,
+        S: Into<String>,
+    {
         let mut scope = Scope::empty(outer_scope);
         scope.items = typ
             .column_types
             .into_iter()
-            .map(|typ| ScopeItem {
+            .zip(column_names)
+            .map(|(typ, column_name)| ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: table_name.owned(),
-                    column_name: typ.name.clone(),
+                    column_name: column_name.map(|n| n.into()),
                 }],
                 typ,
                 expr: None,
             })
             .collect();
         scope
+    }
+
+    /// Constructs an iterator over the canonical name for each column.
+    pub fn column_names(&self) -> impl Iterator<Item = Option<&str>> {
+        self.items.iter().map(|item| {
+            item.names
+                .iter()
+                .find(|n| n.column_name.is_some())
+                .map(|n| n.column_name.mz_as_deref().unwrap())
+        })
     }
 
     pub fn len(&self) -> usize {

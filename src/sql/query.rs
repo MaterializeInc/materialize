@@ -37,6 +37,7 @@ use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
+use std::iter;
 use std::mem;
 use uuid::Uuid;
 
@@ -130,7 +131,7 @@ impl Planner {
                 left,
                 right,
             } => {
-                let (left_expr, _left_scope) = self.plan_set_expr(left, outer_scope)?;
+                let (left_expr, left_scope) = self.plan_set_expr(left, outer_scope)?;
                 let (right_expr, _right_scope) = self.plan_set_expr(right, outer_scope)?;
 
                 // TODO(jamii) this type-checking is redundant with RelationExpr::typ, but currently it seems that we need both because RelationExpr::typ is not allowed to return errors
@@ -184,10 +185,13 @@ impl Planner {
                     }
                 };
 
-                let mut scope = Scope::empty(Some(outer_scope.clone()));
-                for typ in relation_expr.typ().column_types {
-                    scope.items.push(ScopeItem::from_column_type(typ));
-                }
+                let scope = Scope::from_source(
+                    None,
+                    // Column names are taken from the left, as in Postgres.
+                    left_scope.column_names(),
+                    relation_expr.typ(),
+                    Some(outer_scope.clone()),
+                );
 
                 Ok((relation_expr, scope))
             }
@@ -205,10 +209,8 @@ impl Planner {
                 let mut types: Option<Vec<ColumnType>> = None;
                 for row in values {
                     let mut value_exprs = vec![];
-                    for (i, value) in row.iter().enumerate() {
-                        let (expr, mut typ) = self.plan_expr(ctx, value)?;
-                        typ.name = Some(format!("column{}", i + 1));
-                        value_exprs.push((expr, typ));
+                    for value in row {
+                        value_exprs.push(self.plan_expr(ctx, value)?);
                     }
                     types = if let Some(types) = types {
                         if types.len() != value_exprs.len() {
@@ -245,8 +247,9 @@ impl Planner {
                     };
                 }
                 let mut scope = Scope::empty(Some(outer_scope.clone()));
-                for typ in types.unwrap() {
-                    scope.items.push(ScopeItem::from_column_type(typ));
+                for (i, typ) in types.unwrap().into_iter().enumerate() {
+                    let name = Some(format!("column{}", i + 1));
+                    scope.items.push(ScopeItem::from_column_type(name, typ));
                 }
                 Ok((expr.unwrap(), scope))
             }
@@ -287,7 +290,12 @@ impl Planner {
                         rows: vec![vec![]],
                         typ: typ.clone(),
                     },
-                    Scope::from_source(None, typ, Some(outer_scope.clone())),
+                    Scope::from_source(
+                        None,
+                        iter::empty::<Option<String>>(),
+                        typ,
+                        Some(outer_scope.clone()),
+                    ),
                 ))
             })?;
 
@@ -336,7 +344,7 @@ impl Planner {
                             select_all_mapping.insert(*old_column, new_column);
                             ctx.scope.items[*old_column].clone()
                         } else {
-                            ScopeItem::from_column_type(typ.clone())
+                            ScopeItem::from_column_type(None, typ.clone())
                         };
                     scope_item.expr = Some(group_expr.clone());
 
@@ -363,7 +371,10 @@ impl Planner {
                 let (expr, typ) = self.plan_aggregate(ctx, sql_function)?;
                 aggregates.push((expr, typ.clone()));
                 group_scope.items.push(ScopeItem {
-                    names: vec![],
+                    names: vec![ScopeItemName {
+                        table_name: None,
+                        column_name: Some(sql_function.name.to_string().to_lowercase()),
+                    }],
                     typ,
                     expr: Some(Expr::Function(sql_function.clone())),
                 });
@@ -467,10 +478,10 @@ impl Planner {
                     bail!("WITH hints are not supported");
                 }
                 let name = extract_sql_object_name(name)?;
-                let typ = self.dataflows.get_type(&name)?;
+                let desc = self.dataflows.get_desc(&name)?;
                 let expr = RelationExpr::Get {
                     name: name.clone(),
-                    typ: typ.clone(),
+                    typ: desc.typ().clone(),
                 };
                 let alias = if let Some(TableAlias { name, columns }) = alias {
                     if !columns.is_empty() {
@@ -480,8 +491,12 @@ impl Planner {
                 } else {
                     name
                 };
-                let scope =
-                    Scope::from_source(Some(&alias), typ.clone(), Some(outer_scope.clone()));
+                let scope = Scope::from_source(
+                    Some(&alias),
+                    desc.iter_names(),
+                    desc.typ().clone(),
+                    Some(outer_scope.clone()),
+                );
                 Ok((expr, scope))
             }
             TableFactor::Derived {
@@ -492,8 +507,7 @@ impl Planner {
                 if *lateral {
                     bail!("LATERAL derived tables are not yet supported");
                 }
-                // TODO(jamii) would be nice to use this scope instead of use expr.typ() below
-                let (expr, _scope, finishing) = self.plan_query(&subquery, &Scope::empty(None))?;
+                let (expr, scope, finishing) = self.plan_query(&subquery, &Scope::empty(None))?;
                 if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in subqueries");
                 }
@@ -505,7 +519,12 @@ impl Planner {
                 } else {
                     None
                 };
-                let scope = Scope::from_source(alias, expr.typ(), Some(outer_scope.clone()));
+                let scope = Scope::from_source(
+                    alias,
+                    scope.column_names(),
+                    expr.typ(),
+                    Some(outer_scope.clone()),
+                );
                 Ok((expr, scope))
             }
             TableFactor::NestedJoin(table_with_joins) => {
@@ -527,7 +546,7 @@ impl Planner {
                 let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
                     ctx.scope.items[*i].clone()
                 } else {
-                    ScopeItem::from_column_type(typ)
+                    ScopeItem::from_column_type(None, typ)
                 };
                 scope_item.expr = Some(sql_expr.clone());
                 Ok(vec![(expr, scope_item)])
@@ -540,13 +559,15 @@ impl Planner {
                 let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
                     ctx.scope.items[*i].clone()
                 } else {
-                    ScopeItem::from_column_type(typ)
+                    ScopeItem::from_column_type(None, typ)
                 };
-                scope_item.names.push(ScopeItemName {
-                    table_name: None,
-                    column_name: Some(alias.clone()),
-                });
-                scope_item.typ.name = Some(alias.clone());
+                scope_item.names.insert(
+                    0,
+                    ScopeItemName {
+                        table_name: None,
+                        column_name: Some(alias.clone()),
+                    },
+                );
                 scope_item.expr = Some(sql_expr.clone());
                 Ok(vec![(expr, scope_item)])
             }
@@ -1011,7 +1032,6 @@ impl Planner {
         Ok((
             expr,
             ColumnType {
-                name: None,
                 nullable: op_type.nullable,
                 scalar_type: ScalarType::Bool,
             },
@@ -1059,9 +1079,7 @@ impl Planner {
                 (expr, func, scalar_type)
             }
         };
-        let typ = ColumnType::new(scalar_type)
-            .name(ident.clone())
-            .nullable(func.is_nullable());
+        let typ = ColumnType::new(scalar_type).nullable(func.is_nullable());
         Ok((
             AggregateExpr {
                 func,
