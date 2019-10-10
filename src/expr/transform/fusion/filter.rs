@@ -33,7 +33,7 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::RelationExpr;
+use crate::{RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct Filter;
@@ -62,6 +62,9 @@ impl Filter {
                 *input = Box::new(inner.take_dangerous());
             }
 
+            for predicate in predicates.iter_mut() {
+                canonicalize_predicate(predicate);
+            }
             predicates.sort();
             predicates.dedup();
 
@@ -69,6 +72,29 @@ impl Filter {
             if predicates.is_empty() {
                 *relation = input.take_dangerous();
             }
+        }
+    }
+}
+
+/// Ensures that two equalities are made in a consistent order.
+fn canonicalize_predicate(predicate: &mut ScalarExpr) {
+    if let ScalarExpr::CallBinary {
+        func: crate::BinaryFunc::Eq,
+        expr1,
+        expr2,
+    } = predicate
+    {
+        // Canonically order elements so that deduplication works better.
+        if expr2 < expr1 {
+            ::std::mem::swap(expr1, expr2);
+        }
+
+        // Comparison to self is always true unless the element is `Datum::Null`.
+        if expr1 == expr2 {
+            *predicate = expr1
+                .clone()
+                .call_unary(crate::UnaryFunc::IsNull)
+                .call_unary(crate::UnaryFunc::Not);
         }
     }
 }
