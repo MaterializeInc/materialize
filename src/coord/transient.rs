@@ -81,6 +81,7 @@ where
                         for (name, frontier) in updates {
                             coord.update_upper(&name, &frontier);
                         }
+                        coord.maintenance();
                     }
                 }
             }
