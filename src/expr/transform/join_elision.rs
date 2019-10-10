@@ -31,29 +31,28 @@ impl JoinElision {
             // some clean-up logic as we go. Mainly, we need to update the key
             // equivalence classes which contain relation indices which should
             // be decremented appropriately.
-            let mut new_inputs = Vec::new();
-            for (position, expression) in inputs.drain(..).enumerate() {
-                let is_vacuous = if let RelationExpr::Constant { rows, .. } = &expression {
+
+            // For each input relation, is it trivial and should be removed?
+            let is_vacuous = inputs.iter().map(|expression|
+                if let RelationExpr::Constant { rows, .. } = &expression {
                     rows.len() == 1 && rows[0].0.len() == 0 && rows[0].1 == 1
                 } else {
                     false
-                };
+                }
+            ).collect::<Vec<_>>();
 
-                if is_vacuous {
-                    for group in variables.iter_mut() {
-                        for (index, _) in group {
-                            if *index >= position {
-                                *index -= 1;
-                            }
-                        }
-                    }
-                } else {
-                    new_inputs.push(expression);
+            let new_inputs = inputs.drain(..).enumerate().filter(|(index, _)| !is_vacuous[*index]).map(|(_, expression)| expression).collect::<Vec<_>>();
+
+            for group in variables.iter_mut() {
+                for (index, _) in group {
+                    // Subtract the number of prior vacuous join inputs.
+                    *index -= (0 .. *index).filter(|i| is_vacuous[*i]).count()
                 }
             }
 
             // If `new_inputs` is empty or a singleton (without constraints) we can remove the join.
             *inputs = new_inputs;
+
             match inputs.len() {
                 0 => {
                     *relation = RelationExpr::constant(vec![vec![]], RelationType::new(Vec::new()));
