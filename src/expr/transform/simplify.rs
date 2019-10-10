@@ -37,7 +37,11 @@ impl SimplifyJoinEqualities {
         let mut updated = false;
         let mut original_outputs = 0;
         if let RelationExpr::Filter { input, predicates } = relation {
-            if let RelationExpr::Join { inputs, variables: _ } = &mut **input {
+            if let RelationExpr::Join {
+                inputs,
+                variables: _,
+            } = &mut **input
+            {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let mut input_arities = input_types
                     .iter()
@@ -109,7 +113,7 @@ impl SimplifyJoinEqualities {
                 }
             }
         }
-        if let true = updated {
+        if updated {
             mem::replace(
                 relation,
                 RelationExpr::Project {
