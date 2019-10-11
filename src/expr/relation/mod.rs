@@ -178,6 +178,8 @@ impl RelationExpr {
             RelationExpr::Join { inputs, variables } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
+                // Iterating and cloning types inside the flat_map() avoids allocating Vec<>,
+                // as clones are directly added to column_types Vec<>.
                 let column_types = input_types
                     .iter()
                     .flat_map(|i| i.column_types.iter().cloned())
