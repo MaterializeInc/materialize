@@ -27,7 +27,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Dataflow, PeekWhen, Sink, SinkConnector, TailSinkConnector, Timestamp, View,
+    compare_columns, Dataflow, PeekWhen, RowSetFinishing, Sink, SinkConnector, TailSinkConnector,
+    Timestamp, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
@@ -164,6 +165,21 @@ where
                 // need to block on the arrival of further input data.
                 let timestamp =
                     ts_override.unwrap_or_else(|| self.determine_timestamp(&source, when));
+
+                // Move any final filter from regular dataflow into finishing. The optimizer
+                // invocation above ensures that there is at most one filter operator.
+                let (source, finishing) = if let RelationExpr::Filter { input, predicates } = source
+                {
+                    (
+                        *input,
+                        RowSetFinishing {
+                            filter: predicates,
+                            ..finishing
+                        },
+                    )
+                } else {
+                    (source, finishing)
+                };
 
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
