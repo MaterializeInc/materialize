@@ -176,10 +176,12 @@ impl RelationExpr {
             }
             RelationExpr::Filter { input, .. } => input.typ(),
             RelationExpr::Join { inputs, variables } => {
-                let mut column_types = vec![];
-                for input in inputs {
-                    column_types.append(&mut input.typ().column_types);
-                }
+                let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+
+                let column_types = input_types
+                    .iter()
+                    .flat_map(|i| i.column_types.iter().cloned())
+                    .collect::<Vec<_>>();
                 let mut typ = RelationType::new(column_types);
 
                 // A relation's uniqueness constraint holds if there is a
@@ -190,7 +192,6 @@ impl RelationExpr {
                 // We are going to use the uniqueness constraints of the
                 // first relation, and attempt to use the presented order.
                 let remains_unique = (1..inputs.len()).all(|index| {
-                    let typ = inputs[index].typ();
                     let mut prior_bound = Vec::new();
                     for variable in variables {
                         if variable.iter().any(|(r, _c)| r < &index) {
@@ -201,12 +202,13 @@ impl RelationExpr {
                             }
                         }
                     }
-                    typ.keys
+                    input_types[index]
+                        .keys
                         .iter()
                         .any(|ks| ks.iter().all(|k| prior_bound.contains(&k)))
                 });
                 if remains_unique && !inputs.is_empty() {
-                    for keys in inputs[0].typ().keys {
+                    for keys in input_types[0].keys.iter() {
                         typ = typ.add_keys(keys.clone());
                     }
                 }
