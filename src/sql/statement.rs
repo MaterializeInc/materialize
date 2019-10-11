@@ -442,6 +442,7 @@ impl Planner {
                 PeekWhen::EarliestSource
             },
             finishing: RowSetFinishing {
+                filter: vec![],
                 offset: 0,
                 limit: None,
                 order_by: (0..typ.column_types.len())
