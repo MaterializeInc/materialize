@@ -466,13 +466,16 @@ where
     ) -> Vec<Vec<Datum>> {
         let (mut cur, storage) = trace.cursor();
         let mut results = Vec::new();
-        'producer: while let Some(record) = cur.get_key(&storage) {
+        while let Some(record) = cur.get_key(&storage) {
             // Before (expensively) determining how many copies of a record
             // we have, let's eliminate records that we don't care about.
-            for predicate in &peek.finishing.filter {
-                if predicate.eval(record) != Datum::True {
-                    continue 'producer;
-                }
+            if !peek
+                .finishing
+                .filter
+                .iter()
+                .all(|predicate| predicate.eval(record) == Datum::True)
+            {
+                continue;
             }
 
             // TODO: Absent value iteration might be weird (in principle
