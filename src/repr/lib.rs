@@ -25,7 +25,7 @@
 mod relation;
 mod scalar;
 
-pub use relation::{ColumnType, RelationType};
+pub use relation::{ColumnType, RelationDesc, RelationType};
 pub use scalar::decimal;
 pub use scalar::regex;
 pub use scalar::{Datum, Interval, ScalarType};

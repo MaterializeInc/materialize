@@ -10,7 +10,7 @@
 use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Sink, Source, View};
 use failure::bail;
 
-use repr::{Datum, RelationType};
+use repr::{Datum, RelationDesc};
 pub use session::Session;
 use sqlparser::ast::ObjectName;
 
@@ -43,16 +43,17 @@ pub enum Plan {
     },
     Peek {
         source: ::expr::RelationExpr,
+        desc: RelationDesc,
         when: PeekWhen,
         finishing: RowSetFinishing,
     },
     Tail(Dataflow),
     SendRows {
-        typ: RelationType,
+        desc: RelationDesc,
         rows: Vec<Vec<Datum>>,
     },
     ExplainPlan {
-        typ: RelationType,
+        desc: RelationDesc,
         relation_expr: ::expr::RelationExpr,
     },
 }

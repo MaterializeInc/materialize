@@ -69,7 +69,7 @@ pub fn build_dataflow<A: Allocate>(
                 WithDrop::new(arrangement_by_self.trace, capability.clone()),
             );
 
-            for keys in src.typ.keys.iter() {
+            for keys in src.desc.typ().keys.iter() {
                 let keys_clone = keys.clone();
                 let arrangement_by_key = stream
                     .as_collection()

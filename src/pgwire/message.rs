@@ -11,7 +11,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime};
 
 use super::types::PgType;
 use repr::decimal::Decimal;
-use repr::{ColumnType, Datum, Interval, RelationType, ScalarType};
+use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, ScalarType};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -369,13 +369,12 @@ pub fn field_values_from_row(row: Vec<Datum>, typ: &RelationType) -> Vec<Option<
         .collect()
 }
 
-pub fn row_description_from_type(typ: &RelationType) -> Vec<FieldDescription> {
-    typ.column_types
-        .iter()
-        .map(|typ| {
+pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
+    desc.iter()
+        .map(|(name, typ)| {
             let pg_type: PgType = (&typ.scalar_type).into();
             FieldDescription {
-                name: typ.name.as_ref().unwrap_or(&"?column?".into()).to_owned(),
+                name: name.unwrap_or("?column?").to_owned(),
                 table_id: 0,
                 column_id: 0,
                 type_oid: pg_type.oid,

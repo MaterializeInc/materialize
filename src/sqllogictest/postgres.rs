@@ -19,12 +19,12 @@ use sqlparser::ast::ColumnOption;
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, Interval, RelationType, ScalarType};
+use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, ScalarType};
 use sql::scalar_type_from_sql;
 
 pub struct Postgres {
     client: Client,
-    table_types: HashMap<String, (Vec<DataType>, RelationType)>,
+    table_types: HashMap<String, (Vec<DataType>, RelationDesc)>,
 }
 
 pub type Row = Vec<Datum>;
@@ -32,7 +32,7 @@ pub type Diff = Vec<(Row, isize)>;
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    Created(String, RelationType),
+    Created(String, RelationDesc),
     Dropped(Vec<String>),
     Changed {
         table_name: String,
@@ -100,7 +100,6 @@ END $$;
                         .iter()
                         .map(|column| {
                             Ok(ColumnType {
-                                name: Some(column.name.clone()),
                                 scalar_type: scalar_type_from_sql(&column.data_type)?,
                                 nullable: !column
                                     .options
@@ -110,6 +109,7 @@ END $$;
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
                 );
+                let names = columns.iter().map(|column| Some(column.name.clone()));
 
                 for constraint in constraints {
                     use sqlparser::ast::TableConstraint;
@@ -138,9 +138,10 @@ END $$;
                     }
                 }
 
+                let desc = RelationDesc::new(typ, names);
                 self.table_types
-                    .insert(name.to_string(), (sql_types, typ.clone()));
-                Outcome::Created(name.to_string(), typ)
+                    .insert(name.to_string(), (sql_types, desc.clone()));
+                Outcome::Created(name.to_string(), desc)
             }
             Statement::Drop {
                 names,
@@ -209,7 +210,7 @@ END $$;
     }
 
     fn run_query(&mut self, table_name: &str, query: String) -> Result<Vec<Row>, failure::Error> {
-        let (sql_types, typ) = self
+        let (sql_types, desc) = self
             .table_types
             .get(table_name)
             .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
@@ -223,12 +224,12 @@ END $$;
                         &postgres_row,
                         c,
                         &sql_types[c],
-                        typ.column_types[c].nullable,
+                        desc.typ().column_types[c].nullable,
                     )?;
                     ensure!(
-                        datum.is_instance_of(&typ.column_types[c]),
+                        datum.is_instance_of(&desc.typ().column_types[c]),
                         "Expected value of type {:?}, got {:?}",
-                        typ.column_types[c],
+                        desc.typ().column_types[c],
                         datum
                     );
                     Ok(datum)
