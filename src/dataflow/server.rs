@@ -494,10 +494,6 @@ where
                 peek.name
             );
 
-            // Filter on single record
-            // Map
-            // Project
-
             for _ in 0..copies {
                 results.push(record.clone());
             }
