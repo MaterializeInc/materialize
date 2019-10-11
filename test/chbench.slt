@@ -385,56 +385,50 @@ Project {
     group_key: [8],
     aggregates: [countall(null)],
     Project {
-      outputs: [9 .. 16, 15],
+      outputs: [0 .. 7, 6],
       Join {
         variables: [
-          [(1, 0), (0, 0)],
-          [(1, 1), (0, 1)],
-          [(1, 2), (0, 2)],
-          [(1, 3), (0, 3)],
-          [(1, 4), (0, 4)],
-          [(1, 5), (0, 5)],
-          [(1, 6), (0, 6)],
-          [(1, 7), (0, 7)]
+          [(0, 0), (1, 0)],
+          [(0, 1), (1, 1)],
+          [(0, 2), (1, 2)],
+          [(0, 3), (1, 3)],
+          [(0, 4), (1, 4)],
+          [(0, 5), (1, 5)],
+          [(0, 6), (1, 6)],
+          [(0, 7), (1, 7)]
         ],
-        Union {
-          Join {
-            variables: [],
-            Distinct {
-              group_key: [0 .. 7],
-              Filter {
-                predicates: [#14 >= #4],
-                Project {
-                  outputs: [10 .. 17, 0 .. 9],
-                  Join {
-                    variables: [
-                      [(1, 1), (0, 1)],
-                      [(1, 2), (0, 2)],
-                      [(1, 0), (0, 0)]
-                    ],
-                    Get { orderline },
-                    Filter {
-                      predicates: [
-                        datetots #4 < 2012-01-02 00:00:00,
-                        datetots #4 >= 2007-01-02 00:00:00
-                      ],
-                      Get { "order" }
-                    }
-                  }
-                }
-              }
-            },
-            Constant [[true]]
-          },
-          Constant []
-        },
         Filter {
           predicates: [
             datetots #4 < 2012-01-02 00:00:00,
             datetots #4 >= 2007-01-02 00:00:00
           ],
           Get { "order" }
-        }
+        },
+        Distinct {
+          group_key: [0 .. 7],
+          Filter {
+            predicates: [#14 >= #4],
+            Project {
+              outputs: [10 .. 17, 0 .. 9],
+              Join {
+                variables: [
+                  [(1, 1), (0, 1)],
+                  [(1, 2), (0, 2)],
+                  [(1, 0), (0, 0)]
+                ],
+                Get { orderline },
+                Filter {
+                  predicates: [
+                    datetots #4 < 2012-01-02 00:00:00,
+                    datetots #4 >= 2007-01-02 00:00:00
+                  ],
+                  Get { "order" }
+                }
+              }
+            }
+          }
+        },
+        Constant [[true]]
       }
     }
   }
@@ -1308,51 +1302,45 @@ Project {
       [(0, 8), (1, 8)]
     ],
     Filter { predicates: [!isnull #8], Get { id-1 } },
-    Union {
-      Union {
-        Filter {
-          predicates: [!isnull #9, #8 = #9],
-          Reduce {
-            group_key: [0 .. 8],
-            aggregates: [max(#10)],
-            Reduce {
-              group_key: [0 .. 8, 37],
-              aggregates: [sum(#17)],
-              Project {
-                outputs: [0 .. 8, 36 .. 45, 18 .. 35, 35],
-                Join {
-                  variables: [
-                    [(0, 0), (1, 0)],
-                    [(0, 1), (1, 1)],
-                    [(0, 2), (1, 2)],
-                    [(0, 3), (1, 3)],
-                    [(0, 4), (1, 4)],
-                    [(0, 5), (1, 5)],
-                    [(0, 6), (1, 6)],
-                    [(0, 7), (1, 7)],
-                    [(0, 8), (1, 8)],
-                    [(3, 5), (2, 1)],
-                    [(3, 4), (2, 0)]
-                  ],
-                  Get { id-2 },
-                  Get { id-2 },
-                  Get { stock },
-                  Filter {
-                    predicates: [
-                      !isnull #4,
-                      !isnull #5,
-                      datetots #6 >= 2007-01-02 00:00:00
-                    ],
-                    Get { orderline }
-                  }
-                }
+    Filter {
+      predicates: [!isnull #9, #8 = #9],
+      Reduce {
+        group_key: [0 .. 8],
+        aggregates: [max(#10)],
+        Reduce {
+          group_key: [0 .. 8, 37],
+          aggregates: [sum(#17)],
+          Project {
+            outputs: [0 .. 8, 36 .. 45, 18 .. 35, 35],
+            Join {
+              variables: [
+                [(0, 0), (1, 0)],
+                [(0, 1), (1, 1)],
+                [(0, 2), (1, 2)],
+                [(0, 3), (1, 3)],
+                [(0, 4), (1, 4)],
+                [(0, 5), (1, 5)],
+                [(0, 6), (1, 6)],
+                [(0, 7), (1, 7)],
+                [(0, 8), (1, 8)],
+                [(3, 5), (2, 1)],
+                [(3, 4), (2, 0)]
+              ],
+              Get { id-2 },
+              Get { id-2 },
+              Get { stock },
+              Filter {
+                predicates: [
+                  !isnull #4,
+                  !isnull #5,
+                  datetots #6 >= 2007-01-02 00:00:00
+                ],
+                Get { orderline }
               }
             }
           }
-        },
-        Constant []
-      },
-      Constant []
+        }
+      }
     }
   }
 }
@@ -1438,20 +1426,17 @@ Project {
             ],
             Get { id-1 },
             Union {
-              Union {
-                Filter { predicates: [#23], Get { id-3 } },
-                Join {
-                  variables: [],
-                  Union {
-                    Negate {
-                      Project { outputs: [0 .. 22], Get { id-3 } }
-                    },
-                    Get { id-2 }
+              Filter { predicates: [#23], Get { id-3 } },
+              Join {
+                variables: [],
+                Union {
+                  Negate {
+                    Project { outputs: [0 .. 22], Get { id-3 } }
                   },
-                  Constant [[true]]
-                }
-              },
-              Constant []
+                  Get { id-2 }
+                },
+                Constant [[true]]
+              }
             }
           }
         }
@@ -1730,98 +1715,88 @@ Project {
       [(0, 10), (1, 10)]
     ],
     Get { id-1 },
-    Union {
-      Union {
-        Filter {
-          predicates: [#11],
-          Reduce {
-            group_key: [0 .. 10],
-            aggregates: [any(distinct #12)],
+    Filter {
+      predicates: [#11],
+      Reduce {
+        group_key: [0 .. 10],
+        aggregates: [any(distinct #12)],
+        Map {
+          scalars: [i32toi64 #0 = #11],
+          Project {
+            outputs: [0 .. 10, 15],
             Map {
-              scalars: [i32toi64 #0 = #11],
-              Project {
-                outputs: [0 .. 10, 15],
-                Map {
-                  scalars: [(#11 * #12) % 10000],
-                  Filter {
-                    predicates: [(2 * i32toi64 #13) > i32toi64 #14],
-                    Reduce {
-                      group_key: [0 .. 10, 39 .. 41],
-                      aggregates: [sum(#36)],
-                      Project {
-                        outputs: [0 .. 38, 11 .. 13],
-                        Join {
-                          variables: [
-                            [(0, 0), (1, 0)],
-                            [(0, 1), (1, 1)],
-                            [(0, 2), (1, 2)],
-                            [(0, 3), (1, 3)],
-                            [(0, 4), (1, 4)],
-                            [(0, 5), (1, 5)],
-                            [(0, 6), (1, 6)],
-                            [(0, 7), (1, 7)],
-                            [(0, 8), (1, 8)],
-                            [(0, 9), (1, 9)],
-                            [(0, 10), (1, 10)],
-                            [(0, 11), (1, 11)],
-                            [(0, 12), (1, 12)],
-                            [(0, 13), (1, 13)],
-                            [(0, 14), (1, 14)],
-                            [(0, 15), (1, 15)],
-                            [(0, 16), (1, 16)],
-                            [(0, 17), (1, 17)],
-                            [(0, 18), (1, 18)],
-                            [(0, 19), (1, 19)],
-                            [(0, 20), (1, 20)],
-                            [(0, 21), (1, 21)],
-                            [(0, 22), (1, 22)],
-                            [(0, 23), (1, 23)],
-                            [(0, 24), (1, 24)],
-                            [(0, 25), (1, 25)],
-                            [(0, 26), (1, 26)],
-                            [(0, 27), (1, 27)],
-                            [(0, 28), (1, 28)],
-                            [(0, 29), (1, 29)],
-                            [(0, 30), (1, 30)],
-                            [(0, 31), (1, 31)],
-                            [(0, 32), (1, 32)],
-                            [(0, 33), (1, 33)],
-                            [(0, 34), (1, 34)],
-                            [(0, 35), (1, 35)],
-                            [(0, 36), (1, 36)],
-                            [(0, 37), (1, 37)],
-                            [(0, 38), (1, 38)]
-                          ],
-                          Get { id-3 },
-                          Union {
-                            Union {
-                              Filter {
-                                predicates: [#39],
-                                Reduce {
+              scalars: [(#11 * #12) % 10000],
+              Filter {
+                predicates: [(2 * i32toi64 #13) > i32toi64 #14],
+                Reduce {
+                  group_key: [0 .. 10, 39 .. 41],
+                  aggregates: [sum(#36)],
+                  Project {
+                    outputs: [0 .. 38, 11 .. 13],
+                    Join {
+                      variables: [
+                        [(0, 0), (1, 0)],
+                        [(0, 1), (1, 1)],
+                        [(0, 2), (1, 2)],
+                        [(0, 3), (1, 3)],
+                        [(0, 4), (1, 4)],
+                        [(0, 5), (1, 5)],
+                        [(0, 6), (1, 6)],
+                        [(0, 7), (1, 7)],
+                        [(0, 8), (1, 8)],
+                        [(0, 9), (1, 9)],
+                        [(0, 10), (1, 10)],
+                        [(0, 11), (1, 11)],
+                        [(0, 12), (1, 12)],
+                        [(0, 13), (1, 13)],
+                        [(0, 14), (1, 14)],
+                        [(0, 15), (1, 15)],
+                        [(0, 16), (1, 16)],
+                        [(0, 17), (1, 17)],
+                        [(0, 18), (1, 18)],
+                        [(0, 19), (1, 19)],
+                        [(0, 20), (1, 20)],
+                        [(0, 21), (1, 21)],
+                        [(0, 22), (1, 22)],
+                        [(0, 23), (1, 23)],
+                        [(0, 24), (1, 24)],
+                        [(0, 25), (1, 25)],
+                        [(0, 26), (1, 26)],
+                        [(0, 27), (1, 27)],
+                        [(0, 28), (1, 28)],
+                        [(0, 29), (1, 29)],
+                        [(0, 30), (1, 30)],
+                        [(0, 31), (1, 31)],
+                        [(0, 32), (1, 32)],
+                        [(0, 33), (1, 33)],
+                        [(0, 34), (1, 34)],
+                        [(0, 35), (1, 35)],
+                        [(0, 36), (1, 36)],
+                        [(0, 37), (1, 37)],
+                        [(0, 38), (1, 38)]
+                      ],
+                      Get { id-3 },
+                      Filter {
+                        predicates: [#39],
+                        Reduce {
+                          group_key: [0 .. 38],
+                          aggregates: [any(distinct #40)],
+                          Map {
+                            scalars: [#11 = #39],
+                            Project {
+                              outputs: [0 .. 39],
+                              Join {
+                                variables: [],
+                                Distinct {
                                   group_key: [0 .. 38],
-                                  aggregates: [any(distinct #40)],
-                                  Map {
-                                    scalars: [#11 = #39],
-                                    Project {
-                                      outputs: [0 .. 39],
-                                      Join {
-                                        variables: [],
-                                        Distinct {
-                                          group_key: [0 .. 38],
-                                          Get { id-3 }
-                                        },
-                                        Filter {
-                                          predicates: [#4 ~ /^co.*$/],
-                                          Get { item }
-                                        }
-                                      }
-                                    }
-                                  }
+                                  Get { id-3 }
+                                },
+                                Filter {
+                                  predicates: [#4 ~ /^co.*$/],
+                                  Get { item }
                                 }
-                              },
-                              Constant []
-                            },
-                            Constant []
+                              }
+                            }
                           }
                         }
                       }
@@ -1831,10 +1806,8 @@ Project {
               }
             }
           }
-        },
-        Constant []
-      },
-      Constant []
+        }
+      }
     }
   }
 }
