@@ -240,20 +240,18 @@ impl PredicatePushdown {
                         });
                         if supported {
                             push_down.push(new_predicate);
-                        } else {
-                            if let ScalarExpr::Column(col) = &predicate {
-                                if *col == group_key.len()
-                                    && aggregates.len() == 1
-                                    && aggregates[0].0.func == AggregateFunc::Any
-                                {
-                                    push_down.push(aggregates[0].0.expr.clone());
-                                    aggregates[0].0.expr = ScalarExpr::Literal(repr::Datum::True);
-                                } else {
-                                    retain.push(predicate);
-                                }
+                        } else if let ScalarExpr::Column(col) = &predicate {
+                            if *col == group_key.len()
+                                && aggregates.len() == 1
+                                && aggregates[0].0.func == AggregateFunc::Any
+                            {
+                                push_down.push(aggregates[0].0.expr.clone());
+                                aggregates[0].0.expr = ScalarExpr::Literal(repr::Datum::True);
                             } else {
                                 retain.push(predicate);
                             }
+                        } else {
+                            retain.push(predicate);
                         }
                     }
 
