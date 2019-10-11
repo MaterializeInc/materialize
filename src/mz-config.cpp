@@ -32,10 +32,10 @@ const mz::Config& mz::defaultConfig() {
             "mysql_tpcch_region",
             "mysql_tpcch_supplier"
         },
-        .kafkaUrl = "kafka://kafka:9092",
+        .viewPattern = "mysql.tpcch.%",
         .materializedUrl = "postgresql://materialized:6875/?sslmode=disable",
-        .schemaRegistryUrl = "http://schema-registry:8081",
-        .viewPattern = "mysql.tpcch.%"
+        .kafkaUrl = "kafka://kafka:9092",
+        .schemaRegistryUrl = "http://schema-registry:8081"
     };
     return singleton;
 }
