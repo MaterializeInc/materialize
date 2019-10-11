@@ -168,16 +168,15 @@ fn simplify_expr_if_complex_equality(
                     // ScalarExpr supports exactly one relation. Simplify!
                     let input_index_to_update = support[0];
                     let column_offset_to_subtract = prior_arities[input_index_to_update];
-                    let new_expr = create_new_expr_with_updated_column_references(
-                        &expr,
-                        column_offset_to_subtract,
-                    );
+                    let new_expr =
+                        create_expr_update_column_references(&expr, column_offset_to_subtract);
                     let map = RelationExpr::Map {
                         input: Box::from(inputs[input_index_to_update].clone()),
                         scalars: vec![(
                             new_expr.clone(),
                             ColumnType {
                                 name: Some(String::from("throwaway")),
+
                                 nullable: false,
                                 scalar_type: ScalarType::Null,
                             },
@@ -215,29 +214,15 @@ fn simplify_expr_if_complex_equality(
 /// This function tackles #2 in that it creates a NEW ScalarExpr predicate
 /// to put into ScalarExpr::Filter that reflects the change from #1.
 /// This is what prevents us from "optimizing" in an infinite loop.
-fn create_new_expr_with_updated_column_references(
+fn create_expr_update_column_references(
     expr: &ScalarExpr,
     column_offset_to_subtract: usize,
 ) -> ScalarExpr {
-    match expr {
-        ScalarExpr::CallBinary { func, expr1, expr2 } => {
-            let new_expr1 = match **expr1 {
-                ScalarExpr::Column(c) => ScalarExpr::Column(c - column_offset_to_subtract),
-                _ => expr1.as_ref().clone(),
-            };
-            let new_expr_2 = match **expr2 {
-                ScalarExpr::Column(c) => ScalarExpr::Column(c - column_offset_to_subtract),
-                _ => expr2.as_ref().clone(),
-            };
-            ScalarExpr::CallBinary {
-                func: *func,
-                expr1: Box::from(new_expr1),
-                expr2: Box::from(new_expr_2),
-            }
+    let mut expr = expr.clone();
+    expr.visit_mut(&mut |e| {
+        if let ScalarExpr::Column(column) = e {
+            *column = *column - column_offset_to_subtract;
         }
-        _ => {
-            // todo: Rest of the ScalarExpr options!
-            ScalarExpr::Column(0) // placeholder
-        }
-    }
+    });
+    expr
 }
