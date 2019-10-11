@@ -993,16 +993,14 @@ impl Planner {
             self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
 
         // plan subquery
-        let right_arity = right.arity();
         let expr = right
-            .map(vec![(op_expr, op_type.clone())])
             .reduce(
                 vec![],
                 vec![(
                     AggregateExpr {
                         func,
-                        expr: Box::new(ScalarExpr::Column(ColumnRef::Inner(right_arity))),
-                        distinct: true,
+                        expr: Box::new(op_expr),
+                        distinct: false,
                     },
                     op_type.clone(),
                 )],

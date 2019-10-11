@@ -46,7 +46,7 @@
 //! PredicatePushdown.transform(&mut expr);
 //! ```
 
-use crate::{RelationExpr, ScalarExpr};
+use crate::{AggregateFunc, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct PredicatePushdown;
@@ -222,7 +222,7 @@ impl PredicatePushdown {
                 RelationExpr::Reduce {
                     input: inner,
                     group_key,
-                    ..
+                    aggregates,
                 } => {
                     let mut retain = Vec::new();
                     let mut push_down = Vec::new();
@@ -241,9 +241,22 @@ impl PredicatePushdown {
                         if supported {
                             push_down.push(new_predicate);
                         } else {
-                            retain.push(predicate);
+                            if let ScalarExpr::Column(col) = &predicate {
+                                if *col == group_key.len()
+                                    && aggregates.len() == 1
+                                    && aggregates[0].0.func == AggregateFunc::Any
+                                {
+                                    push_down.push(aggregates[0].0.expr.clone());
+                                    aggregates[0].0.expr = ScalarExpr::Literal(repr::Datum::True);
+                                } else {
+                                    retain.push(predicate);
+                                }
+                            } else {
+                                retain.push(predicate);
+                            }
                         }
                     }
+
                     if !push_down.is_empty() {
                         *inner = Box::new(inner.take_dangerous().filter(push_down));
                     }
