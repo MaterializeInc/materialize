@@ -183,7 +183,7 @@ impl Environment {
     /// Inject this environment's bindings into the given dataflow graph. This
     /// method is the imperative version of [`Environment::use_in`].
     pub fn inject(self, expr: &mut RelationExpr) {
-        *expr = self.use_in(expr.take());
+        *expr = self.use_in(expr.take_dangerous());
     }
 }
 
@@ -208,7 +208,7 @@ impl Hoist {
                     name,
                     mut value,
                     body,
-                } = expr.take()
+                } = expr.take_dangerous()
                 {
                     extract_all(&mut *value, env);
                     env.bind(name, *value);
@@ -230,7 +230,7 @@ impl Hoist {
 
 impl super::Transform for Hoist {
     /// Hoist all bindings to the top of a dataflow graph.
-    fn transform(&self, expr: &mut RelationExpr, _meta: &RelationType) {
+    fn transform(&self, expr: &mut RelationExpr) {
         Hoist::hoist(expr);
     }
 }
@@ -264,7 +264,7 @@ impl Unbind {
                         name,
                         mut value,
                         body,
-                    } = expr.take()
+                    } = expr.take_dangerous()
                     {
                         unbind_all(&mut value, env);
 
@@ -290,7 +290,7 @@ impl Unbind {
 
 impl super::Transform for Unbind {
     /// Perform the unbind optimization.
-    fn transform(&self, expr: &mut RelationExpr, _meta: &RelationType) {
+    fn transform(&self, expr: &mut RelationExpr) {
         Unbind::unbind(expr);
     }
 }
@@ -464,7 +464,7 @@ impl Deduplicate {
 
 impl super::Transform for Deduplicate {
     /// Deduplicate repeated subgraphs.
-    fn transform(&self, expr: &mut RelationExpr, _metadata: &RelationType) {
+    fn transform(&self, expr: &mut RelationExpr) {
         Deduplicate::deduplicate(expr);
     }
 }
@@ -505,7 +505,7 @@ impl Normalize {
 
 impl super::Transform for Normalize {
     /// Normalize names of local bindings.
-    fn transform(&self, expr: &mut RelationExpr, _metadata: &RelationType) {
+    fn transform(&self, expr: &mut RelationExpr) {
         Normalize::normalize(expr);
     }
 }

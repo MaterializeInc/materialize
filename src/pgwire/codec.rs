@@ -19,7 +19,7 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::pgwire::message::{BackendMessage, FieldFormat, FrontendMessage};
+use crate::message::{BackendMessage, FieldFormat, FrontendMessage};
 use ore::netio;
 
 #[derive(Debug)]
@@ -42,7 +42,7 @@ impl std::fmt::Display for CodecError {
 ///
 /// ```
 /// use futures::{Future, Stream};
-/// use materialize::pgwire::Codec;
+/// use pgwire::Codec;
 /// use tokio::io;
 /// use tokio::net::TcpStream;
 /// use tokio::codec::Framed;

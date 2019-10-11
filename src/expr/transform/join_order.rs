@@ -4,10 +4,20 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
-/// Re-order relations in a join to process them in an order that makes sense.
+/// Re-order relations in a join to minimize the size of intermediate results.
+/// To minimize intermediate results, ensure each additional relation
+/// added to the join shares an equality constraint with a column of a relation
+/// that is already present in the intermediate results.
 ///
+/// For example:
+/// Join relations A, B, C given the equality constraints A.x = C.x and B.y = C.y.
+///
+/// In the given ordering, we join A and B first with no equality constraints. This
+/// means we have to do a full cross join of A and B, creating large intermediate results.
+///
+/// Instead, if we reordered to A, C, B, we could use the shared equality constraint
+/// between A and C to perform an equijoin, creating smaller intermediate results.
 /// ```rust
 /// use expr::RelationExpr;
 /// use expr::transform::join_order::JoinOrder;
@@ -26,39 +36,39 @@ use repr::RelationType;
 ///     vec![input1, input2, input3],
 ///     vec![vec![(0, 0), (2, 0)]],
 /// );
-/// let typ = RelationType::new(vec![
-///     ColumnType::new(ScalarType::Bool),
-///     ColumnType::new(ScalarType::Bool),
-///     ColumnType::new(ScalarType::Bool),
-/// ]);
 ///
-/// JoinOrder.transform(&mut expr, &typ);
+/// JoinOrder.transform(&mut expr);
 ///
 /// if let RelationExpr::Project { input, outputs } = expr {
-///     assert_eq!(outputs, vec![0, 2, 1]);
+///     assert_eq!(outputs, vec![0, 1, 2]);
 /// }
 /// ```
 #[derive(Debug)]
 pub struct JoinOrder;
 
 impl super::Transform for JoinOrder {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl JoinOrder {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join { inputs, variables } = relation {
-            let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+            let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            let uniques = types.iter().map(|t| t.keys.clone()).collect::<Vec<_>>();
+            let arities = types
+                .iter()
+                .map(|t| t.column_types.len())
+                .collect::<Vec<_>>();
 
             // Step 1: determine a relation_expr order starting from `inputs[0]`.
-            let relation_expr_order = order_join(inputs.len(), &variables[..]);
+            let relation_expr_order = order_join(inputs.len(), &variables[..], &uniques[..]);
 
             // Step 2: rewrite `variables`.
             let mut positions = vec![0; relation_expr_order.len()];
@@ -107,25 +117,24 @@ impl JoinOrder {
 
             // Output projection
             *relation = join.project(projection);
-            // (output, metadata)
         }
-        // else {
-        //     (relation, metadata)
-        // }
     }
 }
 
-fn order_join(relations: usize, constraints: &[Vec<(usize, usize)>]) -> Vec<usize> {
+fn order_join(
+    relations: usize,
+    constraints: &[Vec<(usize, usize)>],
+    unique_keys: &[Vec<Vec<usize>>],
+) -> Vec<usize> {
+    // First attempt to order so as to exploit uniqueness constraints.
+    // This attempts to restrict the intermediate state, a proxy for cost-based optimization.
     for i in 0..relations {
-        // TODO: Replace with primary key information.
-        // TODO: Determine how to encode "no primary key"; perhaps avoid this logic if so, or only invoke if a
-        // single relation lacks a primary key and use it as the start.
-        let primaries = vec![vec![0]; relations];
-        if let Some(order) = order_on_primary(relations, i, constraints, &primaries[..]) {
+        if let Some(order) = order_on_keys(relations, i, constraints, unique_keys) {
             return order;
         }
     }
 
+    // Attempt to order relations so that each is at least constrained by columns in prior relations.
     let mut relation_expr_order = vec![0];
     while relation_expr_order.len() < relations {
         let mut candidates = (0..relations)
@@ -152,28 +161,30 @@ fn order_join(relations: usize, constraints: &[Vec<(usize, usize)>]) -> Vec<usiz
     relation_expr_order
 }
 
-/// Attempt to order relations to join on primary keys.
+/// Attempt to order relations to join on unique keys.
 ///
 /// This method attempts to produce an order on relations so that each join will involve at least a
-/// primary key, which would ensure that the number of records does not increase along the join. The
+/// unique key, which would ensure that the number of records does not increase along the join. The
 /// attempt starts from a specified `start` relation, and greedily adds relations as long as any have
-/// primary keys that must be equal to some bound column.
-fn order_on_primary(
+/// unique keys that must be equal to some bound column.
+fn order_on_keys(
     relations: usize,
     start: usize,
     constraints: &[Vec<(usize, usize)>],
-    primary_keys: &[Vec<usize>],
+    unique_keys: &[Vec<Vec<usize>>],
 ) -> Option<Vec<usize>> {
     let mut order = vec![start];
     while order.len() < relations {
-        // Attempt to find a next relation, not yet in `order` and whose primary keys are all bound
+        // Attempt to find a next relation, not yet in `order` and whose unique keys are all bound
         // by columns of relations that are present in `order`.
         let candidate = (0..relations).filter(|i| !order.contains(i)).find(|i| {
-            primary_keys[*i].iter().all(|key| {
-                constraints.iter().any(|variables| {
-                    let contains_key = variables.contains(&(*i, *key));
-                    let contains_bound = variables.iter().any(|(idx, _)| order.contains(idx));
-                    contains_key && contains_bound
+            unique_keys[*i].iter().any(|keys| {
+                keys.iter().all(|key| {
+                    constraints.iter().any(|variables| {
+                        let contains_key = variables.contains(&(*i, *key));
+                        let contains_bound = variables.iter().any(|(idx, _)| order.contains(idx));
+                        contains_key && contains_bound
+                    })
                 })
             })
         });

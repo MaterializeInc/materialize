@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use failure::bail;
 
 use dataflow_types::RowSetFinishing;
+use repr::RelationDesc;
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
@@ -58,7 +59,13 @@ const DATE_STYLE: ServerVar<&'static str> = ServerVar {
 
 const SERVER_VERSION: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("server_version"),
-    value: concat!(env!("CARGO_PKG_VERSION"), "+materialized"),
+    // Postgres client libraries sometimes check this,
+    // so pretend to be a recent version for their benefit
+    value: concat!(
+        "12.0.0+postgres ",
+        env!("CARGO_PKG_VERSION"),
+        "+materialized"
+    ),
     description: "Shows the server version (PostgreSQL).",
 };
 
@@ -350,6 +357,7 @@ impl Var for SessionVar<bool> {
 pub struct PreparedStatement {
     pub raw_sql: String,
     source: ::expr::RelationExpr,
+    desc: RelationDesc,
     finishing: RowSetFinishing,
 }
 
@@ -357,17 +365,23 @@ impl PreparedStatement {
     pub fn new(
         raw_sql: String,
         source: ::expr::RelationExpr,
+        desc: RelationDesc,
         finishing: RowSetFinishing,
     ) -> PreparedStatement {
         PreparedStatement {
             raw_sql,
             source,
+            desc,
             finishing,
         }
     }
 
     pub fn source(&self) -> &::expr::RelationExpr {
         &self.source
+    }
+
+    pub fn desc(&self) -> &RelationDesc {
+        &self.desc
     }
 
     pub fn finishing(&self) -> &RowSetFinishing {

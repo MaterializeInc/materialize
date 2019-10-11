@@ -5,7 +5,10 @@
 
 //! The main Materialize server.
 //!
-//! The name is pronounced "materialize-dee." It listens on port 6875 (MTRL).
+//! The name is pronounced "materialize-deee," as in "[delicious, delovely,
+//! delectable, devine, degroovy, dewith it,
+//! Deee-Lite](https://www.youtube.com/watch?v=zD71055315c)"! It listens on port
+//! 6875 (MTRL).
 //!
 //! The design and implementation of materialized is very much in flux. See the
 //! draft architecture doc for the most up-to-date plan [0]. Access is limited
@@ -17,7 +20,7 @@ use backtrace::Backtrace;
 use failure::{bail, ResultExt};
 use lazy_static::lazy_static;
 use std::env;
-use std::fs::File;
+use std::fs::{read_to_string, File};
 use std::io::{BufRead, BufReader};
 use std::panic;
 use std::panic::PanicInfo;
@@ -71,6 +74,12 @@ fn run() -> Result<(), failure::Error> {
         "text file whose lines are process addresses",
         "FILE",
     );
+    opts.optopt(
+        "s",
+        "startup",
+        "file with SQL queries to execute at startup",
+        "STARTUP",
+    );
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
     let popts = opts.parse(&args[1..])?;
@@ -109,12 +118,18 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
-    materialize::server::serve(materialize::server::Config {
+    let sql = match popts.opt_str("startup") {
+        None => "".to_string(),
+        Some(startup_file) => read_to_string(&startup_file)?,
+    };
+
+    materialized::serve(materialized::Config {
         logging_granularity,
         version,
         threads,
         process,
         addresses,
+        sql,
         gather_metrics,
     })
 }

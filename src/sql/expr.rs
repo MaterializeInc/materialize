@@ -378,7 +378,7 @@ impl ScalarExpr {
             // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
-                *inner = inner.take().branch(id_gen, |id_gen, get_inner| {
+                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
                     let exists = expr
                         // compute for every row in get_inner
                         .applied_to(id_gen, get_inner.clone())?
@@ -401,7 +401,7 @@ impl ScalarExpr {
             }
             Select(expr) => {
                 assert_eq!(expr.arity(), 1);
-                *inner = inner.take().branch(id_gen, |id_gen, get_inner| {
+                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
                     let select = expr
                         // compute for every row in get_inner
                         .applied_to(id_gen, get_inner.clone())?;
@@ -443,12 +443,12 @@ impl RelationExpr {
             RelationExpr::Get { typ, .. } => typ.clone(),
             RelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ();
-                RelationType {
-                    column_types: outputs
+                RelationType::new(
+                    outputs
                         .iter()
                         .map(|&i| input_typ.column_types[i].clone())
                         .collect(),
-                }
+                )
             }
             RelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ();
@@ -458,14 +458,13 @@ impl RelationExpr {
                 typ
             }
             RelationExpr::Filter { input, .. } => input.typ(),
-            RelationExpr::Join { left, right, .. } => RelationType {
-                column_types: left
-                    .typ()
+            RelationExpr::Join { left, right, .. } => RelationType::new(
+                left.typ()
                     .column_types
                     .into_iter()
                     .chain(right.typ().column_types)
                     .collect(),
-            },
+            ),
             RelationExpr::Reduce {
                 input,
                 group_key,
@@ -479,8 +478,10 @@ impl RelationExpr {
                 for (_, column_typ) in aggregates {
                     column_types.push(column_typ.clone());
                 }
-                RelationType { column_types }
+                // TODO(frank): add primary key information.
+                RelationType::new(column_types)
             }
+            // TODO(frank): check for removal; add primary key information.
             RelationExpr::Distinct { input }
             | RelationExpr::Negate { input }
             | RelationExpr::Threshold { input } => input.typ(),
@@ -488,15 +489,15 @@ impl RelationExpr {
                 let left_typ = left.typ();
                 let right_typ = right.typ();
                 assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
-                RelationType {
-                    column_types: left_typ
+                RelationType::new(
+                    left_typ
                         .column_types
                         .iter()
                         .zip(right_typ.column_types.iter())
                         .map(|(l, r)| l.union(r))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap(),
-                }
+                )
             }
         }
     }

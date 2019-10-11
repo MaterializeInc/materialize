@@ -21,8 +21,10 @@ pub fn serve<C>(
     switchboard: comm::Switchboard<C>,
     num_timely_workers: usize,
     logging_config: Option<&LoggingConfig>,
+    startup_sql: String,
     cmd_rx: UnboundedReceiver<Command>,
-) where
+) -> Result<(), failure::Error>
+where
     C: comm::Connection,
 {
     let mut coord =
@@ -30,6 +32,14 @@ pub fn serve<C>(
     let feedback_rx = coord.enable_feedback();
 
     let mut planner = sql::Planner::new(logging_config);
+
+    // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
+    // the first connection ID used is 1. As long as that remains the case, 0 is safe to use here.
+    let mut session = sql::Session::default();
+    let plans = planner.handle_commands(&mut session, startup_sql)?;
+    plans.into_iter().for_each(|plan| {
+        coord.sequence_plan(plan, 0, None /* ts_override */);
+    });
 
     let messages = cmd_rx
         .map(Message::Command)
@@ -71,9 +81,12 @@ pub fn serve<C>(
                         for (name, frontier) in updates {
                             coord.update_upper(&name, &frontier);
                         }
+                        coord.maintenance();
                     }
                 }
             }
         }
     });
+
+    Ok(())
 }

@@ -20,14 +20,14 @@ use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::pgwire::codec::Codec;
-use crate::pgwire::message::{
+use crate::codec::Codec;
+use crate::message::{
     self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity,
 };
 use coord::{self, SqlResponse};
 use dataflow_types::Update;
 use ore::future::{Recv, StreamExt};
-use repr::{Datum, RelationType};
+use repr::{Datum, RelationDesc};
 use sql::Session;
 
 use prometheus::IntCounterVec;
@@ -219,7 +219,7 @@ pub enum StateMachine<A: Conn + 'static> {
     SendRowDescription {
         send: SinkSend<A>,
         session: Session,
-        row_type: RelationType,
+        row_desc: RelationDesc,
         rows_rx: coord::RowsFuture,
     },
 
@@ -228,7 +228,7 @@ pub enum StateMachine<A: Conn + 'static> {
     WaitForRows {
         conn: A,
         session: Session,
-        row_type: RelationType,
+        row_desc: RelationDesc,
         rows_rx: coord::RowsFuture,
         field_formats: Option<Vec<FieldFormat>>,
         currently_extended: bool,
@@ -546,12 +546,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         currently_extended: false,
                         label: "empty",
                     }),
-                    SqlResponse::SendRows { typ, rx } => transition!(SendRowDescription {
+                    SqlResponse::SendRows { desc, rx } => transition!(SendRowDescription {
                         send: state.conn.send(BackendMessage::RowDescription(
-                            super::message::row_description_from_type(&typ)
+                            super::message::row_description_from_desc(&desc)
                         )),
                         session,
-                        row_type: typ,
+                        row_desc: desc,
                         rows_rx: rx,
                     }),
                     SqlResponse::SetVariable => command_complete!("SET", "set"),
@@ -665,14 +665,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         send: state.conn.send(BackendMessage::ParseComplete),
                         session,
                     }),
-                    SqlResponse::SendRows { typ, rx } => {
+                    SqlResponse::SendRows { desc, rx } => {
                         trace!("handle extended: send rows");
                         let ff = state.field_formats;
                         debug_assert!(ff.is_some(), "field formats must be set for execute");
                         transition!(WaitForRows {
                             session,
                             conn: state.conn,
-                            row_type: typ,
+                            row_desc: desc,
                             rows_rx: rx,
                             field_formats: ff,
                             currently_extended: true
@@ -722,8 +722,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         };
         match statement {
             Some(ps) => {
-                let typ = ps.source().typ();
-                let desc = super::message::row_description_from_type(&typ);
+                let desc = ps.desc();
+                let desc = super::message::row_description_from_desc(&desc);
                 transition!(SendDescribeResponseRowdesc {
                     send: conn.send(BackendMessage::RowDescription(desc)),
                     session: state.session,
@@ -756,7 +756,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         transition!(WaitForRows {
             conn,
             session: state.session,
-            row_type: state.row_type,
+            row_desc: state.row_desc,
             rows_rx: state.rows_rx,
             field_formats: None,
             currently_extended: false
@@ -802,7 +802,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             state.conn,
             state.session,
             peek_results,
-            state.row_type,
+            state.row_desc,
             state.field_formats.clone(),
             state.currently_extended,
         ))
@@ -916,7 +916,7 @@ fn send_rows<A, R>(
     conn: A,
     session: Session,
     rows: R,
-    row_type: RelationType,
+    row_desc: RelationDesc,
     field_formats: Option<Vec<FieldFormat>>,
     currently_extended: bool,
 ) -> SendCommandComplete<A>
@@ -932,7 +932,7 @@ where
         .into_iter()
         .map(move |row| {
             BackendMessage::DataRow(
-                message::field_values_from_row(row, &row_type),
+                message::field_values_from_row(row, row_desc.typ()),
                 formats.fresh(),
             )
         })

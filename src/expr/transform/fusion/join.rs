@@ -4,29 +4,27 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
 #[derive(Debug)]
 pub struct Join;
 
 impl crate::transform::Transform for Join {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl Join {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
 
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join { inputs, variables } = relation {
             let mut new_inputs = Vec::new();
             let mut new_variables = Vec::new();
-
             let mut new_relation = Vec::new();
 
             for input in inputs.drain(..) {

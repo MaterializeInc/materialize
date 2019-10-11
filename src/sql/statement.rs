@@ -33,13 +33,26 @@ use expr::RelationExpr;
 use interchange::avro;
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{Datum, RelationDesc, RelationType, ScalarType};
 
 impl Planner {
     pub fn new(logging_config: Option<&LoggingConfig>) -> Planner {
         Planner {
             dataflows: DataflowStore::new(logging_config),
         }
+    }
+
+    /// Parses and plans several raw SQL queries.
+    pub fn handle_commands(
+        &mut self,
+        session: &mut Session,
+        sql: String,
+    ) -> Result<Vec<Plan>, failure::Error> {
+        let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
+        stmts
+            .into_iter()
+            .map(|stmt| self.handle_statement(session, stmt))
+            .collect::<Result<_, _>>()
     }
 
     /// Parses and plans a raw SQL query. See the documentation for
@@ -90,6 +103,7 @@ impl Planner {
             })?;
         Ok(Plan::Peek {
             source: prepared.source().clone(),
+            desc: prepared.desc().clone(),
             when: PeekWhen::Immediately,
             finishing: prepared.finishing().clone(),
         })
@@ -158,13 +172,10 @@ impl Planner {
     ) -> Result<Plan, failure::Error> {
         if variable == unicase::Ascii::new("ALL") {
             Ok(Plan::SendRows {
-                typ: RelationType {
-                    column_types: vec![
-                        ColumnType::new(ScalarType::String).name("name"),
-                        ColumnType::new(ScalarType::String).name("setting"),
-                        ColumnType::new(ScalarType::String).name("description"),
-                    ],
-                },
+                desc: RelationDesc::empty()
+                    .add_column("name", ScalarType::String)
+                    .add_column("setting", ScalarType::String)
+                    .add_column("description", ScalarType::String),
                 rows: session
                     .vars()
                     .iter()
@@ -174,9 +185,7 @@ impl Planner {
         } else {
             let variable = session.get(&variable)?;
             Ok(Plan::SendRows {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String).name(variable.name())],
-                },
+                desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
                 rows: vec![vec![variable.value().into()]],
             })
         }
@@ -197,10 +206,8 @@ impl Planner {
             .collect();
         rows.sort_unstable();
         Ok(Plan::SendRows {
-            typ: RelationType {
-                column_types: vec![ColumnType::new(ScalarType::String)
-                    .name(object_type_as_plural_str(object_type).to_owned())],
-            },
+            desc: RelationDesc::empty()
+                .add_column(object_type_as_plural_str(object_type), ScalarType::String),
             rows,
         })
     }
@@ -225,23 +232,22 @@ impl Planner {
 
         let column_descriptions: Vec<_> = self
             .dataflows
-            .get_type(&table_name.to_string())?
-            .column_types
+            .get_desc(&table_name.to_string())?
             .iter()
-            .map(|colty| {
+            .map(|(name, typ)| {
                 vec![
-                    colty.name.mz_as_deref().unwrap_or("?").into(),
-                    if colty.nullable { "YES" } else { "NO" }.into(),
-                    colty.scalar_type.to_string().into(),
+                    name.mz_as_deref().unwrap_or("?").into(),
+                    if typ.nullable { "YES" } else { "NO" }.into(),
+                    typ.scalar_type.to_string().into(),
                 ]
             })
             .collect();
 
-        let col_name = |s: &str| ColumnType::new(ScalarType::String).name(s.to_string());
         Ok(Plan::SendRows {
-            typ: RelationType {
-                column_types: vec![col_name("Field"), col_name("Nullable"), col_name("Type")],
-            },
+            desc: RelationDesc::empty()
+                .add_column("Field", ScalarType::String)
+                .add_column("Nullable", ScalarType::String)
+                .add_column("Type", ScalarType::String),
             rows: column_descriptions,
         })
     }
@@ -258,11 +264,11 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, finishing) = self.plan_toplevel_query(&query)?;
+                let (relation_expr, mut desc, finishing) = self.plan_toplevel_query(&query)?;
                 if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
-                let mut typ = relation_expr.typ();
+                let typ = desc.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
                         bail!(
@@ -271,14 +277,14 @@ impl Planner {
                             typ.column_types.len()
                         )
                     }
-                    for (typ, name) in typ.column_types.iter_mut().zip(columns) {
-                        typ.name = Some(name.clone());
+                    for (i, name) in columns.iter().enumerate() {
+                        desc.set_name(i, Some(name.into()));
                     }
                 }
                 let view = View {
                     name: extract_sql_object_name(name)?,
                     relation_expr,
-                    typ,
+                    desc,
                     as_of: None,
                 };
                 self.dataflows.insert(Dataflow::View(view.clone()))?;
@@ -368,7 +374,7 @@ impl Planner {
                 let (addr, topic) = parse_kafka_topic_url(url)?;
                 let sink = Sink {
                     name,
-                    from: (from, dataflow.typ().clone()),
+                    from: (from, dataflow.desc().clone()),
                     connector: SinkConnector::Kafka(KafkaSinkConnector {
                         addr,
                         topic,
@@ -429,6 +435,7 @@ impl Planner {
                 name: dataflow.name().to_owned(),
                 typ: typ.clone(),
             },
+            desc: dataflow.desc().clone(),
             when: if immediate {
                 PeekWhen::Immediately
             } else {
@@ -449,9 +456,10 @@ impl Planner {
     }
 
     pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, finishing) = self.plan_toplevel_query(&query)?;
+        let (relation_expr, desc, finishing) = self.plan_toplevel_query(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
+            desc,
             when: PeekWhen::Immediately,
             finishing,
         })
@@ -468,10 +476,10 @@ impl Planner {
         super::transform::transform(&mut stmt);
         match stmt {
             Statement::Query(query) => {
-                let (relation_expr, finishing) = self.plan_toplevel_query(&query)?;
+                let (relation_expr, desc, finishing) = self.plan_toplevel_query(&query)?;
                 session.set_prepared_statement(
                     name.clone(),
-                    PreparedStatement::new(sql, relation_expr, finishing),
+                    PreparedStatement::new(sql, relation_expr, desc, finishing),
                 );
                 Ok(Plan::Parsed { name })
             }
@@ -480,21 +488,17 @@ impl Planner {
     }
 
     pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
-        let (relation_expr, _finishing) = self.plan_toplevel_query(&query)?;
+        let (relation_expr, _desc, _finishing) = self.plan_toplevel_query(&query)?;
         // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
             Ok(Plan::SendRows {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
-                },
+                desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),
                 rows: vec![vec![Datum::from(relation_expr.pretty())]],
             })
         } else {
             Ok(Plan::ExplainPlan {
-                typ: RelationType {
-                    column_types: vec![ColumnType::new(ScalarType::String).name("Dataflow")],
-                },
+                desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),
                 relation_expr,
             })
         }
@@ -503,12 +507,25 @@ impl Planner {
     /// Plans and decorrelates a query once we've planned all nested RelationExprs.
     /// Decorrelation converts a sql::RelationExpr (which can include correlations)
     /// to an expr::RelationExpr (which cannot include correlations).
+    ///
+    /// Note that the returned `RelationDesc` describes the expression after
+    /// applying the returned `RowSetFinishing`.
     fn plan_toplevel_query(
         &mut self,
         query: &Query,
-    ) -> Result<(RelationExpr, RowSetFinishing), failure::Error> {
-        let (relation_expr, _scope, finishing) = self.plan_query(query, &Scope::empty(None))?;
-        Ok((relation_expr.decorrelate()?, finishing))
+    ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+        let (expr, scope, finishing) = self.plan_query(query, &Scope::empty(None))?;
+        let expr = expr.decorrelate()?;
+        let typ = expr.typ();
+        let typ = RelationType::new(
+            finishing
+                .project
+                .iter()
+                .map(|i| typ.column_types[*i].clone())
+                .collect(),
+        );
+        let desc = RelationDesc::new(typ, scope.column_names());
+        Ok((expr, desc, finishing))
     }
 }
 
@@ -545,11 +562,13 @@ fn build_source(
         }
     };
 
-    let typ = avro::validate_value_schema(&value_schema)?;
+    let desc = avro::validate_value_schema(&value_schema)?;
     let pkey_indices = match key_schema {
-        Some(key_schema) => avro::validate_key_schema(&key_schema, &typ)?,
+        Some(key_schema) => avro::validate_key_schema(&key_schema, &desc)?,
         None => Vec::new(),
     };
+
+    let desc = desc.add_keys(pkey_indices);
 
     Ok(Source {
         name,
@@ -559,8 +578,7 @@ fn build_source(
             raw_schema: value_schema,
             schema_registry_url,
         }),
-        typ,
-        pkey_indices,
+        desc,
     })
 }
 

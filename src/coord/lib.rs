@@ -11,7 +11,7 @@
 
 use dataflow_types::Update;
 use futures::Future;
-use repr::{Datum, RelationType};
+use repr::{Datum, RelationDesc};
 use sql::Session;
 use std::fmt;
 
@@ -77,7 +77,7 @@ pub enum SqlResponse {
     DroppedView,
     EmptyQuery,
     SendRows {
-        typ: RelationType,
+        desc: RelationDesc,
         rx: RowsFuture,
     },
     /// We have successfully parsed the query and stashed it in the [`Session`]
@@ -100,7 +100,7 @@ impl fmt::Debug for SqlResponse {
             SqlResponse::DroppedView => f.write_str("SqlResposne::DroppedView"),
             SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
             SqlResponse::Parsed { name } => write!(f, "SqlResponse::Parsed(name: {})", name),
-            SqlResponse::SendRows { typ, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", typ),
+            SqlResponse::SendRows { desc, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", desc),
             SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
             SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),
         }

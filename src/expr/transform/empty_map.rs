@@ -4,31 +4,26 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use repr::RelationType;
 
 #[derive(Debug)]
 pub struct EmptyMap;
 
 impl super::Transform for EmptyMap {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl EmptyMap {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut_pre(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
-    pub fn action(&self, relation: &mut RelationExpr, metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Map { input, scalars } = relation {
             if scalars.is_empty() {
-                let empty = RelationExpr::Constant {
-                    rows: vec![],
-                    typ: metadata.to_owned(),
-                };
-                *relation = std::mem::replace(input, empty);
+                *relation = input.take_dangerous();
             }
         }
     }

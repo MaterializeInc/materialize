@@ -44,7 +44,7 @@ Creating chbench_schema-registry_1 ... done
 ```
 
 If all goes well, you'll have MySQL, ZooKeeper, Kafka, Kafka Connect, and
-Materialized running, each in their own container, with Debezium configured to
+Materialize running, each in their own container, with Debezium configured to
 ship changes from MySQL into Kafka. You won't really be able to tell if things
 fail to start up, which seems to happen from time to time, as the output from
 Docker Compose only tells you if the *container* successfully booted, not if the
@@ -122,7 +122,7 @@ For maximum style points, use `watch-sql` for some live query monitoring:
 $ docker-compose run cli watch-sql "PEEK q01"
 ```
 
-To ensure that materialized reflects all changes to the source data, you can
+To ensure that `materialized` reflects all changes to the source data, you can
 run:
 
 ```bash session

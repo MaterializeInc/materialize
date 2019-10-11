@@ -10,7 +10,7 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use expr::RelationExpr;
-use repr::{Datum, RelationType};
+use repr::{Datum, RelationDesc, RelationType};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use url::Url;
@@ -105,15 +105,27 @@ impl Dataflow {
         }
     }
 
-    /// Reports the type of the datums produced by this dataflow.
-    pub fn typ(&self) -> &RelationType {
+    /// Reports the description of the datums produced by this dataflow.
+    pub fn desc(&self) -> &RelationDesc {
         match self {
-            Dataflow::Source(src) => &src.typ,
+            Dataflow::Source(src) => &src.desc,
             Dataflow::Sink(_) => panic!(
                 "programming error: Dataflow.typ called on Sink variant, \
                  but sinks don't have a type"
             ),
-            Dataflow::View(view) => &view.typ,
+            Dataflow::View(view) => &view.desc,
+        }
+    }
+
+    /// Reports the type of the datums produced by this dataflow.
+    pub fn typ(&self) -> &RelationType {
+        match self {
+            Dataflow::Source(src) => src.desc.typ(),
+            Dataflow::Sink(_) => panic!(
+                "programming error: Dataflow.typ called on Sink variant, \
+                 but sinks don't have a type"
+            ),
+            Dataflow::View(view) => view.desc.typ(),
         }
     }
 
@@ -136,15 +148,14 @@ impl Dataflow {
 pub struct Source {
     pub name: String,
     pub connector: SourceConnector,
-    pub typ: RelationType,
-    pub pkey_indices: Vec<usize>,
+    pub desc: RelationDesc,
 }
 
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Sink {
     pub name: String,
-    pub from: (String, RelationType),
+    pub from: (String, RelationDesc),
     pub connector: SinkConnector,
 }
 
@@ -192,7 +203,7 @@ pub struct TailSinkConnector {
 pub struct View {
     pub name: String,
     pub relation_expr: RelationExpr,
-    pub typ: RelationType,
+    pub desc: RelationDesc,
     /// Indicates if sources can be advanced to a supplied frontier.
     /// Outputs will only be correct from this frontier onward.
     pub as_of: Option<Vec<Timestamp>>,
@@ -217,26 +228,16 @@ mod tests {
                     inputs: vec![
                         RelationExpr::Get {
                             name: "orders".into(),
-                            typ: RelationType {
-                                column_types: vec![ColumnType::new(ScalarType::Int64).name("id")],
-                            },
+                            typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
                         },
                         Box::new(RelationExpr::Union {
                             left: Box::new(RelationExpr::Get {
                                 name: "customers2018".into(),
-                                typ: RelationType {
-                                    column_types: vec![
-                                        ColumnType::new(ScalarType::Int64).name("id")
-                                    ],
-                                },
+                                typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
                             }),
                             right: Box::new(RelationExpr::Get {
                                 name: "customers2019".into(),
-                                typ: RelationType {
-                                    column_types: vec![
-                                        ColumnType::new(ScalarType::Int64).name("id")
-                                    ],
-                                },
+                                typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
                             }),
                         })
                         .distinct(),
@@ -244,12 +245,9 @@ mod tests {
                     variables: vec![vec![(0, 0), (1, 0)]],
                 }),
             },
-            typ: RelationType {
-                column_types: vec![
-                    ColumnType::new(ScalarType::String).name("name"),
-                    ColumnType::new(ScalarType::Int32).name("quantity"),
-                ],
-            },
+            desc: RelationDesc::empty()
+                .add_column("name", ScalarType::String)
+                .add_column("quantity", ScalarType::String),
             as_of: None,
         });
 

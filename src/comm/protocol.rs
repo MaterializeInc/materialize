@@ -146,7 +146,9 @@ pub(crate) fn framed<C>(conn: C) -> Framed<C>
 where
     C: Connection,
 {
-    Framed::new(conn, LengthDelimitedCodec::new())
+    let mut codec = LengthDelimitedCodec::new();
+    codec.set_max_frame_length(1 << 30 /* 1GiB */);
+    Framed::new(conn, codec)
 }
 
 /// All known address types for [`Connection`]s.

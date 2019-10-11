@@ -10,7 +10,7 @@ use std::iter::{self, FromIterator};
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{Dataflow, LocalSourceConnector, Source, SourceConnector};
-use repr::RelationType;
+use repr::{RelationDesc, RelationType};
 
 #[derive(Debug)]
 pub struct DataflowStore {
@@ -33,8 +33,7 @@ impl DataflowStore {
                         connector: SourceConnector::Local(LocalSourceConnector {
                             uuid: uuid::Uuid::new_v4(),
                         }),
-                        typ: log.schema(),
-                        pkey_indices: Vec::new(),
+                        desc: log.schema(),
                     })
                 }))
             }
@@ -49,6 +48,15 @@ impl DataflowStore {
     pub fn get(&self, name: &str) -> Result<&Dataflow, failure::Error> {
         self.try_get(name)
             .ok_or_else(|| failure::err_msg(format!("dataflow {} does not exist", name)))
+    }
+
+    pub fn get_desc(&self, name: &str) -> Result<&RelationDesc, failure::Error> {
+        match self.get(name)? {
+            Dataflow::Sink { .. } => {
+                bail!("dataflow {} is a sink and cannot be depended upon", name)
+            }
+            dataflow => Ok(dataflow.desc()),
+        }
     }
 
     pub fn get_type(&self, name: &str) -> Result<&RelationType, failure::Error> {

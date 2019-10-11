@@ -11,6 +11,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+. misc/shlib/shlib.bash
+
 failed=false
 
 try() {
@@ -18,6 +20,22 @@ try() {
         failed=true
     fi
 }
+
+if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
+    if ! command_exists shellcheck; then
+        printf "lint: fatal: unable to find \`shellcheck\` command on your system\n" >&2
+        printf "hint: https://github.com/koalaman/shellcheck#installing\n" >&2
+        printf "hint: you can disable shellcheck locally by setting \$MZDEV_NO_SHELLCHECK=1\n" >&2
+        exit 1
+    fi
+    version=$(shellcheck --version | grep version: | grep -oE "[0-9]\.[0-9]\.[0-9]" || echo "0.0.0+unknown")
+    if ! version_compat "0.7.0" "$version"; then
+        printf "lint: fatal: shellcheck v0.7.0+ is required\n" >&2
+        printf "hint: detected version %q\n" "$version" >&2
+        printf "hint: you can disable shellcheck locally by setting \$MZDEV_NO_SHELLCHECK=1\n" >&2
+        exit 1
+    fi
+fi
 
 # This Git incantation lists the source files in this repository. If you change
 # it, please preserve the following properties:
@@ -42,6 +60,7 @@ copyright_files=$(grep -vE \
     -e '\.asc$' \
     -e '\.png$' \
     -e '\.jpe?g$' \
+    -e '\/go\.sum$' \
     <<< "$files"
 )
 
@@ -55,7 +74,10 @@ shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -
 
 try xargs -n1 awk -f misc/lint/copyright.awk <<< "$copyright_files"
 try xargs misc/lint/trailing-newline.sh <<< "$newline_files"
-try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"
+
+if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
+    try xargs shellcheck -P SCRIPTDIR <<< "$shell_files"
+fi
 
 if $failed; then
     exit 1

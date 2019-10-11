@@ -16,7 +16,7 @@ use url::Url;
 
 use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -27,45 +27,31 @@ use repr::{ColumnType, Datum, RelationType, ScalarType};
 /// columns.
 pub fn validate_key_schema(
     key_schema: &str,
-    validated_value_schema: &RelationType,
+    value_desc: &RelationDesc,
 ) -> Result<Vec<usize>, Error> {
-    let mut vname_to_value_column = HashMap::new();
-    for (i, column) in validated_value_schema.column_types.iter().enumerate() {
-        if let Some(name) = &column.name {
-            vname_to_value_column.insert(name, (i, column));
-        }
-    }
-
     let key_schema = parse_schema(key_schema)?;
+    let key_desc = validate_schema_1(&key_schema)?;
     let mut indices = Vec::new();
-    for key_column in validate_schema_1(&key_schema)?.column_types.iter() {
-        if let Some(name) = &key_column.name {
-            // The code around ColumnTypes
-            let value = vname_to_value_column.get(name);
-            match value {
-                Some((index, value_column)) => {
-                    if key_column.scalar_type == value_column.scalar_type
-                        && key_column.nullable == value_column.nullable
-                    {
-                        indices.push(*index);
-                    } else {
-                        bail!(
-                            "key and value column types do not match: key {:?} vs. value {:?}",
-                            key_column,
-                            value_column,
-                        )
-                    }
+    for (name, key_type) in key_desc.iter() {
+        if let Some(name) = name {
+            match value_desc.get_by_name(name) {
+                Some((index, value_type)) if key_type == value_type => {
+                    indices.push(index);
                 }
+                Some((_, value_type)) => bail!(
+                    "key and value column types do not match: key {:?} vs. value {:?}",
+                    key_type,
+                    value_type,
+                ),
                 None => bail!("Value schema missing primary key column: {}", name),
             }
         }
     }
-
     Ok(indices)
 }
 
-/// Converts an Apache Avro schema into a [`repr::RelationType`].
-pub fn validate_value_schema(schema: &str) -> Result<RelationType, Error> {
+/// Converts an Apache Avro schema into a [`repr::RelationDesc`].
+pub fn validate_value_schema(schema: &str) -> Result<RelationDesc, Error> {
     let schema = parse_schema(schema)?;
 
     // The top-level record needs to be a diff "envelope" that contains
@@ -122,21 +108,23 @@ pub fn validate_value_schema(schema: &str) -> Result<RelationType, Error> {
     validate_schema_1(row_schema)
 }
 
-fn validate_schema_1(schema: &Schema) -> Result<RelationType, Error> {
+fn validate_schema_1(schema: &Schema) -> Result<RelationDesc, Error> {
     match schema {
         Schema::Record { fields, .. } => {
             let column_types = fields
                 .iter()
                 .map(|f| {
                     Ok(ColumnType {
-                        name: Some(f.name.clone()),
                         nullable: is_nullable(&f.schema),
                         scalar_type: validate_schema_2(&f.schema)?,
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
-
-            Ok(RelationType { column_types })
+            let column_names = fields.iter().map(|f| Some(f.name.clone()));
+            Ok(RelationDesc::new(
+                RelationType::new(column_types),
+                column_names,
+            ))
         }
         _ => bail!("row schemas must be records, got: {:?}", schema),
     }
@@ -177,7 +165,6 @@ fn validate_schema_2(schema: &Schema) -> Result<ScalarType, Error> {
                 .filter(|s| !is_null(s))
                 .map(|s| {
                     Ok(ColumnType {
-                        name: None,
                         nullable: is_nullable(s),
                         scalar_type: validate_schema_2(s)?,
                     })
@@ -534,13 +521,13 @@ mod tests {
     use serde::Deserialize;
     use std::fs::File;
 
-    use repr::RelationType;
+    use repr::RelationDesc;
 
     #[derive(Deserialize)]
     struct TestCase {
         name: String,
         input: serde_json::Value,
-        expected: RelationType,
+        expected: RelationDesc,
     }
 
     #[test]

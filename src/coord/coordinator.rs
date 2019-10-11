@@ -31,7 +31,7 @@ use dataflow_types::{
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{Datum, RelationDesc, ScalarType};
 use sql::Plan;
 
 /// Glues the external world to the Timely workers.
@@ -103,7 +103,7 @@ where
                         .collect(),
                 );
                 send_immediate_rows(
-                    RelationType::new(vec![ColumnType::new(ScalarType::String).name("Topic")]),
+                    RelationDesc::empty().add_column("Topic", ScalarType::String),
                     sources
                         .iter()
                         .map(|s| vec![Datum::from(s.name.to_owned())])
@@ -145,6 +145,7 @@ where
 
             Plan::Peek {
                 mut source,
+                desc,
                 when,
                 finishing,
             } => {
@@ -154,8 +155,7 @@ where
                 // also to ensure that there is a view in place to query, if the source of data
                 // for the peek is not a base relation.
 
-                let typ = source.typ();
-                self.optimizer.optimize(&mut source, &typ);
+                self.optimizer.optimize(&mut source);
 
                 let (rows_tx, rows_rx) = self.switchboard.mpsc();
 
@@ -182,13 +182,12 @@ where
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
                     // peek completes.
-                    let name = format!("<temp_{}>", Uuid::new_v4());
-                    let typ = source.typ();
+                    let name = format!("<peek_{}>", Uuid::new_v4());
 
                     self.create_dataflows(vec![Dataflow::View(View {
                         name: name.clone(),
                         relation_expr: source,
-                        typ,
+                        desc: desc.clone(),
                         as_of: Some(vec![timestamp.clone()]),
                     })]);
                     broadcast(
@@ -207,13 +206,6 @@ where
                     );
                 }
 
-                let typ = RelationType {
-                    column_types: finishing
-                        .project
-                        .iter()
-                        .map(|i| typ.column_types[*i].clone())
-                        .collect(),
-                };
                 let rows_rx = rows_rx
                     .take(self.num_timely_workers as u64)
                     .concat2()
@@ -246,7 +238,7 @@ where
                     .from_err()
                     .boxed();
 
-                SqlResponse::SendRows { typ, rx: rows_rx }
+                SqlResponse::SendRows { desc, rx: rows_rx }
             }
 
             Plan::Tail(source) => {
@@ -254,23 +246,23 @@ where
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
-                        name: format!("<temp_{}>", Uuid::new_v4()),
-                        from: (source.name().to_owned(), source.typ().clone()),
+                        name: format!("<tail_{}>", Uuid::new_v4()),
+                        from: (source.name().to_owned(), source.desc().clone()),
                         connector: SinkConnector::Tail(TailSinkConnector { tx }),
                     })]),
                 );
                 SqlResponse::Tailing { rx }
             }
 
-            Plan::SendRows { typ, rows } => send_immediate_rows(typ, rows),
+            Plan::SendRows { desc, rows } => send_immediate_rows(desc, rows),
 
             Plan::ExplainPlan {
-                typ,
+                desc,
                 mut relation_expr,
             } => {
-                self.optimizer.optimize(&mut relation_expr, &typ);
+                self.optimizer.optimize(&mut relation_expr);
                 let rows = vec![vec![Datum::from(relation_expr.pretty())]];
-                send_immediate_rows(typ, rows)
+                send_immediate_rows(desc, rows)
             }
 
             Plan::Parsed { name } => SqlResponse::Parsed { name },
@@ -280,7 +272,7 @@ where
     pub fn create_dataflows(&mut self, mut dataflows: Vec<Dataflow>) {
         for dataflow in dataflows.iter_mut() {
             if let Dataflow::View(view) = dataflow {
-                self.optimizer.optimize(&mut view.relation_expr, &view.typ);
+                self.optimizer.optimize(&mut view.relation_expr);
             }
         }
         broadcast(
@@ -539,11 +531,11 @@ fn broadcast(
 /// Constructs a [`SqlResponse`] that that will send some rows to the client
 /// immediately, as opposed to asking the dataflow layer to send along the rows
 /// after some computation.
-fn send_immediate_rows(typ: RelationType, rows: Vec<Vec<Datum>>) -> SqlResponse {
+fn send_immediate_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> SqlResponse {
     let (tx, rx) = futures::sync::oneshot::channel();
     tx.send(rows).unwrap();
     SqlResponse::SendRows {
-        typ,
+        desc,
         rx: Box::new(rx.from_err()),
     }
 }

@@ -167,7 +167,7 @@ $ kafka-ingest format=avro topic=mismatched-data schema=${schema_v1} key_schema=
 
 ! CREATE SOURCE data_v3 FROM 'kafka://${testdrive.kafka-addr}/testdrive-mismatched-data-${testdrive.seed}'
   USING SCHEMA REGISTRY '${testdrive.schema-registry-url}';
-key and value column types do not match: key ColumnType { name: Some("a"), nullable: false, scalar_type: Int32 } vs. value ColumnType { name: Some("a"), nullable: false, scalar_type: Int64 }
+key and value column types do not match
 
 $ kafka-ingest format=avro topic=data schema=${schema_v1} key_schema=${valid_key_schema}
   publish=true timestamp=5
