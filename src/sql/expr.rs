@@ -381,16 +381,16 @@ impl RelationExpr {
 }
 
 impl ScalarExpr {
-    /// Rewrite `self` into a `dataflow_expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `inner`.
+    /// Rewrite `self` into a `dataflow_expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `relation`.
     /// This requires removing all nested subqueries, which we can do moving them into `inner` using `RelationExpr::applied_to`.
-    /// We expect that `inner` has already been decorrelated, so that:
-    /// * the first `outer_arity` columns of `inner` hold values from the outer scope
-    /// * the remaining columns of `inner` hold values from the direct input to `self`
+    /// We expect that `relation` has already been decorrelated, so that:
+    /// * the first `outer_arity` columns of `relation` hold values from the outer scope
+    /// * the remaining columns of `relation` hold values from the inner scope (i.e., the direct input to `self`)
     fn applied_to(
         self,
         id_gen: &mut dataflow_expr::IdGen,
         outer_arity: usize,
-        inner: &mut dataflow_expr::RelationExpr,
+        relation: &mut dataflow_expr::RelationExpr,
     ) -> Result<dataflow_expr::ScalarExpr, failure::Error> {
         use self::ScalarExpr::*;
         use dataflow_expr::ScalarExpr as SS;
@@ -407,27 +407,27 @@ impl ScalarExpr {
             Literal(datum, typ) => SS::Literal(datum, typ),
             CallUnary { func, expr } => SS::CallUnary {
                 func,
-                expr: Box::new(expr.applied_to(id_gen, outer_arity, inner)?),
+                expr: Box::new(expr.applied_to(id_gen, outer_arity, relation)?),
             },
             CallBinary { func, expr1, expr2 } => SS::CallBinary {
                 func,
-                expr1: Box::new(expr1.applied_to(id_gen, outer_arity, inner)?),
-                expr2: Box::new(expr2.applied_to(id_gen, outer_arity, inner)?),
+                expr1: Box::new(expr1.applied_to(id_gen, outer_arity, relation)?),
+                expr2: Box::new(expr2.applied_to(id_gen, outer_arity, relation)?),
             },
             CallVariadic { func, exprs } => SS::CallVariadic {
                 func,
                 exprs: exprs
                     .into_iter()
-                    .map(|expr| expr.applied_to(id_gen, outer_arity, inner))
+                    .map(|expr| expr.applied_to(id_gen, outer_arity, relation))
                     .collect::<Result<Vec<_>, failure::Error>>()?,
             },
             If { cond, then, els } => {
                 // TODO(jamii) would be nice to only run subqueries in `then` when `cond` is true
                 // (if subqueries later gain the ability to throw errors, this impacts correctness too)
                 SS::If {
-                    cond: Box::new(cond.applied_to(id_gen, outer_arity, inner)?),
-                    then: Box::new(then.applied_to(id_gen, outer_arity, inner)?),
-                    els: Box::new(els.applied_to(id_gen, outer_arity, inner)?),
+                    cond: Box::new(cond.applied_to(id_gen, outer_arity, relation)?),
+                    then: Box::new(then.applied_to(id_gen, outer_arity, relation)?),
+                    els: Box::new(els.applied_to(id_gen, outer_arity, relation)?),
                 }
             }
 
@@ -443,16 +443,16 @@ impl ScalarExpr {
             // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
-                *inner = branch(
+                *relation = branch(
                     id_gen,
-                    inner.take_dangerous(),
+                    relation.take_dangerous(),
                     *expr,
-                    |id_gen, expr, get_inner| {
+                    |id_gen, expr, get_relation| {
                         let exists = expr
                             // compute for every row in get_inner
-                            .applied_to(id_gen, get_inner.clone())?
+                            .applied_to(id_gen, get_relation.clone())?
                             // throw away actual values and just remember whether or not there where __any__ rows
-                            .distinct_by((0..get_inner.arity()).collect())
+                            .distinct_by((0..get_relation.arity()).collect())
                             // Append true to anything that returned any rows. This
                             // join is logically equivalent to
                             // `.map(vec![Datum::True])`, but using a join allows
@@ -464,26 +464,26 @@ impl ScalarExpr {
                             ));
                         // append False to anything that didn't return any rows
                         let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
-                        Ok(get_inner.lookup(id_gen, exists, default))
+                        Ok(get_relation.lookup(id_gen, exists, default))
                     },
                 )?;
-                SS::Column(inner.arity() - 1)
+                SS::Column(relation.arity() - 1)
             }
             Select(expr) => {
-                *inner = branch(
+                *relation = branch(
                     id_gen,
-                    inner.take_dangerous(),
+                    relation.take_dangerous(),
                     *expr,
-                    |id_gen, expr, get_inner| {
+                    |id_gen, expr, get_relation| {
                         let select = expr
-                            // compute for every row in get_inner
-                            .applied_to(id_gen, get_inner.clone())?;
+                            // compute for every row in get_relation
+                            .applied_to(id_gen, get_relation.clone())?;
                         // append Null to anything that didn't return any rows
                         let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
-                        Ok(get_inner.lookup(id_gen, select, default))
+                        Ok(get_relation.lookup(id_gen, select, default))
                     },
                 )?;
-                SS::Column(inner.arity() - 1)
+                SS::Column(relation.arity() - 1)
             }
         })
     }
