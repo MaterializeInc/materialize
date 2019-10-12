@@ -116,6 +116,8 @@ pub fn build_dataflow<A: Allocate>(
                 let mut tokens = Vec::new();
                 let mut context = Context::<_, _, _, Timestamp>::new();
                 view.relation_expr.visit(&mut |e| {
+                    // Some `Get` expressions are for let bindings, and should not be loaded.
+                    // We might want explicitly enumerate assets to import.
                     if let RelationExpr::Get { name, typ: _ } = e {
                         // Import arrangements for this collection.
                         // TODO: we could import only used arrangements.
@@ -136,8 +138,6 @@ pub fn build_dataflow<A: Allocate>(
                                     source: name.clone(),
                                 });
                             }
-                        } else {
-                            panic!("Did not find arrangement for: {}", name);
                         }
                     }
                 });
