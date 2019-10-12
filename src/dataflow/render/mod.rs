@@ -58,17 +58,8 @@ pub fn build_dataflow<A: Allocate>(
             use crate::arrangement::manager::{KeysOnlySpine, KeysValsSpine};
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
-            let stream_clone = stream.clone();
-            let arrangement_by_self = stream_clone
-                .as_collection()
-                .map(|x| (x, ()))
-                .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
-
-            manager.set_by_self(
-                src.name.to_owned(),
-                WithDrop::new(arrangement_by_self.trace, capability.clone()),
-            );
-
+            // Install arrangements by any presented keys.
+            let mut stored = false;
             for keys in src.desc.typ().keys.iter() {
                 let keys_clone = keys.clone();
                 let arrangement_by_key = stream
@@ -80,6 +71,22 @@ pub fn build_dataflow<A: Allocate>(
                     src.name.to_owned(),
                     &keys[..],
                     WithDrop::new(arrangement_by_key.trace, capability.clone()),
+                );
+                stored = true;
+            }
+
+            // If no keys were presented, install an arrangement "by self".
+            if !stored {
+                let stream_clone = stream.clone();
+                let arrangement_by_self =
+                    stream_clone
+                        .as_collection()
+                        .map(|x| (x, ()))
+                        .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
+
+                manager.set_by_self(
+                    src.name.to_owned(),
+                    WithDrop::new(arrangement_by_self.trace, capability.clone()),
                 );
             }
         }
@@ -400,6 +407,8 @@ where
                             })
                             .arrange_by_key();
                         self.set_local(&input, &new_keys[..], new_keyed);
+                    } else {
+                        println!("Arrangement found!");
                     }
 
                     joined = match self.arrangement(&input, &new_keys[..]) {
