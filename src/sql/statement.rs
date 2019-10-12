@@ -138,6 +138,7 @@ impl Planner {
                 table_name,
                 filter,
             } => self.handle_show_columns(extended, full, &table_name, filter.as_ref()),
+            Statement::ShowCreateView { view_name } => self.handle_show_create_view(view_name),
             Statement::Explain { stage, query } => self.handle_explain(stage, *query),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
@@ -252,13 +253,28 @@ impl Planner {
         })
     }
 
-    fn handle_create_dataflow(&mut self, stmt: Statement) -> Result<Plan, failure::Error> {
-        match &stmt {
+    fn handle_show_create_view(&mut self, object_name: ObjectName) -> Result<Plan, failure::Error> {
+        let name = object_name.to_string();
+        let raw_sql = if let Dataflow::View(view) = self.dataflows.get(&name)? {
+            &view.raw_sql
+        } else {
+            bail!("{} is not a view", name);
+        };
+        Ok(Plan::SendRows {
+            desc: RelationDesc::empty()
+                .add_column("View", ScalarType::String)
+                .add_column("Create View", ScalarType::String),
+            rows: vec![vec![name.into(), raw_sql.to_owned().into()]],
+        })
+    }
+
+    fn handle_create_dataflow(&mut self, mut stmt: Statement) -> Result<Plan, failure::Error> {
+        match &mut stmt {
             Statement::CreateView {
                 name,
                 columns,
                 query,
-                materialized: _,
+                materialized,
                 with_options,
             } => {
                 if !with_options.is_empty() {
@@ -268,6 +284,7 @@ impl Planner {
                 if !finishing.is_trivial() {
                     bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
                 }
+                *materialized = false; // Normalize for `raw_sql` below.
                 let typ = desc.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -283,6 +300,7 @@ impl Planner {
                 }
                 let view = View {
                     name: extract_sql_object_name(name)?,
+                    raw_sql: stmt.to_string(),
                     relation_expr,
                     desc,
                     as_of: None,
