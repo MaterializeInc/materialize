@@ -156,8 +156,10 @@ impl PredicatePushdown {
                                     // null != anything, so joined columns mustn't be null
                                     let column1 = *c1 - prior_arities[relation1];
                                     let column2 = *c2 - prior_arities[relation2];
-                                    let nullable1 = input_types[relation1].column_types[column1].nullable;
-                                    let nullable2 = input_types[relation2].column_types[column2].nullable;
+                                    let nullable1 =
+                                        input_types[relation1].column_types[column1].nullable;
+                                    let nullable2 =
+                                        input_types[relation2].column_types[column2].nullable;
                                     // We only *need* to push down a null filter if either are nullable,
                                     // as if either is non-nullable nulls will never match.
                                     // We *could* push down the filter if we thought that would help!
