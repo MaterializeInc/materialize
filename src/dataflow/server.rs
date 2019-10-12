@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use super::render;
 use crate::arrangement::{
-    manager::{KeysOnlyHandle, WithDrop},
+    manager::{KeysValsHandle, WithDrop},
     TraceManager,
 };
 use crate::logging;
@@ -181,7 +181,7 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
+    pending_peeks: Vec<(PendingPeek, WithDrop<KeysValsHandle>)>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
@@ -238,17 +238,17 @@ where
                 );
 
             // Install traces as maintained views.
-            for (log, trace) in t_traces {
+            for (log, (key, trace)) in t_traces {
                 self.traces
-                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
+                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
             }
-            for (log, trace) in d_traces {
+            for (log, (key, trace)) in d_traces {
                 self.traces
-                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
+                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
             }
-            for (log, trace) in m_traces {
+            for (log, (key, trace)) in m_traces {
                 self.traces
-                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
+                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -288,9 +288,10 @@ where
             if let Some(feedback_tx) = &mut self.feedback_tx {
                 let mut upper = Antichain::new();
                 let mut progress = Vec::new();
-                for name in self.traces.traces.keys() {
-                    if let Some(by_self) = self.traces.get_by_self(name) {
-                        by_self.clone().read_upper(&mut upper);
+                let names = self.traces.traces.keys().cloned().collect::<Vec<_>>();
+                for name in names {
+                    if let Some(mut traces) = self.traces.get_all_keyed(&name) {
+                        traces.next().unwrap().1.clone().read_upper(&mut upper);
                         progress.push((name.to_owned(), upper.elements().to_vec()));
                     }
                 }
@@ -355,8 +356,11 @@ where
             } => {
                 let mut trace = self
                     .traces
-                    .get_by_self(&name)
-                    .expect("Failed to find trace for peek")
+                    .get_all_keyed(&name)
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .1
                     .clone();
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
@@ -466,37 +470,40 @@ where
     ) -> Vec<Vec<Datum>> {
         let (mut cur, storage) = trace.cursor();
         let mut results = Vec::new();
-        while let Some(record) = cur.get_key(&storage) {
-            // Before (expensively) determining how many copies of a record
-            // we have, let's eliminate records that we don't care about.
-            if peek
-                .finishing
-                .filter
-                .iter()
-                .all(|predicate| predicate.eval(record) == Datum::True)
-            {
-                // TODO: Absent value iteration might be weird (in principle
-                // the cursor *could* say no `()` values associated with the
-                // key, though I can't imagine how that would happen for this
-                // specific trace implementation).
-                let mut copies = 0;
-                cur.map_times(&storage, |time, diff| {
-                    use timely::order::PartialOrder;
-                    if time.less_equal(&peek.timestamp) {
-                        copies += diff;
-                    }
-                });
-                assert!(
-                    copies >= 0,
-                    "Negative multiplicity: {} for {:?} in view {}",
-                    copies,
-                    record,
-                    peek.name
-                );
+        while let Some(key) = cur.get_key(&storage) {
+            while let Some(record) = cur.get_val(&storage) {
+                // Before (expensively) determining how many copies of a record
+                // we have, let's eliminate records that we don't care about.
+                if peek
+                    .finishing
+                    .filter
+                    .iter()
+                    .all(|predicate| predicate.eval(record) == Datum::True)
+                {
+                    // TODO: Absent value iteration might be weird (in principle
+                    // the cursor *could* say no `()` values associated with the
+                    // key, though I can't imagine how that would happen for this
+                    // specific trace implementation).
+                    let mut copies = 0;
+                    cur.map_times(&storage, |time, diff| {
+                        use timely::order::PartialOrder;
+                        if time.less_equal(&peek.timestamp) {
+                            copies += diff;
+                        }
+                    });
+                    assert!(
+                        copies >= 0,
+                        "Negative multiplicity: {} for {:?} in view {}",
+                        copies,
+                        record,
+                        peek.name
+                    );
 
-                for _ in 0..copies {
-                    results.push(record.clone());
+                    for _ in 0..copies {
+                        results.push(record.clone());
+                    }
                 }
+                cur.step_val(&storage);
             }
             cur.step_key(&storage)
         }

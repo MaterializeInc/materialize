@@ -7,7 +7,7 @@
 #![allow(clippy::or_fun_call)]
 
 use super::{LogVariant, TimelyLog};
-use crate::arrangement::KeysOnlyHandle;
+use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
 use repr::Datum;
@@ -22,13 +22,12 @@ pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, TimelyEvent)>>,
-) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
+) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
 
     // A dataflow for multiple log-derived arrangements.
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::arrange::arrangement::ArrangeBySelf;
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::Map;
 
@@ -227,8 +226,8 @@ pub fn construct<A: Allocate>(
             .map(|(op, t, d)| (op, t, d as isize))
             .as_collection()
             .count()
-            .map(|(op, cnt)| vec![Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
-            .arrange_by_self();
+            .map(|(op, cnt)| vec![Datum::Int64(op as i64), Datum::Int64(cnt as i64)]);
+
         let histogram = duration
             .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
             .as_collection()
@@ -239,22 +238,34 @@ pub fn construct<A: Allocate>(
                     Datum::Int64(pow as i64),
                     Datum::Int64(cnt as i64),
                 ]
-            })
-            .arrange_by_self();
+            });
 
-        let operates = operates.as_collection().arrange_by_self();
-        let channels = channels.as_collection().arrange_by_self();
+        let operates = operates.as_collection();
+        let channels = channels.as_collection();
+
+        use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 
         // Restrict results by those logs that are meant to be active.
-        vec![
-            (LogVariant::Timely(TimelyLog::Operates), operates.trace),
-            (LogVariant::Timely(TimelyLog::Channels), channels.trace),
-            (LogVariant::Timely(TimelyLog::Elapsed), elapsed.trace),
-            (LogVariant::Timely(TimelyLog::Histogram), histogram.trace),
-        ]
-        .into_iter()
-        .filter(|(name, _trace)| config.active_logs().contains(name))
-        .collect()
+        let logs = vec![
+            (LogVariant::Timely(TimelyLog::Operates), operates),
+            (LogVariant::Timely(TimelyLog::Channels), channels),
+            (LogVariant::Timely(TimelyLog::Elapsed), elapsed),
+            (LogVariant::Timely(TimelyLog::Histogram), histogram),
+        ];
+
+        let mut result = std::collections::HashMap::new();
+        for (variant, collection) in logs {
+            if config.active_logs().contains(&variant) {
+                let key = variant.index_by();
+                let key_clone = key.clone();
+                let trace = collection
+                    .map(move |record| (key.iter().map(|k| record[*k].clone()).collect(), record))
+                    .arrange_by_key()
+                    .trace;
+                result.insert(variant, (key_clone, trace));
+            }
+        }
+        result
     });
 
     traces

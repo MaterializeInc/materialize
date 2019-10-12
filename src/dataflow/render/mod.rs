@@ -55,45 +55,39 @@ pub fn build_dataflow<A: Allocate>(
                 }
             };
 
-            use crate::arrangement::manager::{KeysOnlySpine, KeysValsSpine};
+            use crate::arrangement::manager::KeysValsSpine;
             use differential_dataflow::operators::arrange::arrangement::Arrange;
 
-            // Install arrangements by any presented keys.
-            let mut stored = false;
-            for keys in src.desc.typ().keys.iter() {
-                let keys_clone = keys.clone();
+            // Install arrangements indexed by any presented keys.
+            // If no presented keys, use all columns for the index.
+            let typ = src.desc.typ();
+            let mut keys = typ.keys.to_vec();
+            if keys.is_empty() {
+                keys.push((0..typ.column_types.len()).collect());
+            }
+
+            for key in keys {
+                let key_clone = key.clone();
                 let arrangement_by_key = stream
                     .as_collection()
-                    .map(move |x| (keys_clone.iter().map(|i| x[*i].clone()).collect(), x))
+                    .map(move |x| (key_clone.iter().map(|i| x[*i].clone()).collect(), x))
                     .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
 
                 manager.set_by_keys(
                     src.name.to_owned(),
-                    &keys[..],
+                    &key[..],
                     WithDrop::new(arrangement_by_key.trace, capability.clone()),
-                );
-                stored = true;
-            }
-
-            // If no keys were presented, install an arrangement "by self".
-            if !stored {
-                let stream_clone = stream.clone();
-                let arrangement_by_self =
-                    stream_clone
-                        .as_collection()
-                        .map(|x| (x, ()))
-                        .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", src.name));
-
-                manager.set_by_self(
-                    src.name.to_owned(),
-                    WithDrop::new(arrangement_by_self.trace, capability.clone()),
                 );
             }
         }
         Dataflow::Sink(sink) => {
             // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
             // the concept of dropping a sink.
-            let trace = manager.get_by_self_mut(&sink.from.0).expect("View missing");
+            let (_key, trace) = manager
+                .get_all_keyed(&sink.from.0)
+                .expect("View missing")
+                .next()
+                .expect("No arrangements");
             let _token = trace.to_drop().clone();
             let (arrangement, _button) =
                 trace.import_core(scope, &format!("Import({:?})", sink.from));
@@ -123,26 +117,8 @@ pub fn build_dataflow<A: Allocate>(
                 let mut context = Context::<_, _, _, Timestamp>::new();
                 view.relation_expr.visit(&mut |e| {
                     if let RelationExpr::Get { name, typ: _ } = e {
-                        // Import the believed-to-exist base arrangement.
-                        if let Some(mut trace) = manager.get_by_self(&name).cloned() {
-                            let token = trace.to_drop().clone();
-                            let (arranged, button) =
-                                trace.import_frontier_core(scope, name, as_of.clone());
-                            let arranged = arranged.enter(region);
-                            context
-                                .collections
-                                .insert(e.clone(), arranged.as_collection(|k, _| k.clone()));
-
-                            // Log the dependency.
-                            if let Some(logger) = logger {
-                                logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: view.name.clone(),
-                                    source: name.clone(),
-                                });
-                            }
-
-                            tokens.push((button.press_on_drop(), token));
-                        }
+                        // Import arrangements for this collection.
+                        // TODO: we could import only used arrangements.
                         if let Some(traces) = manager.get_all_keyed(&name) {
                             for (key, trace) in traces {
                                 let token = trace.to_drop().clone();
@@ -152,27 +128,60 @@ pub fn build_dataflow<A: Allocate>(
                                 context.set_trace(e, key, arranged);
                                 tokens.push((button.press_on_drop(), token));
                             }
+
+                            // Log the dependency.
+                            if let Some(logger) = logger {
+                                logger.log(MaterializedEvent::DataflowDependency {
+                                    dataflow: view.name.clone(),
+                                    source: name.clone(),
+                                });
+                            }
+                        } else {
+                            panic!("Did not find arrangement for: {}", name);
                         }
                     }
                 });
 
-                use crate::arrangement::manager::KeysOnlySpine;
+                let tokens = Rc::new(tokens);
+
+                use crate::arrangement::manager::KeysValsSpine;
                 use differential_dataflow::operators::arrange::arrangement::Arrange;
 
                 context.ensure_rendered(&view.relation_expr, region, worker_index);
 
-                // TODO: We could extract any arrangement here, but choose to arrange by self.
-                let arrangement = context
-                    .collection(&view.relation_expr)
-                    .unwrap()
-                    .map(|x| (x, ()))
-                    .arrange_named::<KeysOnlySpine>(&format!("Arrange: {}", view.name));
+                // Having ensured that `view.relation_expr` is rendered, we can now extract it
+                // or re-arrange it by other keys. The only information we have at the moment
+                // is whether the dataflow results in an arranged form of the expression.
 
-                // names.insert(view.name.to_string(), Box::new(buttons));
-                manager.set_by_self(view.name, WithDrop::new(arrangement.trace, tokens));
-
-                // TODO: We could export a variety of arrangements if we were instructed
-                // to do so. We don't have a language for that at the moment.
+                if let Some(arrangements) = context.get_all_local(&view.relation_expr) {
+                    if arrangements.is_empty() {
+                        let key = (0..view.relation_expr.arity()).collect::<Vec<_>>();
+                        let key_clone = key.clone();
+                        let arrangement = context
+                            .collection(&view.relation_expr)
+                            .unwrap()
+                            .map(move |x| {
+                                (key.iter().map(|k| x[*k].clone()).collect::<Vec<_>>(), x)
+                            })
+                            .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
+                        manager.set_by_keys(
+                            view.name,
+                            &key_clone[..],
+                            WithDrop::new(arrangement.trace, tokens.clone()),
+                        );
+                    } else {
+                        // TODO: This stores all arrangements. Should we store fewer?
+                        for (key, arrangement) in arrangements {
+                            manager.set_by_keys(
+                                view.name.clone(),
+                                &key[..],
+                                WithDrop::new(arrangement.trace.clone(), tokens.clone()),
+                            );
+                        }
+                    }
+                } else {
+                    panic!("Render failed for expression");
+                }
             });
         }
     })
