@@ -407,8 +407,6 @@ where
                             })
                             .arrange_by_key();
                         self.set_local(&input, &new_keys[..], new_keyed);
-                    } else {
-                        println!("Arrangement found!");
                     }
 
                     joined = match self.arrangement(&input, &new_keys[..]) {
