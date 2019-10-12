@@ -72,6 +72,11 @@ Field Nullable Type
 b     NO       i64
 sum   YES      i64
 
+> SHOW CREATE VIEW test1
+View   Create View
+------------------
+test1  "CREATE VIEW test1 AS SELECT b, sum(a) FROM data GROUP BY b"
+
 > CREATE MATERIALIZED VIEW test2 AS
   SELECT b, 1 + sum(a + 1) FROM data GROUP BY b;
 
