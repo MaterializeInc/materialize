@@ -351,7 +351,7 @@ Project {
         ],
         Get { orderline },
         Filter {
-          predicates: [!isnull #3, datetots #4 > 2007-01-02 00:00:00],
+          predicates: [datetots #4 > 2007-01-02 00:00:00],
           Get { "order" }
         },
         Filter { predicates: [#9 ~ /^A.*$/], Get { customer } },
@@ -481,13 +481,10 @@ Project {
             ],
             Get { customer },
             Filter {
-              predicates: [
-                !isnull #3,
-                datetots #4 >= 2007-01-02 00:00:00
-              ],
+              predicates: [datetots #4 >= 2007-01-02 00:00:00],
               Get { "order" }
             },
-            Filter { predicates: [!isnull #4], Get { orderline } },
+            Get { orderline },
             Get { stock },
             Get { supplier }
           }
@@ -598,14 +595,12 @@ Project {
             },
             Filter {
               predicates: [
-                !isnull #4,
-                !isnull #5,
                 datetots #6 <= 2012-01-02 00:00:00,
                 datetots #6 >= 2007-01-02 00:00:00
               ],
               Get { orderline }
             },
-            Filter { predicates: [!isnull #3], Get { "order" } },
+            Get { "order" },
             Get { customer },
             Get { nation },
             Get { nation }
@@ -687,12 +682,11 @@ Project {
                 }
               },
               Filter {
-                predicates: [!isnull #4, !isnull #5, #4 < 1000],
+                predicates: [!isnull #4, #4 < 1000],
                 Get { orderline }
               },
               Filter {
                 predicates: [
-                  !isnull #3,
                   datetots #4 <= 2012-01-02 00:00:00,
                   datetots #4 >= 2007-01-02 00:00:00
                 ],
@@ -756,10 +750,7 @@ Project {
               Get { supplier }
             }
           },
-          Filter {
-            predicates: [!isnull #4, !isnull #5],
-            Get { orderline }
-          },
+          Get { orderline },
           Get { "order" },
           Get { nation }
         }
@@ -812,10 +803,7 @@ Project {
                 ],
                 Get { orderline },
                 Filter {
-                  predicates: [
-                    !isnull #3,
-                    datetots #4 >= 2007-01-02 00:00:00
-                  ],
+                  predicates: [datetots #4 >= 2007-01-02 00:00:00],
                   Get { "order" }
                 },
                 Get { customer }
@@ -1065,10 +1053,7 @@ Let {
         [(1, 1), (0, 1)],
         [(1, 2), (0, 2)]
       ],
-      Filter {
-        predicates: [!isnull #3, i32toi64 #5 > 8],
-        Get { "order" }
-      },
+      Filter { predicates: [i32toi64 #5 > 8], Get { "order" } },
       Get { customer }
     }
   }
@@ -1129,7 +1114,6 @@ Let {
       variables: [[(0, 4), (1, 0)]],
       Filter {
         predicates: [
-          !isnull #4,
           datetots #6 < 2020-01-02 00:00:00,
           datetots #6 >= 2007-01-02 00:00:00
         ],
@@ -1200,11 +1184,7 @@ Let {
       Join {
         variables: [[(0, 5), (1, 1)], [(0, 4), (1, 0)]],
         Filter {
-          predicates: [
-            !isnull #4,
-            !isnull #5,
-            datetots #6 >= 2007-01-02 00:00:00
-          ],
+          predicates: [datetots #6 >= 2007-01-02 00:00:00],
           Get { orderline }
         },
         Get { stock }
@@ -1323,7 +1303,7 @@ Let {
       predicates: [(i32todec #7 * 1000000dec) < #11],
       Join {
         variables: [[(0, 4), (1, 0)]],
-        Filter { predicates: [!isnull #4], Get { orderline } },
+        Get { orderline },
         Project {
           outputs: [0, 3],
           Map {
@@ -1337,10 +1317,7 @@ Let {
                 outputs: [10 .. 14, 0 .. 10],
                 Join {
                   variables: [[(1, 0), (0, 4)]],
-                  Filter {
-                    predicates: [!isnull #4],
-                    Get { orderline }
-                  },
+                  Get { orderline },
                   Filter { predicates: [#4 ~ /^.*b$/], Get { item } }
                 }
               }
@@ -1405,7 +1382,7 @@ Project {
             [(1, 2), (0, 2)]
           ],
           Get { orderline },
-          Filter { predicates: [!isnull #3], Get { "order" } },
+          Get { "order" },
           Get { customer }
         }
       }
@@ -1470,11 +1447,7 @@ Let {
       Join {
         variables: [[(0, 4), (1, 0)]],
         Filter {
-          predicates: [
-            !isnull #4,
-            i32toi64 #7 <= 10,
-            i32toi64 #7 >= 1
-          ],
+          predicates: [i32toi64 #7 <= 10, i32toi64 #7 >= 1],
           Get { orderline }
         },
         Filter {
@@ -1804,7 +1777,7 @@ Let {
             [(1, 2), (0, 2)],
             [(1, 0), (0, 3)]
           ],
-          Filter { predicates: [!isnull #3], Get { "order" } },
+          Get { "order" },
           Get { id-4 }
         }
       }
