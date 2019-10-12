@@ -547,7 +547,7 @@ where
     // inner relation depends. We discover these dependencies by walking the
     // inner relation expression and looking for outer column references.
     //
-    // We don't consider outer column references that refer to indicies that are
+    // We don't consider outer column references that refer to indices that are
     // not yet available (i.e., indices greater than the arity of `outer`).
     // Those are the result of doubly-nested subqueries, and they'll be
     // incorporated in the key for the next recursive call to
@@ -578,7 +578,17 @@ where
     });
 
     outer.let_in(id_gen, |id_gen, get_outer| {
-        let keyed_outer = get_outer.clone().distinct_by(key.clone());
+        let keyed_outer = if key.is_empty() {
+            // Don't depend on outer at all if the branch is not correlated,
+            // which yields vastly better query plans. Note that this is a bit
+            // weird in that the branch will be computed even if outer has no
+            // rows, whereas if it had been correlated it would not (and *could*
+            // not) have been computed if outer had no rows, but the callers of
+            // this function don't mind these somewhat-weird semantics.
+            dataflow_expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+        } else {
+            get_outer.clone().distinct_by(key.clone())
+        };
         keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
             let branch = apply(id_gen, inner, get_keyed_outer)?;
             let ba = branch.arity();
