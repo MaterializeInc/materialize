@@ -227,7 +227,7 @@ END $$;
                         desc.typ().column_types[c].nullable,
                     )?;
                     ensure!(
-                        datum.is_instance_of(&desc.typ().column_types[c]),
+                        datum.is_instance_of(desc.typ().column_types[c]),
                         "Expected value of type {:?}, got {:?}",
                         desc.typ().column_types[c],
                         datum

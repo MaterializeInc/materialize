@@ -33,7 +33,7 @@
 //! let predicate0 = ScalarExpr::column(0);
 //! let predicate1 = ScalarExpr::column(1);
 //! let predicate01 = ScalarExpr::column(0).call_binary(ScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = ScalarExpr::literal(Datum::False);
+//! let predicate012 = ScalarExpr::literal(Datum::False, ColumnType::new(ScalarType::Bool));
 //!
 //! let mut expr = join.filter(
 //!    vec![
@@ -45,6 +45,8 @@
 //!
 //! PredicatePushdown.transform(&mut expr);
 //! ```
+
+use repr::{ColumnType, Datum, ScalarType};
 
 use crate::{AggregateFunc, RelationExpr, ScalarExpr};
 
@@ -243,10 +245,13 @@ impl PredicatePushdown {
                         } else if let ScalarExpr::Column(col) = &predicate {
                             if *col == group_key.len()
                                 && aggregates.len() == 1
-                                && aggregates[0].0.func == AggregateFunc::Any
+                                && aggregates[0].func == AggregateFunc::Any
                             {
-                                push_down.push(aggregates[0].0.expr.clone());
-                                aggregates[0].0.expr = ScalarExpr::Literal(repr::Datum::True);
+                                push_down.push(aggregates[0].expr.clone());
+                                aggregates[0].expr = ScalarExpr::Literal(
+                                    Datum::True,
+                                    ColumnType::new(ScalarType::Bool),
+                                );
                             } else {
                                 retain.push(predicate);
                             }

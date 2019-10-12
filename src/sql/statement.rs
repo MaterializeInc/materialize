@@ -514,14 +514,15 @@ impl Planner {
         &mut self,
         query: &Query,
     ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-        let (expr, scope, finishing) = self.plan_query(query, &Scope::empty(None))?;
+        let (expr, scope, finishing) =
+            self.plan_query(query, &Scope::empty(None), &RelationType::empty())?;
         let expr = expr.decorrelate()?;
         let typ = expr.typ();
         let typ = RelationType::new(
             finishing
                 .project
                 .iter()
-                .map(|i| typ.column_types[*i].clone())
+                .map(|i| typ.column_types[*i])
                 .collect(),
         );
         let desc = RelationDesc::new(typ, scope.column_names());

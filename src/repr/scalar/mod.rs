@@ -13,6 +13,7 @@ use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::Interval as SqlInterval;
 use std::fmt::{self, Write};
+use std::hash::{Hash, Hasher};
 
 use self::decimal::Significand;
 use self::regex::Regex;
@@ -204,7 +205,7 @@ impl Datum {
         }
     }
 
-    pub fn is_instance_of(&self, column_type: &ColumnType) -> bool {
+    pub fn is_instance_of(&self, column_type: ColumnType) -> bool {
         match (self, &column_type.scalar_type) {
             (Datum::Null, _) if column_type.nullable => true,
             (Datum::Null, _) => false,
@@ -405,7 +406,7 @@ impl<'a> From<&'a Datum> for Doc<'a, BoxDoc<'a, ()>> {
 /// an optional default value and nullability, that must also be considered part
 /// of a datum's type.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Copy, Debug, Eq, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ScalarType {
     /// The type of a datum that can only be null.
     ///
@@ -435,10 +436,78 @@ pub enum ScalarType {
 }
 
 impl ScalarType {
-    pub fn unwrap_decimal_parts(&self) -> (u8, u8) {
+    pub fn unwrap_decimal_parts(self) -> (u8, u8) {
         match self {
-            ScalarType::Decimal(p, s) => (*p, *s),
+            ScalarType::Decimal(p, s) => (p, s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
+        }
+    }
+}
+
+// TODO(benesch): the implementations of PartialEq and Hash for ScalarType can
+// be removed when decimal precision is either fixed or removed.
+
+impl PartialEq for ScalarType {
+    fn eq(&self, other: &Self) -> bool {
+        use ScalarType::*;
+        match (self, other) {
+            (Decimal(_, s1), Decimal(_, s2)) => s1 == s2,
+
+            (Null, Null)
+            | (Bool, Bool)
+            | (Int32, Int32)
+            | (Int64, Int64)
+            | (Float32, Float32)
+            | (Float64, Float64)
+            | (Date, Date)
+            | (Time, Time)
+            | (Timestamp, Timestamp)
+            | (Interval, Interval)
+            | (Bytes, Bytes)
+            | (String, String)
+            | (Regex, Regex) => true,
+
+            (Null, _)
+            | (Bool, _)
+            | (Int32, _)
+            | (Int64, _)
+            | (Float32, _)
+            | (Float64, _)
+            | (Decimal(_, _), _)
+            | (Date, _)
+            | (Time, _)
+            | (Timestamp, _)
+            | (Interval, _)
+            | (Bytes, _)
+            | (String, _)
+            | (Regex, _) => false,
+        }
+    }
+}
+
+impl Hash for ScalarType {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use ScalarType::*;
+        match self {
+            Null => state.write_u8(0),
+            Bool => state.write_u8(1),
+            Int32 => state.write_u8(2),
+            Int64 => state.write_u8(3),
+            Float32 => state.write_u8(4),
+            Float64 => state.write_u8(5),
+            Decimal(_, s) => {
+                // TODO(benesch): we should properly implement decimal precision
+                // tracking, or just remove it.
+                state.write_u8(6);
+                state.write_u8(*s);
+            }
+            Date => state.write_u8(7),
+            Time => state.write_u8(8),
+            Timestamp => state.write_u8(9),
+            Interval => state.write_u8(10),
+            Bytes => state.write_u8(11),
+            String => state.write_u8(12),
+            Regex => state.write_u8(13),
         }
     }
 }
@@ -458,7 +527,7 @@ impl fmt::Display for ScalarType {
             Int64 => f.write_str("i64"),
             Float32 => f.write_str("f32"),
             Float64 => f.write_str("f64"),
-            Decimal(scale, precision) => write!(f, "decimal({}, {})", scale, precision),
+            Decimal(p, s) => write!(f, "decimal({}, {})", p, s),
             Date => f.write_str("date"),
             Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
