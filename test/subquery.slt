@@ -185,7 +185,8 @@ SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE EXISTS (SELECT 1 FROM t3 W
 
 mode standard
 
-# Verify that the plan for a non-correlated subquery is sane.
+# Verify that the plans for some simple non-correlated subqueries are sane.
+
 query T multiline
 EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
@@ -194,14 +195,21 @@ Project {
   Join {
     variables: [],
     Get { t1 },
-    Distinct {
-      group_key: [],
-      Join {
-        variables: [],
-        Get { t2 },
-        Distinct { group_key: [], Get { t1 } }
-      }
-    },
+    Distinct { group_key: [], Get { t2 } },
     Constant [[true]]
+  }
+}
+
+query T multiline
+EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
+----
+Project {
+  outputs: [0 .. 2],
+  Join {
+    variables: [[(0, 0), (1, 0)]],
+    Get { t1 },
+    Get { t3 },
+    Constant [[true]],
+    Distinct { group_key: [], Get { t2 } }
   }
 }
