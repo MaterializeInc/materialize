@@ -202,6 +202,8 @@ pub struct TailSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub name: String,
+    /// The raw SQL used to create this view.
+    pub raw_sql: String,
     pub relation_expr: RelationExpr,
     pub desc: RelationDesc,
     /// Indicates if sources can be advanced to a supplied frontier.
