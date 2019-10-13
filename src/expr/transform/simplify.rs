@@ -7,148 +7,148 @@
 //! the amount of data volume produced intermediate relations.
 //!
 //! ```rust
-//! use expr::RelationExpr;
-//! use repr::{RelationType, ColumnType};
+//! use expr::{RelationExpr, ScalarExpr, BinaryFunc};
+//! use repr::{RelationType, ColumnType, Datum, ScalarType};
 //! use expr::transform::simplify::SimplifyJoinEqualities;
 //!
 //! let mut relation = RelationExpr::Filter {
-//!    input: Join {
-//!        inputs: [
-//!            Get {
-//!                name: "aggdata",
+//!    input: Box::from(RelationExpr::Join {
+//!        inputs: vec![
+//!            RelationExpr::Get {
+//!                name: String::from("aggdata"),
 //!                typ: RelationType {
 //!                    column_types: vec![
 //!                        ColumnType {
 //!                            nullable: false,
-//!                            scalar_type: Int64,
+//!                            scalar_type: ScalarType::Int64,
 //!                        },
 //!                        ColumnType {
 //!                            nullable: false,
-//!                            scalar_type: Int64,
+//!                            scalar_type: ScalarType::Int64,
 //!                        },
 //!                    ],
-//!                    keys: [
-//!                        [],
+//!                    keys: vec![
+//!                        vec![],
 //!                    ],
 //!                },
 //!            },
-//!            Get {
-//!                name: "aggdata",
+//!            RelationExpr::Get {
+//!                name: String::from("aggdata"),
 //!                typ: RelationType {
 //!                    column_types: vec![
 //!                        ColumnType {
 //!                            nullable: false,
-//!                            scalar_type: Int64,
+//!                            scalar_type: ScalarType::Int64,
 //!                        },
 //!                        ColumnType {
 //!                            nullable: false,
-//!                            scalar_type: Int64,
+//!                            scalar_type: ScalarType::Int64,
 //!                        },
 //!                    ],
-//!                    keys: [
-//!                        [],
+//!                    keys: vec![
+//!                        vec![],
 //!                    ],
 //!                },
 //!            },
-//!        ],
-//!        variables: [],
-//!    },
-//!    predicates: [
-//!        CallBinary {
-//!            func: Eq,
-//!            expr1: Column(
+//!        ].to_owned(),
+//!        variables: vec![],
+//!    }),
+//!    predicates: vec![
+//!        ScalarExpr::CallBinary {
+//!            func: BinaryFunc::Eq,
+//!            expr1: Box::from(ScalarExpr::Column(
 //!                2,
-//!            ),
-//!            expr2: CallBinary {
-//!                func: MulInt64,
-//!                expr1: Column(
+//!            )),
+//!            expr2: Box::from(ScalarExpr::CallBinary {
+//!                func: BinaryFunc::MulInt64,
+//!                expr1: Box::from(ScalarExpr::Column(
 //!                    0,
-//!                ),
-//!                expr2: Column(
+//!                )),
+//!                expr2: Box::from(ScalarExpr::Column(
 //!                    0,
-//!                ),
-//!            },
+//!                )),
+//!            }),
 //!        },
-//!    ],
+//!    ].to_owned(),
 //!};
 //!
 //!SimplifyJoinEqualities.transform(&mut relation);
 //!
-//!let expected = Project {
-//!    input: RelationExpr::Filter {
-//!        input: Join {
-//!            inputs: [
+//!let expected = RelationExpr::Project {
+//!    input: Box::from(RelationExpr::Filter {
+//!        input: Box::from(RelationExpr::Join {
+//!            inputs: vec![
 //!                RelationExpr::Map {
-//!                    input: Get {
-//!                        name: "aggdata",
+//!                    input: Box::from(RelationExpr::Get {
+//!                        name: String::from("aggdata"),
 //!                        typ: RelationType {
 //!                            column_types: vec![
 //!                                ColumnType {
 //!                                    nullable: false,
-//!                                    scalar_type: Int64,
+//!                                    scalar_type: ScalarType::Int64,
 //!                                },
 //!                                ColumnType {
 //!                                    nullable: false,
-//!                                    scalar_type: Int64,
+//!                                    scalar_type: ScalarType::Int64,
 //!                                },
 //!                            ],
-//!                            keys: [
-//!                                [],
+//!                            keys: vec![
+//!                                vec![],
 //!                            ],
 //!                        },
-//!                    },
-//!                    scalars: [
+//!                    }),
+//!                    scalars: vec![
 //!                        (
-//!                            CallBinary {
-//!                                func: MulInt64,
-//!                                expr1: Column(
+//!                           ScalarExpr::CallBinary {
+//!                                func: BinaryFunc::MulInt64,
+//!                                expr1: Box::from(ScalarExpr::Column(
 //!                                    0,
-//!                                ),
-//!                                expr2: Column(
+//!                                )),
+//!                                expr2: Box::from(ScalarExpr::Column(
 //!                                    0,
-//!                                ),
+//!                                )),
 //!                            },
 //!                            ColumnType {
 //!                                nullable: false,
-//!                                scalar_type: Null,
+//!                                scalar_type: ScalarType::Null,
 //!                            },
 //!                        ),
 //!                    ],
 //!                },
-//!                Get {
-//!                    name: "aggdata",
+//!                RelationExpr::Get {
+//!                    name: String::from("aggdata"),
 //!                    typ: RelationType {
 //!                        column_types: vec![
 //!                            ColumnType {
 //!                                nullable: false,
-//!                                scalar_type: Int64,
+//!                                scalar_type: ScalarType::Int64,
 //!                            },
 //!                            ColumnType {
 //!                                nullable: false,
-//!                                scalar_type: Int64,
+//!                                scalar_type: ScalarType::Int64,
 //!                            },
 //!                        ],
-//!                        keys: [
-//!                            [],
+//!                        keys: vec![
+//!                            vec![],
 //!                        ],
 //!                    },
 //!                },
-//!            ],
-//!            variables: [],
-//!        },
-//!        predicates: [
-//!            CallBinary {
-//!                func: Eq,
-//!                expr1: Column(
+//!            ].to_owned(),
+//!            variables: vec![],
+//!        }),
+//!        predicates: vec![
+//!            ScalarExpr::CallBinary {
+//!                func: BinaryFunc::Eq,
+//!                expr1: Box::from(ScalarExpr::Column(
 //!                    3,
-//!                ),
-//!                expr2: Column(
+//!                )),
+//!                expr2: Box::from(ScalarExpr::Column(
 //!                    2,
-//!                ),
+//!                )),
 //!            },
-//!        ],
-//!    },
-//!    outputs: [
+//!        ].to_owned(),
+//!    }),
+//!    outputs: vec![
 //!        0,
 //!        1,
 //!        3,
@@ -186,7 +186,6 @@ impl SimplifyJoinEqualities {
                 variables: _,
             } = &mut **input
             {
-                println!("trying to simplify");
                 let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let mut input_arities = input_types
                     .iter()
