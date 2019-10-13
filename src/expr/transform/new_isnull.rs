@@ -3,40 +3,11 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Re-order relations in a join to process them in an order that makes sense.
-//!
-//! ```rust
-//! use expr::{RelationExpr, ScalarExpr};
-//! use expr::transform::fusion::filter::Filter;
-//! use repr::{ColumnType, Datum, RelationType, ScalarType};
-//!
-//! let input = RelationExpr::constant(vec![], RelationType::new(vec![
-//!     ColumnType::new(ScalarType::Bool),
-//! ]));
-//!
-//! let predicate0 = ScalarExpr::Column(0);
-//! let predicate1 = ScalarExpr::Column(0);
-//! let predicate2 = ScalarExpr::Column(0);
-//!
-//! let mut expr =
-//! input
-//!     .clone()
-//!     .filter(vec![predicate0.clone()])
-//!     .filter(vec![predicate1.clone()])
-//!     .filter(vec![predicate2.clone()]);
-//!
-//! // .transform() will deduplicate any predicates
-//! Filter.transform(&mut expr);
-//!
-//! let correct = input.filter(vec![predicate0]);
-//!
-//! assert_eq!(expr, correct);
-//! ```
-
 use crate::{BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::{RelationExpr, ScalarExpr};
 use std::collections::HashSet;
 
+/// Drive non-null requirements to `RelationExpr::Constant` collections.
 #[derive(Debug)]
 pub struct NewIsNull;
 

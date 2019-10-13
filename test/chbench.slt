@@ -780,6 +780,7 @@ Project {
   }
 }
 
+<<<<<<< HEAD
 
 # Query 11
 query T multiline
@@ -837,6 +838,8 @@ Project {
 }
 
 
+=======
+>>>>>>> tidy comments, remove q11v2
 # Query 11
 query T multiline
 EXPLAIN PLAN FOR
