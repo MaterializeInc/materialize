@@ -810,31 +810,6 @@ Let {
     }
   }
 } in
-Let {
-  id-2 = Reduce {
-    group_key: [],
-    aggregates: [sum(#14)],
-    Get { id-1 }
-  }
-} in
-Let {
-  id-3 = Project {
-    outputs: [1],
-    Map {
-      scalars: [(i32todec #0 * 1000dec) * 5dec],
-      Union {
-        Get { id-2 },
-        Map {
-          scalars: [null],
-          Union {
-            Negate { Project { outputs: [], Get { id-2 } } },
-            Constant [[]]
-          }
-        }
-      }
-    }
-  }
-} in
 Project {
   outputs: [0, 1, 1],
   Filter {
@@ -846,13 +821,14 @@ Project {
         aggregates: [sum(#14)],
         Project { outputs: [0 .. 28, 0], Get { id-1 } }
       },
-      Union {
-        Get { id-3 },
+      Project {
+        outputs: [1],
         Map {
-          scalars: [null],
-          Union {
-            Negate { Distinct { group_key: [], Get { id-3 } } },
-            Constant [[]]
+          scalars: [(i32todec #0 * 1000dec) * 5dec],
+          Reduce {
+            group_key: [],
+            aggregates: [sum(#14)],
+            Get { id-1 }
           }
         }
       }
@@ -890,31 +866,6 @@ Let {
     }
   }
 } in
-Let {
-  id-2 = Reduce {
-    group_key: [],
-    aggregates: [sum(#14)],
-    Get { id-1 }
-  }
-} in
-Let {
-  id-3 = Project {
-    outputs: [1],
-    Map {
-      scalars: [(i32todec #0 * 1000dec) * 5dec],
-      Union {
-        Get { id-2 },
-        Map {
-          scalars: [null],
-          Union {
-            Negate { Project { outputs: [], Get { id-2 } } },
-            Constant [[]]
-          }
-        }
-      }
-    }
-  }
-} in
 Project {
   outputs: [0, 1, 1],
   Filter {
@@ -926,13 +877,14 @@ Project {
         aggregates: [sum(#14)],
         Project { outputs: [0 .. 28, 0], Get { id-1 } }
       },
-      Union {
-        Get { id-3 },
+      Project {
+        outputs: [1],
         Map {
-          scalars: [null],
-          Union {
-            Negate { Distinct { group_key: [], Get { id-3 } } },
-            Constant [[]]
+          scalars: [(i32todec #0 * 1000dec) * 5dec],
+          Reduce {
+            group_key: [],
+            aggregates: [sum(#14)],
+            Get { id-1 }
           }
         }
       }

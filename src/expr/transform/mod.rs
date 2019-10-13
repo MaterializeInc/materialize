@@ -22,6 +22,7 @@ pub mod projection_extraction;
 pub mod reduction;
 pub mod simplify;
 pub mod split_predicates;
+pub mod new_isnull;
 
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
@@ -114,6 +115,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::inline_let::InlineLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                     Box::new(crate::transform::filter_lets::FilterLets),
+                    Box::new(crate::transform::new_isnull::NewIsNull),
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.
