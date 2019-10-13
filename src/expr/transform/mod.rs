@@ -16,13 +16,13 @@ pub mod fusion;
 pub mod inline_let;
 pub mod join_elision;
 pub mod join_order;
+pub mod new_isnull;
 pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod reduction;
 pub mod simplify;
 pub mod split_predicates;
-pub mod new_isnull;
 
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.

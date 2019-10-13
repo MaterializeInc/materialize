@@ -33,9 +33,9 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use std::collections::HashSet;
+use crate::{BinaryFunc, UnaryFunc, VariadicFunc};
 use crate::{RelationExpr, ScalarExpr};
-use crate::{UnaryFunc, BinaryFunc, VariadicFunc};
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub struct NewIsNull;
@@ -56,7 +56,7 @@ impl NewIsNull {
             RelationExpr::Constant { rows, .. } => {
                 rows.retain(|(row, _)| columns.iter().all(|c| row[*c] != repr::Datum::Null))
             }
-            RelationExpr::Get { .. } => { }
+            RelationExpr::Get { .. } => {}
             RelationExpr::Let { body, .. } => {
                 self.action(body, columns);
             }
@@ -71,8 +71,7 @@ impl NewIsNull {
                     // A "non-empty" requirement, I guess?
                     if column < arity {
                         new_columns.insert(column);
-                    }
-                    else {
+                    } else {
                         must_be_non_null(&scalars[column - arity], &mut new_columns);
                     }
                 }
@@ -87,7 +86,6 @@ impl NewIsNull {
                 self.action(input, columns);
             }
             RelationExpr::Join { inputs, variables } => {
-
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types
                     .iter()
@@ -115,8 +113,8 @@ impl NewIsNull {
 
                 // `variable` smears constraints around.
                 for variable in variables {
-                    if variable.iter().any(|(r,c)| new_columns[*r].contains(c)) {
-                        for (r,c) in variable {
+                    if variable.iter().any(|(r, c)| new_columns[*r].contains(c)) {
+                        for (r, c) in variable {
                             new_columns[*r].insert(*c);
                         }
                     }
@@ -126,7 +124,9 @@ impl NewIsNull {
                     self.action(input, columns);
                 }
             }
-            RelationExpr::Reduce { input, group_key, .. } => {
+            RelationExpr::Reduce {
+                input, group_key, ..
+            } => {
                 let mut new_columns = HashSet::new();
                 for column in columns {
                     // No obvious requirements on aggregate columns.
@@ -137,7 +137,7 @@ impl NewIsNull {
                 }
                 self.action(input, new_columns);
             }
-            RelationExpr::TopK { input, ..} => {
+            RelationExpr::TopK { input, .. } => {
                 self.action(input, columns);
             }
             RelationExpr::Negate { input } => {
@@ -160,7 +160,7 @@ fn must_be_non_null(predicate: &ScalarExpr, columns: &mut HashSet<usize>) {
         ScalarExpr::Column(col) => {
             columns.insert(*col);
         }
-        ScalarExpr::Literal(..) => { }
+        ScalarExpr::Literal(..) => {}
         ScalarExpr::CallUnary { func, expr } => {
             if func != &UnaryFunc::IsNull {
                 must_be_non_null(expr, columns);
@@ -179,7 +179,11 @@ fn must_be_non_null(predicate: &ScalarExpr, columns: &mut HashSet<usize>) {
                 }
             }
         }
-        ScalarExpr::If { cond, then: _, els: _ } => {
+        ScalarExpr::If {
+            cond,
+            then: _,
+            els: _,
+        } => {
             must_be_non_null(cond, columns);
         }
     }
