@@ -4,7 +4,9 @@
 // distributed without the express permission of Materialize, Inc.
 
 use expr as dataflow_expr;
+use ore::collections::CollectionExt;
 use repr::*;
+use std::collections::{HashMap, HashSet};
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use dataflow_expr::like;
@@ -33,7 +35,7 @@ pub enum RelationExpr {
     },
     Map {
         input: Box<RelationExpr>,
-        scalars: Vec<(ScalarExpr, ColumnType)>,
+        scalars: Vec<ScalarExpr>,
     },
     Filter {
         input: Box<RelationExpr>,
@@ -50,7 +52,7 @@ pub enum RelationExpr {
     Reduce {
         input: Box<RelationExpr>,
         group_key: Vec<usize>,
-        aggregates: Vec<(AggregateExpr, ColumnType)>,
+        aggregates: Vec<AggregateExpr>,
     },
     Distinct {
         input: Box<RelationExpr>,
@@ -72,7 +74,7 @@ pub enum RelationExpr {
 pub enum ScalarExpr {
     /// Unlike dataflow::ScalarExpr, we can nest RelationExprs via eg Exists. This means that a variable could refer to a column of the current input, or to a column of an outer relation. We use ColumnRef to denote the difference.
     Column(ColumnRef),
-    Literal(Datum),
+    Literal(Datum, ColumnType),
     CallUnary {
         func: UnaryFunc,
         expr: Box<ScalarExpr>,
@@ -105,7 +107,23 @@ pub enum ScalarExpr {
     Select(Box<RelationExpr>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub const LITERAL_TRUE: ScalarExpr = ScalarExpr::Literal(
+    Datum::True,
+    ColumnType {
+        nullable: false,
+        scalar_type: ScalarType::Bool,
+    },
+);
+
+pub const LITERAL_NULL: ScalarExpr = ScalarExpr::Literal(
+    Datum::Null,
+    ColumnType {
+        nullable: true,
+        scalar_type: ScalarType::Null,
+    },
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnRef {
     /// References a variable from the input relation
     Inner(usize),
@@ -168,11 +186,11 @@ impl RelationExpr {
             }
             Map { input, scalars } => {
                 let mut input = input.applied_to(id_gen, get_outer.clone())?;
-                for (scalar, typ) in scalars {
+                for scalar in scalars {
                     let old_arity = input.arity();
                     let scalar = scalar.applied_to(id_gen, get_outer.arity(), &mut input)?;
                     let new_arity = input.arity();
-                    input = input.map(vec![(scalar, typ)]);
+                    input = input.map(vec![scalar]);
                     if old_arity != new_arity {
                         // this means we added some columns to handle subqueries, and now we need to get rid of them
                         input = input.project((0..old_arity).chain(vec![new_arity]).collect());
@@ -201,11 +219,11 @@ impl RelationExpr {
                 kind,
             } => {
                 let oa = get_outer.arity();
-                let la = left.arity();
-                let ra = right.arity();
                 let left = left.applied_to(id_gen, get_outer.clone())?;
+                let la = left.arity() - oa;
                 left.let_in(id_gen, |id_gen, get_left| {
                     let right = right.applied_to(id_gen, get_outer.clone())?;
+                    let ra = right.arity() - oa;
                     right.let_in(id_gen, |id_gen, get_right| {
                         let mut product = SR::Join {
                             inputs: vec![get_left.clone(), get_right.clone()],
@@ -289,22 +307,17 @@ impl RelationExpr {
                     .clone()
                     .into_iter()
                     // TODO(jamii) how do we deal with the extra columns here?
-                    .map(|(aggregate, typ)| {
-                        Ok((
-                            aggregate.applied_to(id_gen, get_outer.arity(), &mut input)?,
-                            typ,
-                        ))
+                    .map(|aggregate| {
+                        Ok(aggregate.applied_to(id_gen, get_outer.arity(), &mut input)?)
                     })
                     .collect::<Result<Vec<_>, failure::Error>>()?;
+                let input_type = input.typ();
+                let default = applied_aggregates
+                    .iter()
+                    .map(|agg| (agg.func.default(), agg.typ(&input_type)))
+                    .collect();
                 let mut reduced = input.reduce(applied_group_key, applied_aggregates);
                 if group_key.is_empty() {
-                    let default = aggregates
-                        .iter()
-                        .map(|(aggregate, _)| {
-                            let (datum, scalar_type) = aggregate.func.default();
-                            (datum, ColumnType::new(scalar_type))
-                        })
-                        .collect();
                     reduced = get_outer.lookup(id_gen, reduced, default);
                 }
                 Ok(reduced)
@@ -314,19 +327,70 @@ impl RelationExpr {
             Threshold { input } => Ok(input.applied_to(id_gen, get_outer)?.threshold()),
         }
     }
+
+    /// Visits the column references within this `RelationExpr`.
+    fn visit_columns<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut ColumnRef),
+    {
+        match self {
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+
+            RelationExpr::Project { input, .. }
+            | RelationExpr::Distinct { input }
+            | RelationExpr::Negate { input }
+            | RelationExpr::Threshold { input } => input.visit_columns(f),
+
+            RelationExpr::Union { left, right } => {
+                left.visit_columns(f);
+                right.visit_columns(f);
+            }
+
+            RelationExpr::Join {
+                left, right, on, ..
+            } => {
+                left.visit_columns(f);
+                right.visit_columns(f);
+                on.visit_columns(f);
+            }
+
+            RelationExpr::Reduce {
+                input, aggregates, ..
+            } => {
+                input.visit_columns(f);
+                for aggregate in aggregates {
+                    aggregate.visit_columns(f);
+                }
+            }
+
+            RelationExpr::Map { input, scalars } => {
+                input.visit_columns(f);
+                for scalar in scalars {
+                    scalar.visit_columns(f);
+                }
+            }
+
+            RelationExpr::Filter { input, predicates } => {
+                input.visit_columns(f);
+                for predicate in predicates {
+                    predicate.visit_columns(f);
+                }
+            }
+        }
+    }
 }
 
 impl ScalarExpr {
-    /// Rewrite `self` into a `dataflow_expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `inner`.
+    /// Rewrite `self` into a `dataflow_expr::ScalarExpr` which will be `Map`ped or `Filter`ed over `relation`.
     /// This requires removing all nested subqueries, which we can do moving them into `inner` using `RelationExpr::applied_to`.
-    /// We expect that `inner` has already been decorrelated, so that:
-    /// * the first `outer_arity` columns of `inner` hold values from the outer scope
-    /// * the remaining columns of `inner` hold values from the direct input to `self`
+    /// We expect that `relation` has already been decorrelated, so that:
+    /// * the first `outer_arity` columns of `relation` hold values from the outer scope
+    /// * the remaining columns of `relation` hold values from the inner scope (i.e., the direct input to `self`)
     fn applied_to(
         self,
         id_gen: &mut dataflow_expr::IdGen,
         outer_arity: usize,
-        inner: &mut dataflow_expr::RelationExpr,
+        relation: &mut dataflow_expr::RelationExpr,
     ) -> Result<dataflow_expr::ScalarExpr, failure::Error> {
         use self::ScalarExpr::*;
         use dataflow_expr::ScalarExpr as SS;
@@ -340,30 +404,30 @@ impl ScalarExpr {
                 assert!(column < outer_arity);
                 SS::Column(column)
             }
-            Literal(datum) => SS::Literal(datum),
+            Literal(datum, typ) => SS::Literal(datum, typ),
             CallUnary { func, expr } => SS::CallUnary {
                 func,
-                expr: Box::new(expr.applied_to(id_gen, outer_arity, inner)?),
+                expr: Box::new(expr.applied_to(id_gen, outer_arity, relation)?),
             },
             CallBinary { func, expr1, expr2 } => SS::CallBinary {
                 func,
-                expr1: Box::new(expr1.applied_to(id_gen, outer_arity, inner)?),
-                expr2: Box::new(expr2.applied_to(id_gen, outer_arity, inner)?),
+                expr1: Box::new(expr1.applied_to(id_gen, outer_arity, relation)?),
+                expr2: Box::new(expr2.applied_to(id_gen, outer_arity, relation)?),
             },
             CallVariadic { func, exprs } => SS::CallVariadic {
                 func,
                 exprs: exprs
                     .into_iter()
-                    .map(|expr| expr.applied_to(id_gen, outer_arity, inner))
+                    .map(|expr| expr.applied_to(id_gen, outer_arity, relation))
                     .collect::<Result<Vec<_>, failure::Error>>()?,
             },
             If { cond, then, els } => {
                 // TODO(jamii) would be nice to only run subqueries in `then` when `cond` is true
                 // (if subqueries later gain the ability to throw errors, this impacts correctness too)
                 SS::If {
-                    cond: Box::new(cond.applied_to(id_gen, outer_arity, inner)?),
-                    then: Box::new(then.applied_to(id_gen, outer_arity, inner)?),
-                    els: Box::new(els.applied_to(id_gen, outer_arity, inner)?),
+                    cond: Box::new(cond.applied_to(id_gen, outer_arity, relation)?),
+                    then: Box::new(then.applied_to(id_gen, outer_arity, relation)?),
+                    els: Box::new(els.applied_to(id_gen, outer_arity, relation)?),
                 }
             }
 
@@ -373,46 +437,174 @@ impl ScalarExpr {
             // Anything in the subquery that cares about row counts (Reduce/Distinct/Negate/Threshold) must not:
             // * change the row counts of the outer query
             // * accidentally compute its own value using the row counts of the outer query
-            // Use `branch` to calculate the subquery once for each __distinct__ row of the outer query and then join the answers back on to the original rows of the outer query
+            // Use `branch` to calculate the subquery once for each __distinct__ key in the outer
+            // query and then join the answers back on to the original rows of the outer query.
 
             // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
-                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
-                    let exists = expr
-                        // compute for every row in get_inner
-                        .applied_to(id_gen, get_inner.clone())?
-                        // throw away actual values and just remember whether or not there where __any__ rows
-                        .distinct_by((0..get_inner.arity()).collect())
-                        // Append true to anything that returned any rows. This
-                        // join is logically equivalent to
-                        // `.map(vec![Datum::True])`, but using a join allows
-                        // for potential predicate pushdown and elision in the
-                        // optimizer.
-                        .product(dataflow_expr::RelationExpr::constant(
-                            vec![vec![Datum::True]],
-                            RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
-                        ));
-                    // append False to anything that didn't return any rows
-                    let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
-                    Ok(get_inner.lookup(id_gen, exists, default))
-                })?;
-                SS::Column(inner.arity() - 1)
+                *relation = branch(
+                    id_gen,
+                    relation.take_dangerous(),
+                    *expr,
+                    |id_gen, expr, get_relation| {
+                        let exists = expr
+                            // compute for every row in get_inner
+                            .applied_to(id_gen, get_relation.clone())?
+                            // throw away actual values and just remember whether or not there where __any__ rows
+                            .distinct_by((0..get_relation.arity()).collect())
+                            // Append true to anything that returned any rows. This
+                            // join is logically equivalent to
+                            // `.map(vec![Datum::True])`, but using a join allows
+                            // for potential predicate pushdown and elision in the
+                            // optimizer.
+                            .product(dataflow_expr::RelationExpr::constant(
+                                vec![vec![Datum::True]],
+                                RelationType::new(vec![ColumnType::new(ScalarType::Bool)]),
+                            ));
+                        // append False to anything that didn't return any rows
+                        let default = vec![(Datum::False, ColumnType::new(ScalarType::Bool))];
+                        Ok(get_relation.lookup(id_gen, exists, default))
+                    },
+                )?;
+                SS::Column(relation.arity() - 1)
             }
             Select(expr) => {
-                assert_eq!(expr.arity(), 1);
-                *inner = inner.take_safely().branch(id_gen, |id_gen, get_inner| {
-                    let select = expr
-                        // compute for every row in get_inner
-                        .applied_to(id_gen, get_inner.clone())?;
-                    // append Null to anything that didn't return any rows
-                    let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
-                    Ok(get_inner.lookup(id_gen, select, default))
-                })?;
-                SS::Column(inner.arity() - 1)
+                *relation = branch(
+                    id_gen,
+                    relation.take_dangerous(),
+                    *expr,
+                    |id_gen, expr, get_relation| {
+                        let select = expr
+                            // compute for every row in get_relation
+                            .applied_to(id_gen, get_relation.clone())?;
+                        // append Null to anything that didn't return any rows
+                        let default = vec![(Datum::Null, ColumnType::new(ScalarType::Null))];
+                        Ok(get_relation.lookup(id_gen, select, default))
+                    },
+                )?;
+                SS::Column(relation.arity() - 1)
             }
         })
     }
+
+    /// Visits the column references in this scalar expression.
+    fn visit_columns<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut ColumnRef),
+    {
+        match self {
+            ScalarExpr::Literal(_, _) => (),
+            ScalarExpr::Column(col_ref) => f(col_ref),
+            ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(f),
+            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.visit_columns(f);
+                expr2.visit_columns(f);
+            }
+            ScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    expr.visit_columns(f);
+                }
+            }
+            ScalarExpr::If { cond, then, els } => {
+                cond.visit_columns(f);
+                then.visit_columns(f);
+                els.visit_columns(f);
+            }
+            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+                expr.visit_columns(f);
+            }
+        }
+    }
+}
+
+/// Prepare to apply `inner` to `outer`. Note that `inner` is a correlated (SQL)
+/// expression, while `outer` is a non-correlated (dataflow) expression. `inner`
+/// will, in effect, be executed once for every distinct row in `outer`, and the
+/// results will be joined with `outer`. Note that columns in `outer` that are
+/// not depended upon by `inner` are thrown away before the distinct, so that we
+/// don't perform needless computation of `inner`; column references in `inner`
+/// are rewritten to account for these dropped columns.
+///
+/// The caller must supply the `apply` function that applies the rewritten
+/// `inner` to `outer`.
+fn branch<F>(
+    id_gen: &mut dataflow_expr::IdGen,
+    outer: dataflow_expr::RelationExpr,
+    mut inner: RelationExpr,
+    apply: F,
+) -> Result<dataflow_expr::RelationExpr, failure::Error>
+where
+    F: FnOnce(
+        &mut dataflow_expr::IdGen,
+        RelationExpr,
+        dataflow_expr::RelationExpr,
+    ) -> Result<dataflow_expr::RelationExpr, failure::Error>,
+{
+    let oa = outer.arity();
+
+    // The key consists of the columns from the outer expression upon which the
+    // inner relation depends. We discover these dependencies by walking the
+    // inner relation expression and looking for outer column references.
+    //
+    // We don't consider outer column references that refer to indices that are
+    // not yet available (i.e., indices greater than the arity of `outer`).
+    // Those are the result of doubly-nested subqueries, and they'll be
+    // incorporated in the key for the next recursive call to
+    // `ScalarExpr::applied_to`.
+    let mut outer_columns = HashSet::new();
+    inner.visit_columns(&mut |col_ref| {
+        if let ColumnRef::Outer(i) = col_ref {
+            outer_columns.insert(*i);
+        }
+    });
+    let mut permutation = HashMap::new();
+    let mut key = vec![];
+    for i in 0..oa {
+        if outer_columns.contains(&i) {
+            permutation.insert(i, key.len());
+            key.push(i);
+        }
+    }
+    let dropped = oa - key.len();
+    inner.visit_columns(&mut |col_ref| {
+        if let ColumnRef::Outer(i) = col_ref {
+            if let Some(new_i) = permutation.get(i) {
+                *i = *new_i;
+            } else {
+                *i -= dropped;
+            }
+        }
+    });
+
+    outer.let_in(id_gen, |id_gen, get_outer| {
+        let keyed_outer = if key.is_empty() {
+            // Don't depend on outer at all if the branch is not correlated,
+            // which yields vastly better query plans. Note that this is a bit
+            // weird in that the branch will be computed even if outer has no
+            // rows, whereas if it had been correlated it would not (and *could*
+            // not) have been computed if outer had no rows, but the callers of
+            // this function don't mind these somewhat-weird semantics.
+            dataflow_expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+        } else {
+            get_outer.clone().distinct_by(key.clone())
+        };
+        keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
+            let branch = apply(id_gen, inner, get_keyed_outer)?;
+            let ba = branch.arity();
+            let joined = dataflow_expr::RelationExpr::Join {
+                inputs: vec![get_outer.clone(), branch],
+                variables: key
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &k)| vec![(0, k), (1, i)])
+                    .collect(),
+            }
+            // throw away the right-hand copy of the key we just joined on
+            .project((0..oa).chain((oa + key.len())..(oa + ba)).collect());
+            Ok(joined)
+        })
+    })
 }
 
 impl AggregateExpr {
@@ -434,35 +626,38 @@ impl AggregateExpr {
             distinct,
         })
     }
+
+    /// Visits the column references in this aggregate expression.
+    fn visit_columns<F>(&mut self, f: &mut F)
+    where
+        F: FnMut(&mut ColumnRef),
+    {
+        self.expr.visit_columns(f);
+    }
 }
 
 impl RelationExpr {
-    pub fn typ(&self) -> RelationType {
+    pub fn typ(&self, outer: &RelationType) -> RelationType {
         match self {
             RelationExpr::Constant { typ, .. } => typ.clone(),
             RelationExpr::Get { typ, .. } => typ.clone(),
             RelationExpr::Project { input, outputs } => {
-                let input_typ = input.typ();
-                RelationType::new(
-                    outputs
-                        .iter()
-                        .map(|&i| input_typ.column_types[i].clone())
-                        .collect(),
-                )
+                let input_typ = input.typ(outer);
+                RelationType::new(outputs.iter().map(|&i| input_typ.column_types[i]).collect())
             }
             RelationExpr::Map { input, scalars } => {
-                let mut typ = input.typ();
-                for (_, column_typ) in scalars {
-                    typ.column_types.push(column_typ.clone());
+                let mut typ = input.typ(outer);
+                for scalar in scalars {
+                    typ.column_types.push(scalar.typ(outer, &typ));
                 }
                 typ
             }
-            RelationExpr::Filter { input, .. } => input.typ(),
+            RelationExpr::Filter { input, .. } => input.typ(outer),
             RelationExpr::Join { left, right, .. } => RelationType::new(
-                left.typ()
+                left.typ(outer)
                     .column_types
                     .into_iter()
-                    .chain(right.typ().column_types)
+                    .chain(right.typ(outer).column_types)
                     .collect(),
             ),
             RelationExpr::Reduce {
@@ -470,13 +665,13 @@ impl RelationExpr {
                 group_key,
                 aggregates,
             } => {
-                let input_typ = input.typ();
+                let input_typ = input.typ(outer);
                 let mut column_types = group_key
                     .iter()
-                    .map(|&i| input_typ.column_types[i].clone())
+                    .map(|&i| input_typ.column_types[i])
                     .collect::<Vec<_>>();
-                for (_, column_typ) in aggregates {
-                    column_types.push(column_typ.clone());
+                for agg in aggregates {
+                    column_types.push(agg.typ(outer, &input_typ));
                 }
                 // TODO(frank): add primary key information.
                 RelationType::new(column_types)
@@ -484,27 +679,22 @@ impl RelationExpr {
             // TODO(frank): check for removal; add primary key information.
             RelationExpr::Distinct { input }
             | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input } => input.typ(),
+            | RelationExpr::Threshold { input } => input.typ(outer),
             RelationExpr::Union { left, right } => {
-                let left_typ = left.typ();
-                let right_typ = right.typ();
+                let left_typ = left.typ(outer);
+                let right_typ = right.typ(outer);
                 assert_eq!(left_typ.column_types.len(), right_typ.column_types.len());
                 RelationType::new(
                     left_typ
                         .column_types
                         .iter()
                         .zip(right_typ.column_types.iter())
-                        .map(|(l, r)| l.union(r))
+                        .map(|(l, r)| l.union(*r))
                         .collect::<Result<Vec<_>, _>>()
                         .unwrap(),
                 )
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn arity(&self) -> usize {
-        self.typ().column_types.len()
     }
 
     pub fn project(self, outputs: Vec<usize>) -> Self {
@@ -514,7 +704,7 @@ impl RelationExpr {
         }
     }
 
-    pub fn map(self, scalars: Vec<(ScalarExpr, ColumnType)>) -> Self {
+    pub fn map(self, scalars: Vec<ScalarExpr>) -> Self {
         RelationExpr::Map {
             input: Box::new(self),
             scalars,
@@ -532,16 +722,12 @@ impl RelationExpr {
         RelationExpr::Join {
             left: Box::new(self),
             right: Box::new(right),
-            on: ScalarExpr::Literal(Datum::True),
+            on: ScalarExpr::Literal(Datum::True, ColumnType::new(ScalarType::Bool)),
             kind: JoinKind::Inner,
         }
     }
 
-    pub fn reduce(
-        self,
-        group_key: Vec<usize>,
-        aggregates: Vec<(AggregateExpr, ColumnType)>,
-    ) -> Self {
+    pub fn reduce(self, group_key: Vec<usize>, aggregates: Vec<AggregateExpr>) -> Self {
         RelationExpr::Reduce {
             input: Box::new(self),
             group_key,
@@ -584,6 +770,39 @@ impl RelationExpr {
 }
 
 impl ScalarExpr {
+    pub fn typ(&self, outer: &RelationType, inner: &RelationType) -> ColumnType {
+        match self {
+            ScalarExpr::Column(ColumnRef::Outer(i)) => outer.column_types[*i],
+            ScalarExpr::Column(ColumnRef::Inner(i)) => inner.column_types[*i],
+            ScalarExpr::Literal(_, typ) => *typ,
+            ScalarExpr::CallUnary { expr, func } => func.output_type(expr.typ(outer, inner)),
+            ScalarExpr::CallBinary { expr1, expr2, func } => {
+                func.output_type(expr1.typ(outer, inner), expr2.typ(outer, inner))
+            }
+            ScalarExpr::CallVariadic { exprs, func } => {
+                func.output_type(exprs.iter().map(|e| e.typ(outer, inner)).collect())
+            }
+            ScalarExpr::If { cond: _, then, els } => {
+                let then_type = then.typ(outer, inner);
+                let else_type = els.typ(outer, inner);
+                then_type.union(else_type).unwrap()
+            }
+            ScalarExpr::Exists(_) => ColumnType::new(ScalarType::Bool).nullable(true),
+            ScalarExpr::Select(expr) => expr
+                .typ(&RelationType::new(
+                    outer
+                        .column_types
+                        .iter()
+                        .cloned()
+                        .chain(inner.column_types.iter().cloned())
+                        .collect(),
+                ))
+                .column_types
+                .into_element()
+                .nullable(true),
+        }
+    }
+
     pub fn call_unary(self, func: UnaryFunc) -> Self {
         ScalarExpr::CallUnary {
             func,
@@ -597,5 +816,11 @@ impl ScalarExpr {
             expr1: Box::new(self),
             expr2: Box::new(other),
         }
+    }
+}
+
+impl AggregateExpr {
+    pub fn typ(&self, outer: &RelationType, inner: &RelationType) -> ColumnType {
+        self.func.output_type(self.expr.typ(outer, inner))
     }
 }

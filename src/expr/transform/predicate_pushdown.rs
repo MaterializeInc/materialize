@@ -33,7 +33,7 @@
 //! let predicate0 = ScalarExpr::column(0);
 //! let predicate1 = ScalarExpr::column(1);
 //! let predicate01 = ScalarExpr::column(0).call_binary(ScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = ScalarExpr::literal(Datum::False);
+//! let predicate012 = ScalarExpr::literal(Datum::False, ColumnType::new(ScalarType::Bool));
 //!
 //! let mut expr = join.filter(
 //!    vec![
@@ -46,7 +46,9 @@
 //! PredicatePushdown.transform(&mut expr);
 //! ```
 
-use crate::{RelationExpr, ScalarExpr};
+use repr::{ColumnType, Datum, ScalarType};
+
+use crate::{AggregateFunc, RelationExpr, ScalarExpr};
 
 #[derive(Debug)]
 pub struct PredicatePushdown;
@@ -153,15 +155,20 @@ impl PredicatePushdown {
                                     }
                                     // null != anything, so joined columns mustn't be null
                                     let column1 = *c1 - prior_arities[relation1];
-                                    if input_types[relation1].column_types[column1].nullable {
+                                    let column2 = *c2 - prior_arities[relation2];
+                                    let nullable1 =
+                                        input_types[relation1].column_types[column1].nullable;
+                                    let nullable2 =
+                                        input_types[relation2].column_types[column2].nullable;
+                                    // We only *need* to push down a null filter if either are nullable,
+                                    // as if either is non-nullable nulls will never match.
+                                    // We *could* push down the filter if we thought that would help!
+                                    if nullable1 && nullable2 {
                                         push_downs[relation1].push(
                                             ScalarExpr::Column(column1)
                                                 .call_unary(UnaryFunc::IsNull)
                                                 .call_unary(UnaryFunc::Not),
                                         );
-                                    }
-                                    let column2 = *c2 - prior_arities[relation2];
-                                    if input_types[relation2].column_types[column2].nullable {
                                         push_downs[relation2].push(
                                             ScalarExpr::Column(*c2 - prior_arities[relation2])
                                                 .call_unary(UnaryFunc::IsNull)
@@ -222,7 +229,7 @@ impl PredicatePushdown {
                 RelationExpr::Reduce {
                     input: inner,
                     group_key,
-                    ..
+                    aggregates,
                 } => {
                     let mut retain = Vec::new();
                     let mut push_down = Vec::new();
@@ -240,10 +247,24 @@ impl PredicatePushdown {
                         });
                         if supported {
                             push_down.push(new_predicate);
+                        } else if let ScalarExpr::Column(col) = &predicate {
+                            if *col == group_key.len()
+                                && aggregates.len() == 1
+                                && aggregates[0].func == AggregateFunc::Any
+                            {
+                                push_down.push(aggregates[0].expr.clone());
+                                aggregates[0].expr = ScalarExpr::Literal(
+                                    Datum::True,
+                                    ColumnType::new(ScalarType::Bool),
+                                );
+                            } else {
+                                retain.push(predicate);
+                            }
                         } else {
                             retain.push(predicate);
                         }
                     }
+
                     if !push_down.is_empty() {
                         *inner = Box::new(inner.take_dangerous().filter(push_down));
                     }

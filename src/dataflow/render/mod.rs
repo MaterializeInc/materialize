@@ -254,7 +254,7 @@ where
                     let scalars = scalars.clone();
                     let collection = self.collection(input).unwrap().map(move |mut tuple| {
                         for s in scalars.iter() {
-                            let to_push = s.0.eval(&tuple[..]);
+                            let to_push = s.eval(&tuple[..]);
                             tuple.push(to_push);
                         }
                         tuple
@@ -458,7 +458,7 @@ where
 
             // Track whether aggregations are Abelian (and so accumulable) or not.
             let mut abelian = Vec::new();
-            for (aggregate, _type) in aggregates.iter() {
+            for aggregate in aggregates.iter() {
                 let accumulable = match aggregate.func {
                     AggregateFunc::SumInt32 => !aggregate.distinct,
                     AggregateFunc::SumInt64 => !aggregate.distinct,
@@ -491,7 +491,7 @@ where
                     let mut vals = Vec::new();
                     let mut aggs = vec![1i128];
 
-                    for (index, (aggregate, _column_type)) in aggregates_clone.iter().enumerate() {
+                    for (index, aggregate) in aggregates_clone.iter().enumerate() {
                         // Presently, we can accumulate in the difference field only
                         // if the aggregation has a known type and does not require
                         // us to accumulate only distinct elements.
@@ -578,7 +578,7 @@ where
                     let mut abelian_pos = 1; // <- advance past the count
                     let mut non_abelian_pos = 0;
 
-                    for ((agg, _column_type), abl) in aggregates.iter().zip(abelian.iter()) {
+                    for (agg, abl) in aggregates.iter().zip(abelian.iter()) {
                         if *abl {
                             let value = match agg.func {
                                 AggregateFunc::SumInt32 => {

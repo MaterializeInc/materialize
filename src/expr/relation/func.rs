@@ -12,7 +12,7 @@ use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
-use repr::{Datum, ScalarType};
+use repr::{ColumnType, Datum, ScalarType};
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -370,21 +370,29 @@ impl AggregateFunc {
         }
     }
 
-    pub fn is_nullable(self) -> bool {
+    pub fn default(self) -> Datum {
         match self {
-            AggregateFunc::Count => false,
-            // max/min/sum return null on empty sets
-            _ => true,
+            AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
+            AggregateFunc::Any => Datum::False,
+            AggregateFunc::All => Datum::True,
+            _ => Datum::Null,
         }
     }
 
-    pub fn default(self) -> (Datum, ScalarType) {
-        match self {
-            AggregateFunc::Count | AggregateFunc::CountAll => (Datum::Int64(0), ScalarType::Int64),
-            AggregateFunc::Any => (Datum::False, ScalarType::Bool),
-            AggregateFunc::All => (Datum::True, ScalarType::Bool),
-            _ => (Datum::Null, ScalarType::Null),
-        }
+    pub fn output_type(self, input_type: ColumnType) -> ColumnType {
+        let scalar_type = match self {
+            AggregateFunc::Count => ScalarType::Int64,
+            AggregateFunc::CountAll => ScalarType::Int64,
+            AggregateFunc::Any => ScalarType::Bool,
+            AggregateFunc::All => ScalarType::Bool,
+            _ => input_type.scalar_type,
+        };
+        let nullable = match self {
+            AggregateFunc::Count => false,
+            // max/min/sum return null on empty sets
+            _ => true,
+        };
+        ColumnType::new(scalar_type).nullable(nullable)
     }
 }
 
