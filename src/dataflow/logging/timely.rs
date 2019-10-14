@@ -47,33 +47,25 @@ pub fn construct<A: Allocate>(
 
         let (mut operates_out, operates) = demux.new_output();
         let (mut channels_out, channels) = demux.new_output();
-        let (mut messages_out, messages) = demux.new_output();
-        let (mut shutdown_out, shutdown) = demux.new_output();
-        let (mut text_out, text) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
 
         demux.build(move |_capability| {
-            // Track operator and channel information so that they can be deleted when we
-            // observe the corresponding operator drop events.
+            // These two maps track operator and channel information
+            // so that they can be deleted when we observe the drop
+            // events for the corresponding operators.
             let mut operates_data = HashMap::new();
             let mut channels_data = HashMap::new();
 
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
-                let mut messages = messages_out.activate();
-                let mut shutdown = shutdown_out.activate();
-                let mut text = text_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
 
                     let mut operates_session = operates.session(&time);
                     let mut channels_session = channels.session(&time);
-                    let mut messages_session = messages.session(&time);
-                    let mut shutdown_session = shutdown.session(&time);
-                    let mut text_session = text.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
@@ -81,7 +73,8 @@ pub fn construct<A: Allocate>(
 
                         match datum {
                             TimelyEvent::Operates(event) => {
-                                // Record operator information for eventual drop.
+                                // Record operator information so that we can replay a negated
+                                // version when the operator is dropped.
                                 operates_data.insert(
                                     (event.id, worker),
                                     (event.addr.clone(), event.name.clone()),
@@ -102,6 +95,8 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             TimelyEvent::Channels(event) => {
+                                // Record channel information so that we can replay a negated
+                                // version when the host dataflow is dropped.
                                 channels_data
                                     .entry(event.scope_addr[0])
                                     .or_insert(Vec::new())
@@ -127,12 +122,10 @@ pub fn construct<A: Allocate>(
                                     1,
                                 ));
                             }
-                            TimelyEvent::Messages(messages) => messages_session.give((
-                                messages.channel,
-                                time_ms,
-                                messages.length as isize,
-                            )),
                             TimelyEvent::Shutdown(event) => {
+                                // Dropped operators should result in a negative record for
+                                // the `operates` collection, cancelling out the initial
+                                // operator announcement.
                                 if let Some((address, event_name)) =
                                     operates_data.remove(&(event.id, worker))
                                 {
@@ -149,7 +142,8 @@ pub fn construct<A: Allocate>(
                                             -1,
                                         ));
                                     }
-                                    // If a dataflow shutdown, drop channels too.
+                                    // If we are observing a dataflow shutdown, we should also
+                                    // issue a deletion for channels in the dataflow.
                                     if address.len() == 1 {
                                         if let Some(channels) = channels_data.remove(&address[0]) {
                                             for (event_id, worker, scope_addr, source, target) in
@@ -172,22 +166,6 @@ pub fn construct<A: Allocate>(
                                         }
                                     }
                                 }
-
-                                shutdown_session.give((
-                                    vec![
-                                        Datum::Int64(event.id as i64),
-                                        Datum::Int64(worker as i64),
-                                    ],
-                                    time_ms,
-                                    1,
-                                ));
-                            }
-                            TimelyEvent::Text(text) => {
-                                text_session.give((
-                                    vec![Datum::String(text), Datum::Int64(worker as i64)],
-                                    time_ms,
-                                    1,
-                                ));
                             }
                             _ => {}
                         }
@@ -266,21 +244,11 @@ pub fn construct<A: Allocate>(
 
         let operates = operates.as_collection().arrange_by_self();
         let channels = channels.as_collection().arrange_by_self();
-        let messages = messages
-            .as_collection()
-            .count()
-            .map(|(channel, count)| vec![Datum::Int64(channel as i64), Datum::Int64(count as i64)])
-            .arrange_by_self();
-        let shutdown = shutdown.as_collection().arrange_by_self();
-        let text = text.as_collection().arrange_by_self();
 
         // Restrict results by those logs that are meant to be active.
         vec![
             (LogVariant::Timely(TimelyLog::Operates), operates.trace),
             (LogVariant::Timely(TimelyLog::Channels), channels.trace),
-            (LogVariant::Timely(TimelyLog::Messages), messages.trace),
-            (LogVariant::Timely(TimelyLog::Shutdown), shutdown.trace),
-            (LogVariant::Timely(TimelyLog::Text), text.trace),
             (LogVariant::Timely(TimelyLog::Elapsed), elapsed.trace),
             (LogVariant::Timely(TimelyLog::Histogram), histogram.trace),
         ]

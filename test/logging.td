@@ -14,14 +14,6 @@
 > SELECT count(*) FROM count_channels;
 1
 
-> CREATE VIEW count_shutdown AS SELECT count(*) FROM logs_shutdown;
-> SELECT count(*) FROM count_shutdown;
-1
-
-> CREATE VIEW count_text AS SELECT count(*) FROM logs_text;
-> SELECT count(*) FROM count_text;
-1
-
 > CREATE VIEW count_elapsed AS SELECT count(*) FROM logs_elapsed;
 > SELECT count(*) FROM count_elapsed;
 1
