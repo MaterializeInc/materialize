@@ -118,8 +118,14 @@ impl SimplifyFilterPredicates {
                     } = &predicates[i]
                     {
                         match (
-                            supports_complex_equality_on_input(&*expr1, &input_relation),
-                            supports_complex_equality_on_input(&*expr2, &input_relation),
+                            supports_complex_equality_on_exactly_one_input(
+                                &*expr1,
+                                &input_relation,
+                            ),
+                            supports_complex_equality_on_exactly_one_input(
+                                &*expr2,
+                                &input_relation,
+                            ),
                         ) {
                             (Some(input_index_1), Some(input_index_2)) => {
                                 // Predicates like `expr1 = expr2` where expr1, expr2 are both complex
