@@ -2,12 +2,12 @@
 //
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
-
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysOnlyHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
 use repr::Datum;
+use std::collections::HashMap;
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -50,6 +50,11 @@ pub fn construct<A: Allocate>(
         let mut demux_buffer = Vec::new();
 
         demux.build(move |_capability| {
+            // Track operator and channel information so that they can be deleted when we
+            // observe the corresponding operator drop events.
+            let mut operates_data = HashMap::new();
+            let mut channels_data = HashMap::new();
+
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
@@ -72,6 +77,12 @@ pub fn construct<A: Allocate>(
 
                         match datum {
                             TimelyEvent::Operates(event) => {
+                                // Record operator information for eventual drop.
+                                operates_data.insert(
+                                    (event.id, worker),
+                                    (event.addr.clone(), event.name.clone()),
+                                );
+
                                 for (addr_slot, addr_value) in event.addr.iter().enumerate() {
                                     operates_session.give((
                                         vec![
@@ -87,6 +98,17 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             TimelyEvent::Channels(event) => {
+                                channels_data
+                                    .entry(event.scope_addr[0])
+                                    .or_insert(Vec::new())
+                                    .push((
+                                        event.id,
+                                        worker,
+                                        event.scope_addr.clone(),
+                                        event.source,
+                                        event.target,
+                                    ));
+
                                 channels_session.give((
                                     vec![
                                         Datum::Int64(event.id as i64),
@@ -107,6 +129,46 @@ pub fn construct<A: Allocate>(
                                 messages.length as isize,
                             )),
                             TimelyEvent::Shutdown(event) => {
+                                if let Some((address, event_name)) =
+                                    operates_data.remove(&(event.id, worker))
+                                {
+                                    for (addr_slot, addr_value) in address.iter().enumerate() {
+                                        operates_session.give((
+                                            vec![
+                                                Datum::Int64(event.id as i64),
+                                                Datum::Int64(worker as i64),
+                                                Datum::Int64(addr_slot as i64),
+                                                Datum::Int64(*addr_value as i64),
+                                                Datum::String(event_name.clone()),
+                                            ],
+                                            time_ms,
+                                            -1,
+                                        ));
+                                    }
+                                    // If a dataflow shutdown, drop channels too.
+                                    if address.len() == 1 {
+                                        if let Some(channels) = channels_data.remove(&address[0]) {
+                                            for (event_id, worker, scope_addr, source, target) in
+                                                channels
+                                            {
+                                                channels_session.give((
+                                                    vec![
+                                                        Datum::Int64(event_id as i64),
+                                                        Datum::Int64(worker as i64),
+                                                        Datum::String(format!("{:?}", scope_addr)),
+                                                        Datum::Int64(source.0 as i64),
+                                                        Datum::Int64(source.1 as i64),
+                                                        Datum::Int64(target.0 as i64),
+                                                        Datum::Int64(target.1 as i64),
+                                                    ],
+                                                    time_ms,
+                                                    -1,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+
                                 shutdown_session.give((
                                     vec![
                                         Datum::Int64(event.id as i64),
