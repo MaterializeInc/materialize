@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
 ///
@@ -32,20 +32,47 @@ impl crate::transform::Transform for NonNullRequirements {
 
 impl NonNullRequirements {
     pub fn transform(&self, relation: &mut RelationExpr) {
-        self.action(relation, HashSet::new());
+        self.action(relation, HashSet::new(), &mut HashMap::new());
     }
     /// Columns that must be non-null.
-    pub fn action(&self, relation: &mut RelationExpr, mut columns: HashSet<usize>) {
+    pub fn action(
+        &self,
+        relation: &mut RelationExpr,
+        mut columns: HashSet<usize>,
+        gets: &mut HashMap<String, Vec<HashSet<usize>>>,
+    ) {
         match relation {
             RelationExpr::Constant { rows, .. } => {
                 rows.retain(|(row, _)| columns.iter().all(|c| row[*c] != repr::Datum::Null))
             }
-            RelationExpr::Get { .. } => {}
-            RelationExpr::Let { body, .. } => {
-                self.action(body, columns);
+            RelationExpr::Get { name, .. } => {
+                gets.entry(name.to_string())
+                    .or_insert(Vec::new())
+                    .push(columns.clone());
+            }
+            RelationExpr::Let { name, value, body } => {
+                // Let harvests any non-null requirements from its body,
+                // and acts on the intersection of the requirements for
+                // each corresponding Get, pushing them at its value.
+                let prior = gets.insert(name.to_string(), Vec::new());
+                self.action(body, columns, gets);
+                let mut needs = gets.remove(name).unwrap();
+                if let Some(prior) = prior {
+                    gets.insert(name.to_string(), prior);
+                }
+                if let Some(mut need) = needs.pop() {
+                    while let Some(x) = needs.pop() {
+                        need.retain(|col| x.contains(col))
+                    }
+                    self.action(value, need, gets);
+                }
             }
             RelationExpr::Project { input, outputs } => {
-                self.action(input, columns.into_iter().map(|c| outputs[c]).collect());
+                self.action(
+                    input,
+                    columns.into_iter().map(|c| outputs[c]).collect(),
+                    gets,
+                );
             }
             RelationExpr::Map { input, scalars } => {
                 let arity = input.arity();
@@ -57,7 +84,7 @@ impl NonNullRequirements {
                         scalars[column - arity].non_null_requirements(&mut new_columns);
                     }
                 }
-                self.action(input, new_columns);
+                self.action(input, new_columns, gets);
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
@@ -65,7 +92,7 @@ impl NonNullRequirements {
                     // TODO: Equality constraints should smear around requirements!
                     // TODO: Not(IsNull) should add a constraint!
                 }
-                self.action(input, columns);
+                self.action(input, columns, gets);
             }
             RelationExpr::Join { inputs, variables } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -103,7 +130,7 @@ impl NonNullRequirements {
                 }
 
                 for (input, columns) in inputs.iter_mut().zip(new_columns) {
-                    self.action(input, columns);
+                    self.action(input, columns, gets);
                 }
             }
             RelationExpr::Reduce {
@@ -117,20 +144,20 @@ impl NonNullRequirements {
                         new_columns.insert(group_key[column]);
                     }
                 }
-                self.action(input, new_columns);
+                self.action(input, new_columns, gets);
             }
             RelationExpr::TopK { input, .. } => {
-                self.action(input, columns);
+                self.action(input, columns, gets);
             }
             RelationExpr::Negate { input } => {
-                self.action(input, columns);
+                self.action(input, columns, gets);
             }
             RelationExpr::Threshold { input } => {
-                self.action(input, columns);
+                self.action(input, columns, gets);
             }
             RelationExpr::Union { left, right } => {
-                self.action(left, columns.clone());
-                self.action(right, columns);
+                self.action(left, columns.clone(), gets);
+                self.action(right, columns, gets);
             }
         }
     }
