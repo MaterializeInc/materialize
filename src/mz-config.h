@@ -16,6 +16,8 @@ limitations under the License.
 
 #include <unordered_set>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace mz {
 struct Config {
@@ -24,7 +26,10 @@ struct Config {
     std::string materializedUrl;
     std::string kafkaUrl;
     std::string schemaRegistryUrl;
+    std::vector<std::pair<std::string, std::string>> hQueries;
 };
 
 const Config& defaultConfig(); // The config that works with our current docker-compose setup
+
+const std::unordered_map<std::string, std::string>& allHQueries();
 }

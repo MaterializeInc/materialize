@@ -21,13 +21,16 @@ limitations under the License.
 #include <string>
 #include <exception>
 
-class MaterializedException : public std::exception {};
+namespace mz {
+class MaterializedException : public std::exception {
+};
 
 class UnexpectedCreateSourcesResult : public MaterializedException {
     std::string what_rendered;
 public:
-    const char* what() const noexcept override;
-    explicit UnexpectedCreateSourcesResult(const std::string& explanation);
+    const char *what() const noexcept override;
+
+    explicit UnexpectedCreateSourcesResult(const std::string &explanation);
 };
 
 std::vector<std::string> createAllSources(
@@ -35,3 +38,7 @@ std::vector<std::string> createAllSources(
         std::string from,
         std::string registry,
         std::optional<std::string> like);
+
+void createMaterializedView(pqxx::connection& c, std::string&& name, std::string&& query);
+}
+

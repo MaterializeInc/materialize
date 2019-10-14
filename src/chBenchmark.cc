@@ -38,8 +38,9 @@ limitations under the License.
 #include <sqltypes.h>
 #include <unistd.h>
 #include <climits>
-#include <unordered_set>
 #include <thread>
+#include <vector>
+#include <utility>
 
 enum class RunState {
     off,
@@ -104,16 +105,16 @@ static void* analyticalThread(void* args) {
     return nullptr;
 }
 
-static void createSourcesThread(const mz::Config* config) {
-    const auto& connUrl = config->materializedUrl;
-    auto expected = config->expectedSources;
-    const auto& kafkaUrl = config->kafkaUrl;
-    const auto& schemaRegistryUrl = config->schemaRegistryUrl;
-    const auto& pattern = config->viewPattern;
+static void createSourcesThread(mz::Config config) {
+    const auto& connUrl = config.materializedUrl;
+    auto& expected = config.expectedSources;
+    const auto& kafkaUrl = config.kafkaUrl;
+    const auto& schemaRegistryUrl = config.schemaRegistryUrl;
+    const auto& pattern = config.viewPattern;
     pqxx::connection c(connUrl);
 
     while (!expected.empty()) {
-        auto created = createAllSources(c, kafkaUrl, schemaRegistryUrl, pattern);
+        auto created = mz::createAllSources(c, kafkaUrl, schemaRegistryUrl, pattern);
         for (const auto& source: created) {
             std::cout << "Created source: " << source << std::endl;
             bool existed = expected.erase(source);
@@ -124,6 +125,10 @@ static void createSourcesThread(const mz::Config* config) {
         sleep(1);
     }
     std::cout << "Done creating expected sources" << std::endl;
+    for (auto& vp: config.hQueries) {
+        std::cout << "Creating query " << vp.first << std::endl;
+        mz::createMaterializedView(c, std::move(vp.first), std::move(vp.second));
+    }
 }
 
 static void* transactionalThread(void* args) {
@@ -234,6 +239,16 @@ static double parseDouble(const char* context, const char* v) {
     }
 }
 
+static std::vector<std::string> parseCommaSeparated(const char* v) {
+    std::stringstream ss(v);
+    std::string part;
+    std::vector<std::string> ret;
+    while (std::getline(ss, part, ',')) {
+        ret.push_back(std::move(part));
+    }
+    return ret;
+}
+
 static void usage() {
     fprintf(stderr, "usage: chBenchmark [--warehouses N] [--out-dir PATH] gen\n"
                     "   or: chBenchmark [options] run\n");
@@ -273,6 +288,7 @@ static int run(int argc, char* argv[]) {
         {"min-delay", required_argument, nullptr, 'm'},
         {"max-delay", required_argument, nullptr, 'M'},
         {"mz-sources", no_argument, nullptr, 'S'},
+        {"mz-views", required_argument, nullptr, 'V'},
         {nullptr, 0, nullptr, 0}};
 
     int c;
@@ -288,6 +304,7 @@ static int run(int argc, char* argv[]) {
     std::string genDir = "gen";
     const char* logFile = nullptr;
     bool createSources = false;
+    std::vector<std::string> mzViews;
     while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:", longOpts,
                             nullptr)) != -1) {
         switch (c) {
@@ -327,6 +344,9 @@ static int run(int argc, char* argv[]) {
         case 'S':
             createSources = true;
             break;
+        case 'V':
+            mzViews = parseCommaSeparated(optarg);
+            break;
         default:
             return 1;
         }
@@ -351,6 +371,8 @@ static int run(int argc, char* argv[]) {
         errx(1, "warmup seconds cannot be negative");
     if (runSeconds < 0)
         errx(1, "run seconds cannot be negative");
+    if (!mzViews.empty() && !createSources)
+        errx(1, "--mz-views requires --mz-sources");
 
     if (logFile)
         Log::open(logFile);
@@ -442,8 +464,17 @@ static int run(int argc, char* argv[]) {
         pthread_create(&tpt[i], nullptr, transactionalThread, &tprm[i]);
     }
     if (createSources) {
-        std::thread( createSourcesThread,
-                &mz::defaultConfig()
+        mz::Config mzCfg = mz::defaultConfig();
+        const auto& allHQueries = mz::allHQueries();
+        for (const auto& view: mzViews) {
+            if (auto i = allHQueries.find(view); i != allHQueries.end()) {
+                mzCfg.hQueries.push_back(*i);
+            } else {
+                errx(1, "No such view: %s", view.c_str());
+            }
+        }
+        std::thread(createSourcesThread,
+                std::move(mzCfg)
                 ).detach();
     }
 

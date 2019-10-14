@@ -17,7 +17,7 @@ limitations under the License.
 #include "materialized.h"
 
 std::vector<std::string>
-createAllSources(pqxx::connection &c, std::string from, std::string registry, std::optional<std::string> like) {
+mz::createAllSources(pqxx::connection &c, std::string from, std::string registry, std::optional<std::string> like) {
     std::vector<std::string> results;
     pqxx::nontransaction w(c);
     from = c.quote(from);
@@ -36,10 +36,15 @@ createAllSources(pqxx::connection &c, std::string from, std::string registry, st
     return results;
 }
 
-const char *UnexpectedCreateSourcesResult::what() const noexcept {
+void mz::createMaterializedView(pqxx::connection& c, std::string&& name, std::string&& query) {
+    pqxx::nontransaction w(c);
+    w.exec0("CREATE VIEW " + std::move(name) + " AS " + std::move(query));
+}
+
+const char *mz::UnexpectedCreateSourcesResult::what() const noexcept {
     return what_rendered.c_str();
 }
 
-UnexpectedCreateSourcesResult::UnexpectedCreateSourcesResult(const std::string& explanation) {
+mz::UnexpectedCreateSourcesResult::UnexpectedCreateSourcesResult(const std::string& explanation) {
     what_rendered = std::string {"Unexpected result from CREATE SOURCES: "} + explanation;
 }
