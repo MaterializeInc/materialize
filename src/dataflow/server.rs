@@ -466,11 +466,11 @@ where
 
     fn collect_finished_data(
         peek: &PendingPeek,
-        trace: &mut WithDrop<KeysOnlyHandle>,
+        trace: &mut WithDrop<KeysValsHandle>,
     ) -> Vec<Vec<Datum>> {
         let (mut cur, storage) = trace.cursor();
         let mut results = Vec::new();
-        while let Some(key) = cur.get_key(&storage) {
+        while let Some(_key) = cur.get_key(&storage) {
             while let Some(record) = cur.get_val(&storage) {
                 // Before (expensively) determining how many copies of a record
                 // we have, let's eliminate records that we don't care about.
