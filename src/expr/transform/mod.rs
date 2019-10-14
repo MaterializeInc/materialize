@@ -71,6 +71,19 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
+            // The first block are peep-hole optimizations that simplify
+            // the representation of the query and are largely uncontentious.
+            Box::new(crate::transform::join_elision::JoinElision),
+            Box::new(crate::transform::inline_let::InlineLet),
+            Box::new(crate::transform::reduction::FoldConstants),
+            Box::new(crate::transform::split_predicates::SplitPredicates),
+            Box::new(crate::transform::fusion::filter::Filter),
+            Box::new(crate::transform::fusion::map::Map),
+            Box::new(crate::transform::projection_extraction::ProjectionExtraction),
+            Box::new(crate::transform::fusion::project::Project),
+            Box::new(crate::transform::fusion::join::Join),
+            Box::new(crate::transform::join_elision::JoinElision),
+            Box::new(crate::transform::empty_map::EmptyMap),
             // Unbinding increases the complexity, but exposes more optimization opportunities.
             Box::new(crate::transform::binding::Unbind),
             Box::new(crate::transform::binding::Deduplicate),

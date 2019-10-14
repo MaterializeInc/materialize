@@ -69,6 +69,12 @@ impl Join {
 
             *inputs = new_inputs;
             *variables = new_variables;
+
+            // put join constraints in a canonical format.
+            for variable in variables.iter_mut() {
+                variable.sort();
+            }
+            variables.sort();
         }
     }
 }
