@@ -192,11 +192,13 @@ EXPLAIN PLAN FOR SELECT * FROM t1 WHERE EXISTS (SELECT * FROM t2)
 ----
 Project {
   outputs: [0],
-  Join {
-    variables: [],
-    Get { t1 },
-    Distinct { group_key: [], Get { t2 } },
-    Constant [[true]]
+  Map {
+    scalars: [true],
+    Join {
+      variables: [],
+      Get { t1 },
+      Distinct { group_key: [], Get { t2 } }
+    }
   }
 }
 
