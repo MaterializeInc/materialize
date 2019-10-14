@@ -20,6 +20,7 @@ pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod reduction;
+pub mod simplify;
 pub mod split_predicates;
 
 pub trait Transform: std::fmt::Debug {
@@ -101,6 +102,7 @@ impl Default for Optimizer {
                 transforms: vec![
                     Box::new(crate::transform::nonnullable::NonNullable),
                     Box::new(crate::transform::reduction::FoldConstants),
+                    Box::new(crate::transform::simplify::SimplifyJoinEqualities),
                     Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::transform::fusion::join::Join),
                     Box::new(crate::transform::fusion::filter::Filter),
