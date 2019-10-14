@@ -4,25 +4,24 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::{RelationExpr, ScalarExpr};
-use repr::RelationType;
 
 #[derive(Debug)]
 pub struct ConstantJoin;
 
 impl super::Transform for ConstantJoin {
-    fn transform(&self, relation: &mut RelationExpr, metadata: &RelationType) {
-        self.transform(relation, metadata)
+    fn transform(&self, relation: &mut RelationExpr) {
+        self.transform(relation)
     }
 }
 
 impl ConstantJoin {
-    pub fn transform(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut_pre(&mut |e| {
-            self.action(e, &e.typ());
+            self.action(e);
         });
     }
 
-    pub fn action(&self, relation: &mut RelationExpr, _metadata: &RelationType) {
+    pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join { variables, inputs } = relation {
             // If the tail end of `inputs` contains singleton constant relations whose
             // columns are not used in constraints, we can remove them from the join and
@@ -42,13 +41,13 @@ impl ConstantJoin {
                                 .iter()
                                 .all(|v| v.iter().all(|(r, _)| *r != inputs_len - 1))
                         {
-                            let values = rows
-                                .pop()
+                            let values = rows.pop()
                                 .unwrap()
                                 .0
                                 .into_iter()
-                                .map(|d| ScalarExpr::Literal(d));
-                            map_arguments.extend(values.zip(typ.column_types).rev());
+                                .zip(typ.column_types)
+                                .map(|(d,t)| ScalarExpr::Literal(d,t));
+                            map_arguments.extend(values.rev());
                         } else {
                             inputs.push(RelationExpr::Constant { rows, typ });
                             done = true;
@@ -69,7 +68,7 @@ impl ConstantJoin {
                 if inputs.len() == 1 {
                     *relation = inputs.pop().unwrap().map(map_arguments);
                 } else {
-                    *relation = relation.take().map(map_arguments);
+                    *relation = relation.take_dangerous().map(map_arguments);
                 }
             }
         }
