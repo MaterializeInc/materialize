@@ -118,14 +118,8 @@ impl SimplifyFilterPredicates {
                     } = &predicates[i]
                     {
                         match (
-                            supports_complex_equality_on_exactly_one_input(
-                                &*expr1,
-                                &input_relation,
-                            ),
-                            supports_complex_equality_on_exactly_one_input(
-                                &*expr2,
-                                &input_relation,
-                            ),
+                            supports_complex_equality_on_input(&*expr1, &input_relation),
+                            supports_complex_equality_on_input(&*expr2, &input_relation),
                         ) {
                             (Some(input_index_1), Some(input_index_2)) => {
                                 // Predicates like `expr1 = expr2` where expr1, expr2 are both complex
@@ -320,7 +314,7 @@ impl SimplifyFilterPredicates {
 /// only supports one relation.
 /// A ScalarExpr supports a relation iff it requires using
 /// values from that relation.
-fn supports_complex_equality_on_exactly_one_input(
+fn supports_complex_equality_on_input(
     expr: &ScalarExpr,
     input_relation: &[usize],
 ) -> Option<usize> {
@@ -341,7 +335,7 @@ fn supports_complex_equality_on_exactly_one_input(
             match support.len() {
                 1 => Some(support[0]),
                 _ => {
-                    // todo@jldlaughlin: should not simplify if either expr supports > 1 input relation!
+                    // TODO: #761 Don't simplify if either expr supports > 1 input_relation.
                     // If ScalarExpr doesn't support any relations (support.len() == 0):
                     // there's nothing to simplify.
                     // If ScalarExpr supports >1 relations: will have to actually join,
