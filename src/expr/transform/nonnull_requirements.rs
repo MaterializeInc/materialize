@@ -125,8 +125,11 @@ impl NonNullRequirements {
                 // `variable` smears constraints around.
                 // Also, any non-nullable columns impose constraints on their equivalence class.
                 for variable in variables {
-                    let exists_constraint = variable.iter().any(|(r, c)| new_columns[*r].contains(c));
-                    let nonnull_columns = variable.iter().any(|(r,c)| !input_types[*r].column_types[*c].nullable);
+                    let exists_constraint =
+                        variable.iter().any(|(r, c)| new_columns[*r].contains(c));
+                    let nonnull_columns = variable
+                        .iter()
+                        .any(|(r, c)| !input_types[*r].column_types[*c].nullable);
                     if exists_constraint || nonnull_columns {
                         for (r, c) in variable {
                             new_columns[*r].insert(*c);
@@ -139,7 +142,9 @@ impl NonNullRequirements {
                 }
             }
             RelationExpr::Reduce {
-                input, group_key, aggregates
+                input,
+                group_key,
+                aggregates,
             } => {
                 let mut new_columns = HashSet::new();
                 for column in columns {
@@ -148,7 +153,10 @@ impl NonNullRequirements {
                     if column < group_key.len() {
                         new_columns.insert(group_key[column]);
                     }
-                    if column == group_key.len() && aggregates.len() == 1 && aggregates[0].func != crate::AggregateFunc::CountAll {
+                    if column == group_key.len()
+                        && aggregates.len() == 1
+                        && aggregates[0].func != crate::AggregateFunc::CountAll
+                    {
                         aggregates[0].expr.non_null_requirements(&mut new_columns);
                     }
                 }
