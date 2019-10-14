@@ -432,42 +432,9 @@ where
             if upper.less_equal(&peek.timestamp) {
                 return true; // retain
             }
-            let (mut cur, storage) = trace.cursor();
-            let mut results = Vec::new();
-            while let Some(key) = cur.get_key(&storage) {
-                // TODO: Absent value iteration might be weird (in principle
-                // the cursor *could* say no `()` values associated with the
-                // key, though I can't imagine how that would happen for this
-                // specific trace implementation).
 
-                let mut copies = 0;
-                cur.map_times(&storage, |time, diff| {
-                    use timely::order::PartialOrder;
-                    if time.less_equal(&peek.timestamp) {
-                        copies += diff;
-                    }
-                });
-                assert!(
-                    copies >= 0,
-                    "Negative multiplicity: {} for {:?} in view {}",
-                    copies,
-                    key,
-                    peek.name
-                );
-                for _ in 0..copies {
-                    results.push(key.clone());
-                }
-                cur.step_key(&storage)
-            }
-            if let Some(limit) = peek.finishing.limit {
-                let offset_plus_limit = limit + peek.finishing.offset;
-                if results.len() > offset_plus_limit {
-                    pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
-                        compare_columns(&peek.finishing.order_by, left, right)
-                    });
-                    results.truncate(offset_plus_limit);
-                }
-            }
+            let results = Worker::<A>::collect_finished_data(peek, &mut trace);
+
             // TODO(benesch): investigate connection pooling for PEEK results,
             // or multiplexing across one TCP stream. At the moment, every PEEK
             // opens a new network connection.
@@ -491,5 +458,59 @@ where
             false // don't retain
         });
         mem::replace(&mut self.pending_peeks, pending_peeks);
+    }
+
+    fn collect_finished_data(
+        peek: &PendingPeek,
+        trace: &mut WithDrop<KeysOnlyHandle>,
+    ) -> Vec<Vec<Datum>> {
+        let (mut cur, storage) = trace.cursor();
+        let mut results = Vec::new();
+        while let Some(record) = cur.get_key(&storage) {
+            // Before (expensively) determining how many copies of a record
+            // we have, let's eliminate records that we don't care about.
+            if peek
+                .finishing
+                .filter
+                .iter()
+                .all(|predicate| predicate.eval(record) == Datum::True)
+            {
+                // TODO: Absent value iteration might be weird (in principle
+                // the cursor *could* say no `()` values associated with the
+                // key, though I can't imagine how that would happen for this
+                // specific trace implementation).
+                let mut copies = 0;
+                cur.map_times(&storage, |time, diff| {
+                    use timely::order::PartialOrder;
+                    if time.less_equal(&peek.timestamp) {
+                        copies += diff;
+                    }
+                });
+                assert!(
+                    copies >= 0,
+                    "Negative multiplicity: {} for {:?} in view {}",
+                    copies,
+                    record,
+                    peek.name
+                );
+
+                for _ in 0..copies {
+                    results.push(record.clone());
+                }
+            }
+            cur.step_key(&storage)
+        }
+
+        if let Some(limit) = peek.finishing.limit {
+            let offset_plus_limit = limit + peek.finishing.offset;
+            if results.len() > offset_plus_limit {
+                pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
+                    compare_columns(&peek.finishing.order_by, left, right)
+                });
+                results.truncate(offset_plus_limit);
+            }
+        }
+
+        results
     }
 }

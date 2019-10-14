@@ -9,7 +9,7 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use expr::RelationExpr;
+use expr::{RelationExpr, ScalarExpr};
 use repr::{Datum, RelationDesc, RelationType};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -64,11 +64,24 @@ pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -
     Ordering::Equal
 }
 
+/// Instructions for finishing the result of a query.
+///
+/// The primary reason for the existence of this structure and attendant code
+/// is that SQL's ORDER BY requires sorting rows (as already implied by the
+/// keywords), whereas much of the rest of SQL is defined in terms of unordered
+/// multisets. But as it turns out, the same idea can be used to optimize
+/// trivial peeks.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct RowSetFinishing {
+    /// Include only rows matching all predicates.
+    pub filter: Vec<ScalarExpr>,
+    /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
+    /// Include only as many rows (after offset).
     pub limit: Option<usize>,
+    /// Omit as many rows.
     pub offset: usize,
+    /// Include only given columns.
     pub project: Vec<usize>,
 }
 

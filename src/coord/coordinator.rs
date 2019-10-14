@@ -27,7 +27,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Dataflow, PeekWhen, Sink, SinkConnector, TailSinkConnector, Timestamp, View,
+    compare_columns, Dataflow, PeekWhen, RowSetFinishing, Sink, SinkConnector, TailSinkConnector,
+    Timestamp, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
@@ -147,7 +148,7 @@ where
                 mut source,
                 desc,
                 when,
-                finishing,
+                mut finishing,
             } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
                 //
@@ -164,6 +165,10 @@ where
                 // need to block on the arrival of further input data.
                 let timestamp =
                     ts_override.unwrap_or_else(|| self.determine_timestamp(&source, when));
+
+                // For straight-forward dataflow pipelines, use finishing instructions instead of
+                // dataflow operators.
+                Coordinator::<C>::maybe_use_finishing(&mut source, &mut finishing);
 
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
@@ -267,6 +272,58 @@ where
 
             Plan::Parsed { name } => SqlResponse::Parsed { name },
         }
+    }
+
+    /// Maybe use finishing instructions instead of relation expressions. This
+    /// method may replace top-level dataflow operators in the given dataflow
+    /// graph with semantically equivalent finishing instructions.
+    ///
+    /// This makes sense for short-lived queries that do not need to shuffle
+    /// data between workers and is the case for basic
+    /// `SELECT ... FROM ... WHERE ...` queries. They translate to
+    /// straight-forward dataflow pipelines that start with a `Get` on a
+    /// built-in view or a source and then process the resulting records with
+    /// `Project`, `Map`, `Filter`, `Negate`, `Threshold`, and possibly `Union`.
+    /// By executing finishing instructions instead of installing full dataflow
+    /// graphs, such queries can avoid view generation altogether and execute
+    /// faster. That is particularly valuable for introspective queries, e.g.,
+    /// when performance monitoring. It is, however, exactly the wrong thing to
+    /// do when a query needs to install a view, since `Project`, `Filter`, and
+    /// `Threshold` may reduce the size of that view.
+    fn maybe_use_finishing(expr: &mut RelationExpr, finishing: &mut RowSetFinishing) {
+        // Check whether the relation expression is a simple pipeline.
+        fn is_simple(expr: &RelationExpr) -> bool {
+            match expr {
+                RelationExpr::Filter { input, .. } => is_simple(input),
+                RelationExpr::Get { .. } => true,
+                _ => false,
+            }
+        }
+
+        if !is_simple(expr) {
+            return;
+        }
+
+        // Replace operators with finishing instructions.
+        fn use_finishing(expr: &mut RelationExpr, finishing: &mut RowSetFinishing) {
+            if let RelationExpr::Get { .. } = expr {
+                return;
+            }
+
+            match expr.take_dangerous() {
+                RelationExpr::Filter {
+                    mut input,
+                    mut predicates,
+                } => {
+                    use_finishing(&mut input, finishing);
+                    *expr = *input;
+                    finishing.filter.append(&mut predicates);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        use_finishing(expr, finishing);
     }
 
     pub fn create_dataflows(&mut self, mut dataflows: Vec<Dataflow>) {
