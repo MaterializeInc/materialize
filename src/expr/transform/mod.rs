@@ -9,7 +9,6 @@ use crate::RelationExpr;
 
 pub mod binding;
 pub mod constant_join;
-pub mod distinct_elision;
 pub mod empty_map;
 pub mod filter_lets;
 pub mod fusion;
@@ -20,6 +19,7 @@ pub mod nonnull_requirements;
 pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
+pub mod reduce_elision;
 pub mod reduction;
 pub mod simplify;
 pub mod split_predicates;
@@ -111,7 +111,7 @@ impl Default for Optimizer {
                     Box::new(crate::transform::fusion::map::Map),
                     Box::new(crate::transform::empty_map::EmptyMap),
                     Box::new(crate::transform::join_elision::JoinElision),
-                    Box::new(crate::transform::distinct_elision::DistinctElision),
+                    Box::new(crate::transform::reduce_elision::ReduceElision),
                     Box::new(crate::transform::inline_let::InlineLet),
                     Box::new(crate::transform::projection_extraction::ProjectionExtraction),
                     Box::new(crate::transform::filter_lets::FilterLets),
