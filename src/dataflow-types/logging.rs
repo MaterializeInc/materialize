@@ -42,9 +42,6 @@ pub enum LogVariant {
 pub enum TimelyLog {
     Operates,
     Channels,
-    Messages,
-    Shutdown,
-    Text,
     Elapsed,
     Histogram,
 }
@@ -69,9 +66,6 @@ impl LogVariant {
         vec![
             LogVariant::Timely(TimelyLog::Operates),
             LogVariant::Timely(TimelyLog::Channels),
-            LogVariant::Timely(TimelyLog::Messages),
-            LogVariant::Timely(TimelyLog::Shutdown),
-            LogVariant::Timely(TimelyLog::Text),
             LogVariant::Timely(TimelyLog::Elapsed),
             LogVariant::Timely(TimelyLog::Histogram),
             LogVariant::Differential(DifferentialLog::Arrangement),
@@ -89,9 +83,6 @@ impl LogVariant {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => "logs_operates",
             LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
-            LogVariant::Timely(TimelyLog::Messages) => "logs_messages",
-            LogVariant::Timely(TimelyLog::Shutdown) => "logs_shutdown",
-            LogVariant::Timely(TimelyLog::Text) => "logs_text",
             LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
             LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
@@ -125,20 +116,6 @@ impl LogVariant {
                 .add_column("target_node", ScalarType::Int64)
                 .add_column("target_port", ScalarType::Int64)
                 .add_keys(vec![0, 1]),
-
-            LogVariant::Timely(TimelyLog::Messages) => RelationDesc::empty()
-                .add_column("channel", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
-                .add_keys(vec![0]),
-
-            LogVariant::Timely(TimelyLog::Shutdown) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
-
-            LogVariant::Timely(TimelyLog::Text) => RelationDesc::empty()
-                .add_column("text", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
