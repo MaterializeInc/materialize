@@ -153,7 +153,10 @@ impl NonNullRequirements {
                     if column < group_key.len() {
                         new_columns.insert(group_key[column]);
                     }
-                    if column == group_key.len() && aggregates.len() == 1 && aggregates[0].func != crate::AggregateFunc::CountAll {
+                    if column == group_key.len()
+                        && aggregates.len() == 1
+                        && aggregates[0].func != crate::AggregateFunc::CountAll
+                    {
                         aggregates[0].expr.non_null_requirements(&mut new_columns);
                     }
                 }
