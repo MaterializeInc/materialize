@@ -780,66 +780,6 @@ Project {
   }
 }
 
-<<<<<<< HEAD
-
-# Query 11
-query T multiline
-EXPLAIN PLAN FOR
-SELECT s_i_id, sum(s_order_cnt) AS ordercount
-FROM stock, supplier, nation
-WHERE s_su_suppkey = su_suppkey
-AND su_nationkey = n_nationkey
-AND n_name = 'GERMANY'
-GROUP BY s_i_id
-HAVING sum(s_order_cnt) > (
-    SELECT sum(s_order_cnt) * 0.005
-    FROM stock, supplier, nation
-    WHERE s_su_suppkey = su_suppkey
-    AND su_nationkey = n_nationkey
-    AND n_name = 'GERMANY'
-)
-ORDER BY ordercount DESC
-----
-Let {
-  id-1 = Project {
-    outputs: [0 .. 24, 26 .. 29],
-    Join {
-      variables: [[(0, 17), (1, 7)], [(1, 3), (2, 0)]],
-      Get { stock },
-      Map { scalars: [i32toi64 #0], Get { supplier } },
-      Filter { predicates: [#1 = "GERMANY"], Get { nation } }
-    }
-  }
-} in
-Project {
-  outputs: [0, 1, 1],
-  Filter {
-    predicates: [(i32todec #1 * 1000000dec) > #2],
-    Join {
-      variables: [],
-      Reduce {
-        group_key: [29],
-        aggregates: [sum(#14)],
-        Project { outputs: [0 .. 28, 0], Get { id-1 } }
-      },
-      Project {
-        outputs: [1],
-        Map {
-          scalars: [(i32todec #0 * 1000dec) * 5dec],
-          Reduce {
-            group_key: [],
-            aggregates: [sum(#14)],
-            Get { id-1 }
-          }
-        }
-      }
-    }
-  }
-}
-
-
-=======
->>>>>>> tidy comments, remove q11v2
 # Query 11
 query T multiline
 EXPLAIN PLAN FOR
@@ -957,23 +897,6 @@ FROM (
 GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
-<<<<<<< HEAD
-Let {
-  id-1 = Project {
-    outputs: [8 .. 29, 0 .. 7],
-    Join {
-      variables: [
-        [(0, 1), (1, 1)],
-        [(0, 2), (1, 2)],
-        [(0, 3), (1, 0)]
-      ],
-      Filter { predicates: [i32toi64 #5 > 8], Get { "order" } },
-      Get { customer }
-    }
-  }
-} in
-=======
->>>>>>> scary reduce optimization
 Project {
   outputs: [0, 1, 1, 0],
   Reduce {
@@ -985,39 +908,15 @@ Project {
         group_key: [30],
         aggregates: [countall(null)],
         Project {
-<<<<<<< HEAD
-          outputs: [0 .. 29, 0],
-          Union {
-            Get { id-1 },
-            Map {
-              scalars: [
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null,
-                null
-              ],
-              Union {
-                Negate {
-                  Distinct { group_key: [0 .. 21], Get { id-1 } }
-                },
-                Get { customer }
-              }
-            }
-=======
           outputs: [8 .. 29, 0 .. 8],
           Join {
             variables: [
-              [(1, 0), (0, 3)],
-              [(1, 1), (0, 1)],
-              [(1, 2), (0, 2)]
+              [(0, 1), (1, 1)],
+              [(0, 2), (1, 2)],
+              [(0, 3), (1, 0)]
             ],
             Filter { predicates: [i32toi64 #5 > 8], Get { "order" } },
             Get { customer }
->>>>>>> scary reduce optimization
           }
         }
       }
