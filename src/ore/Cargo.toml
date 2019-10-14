@@ -10,7 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 env_logger = "0.7.0"
-failure = "0.1.5"
+failure = "0.1.6"
 fallible-iterator = "0.2.0"
 futures = "0.1"
 lazy_static = "1.4.0"

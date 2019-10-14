@@ -10,7 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-failure = "0.1.5"
+failure = "0.1.6"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 # TODO(grimmr): upgrade to 0.5.3 after release, when `space_()` becomes officially available.
