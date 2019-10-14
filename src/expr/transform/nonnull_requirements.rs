@@ -147,14 +147,14 @@ impl NonNullRequirements {
                 aggregates,
             } => {
                 let mut new_columns = HashSet::new();
-                if aggregates.len() == 1 && aggregates[0].func != crate::AggregateFunc::CountAll {
-                    aggregates[0].expr.non_null_requirements(&mut new_columns);
-                }
                 for column in columns {
                     // No obvious requirements on aggregate columns.
                     // A "non-empty" requirement, I guess?
                     if column < group_key.len() {
                         new_columns.insert(group_key[column]);
+                    }
+                    if column == group_key.len() && aggregates.len() == 1 && aggregates[0].func != crate::AggregateFunc::CountAll {
+                        aggregates[0].expr.non_null_requirements(&mut new_columns);
                     }
                 }
                 self.action(input, new_columns, gets);

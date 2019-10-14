@@ -897,6 +897,20 @@ FROM (
 GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
+Let {
+  id-1 = Project {
+    outputs: [8 .. 29, 0 .. 7],
+    Join {
+      variables: [
+        [(0, 1), (1, 1)],
+        [(0, 2), (1, 2)],
+        [(0, 3), (1, 0)]
+      ],
+      Filter { predicates: [i32toi64 #5 > 8], Get { "order" } },
+      Get { customer }
+    }
+  }
+} in
 Project {
   outputs: [0, 1, 1, 0],
   Reduce {
@@ -906,17 +920,29 @@ Project {
       outputs: [0, 1, 1],
       Reduce {
         group_key: [30],
-        aggregates: [countall(null)],
+        aggregates: [count(#22)],
         Project {
-          outputs: [8 .. 29, 0 .. 8],
-          Join {
-            variables: [
-              [(0, 1), (1, 1)],
-              [(0, 2), (1, 2)],
-              [(0, 3), (1, 0)]
-            ],
-            Filter { predicates: [i32toi64 #5 > 8], Get { "order" } },
-            Get { customer }
+          outputs: [0 .. 29, 0],
+          Union {
+            Get { id-1 },
+            Map {
+              scalars: [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              Union {
+                Negate {
+                  Distinct { group_key: [0 .. 21], Get { id-1 } }
+                },
+                Get { customer }
+              }
+            }
           }
         }
       }
