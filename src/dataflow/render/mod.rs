@@ -155,32 +155,29 @@ pub fn build_dataflow<A: Allocate>(
 
                 if let Some(arrangements) = context.get_all_local(&view.relation_expr) {
                     if arrangements.is_empty() {
-                        let key = (0..view.relation_expr.arity()).collect::<Vec<_>>();
-                        let key_clone = key.clone();
-                        let arrangement = context
-                            .collection(&view.relation_expr)
-                            .unwrap()
-                            .map(move |x| {
-                                (key.iter().map(|k| x[*k].clone()).collect::<Vec<_>>(), x)
-                            })
-                            .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
+                        panic!("Lied to about arrangement availability");
+                    }
+                    // TODO: This stores all arrangements. Should we store fewer?
+                    for (key, arrangement) in arrangements {
                         manager.set_by_keys(
-                            view.name,
-                            &key_clone[..],
-                            WithDrop::new(arrangement.trace, tokens.clone()),
+                            view.name.clone(),
+                            &key[..],
+                            WithDrop::new(arrangement.trace.clone(), tokens.clone()),
                         );
-                    } else {
-                        // TODO: This stores all arrangements. Should we store fewer?
-                        for (key, arrangement) in arrangements {
-                            manager.set_by_keys(
-                                view.name.clone(),
-                                &key[..],
-                                WithDrop::new(arrangement.trace.clone(), tokens.clone()),
-                            );
-                        }
                     }
                 } else {
-                    panic!("Render failed for expression");
+                    let key = (0..view.relation_expr.arity()).collect::<Vec<_>>();
+                    let key_clone = key.clone();
+                    let arrangement = context
+                        .collection(&view.relation_expr)
+                        .expect("Render failed to produce collection")
+                        .map(move |x| (key.iter().map(|k| x[*k].clone()).collect::<Vec<_>>(), x))
+                        .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
+                    manager.set_by_keys(
+                        view.name,
+                        &key_clone[..],
+                        WithDrop::new(arrangement.trace, tokens.clone()),
+                    );
                 }
             });
         }
