@@ -75,7 +75,7 @@ impl ReduceElision {
 
                 // We may require a project.
                 if group_key.len() != input_typ.column_types.len()
-                    || !group_key.iter().enumerate().any(|(x, y)| x != *y)
+                    || group_key.iter().enumerate().any(|(x, y)| x != *y)
                 {
                     let mut projection = group_key.clone();
                     projection.extend(
