@@ -98,7 +98,6 @@
 //!                        },
 //!                    }),
 //!                    scalars: vec![
-//!                        (
 //!                           ScalarExpr::CallBinary {
 //!                                func: BinaryFunc::MulInt64,
 //!                                expr1: Box::from(ScalarExpr::Column(
@@ -108,11 +107,6 @@
 //!                                    0,
 //!                                )),
 //!                            },
-//!                            ColumnType {
-//!                                nullable: false,
-//!                                scalar_type: ScalarType::Null,
-//!                            },
-//!                        ),
 //!                    ],
 //!                },
 //!                RelationExpr::Get {
@@ -159,7 +153,6 @@
 //! assert_eq!(relation, expected);
 //! ```
 use crate::{BinaryFunc, RelationExpr, ScalarExpr};
-use repr::{ColumnType, ScalarType};
 use std::mem;
 
 #[derive(Debug)]
@@ -414,7 +407,7 @@ fn supports_complex_equality_on_input(
     input_relation: &[usize],
 ) -> Option<usize> {
     match expr {
-        ScalarExpr::Literal(_data) => None,
+        ScalarExpr::Literal(_data, _column_type) => None,
         ScalarExpr::Column(_usize) => None,
         _ => {
             // Check how many relations the expr supports.
@@ -448,13 +441,7 @@ fn create_map_over_input(
 ) -> RelationExpr {
     RelationExpr::Map {
         input: Box::from(input),
-        scalars: vec![(
-            adjust_expr_column_references(expr, column_offset),
-            ColumnType {
-                nullable: false,
-                scalar_type: ScalarType::Null,
-            },
-        )],
+        scalars: vec![adjust_expr_column_references(expr, column_offset)],
     }
 }
 
