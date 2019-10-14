@@ -265,7 +265,7 @@ impl ScalarExpr {
             ScalarExpr::Column(col) => {
                 columns.insert(*col);
             }
-            ScalarExpr::Literal(..) => { }
+            ScalarExpr::Literal(..) => {}
             ScalarExpr::CallUnary { func, expr } => {
                 if func != &UnaryFunc::IsNull {
                     expr.non_null_requirements(columns);
