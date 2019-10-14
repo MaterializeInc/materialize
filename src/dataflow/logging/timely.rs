@@ -2,6 +2,10 @@
 //
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
+
+// Clippy is wrong.
+#![allow(clippy::or_fun_call)]
+
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysOnlyHandle;
 use dataflow_types::logging::LoggingConfig;
