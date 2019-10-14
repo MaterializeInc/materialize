@@ -110,6 +110,12 @@ impl JoinOrder {
                 new_inputs.push(inputs[rel].clone()); // TODO: Extract from `inputs`.
             }
 
+            // put join constraints in a canonical format.
+            for variable in new_variables.iter_mut() {
+                variable.sort();
+            }
+            new_variables.sort();
+
             let join = RelationExpr::Join {
                 inputs: new_inputs,
                 variables: new_variables,
