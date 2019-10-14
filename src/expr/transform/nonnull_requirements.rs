@@ -3,21 +3,34 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::{RelationExpr, ScalarExpr};
+use crate::RelationExpr;
 use std::collections::HashSet;
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
+///
+/// This analysis derives NonNull requirements on the arguments to predicates.
+/// These requirements exist because most functions with Null arguments are
+/// themselves Null, and a predicate that evaluates to Null will not pass.
+///
+/// These requirements are not here introduced as constraints, but rather flow
+/// to sources of data and restrict any constant collections to those rows that
+/// satisfy the constraint. The main consequence is when Null values are added
+/// in support of outer-joins and subqueries, we can occasionally remove that
+/// branch when we observe that Null values would be subjected to predicates.
+///
+/// This analysis relies on a careful understanding of `ScalarExpr` and the
+/// semantics of various functions, *some of which may be non-Null even with
+/// Null arguments*.
 #[derive(Debug)]
-pub struct NewIsNull;
+pub struct NonNullRequirements;
 
-impl crate::transform::Transform for NewIsNull {
+impl crate::transform::Transform for NonNullRequirements {
     fn transform(&self, relation: &mut RelationExpr) {
         self.transform(relation)
     }
 }
 
-impl NewIsNull {
+impl NonNullRequirements {
     pub fn transform(&self, relation: &mut RelationExpr) {
         self.action(relation, HashSet::new());
     }
@@ -38,19 +51,17 @@ impl NewIsNull {
                 let arity = input.arity();
                 let mut new_columns = HashSet::new();
                 for column in columns {
-                    // No obvious requirements on aggregate columns.
-                    // A "non-empty" requirement, I guess?
                     if column < arity {
                         new_columns.insert(column);
                     } else {
-                        must_be_non_null(&scalars[column - arity], &mut new_columns);
+                        scalars[column - arity].non_null_requirements(&mut new_columns);
                     }
                 }
                 self.action(input, new_columns);
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
-                    must_be_non_null(predicate, &mut columns);
+                    predicate.non_null_requirements(&mut columns);
                     // TODO: Equality constraints should smear around requirements!
                     // TODO: Not(IsNull) should add a constraint!
                 }
@@ -121,41 +132,6 @@ impl NewIsNull {
                 self.action(left, columns.clone());
                 self.action(right, columns);
             }
-        }
-    }
-}
-
-/// Columns that must be non-null for the predicate to be true.
-fn must_be_non_null(predicate: &ScalarExpr, columns: &mut HashSet<usize>) {
-    match predicate {
-        ScalarExpr::Column(col) => {
-            columns.insert(*col);
-        }
-        ScalarExpr::Literal(..) => {}
-        ScalarExpr::CallUnary { func, expr } => {
-            if func != &UnaryFunc::IsNull {
-                must_be_non_null(expr, columns);
-            }
-        }
-        ScalarExpr::CallBinary { func, expr1, expr2 } => {
-            if func != &BinaryFunc::Or {
-                must_be_non_null(expr1, columns);
-                must_be_non_null(expr2, columns);
-            }
-        }
-        ScalarExpr::CallVariadic { func, exprs } => {
-            if func != &VariadicFunc::Coalesce {
-                for expr in exprs {
-                    must_be_non_null(expr, columns);
-                }
-            }
-        }
-        ScalarExpr::If {
-            cond,
-            then: _,
-            els: _,
-        } => {
-            must_be_non_null(cond, columns);
         }
     }
 }

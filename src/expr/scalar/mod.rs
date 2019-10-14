@@ -259,6 +259,41 @@ impl ScalarExpr {
         });
     }
 
+    /// Adds any columns that *must* be non-Null for `self` to be non-Null.
+    pub fn non_null_requirements(&self, columns: &mut HashSet<usize>) {
+        match self {
+            ScalarExpr::Column(col) => {
+                columns.insert(*col);
+            }
+            ScalarExpr::Literal(..) => { }
+            ScalarExpr::CallUnary { func, expr } => {
+                if func != &UnaryFunc::IsNull {
+                    expr.non_null_requirements(columns);
+                }
+            }
+            ScalarExpr::CallBinary { func, expr1, expr2 } => {
+                if func != &BinaryFunc::Or {
+                    expr1.non_null_requirements(columns);
+                    expr2.non_null_requirements(columns);
+                }
+            }
+            ScalarExpr::CallVariadic { func, exprs } => {
+                if func != &VariadicFunc::Coalesce {
+                    for expr in exprs {
+                        expr.non_null_requirements(columns);
+                    }
+                }
+            }
+            ScalarExpr::If {
+                cond,
+                then: _,
+                els: _,
+            } => {
+                cond.non_null_requirements(columns);
+            }
+        }
+    }
+
     pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
         match self {
             ScalarExpr::Column(i) => relation_type.column_types[*i],
