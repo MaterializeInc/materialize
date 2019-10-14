@@ -171,6 +171,15 @@ impl SimplifyJoinEqualities {
         });
     }
 
+    /// If the relation is a Filter { Join {} } and one of the Filter predicates
+    /// contains an expression that is 1) complex 2) only depends on one input relation,
+    /// we want to simplify the parameter relation.
+    /// We simplify by:
+    ///     1) Moving the complex predicate into a new Map{} over the correct input relation
+    ///     2) Creating a new ScalarExpr::Column to replace the complex expression in the
+    ///        Filter predicate that points to the output of the new Map{}.
+    ///     3) Adding a Project{} on the outside of the RelationExpr to remove the newly
+    ///        mapped column.
     pub fn generate_simplified_relation(&self, relation: &mut RelationExpr) {
         let mut columns_to_drop = Vec::new();
         if let RelationExpr::Filter { input, predicates } = relation {
