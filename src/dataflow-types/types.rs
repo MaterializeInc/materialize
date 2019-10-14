@@ -9,7 +9,7 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use expr::{RelationExpr, ScalarExpr};
+use expr::{ColumnOrder, RelationExpr, ScalarExpr};
 use repr::{Datum, RelationDesc, RelationType};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -41,12 +41,6 @@ pub struct Update {
     pub row: Vec<Datum>,
     pub timestamp: u64,
     pub diff: isize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ColumnOrder {
-    pub column: usize,
-    pub desc: bool,
 }
 
 pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -> Ordering {
@@ -87,7 +81,7 @@ pub struct RowSetFinishing {
 
 impl RowSetFinishing {
     pub fn is_trivial(&self) -> bool {
-        (self.limit == None) && self.order_by.is_empty()
+        (self.limit == None) && self.order_by.is_empty() && self.offset == 0
     }
 }
 

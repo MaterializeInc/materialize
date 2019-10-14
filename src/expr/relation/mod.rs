@@ -100,9 +100,11 @@ pub enum RelationExpr {
         /// Column indices used to form groups.
         group_key: Vec<usize>,
         /// Column indices used to order rows within groups.
-        order_key: Vec<usize>,
-        /// Number of records to retain, where the limit may be exceeded in the case of ties.
-        limit: usize,
+        order_key: Vec<ColumnOrder>,
+        /// Number of records to retain
+        limit: Option<usize>,
+        /// Number of records to skip
+        offset: usize,
     },
     /// Return a dataflow where the row counts are negated
     Negate {
@@ -380,12 +382,19 @@ impl RelationExpr {
     /// be grouped, the `order_key` argument indicates columns that should be further
     /// used to order records within groups, and the `limit` argument constrains the
     /// total number of records that should be produced in each group.
-    pub fn top_k(self, group_key: Vec<usize>, order_key: Vec<usize>, limit: usize) -> Self {
+    pub fn top_k(
+        self,
+        group_key: Vec<usize>,
+        order_key: Vec<ColumnOrder>,
+        limit: Option<usize>,
+        offset: usize,
+    ) -> Self {
         RelationExpr::TopK {
             input: Box::new(self),
             group_key,
             order_key,
             limit,
+            offset,
         }
     }
 
@@ -724,6 +733,7 @@ impl RelationExpr {
                 group_key: _,
                 order_key: _,
                 limit: _,
+                offset: _,
             } => to_doc!("TopK { ", "\"Oops, TopK is not yet implemented!\"", " }").group(),
             RelationExpr::Negate { input } => to_braced_doc("Negate {", input, "}"),
             RelationExpr::Threshold { input } => to_braced_doc("Threshold {", input, "}"),
@@ -846,6 +856,15 @@ impl RelationExpr {
             })
             .unwrap()
     }
+}
+
+///Specification for an order by column
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct ColumnOrder {
+    /// the column number
+    pub column: usize,
+    /// Whether to sort in descending order
+    pub desc: bool,
 }
 
 /// Manages the allocation of locally unique IDs when building a [`RelationExpr`].

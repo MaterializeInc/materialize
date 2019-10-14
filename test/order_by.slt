@@ -3,6 +3,8 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+mode cockroach
+
 statement ok
 create table foo(a int, b text);
 
@@ -54,3 +56,141 @@ select a from foo order by exists (select * from bar where bar.a = foo.a), a;
 0
 2
 1
+
+###sorts, limits, and offsets in subqueries ###
+
+#these tests have been designed to cover a wide range of situations where there
+#may be a subquery. be sure when modifying these tests to maintain a representation
+#for each situation.
+
+statement ok
+create table fizz(a int, b text);
+
+statement ok
+insert into fizz(a,b) values (2079, 'thirteen'), (12345, 'one'), (12345, 'two'), (12345, 'three'),
+(6745, 'five'), (24223, 'four'), (21243, 'four'), (1735, 'two'), (25040, 'two');
+
+#the order by's inside the subquery are technically meaningless because they do not
+#propagate to the outer query, but we should still return correct results.
+#TODO: materialize#696 replace the current query with the one below
+#SELECT b FROM (SELECT min(b) as b FROM fizz GROUP BY a ORDER BY a DESC)
+query T rowsort
+SELECT b FROM (SELECT a, min(b) as b FROM fizz GROUP BY a ORDER BY a DESC)
+----
+five
+four
+four
+one
+thirteen
+two
+two
+
+query I rowsort
+SELECT ascii(b) FROM (SELECT a, b FROM fizz ORDER BY a ASC, b DESC)
+----
+102
+102
+102
+111
+116
+116
+116
+116
+116
+
+statement ok
+create table baz (val1 int, val2 int);
+
+statement ok
+insert into baz values (12345, 1735), (12345, 1735), (12345, 1735), (1735, 24223), 
+(12345, 12345), (2079, 24223), (1735, 2079), (1735, 2079), (1735, 2079);
+
+#offset
+query I rowsort
+SELECT a FROM fizz where a > ANY(SELECT val1 from baz order by val1 offset 3 ROWS)
+----
+12345
+12345
+12345
+2079
+21243
+24223
+25040
+6745
+
+query I rowsort
+SELECT a from fizz where a in (SELECT val1 from baz order by val1 offset 0 rows)
+----
+12345
+12345
+12345
+1735
+2079
+
+#limit
+query I
+SELECT a FROM fizz WHERE a < ALL(SELECT val1 from baz order by val1 desc limit 5)
+----
+1735
+
+query I
+SELECT count(*) from fizz where exists(SELECT val1 from baz order by val1 limit 0)
+----
+0
+
+#offset + limit
+query TI
+SELECT b, (SELECT val1 from baz where val2 = a order by val1 limit 1 offset 1 rows) c from fizz order by b, c desc
+----
+five      NULL
+four      2079
+four      NULL
+one       NULL
+thirteen  1735
+three     NULL
+two       12345
+two       NULL
+two       NULL
+
+#limit + offset return correct results when there are identical rows
+query I
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 LIMIT 2)
+----
+12345
+12345
+
+query I
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 DESC OFFSET 7 ROWS)
+----
+12345
+12345
+
+query I rowsort
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 LIMIT 2 OFFSET 2 ROWS)
+----
+1735
+12345
+
+query I
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 DESC LIMIT 1 OFFSET 7 ROWS)
+----
+12345
+
+#order by/limit/offset still works after deleting some entries
+statement ok
+CREATE view bazv AS (SELECT val1, val2 FROM baz ORDER BY val2 DESC, val1 LIMIT 2 OFFSET 1 ROW);
+
+query II rowsort
+PEEK bazv
+----
+2079   24223
+12345  12345
+
+statement ok
+DELETE FROM baz WHERE val1=12345;
+
+query II rowsort
+PEEK bazv
+----
+1735   2079
+2079   24223

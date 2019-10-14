@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use dataflow_expr::like;
-pub use dataflow_expr::{AggregateFunc, BinaryFunc, UnaryFunc, VariadicFunc};
+pub use dataflow_expr::{AggregateFunc, BinaryFunc, ColumnOrder, UnaryFunc, VariadicFunc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like dataflow_expr::RelationExpr, except where otherwise noted below
@@ -56,6 +56,19 @@ pub enum RelationExpr {
     },
     Distinct {
         input: Box<RelationExpr>,
+    },
+    /// Groups and orders within each group, limiting output.
+    TopK {
+        /// The source collection.
+        input: Box<RelationExpr>,
+        /// Column indices used to form groups.
+        group_key: Vec<usize>,
+        /// Column indices used to order rows within groups.
+        order_key: Vec<ColumnOrder>,
+        /// Number of records to retain
+        limit: Option<usize>,
+        /// Number of records to skip
+        offset: usize,
     },
     Negate {
         input: Box<RelationExpr>,
@@ -323,6 +336,26 @@ impl RelationExpr {
                 Ok(reduced)
             }
             Distinct { input } => Ok(input.applied_to(id_gen, get_outer)?.distinct()),
+            TopK {
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+            } => {
+                let input = input.applied_to(id_gen, get_outer.clone())?;
+                let applied_group_key = (0..get_outer.arity())
+                    .chain(group_key.iter().map(|i| get_outer.arity() + i))
+                    .collect();
+                let applied_order_key = order_key
+                    .iter()
+                    .map(|column_order| ColumnOrder {
+                        column: column_order.column + get_outer.arity(),
+                        desc: column_order.desc,
+                    })
+                    .collect();
+                Ok(input.top_k(applied_group_key, applied_order_key, limit, offset))
+            }
             Negate { input } => Ok(input.applied_to(id_gen, get_outer)?.negate()),
             Threshold { input } => Ok(input.applied_to(id_gen, get_outer)?.threshold()),
         }
@@ -339,7 +372,8 @@ impl RelationExpr {
             RelationExpr::Project { input, .. }
             | RelationExpr::Distinct { input }
             | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input } => input.visit_columns(f),
+            | RelationExpr::Threshold { input }
+            | RelationExpr::TopK { input, .. } => input.visit_columns(f),
 
             RelationExpr::Union { left, right } => {
                 left.visit_columns(f);
@@ -652,7 +686,9 @@ impl RelationExpr {
                 }
                 typ
             }
-            RelationExpr::Filter { input, .. } => input.typ(outer),
+            RelationExpr::Filter { input, .. } | RelationExpr::TopK { input, .. } => {
+                input.typ(outer)
+            }
             RelationExpr::Join { left, right, .. } => RelationType::new(
                 left.typ(outer)
                     .column_types
@@ -732,6 +768,22 @@ impl RelationExpr {
             input: Box::new(self),
             group_key,
             aggregates,
+        }
+    }
+
+    pub fn top_k(
+        self,
+        group_key: Vec<usize>,
+        order_key: Vec<ColumnOrder>,
+        limit: Option<usize>,
+        offset: usize,
+    ) -> Self {
+        RelationExpr::TopK {
+            input: Box::new(self),
+            group_key,
+            order_key,
+            limit,
+            offset,
         }
     }
 
