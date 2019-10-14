@@ -3,6 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+// Prefering higher-order methods to equivalent lower complexity methods is wrong.
+#![allow(clippy::or_fun_call)]
+
 use crate::RelationExpr;
 use std::collections::{HashMap, HashSet};
 
