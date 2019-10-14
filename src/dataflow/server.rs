@@ -469,36 +469,34 @@ where
         while let Some(record) = cur.get_key(&storage) {
             // Before (expensively) determining how many copies of a record
             // we have, let's eliminate records that we don't care about.
-            if !peek
+            if peek
                 .finishing
                 .filter
                 .iter()
                 .all(|predicate| predicate.eval(record) == Datum::True)
             {
-                continue;
-            }
+                // TODO: Absent value iteration might be weird (in principle
+                // the cursor *could* say no `()` values associated with the
+                // key, though I can't imagine how that would happen for this
+                // specific trace implementation).
+                let mut copies = 0;
+                cur.map_times(&storage, |time, diff| {
+                    use timely::order::PartialOrder;
+                    if time.less_equal(&peek.timestamp) {
+                        copies += diff;
+                    }
+                });
+                assert!(
+                    copies >= 0,
+                    "Negative multiplicity: {} for {:?} in view {}",
+                    copies,
+                    record,
+                    peek.name
+                );
 
-            // TODO: Absent value iteration might be weird (in principle
-            // the cursor *could* say no `()` values associated with the
-            // key, though I can't imagine how that would happen for this
-            // specific trace implementation).
-            let mut copies = 0;
-            cur.map_times(&storage, |time, diff| {
-                use timely::order::PartialOrder;
-                if time.less_equal(&peek.timestamp) {
-                    copies += diff;
+                for _ in 0..copies {
+                    results.push(record.clone());
                 }
-            });
-            assert!(
-                copies >= 0,
-                "Negative multiplicity: {} for {:?} in view {}",
-                copies,
-                record,
-                peek.name
-            );
-
-            for _ in 0..copies {
-                results.push(record.clone());
             }
             cur.step_key(&storage)
         }
