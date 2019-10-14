@@ -9,162 +9,65 @@
 //! ```rust
 //! use expr::{RelationExpr, ScalarExpr, BinaryFunc};
 //! use repr::{RelationType, ColumnType, Datum, ScalarType};
-//! use expr::transform::simplify::SimplifyJoinEqualities;
+//! use expr::transform::simplify::SimplifyFilterPredicates;
 //!
-//! let mut relation = RelationExpr::Filter {
-//!    input: Box::from(RelationExpr::Join {
-//!        inputs: vec![
-//!            RelationExpr::Get {
-//!                name: String::from("aggdata"),
-//!                typ: RelationType {
-//!                    column_types: vec![
-//!                        ColumnType {
-//!                            nullable: false,
-//!                            scalar_type: ScalarType::Int64,
-//!                        },
-//!                        ColumnType {
-//!                            nullable: false,
-//!                            scalar_type: ScalarType::Int64,
-//!                        },
-//!                    ],
-//!                    keys: vec![
-//!                        vec![],
-//!                    ],
-//!                },
-//!            },
-//!            RelationExpr::Get {
-//!                name: String::from("aggdata"),
-//!                typ: RelationType {
-//!                    column_types: vec![
-//!                        ColumnType {
-//!                            nullable: false,
-//!                            scalar_type: ScalarType::Int64,
-//!                        },
-//!                        ColumnType {
-//!                            nullable: false,
-//!                            scalar_type: ScalarType::Int64,
-//!                        },
-//!                    ],
-//!                    keys: vec![
-//!                        vec![],
-//!                    ],
-//!                },
-//!            },
-//!        ].to_owned(),
-//!        variables: vec![],
-//!    }),
-//!    predicates: vec![
-//!        ScalarExpr::CallBinary {
-//!            func: BinaryFunc::Eq,
-//!            expr1: Box::from(ScalarExpr::Column(
-//!                2,
-//!            )),
-//!            expr2: Box::from(ScalarExpr::CallBinary {
-//!                func: BinaryFunc::MulInt64,
-//!                expr1: Box::from(ScalarExpr::Column(
-//!                    0,
-//!                )),
-//!                expr2: Box::from(ScalarExpr::Column(
-//!                    0,
-//!                )),
-//!            }),
-//!        },
-//!    ].to_owned(),
-//!};
+//! // Common schema for each input.
+//! let schema = RelationType::new(vec![
+//!    ColumnType::new(ScalarType::Int32),
+//!    ColumnType::new(ScalarType::Int32),
+//! ]);
 //!
-//!SimplifyJoinEqualities.transform(&mut relation);
+//! // One piece of arbitrary data!
+//! let data = vec![Datum::Int32(1), Datum::Int32(1)];
 //!
-//!let expected = RelationExpr::Project {
-//!    input: Box::from(RelationExpr::Filter {
-//!        input: Box::from(RelationExpr::Join {
-//!            inputs: vec![
-//!                RelationExpr::Map {
-//!                    input: Box::from(RelationExpr::Get {
-//!                        name: String::from("aggdata"),
-//!                        typ: RelationType {
-//!                            column_types: vec![
-//!                                ColumnType {
-//!                                    nullable: false,
-//!                                    scalar_type: ScalarType::Int64,
-//!                                },
-//!                                ColumnType {
-//!                                    nullable: false,
-//!                                    scalar_type: ScalarType::Int64,
-//!                                },
-//!                            ],
-//!                            keys: vec![
-//!                                vec![],
-//!                            ],
-//!                        },
-//!                    }),
-//!                    scalars: vec![
-//!                           ScalarExpr::CallBinary {
-//!                                func: BinaryFunc::MulInt64,
-//!                                expr1: Box::from(ScalarExpr::Column(
-//!                                    0,
-//!                                )),
-//!                                expr2: Box::from(ScalarExpr::Column(
-//!                                    0,
-//!                                )),
-//!                            },
-//!                    ],
-//!                },
-//!                RelationExpr::Get {
-//!                    name: String::from("aggdata"),
-//!                    typ: RelationType {
-//!                        column_types: vec![
-//!                            ColumnType {
-//!                                nullable: false,
-//!                                scalar_type: ScalarType::Int64,
-//!                            },
-//!                            ColumnType {
-//!                                nullable: false,
-//!                                scalar_type: ScalarType::Int64,
-//!                            },
-//!                        ],
-//!                        keys: vec![
-//!                            vec![],
-//!                        ],
-//!                    },
-//!                },
-//!            ].to_owned(),
-//!            variables: vec![],
-//!        }),
-//!        predicates: vec![
-//!            ScalarExpr::CallBinary {
-//!                func: BinaryFunc::Eq,
-//!                expr1: Box::from(ScalarExpr::Column(
-//!                    3,
-//!                )),
-//!                expr2: Box::from(ScalarExpr::Column(
-//!                    2,
-//!                )),
-//!            },
-//!        ].to_owned(),
-//!    }),
-//!    outputs: vec![
-//!        0,
-//!        1,
-//!        3,
-//!        4,
-//!    ],
-//!};
+//! // Two arbitrary inputs!
+//! let input0 = RelationExpr::constant(vec![data.clone()], schema.clone());
+//! let input1 = RelationExpr::constant(vec![data.clone()], schema.clone());
 //!
-//! assert_eq!(relation, expected);
+//! // We will simplify Filter { Join {} } RelationExprs iff the Filter has a predicate
+//! // that:
+//! //      a) is a BinaryFunc::Eq of two ScalarExprs
+//! //      b) one or both sides of the ScalarExprs are not Literals or Columns and
+//! //         relies on exactly one input relation to be computed
+//! //      c) neither side of the Eq relies on more that one input relation
+//! // This tests an arbitrary example of such a Filter { Join {} }.
+//! let join = RelationExpr::join(
+//!     vec![input0.clone(), input1.clone()],
+//!     vec![vec![]]
+//! );
+//! let complex_equality = ScalarExpr::Column(0).call_binary(ScalarExpr::Column(0), BinaryFunc::Eq);
+//! let mut relation = RelationExpr::filter(
+//!     join,
+//!     vec![ScalarExpr::Column(1).call_binary(complex_equality.clone(), BinaryFunc::Eq)]
+//! );
+//!
+//! SimplifyFilterPredicates.transform(&mut relation);
+//!
+//! // We expect:
+//! //     1) The complex equality to be:
+//! //          a) applied as a Map {} over the correct input relation
+//! //          b) replaces in the list of Filter's predicates by a ScalarExpr::Column
+//! //             pointing to the newly Map-ped column
+//! //     2) The whole RelationExpr to be wrapped in a Project to remove the newly Map-ped column
+//! let expected_join = RelationExpr::join(vec![input0.map(vec![complex_equality]), input1], vec![vec![]]);
+//! let updated_equality = ScalarExpr::Column(1).call_binary(ScalarExpr::Column(2), BinaryFunc::Eq);
+//! let expected_relation = expected_join.filter(vec![updated_equality]).project(vec![0, 1, 3, 4]);
+//!
+//! assert_eq!(relation, expected_relation);
 //! ```
 use crate::{BinaryFunc, RelationExpr, ScalarExpr};
 use std::mem;
 
 #[derive(Debug)]
-pub struct SimplifyJoinEqualities;
+pub struct SimplifyFilterPredicates;
 
-impl super::Transform for SimplifyJoinEqualities {
+impl super::Transform for SimplifyFilterPredicates {
     fn transform(&self, relation: &mut RelationExpr) {
         self.transform(relation);
     }
 }
 
-impl SimplifyJoinEqualities {
+impl SimplifyFilterPredicates {
     pub fn transform(&self, relation: &mut RelationExpr) {
         relation.visit_mut_pre(&mut |e| {
             self.generate_simplified_relation(e);
@@ -411,7 +314,7 @@ impl SimplifyJoinEqualities {
 /// only supports one relation.
 /// A ScalarExpr supports a relation iff it requires using
 /// values from that relation.
-fn supports_complex_equality_on_input(
+fn supports_complex_equality_on_exactly_one_input(
     expr: &ScalarExpr,
     input_relation: &[usize],
 ) -> Option<usize> {
