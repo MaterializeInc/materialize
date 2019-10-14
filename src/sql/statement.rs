@@ -564,13 +564,11 @@ fn build_source(
         }
     };
 
-    let desc = avro::validate_value_schema(&value_schema)?;
-    let pkey_indices = match key_schema {
-        Some(key_schema) => avro::validate_key_schema(&key_schema, &desc)?,
-        None => Vec::new(),
-    };
-
-    let desc = desc.add_keys(pkey_indices);
+    let mut desc = avro::validate_value_schema(&value_schema)?;
+    if let Some(key_schema) = key_schema {
+        let keys = avro::validate_key_schema(&key_schema, &desc)?;
+        desc = desc.add_keys(keys);
+    }
 
     Ok(Source {
         name,
