@@ -335,6 +335,7 @@ fn supports_complex_equality_on_exactly_one_input(
             match support.len() {
                 1 => Some(support[0]),
                 _ => {
+                    // todo@jldlaughlin: should not simplify if either expr supports > 1 input relation!
                     // If ScalarExpr doesn't support any relations (support.len() == 0):
                     // there's nothing to simplify.
                     // If ScalarExpr supports >1 relations: will have to actually join,
