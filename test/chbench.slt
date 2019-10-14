@@ -957,6 +957,7 @@ FROM (
 GROUP BY c_count
 ORDER BY custdist DESC, c_count DESC
 ----
+<<<<<<< HEAD
 Let {
   id-1 = Project {
     outputs: [8 .. 29, 0 .. 7],
@@ -971,6 +972,8 @@ Let {
     }
   }
 } in
+=======
+>>>>>>> scary reduce optimization
 Project {
   outputs: [0, 1, 1, 0],
   Reduce {
@@ -980,8 +983,9 @@ Project {
       outputs: [0, 1, 1],
       Reduce {
         group_key: [30],
-        aggregates: [count(#22)],
+        aggregates: [countall(null)],
         Project {
+<<<<<<< HEAD
           outputs: [0 .. 29, 0],
           Union {
             Get { id-1 },
@@ -1003,6 +1007,17 @@ Project {
                 Get { customer }
               }
             }
+=======
+          outputs: [8 .. 29, 0 .. 8],
+          Join {
+            variables: [
+              [(1, 0), (0, 3)],
+              [(1, 1), (0, 1)],
+              [(1, 2), (0, 2)]
+            ],
+            Filter { predicates: [i32toi64 #5 > 8], Get { "order" } },
+            Get { customer }
+>>>>>>> scary reduce optimization
           }
         }
       }
