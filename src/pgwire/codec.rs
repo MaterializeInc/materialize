@@ -107,9 +107,9 @@ impl Encoder for Codec {
             // psql doesn't actually care about the number of columns.
             // It should be saved in the message if we ever need to care about it; until then,
             // 0 is fine.
-            BackendMessage::CopyOutResponse/*(n_cols)*/ => {
+            BackendMessage::CopyOutResponse /* (n_cols) */ => {
                 buf.put_u8(0); // textual format
-                buf.put_i16_be(0/*n_cols*/);
+                buf.put_i16_be(0); // n_cols
                 /*
                 for _ in 0..n_cols {
                     buf.put_i16_be(0); // textual format for this column
@@ -262,24 +262,26 @@ impl Decoder for Codec {
                     let buf = src.split_to(frame_len).freeze();
                     let buf = Cursor::new(&buf);
                     let msg = match msg_type {
-                        // initialization
+                        // Initialization and termination.
                         b's' => {
                             let version = buf.read_u32()?;
                             FrontendMessage::Startup { version }
                         }
-                        // Simple query
+                        b'X' => FrontendMessage::Terminate,
+
+                        // Simple query flow.
                         b'Q' => FrontendMessage::Query {
                             sql: buf.read_cstr()?.to_string(),
                         },
-                        // Extended query flow
+
+                        // Extended query flow.
                         b'P' => parse_parse_msg(buf)?,
                         b'D' => parse_describe(buf)?,
                         b'B' => parse_bind(buf)?,
                         b'E' => parse_execute(buf)?,
                         b'S' => FrontendMessage::Sync,
 
-                        // end
-                        b'X' => FrontendMessage::Terminate,
+                        // Invalid.
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -353,7 +355,6 @@ fn parse_describe(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     }
 }
 
-/// Parse a `Byte1('B')`
 fn parse_bind(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
@@ -393,7 +394,14 @@ fn parse_execute(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Execute { portal_name })
 }
 
-/// Read postgres-formatted items from the network
+/// Decodes data within pgwire messages.
+///
+/// The API provided is very similar to [`bytes::Buf`], but operations return
+/// errors rather than panicking. This is important for safety, as we don't want
+/// to crash if the user sends us malformatted pgwire messages.
+///
+/// There are also some special-purpose methods, like [`Cursor::read_cstr`],
+/// that are specific to pgwire messages.
 #[derive(Debug)]
 struct Cursor<'a> {
     buf: &'a [u8],
@@ -401,6 +409,8 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
+    /// Constructs a new `Cursor` from a byte slice. The cursor will begin
+    /// decoding from the beginning of the slice.
     fn new(buf: &'a [u8]) -> Cursor {
         Cursor {
             buf,
@@ -408,6 +418,7 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Returns the next byte, advancing the cursor by one byte.
     fn read_byte(&self) -> Result<u8, io::Error> {
         let byte = self
             .cur_buf()
@@ -417,7 +428,19 @@ impl<'a> Cursor<'a> {
         Ok(*byte)
     }
 
-    /// Read the first full null-terminated string in `self`
+    /// Returns the next null-terminated string. The null character is not
+    /// included the returned string. The cursor is advanced past the null-
+    /// terminated string.
+    ///
+    /// If there is no null byte remaining in the string, returns
+    /// `CodecError::StringNoTerminator`. If the string is not valid UTF-8,
+    /// returns an `io::Error` with an error kind of
+    /// `io::ErrorKind::InvalidInput`.
+    ///
+    /// NOTE(benesch): it is possible that returning a string here is wrong, and
+    /// we should be returning bytes, so that we can support messages that are
+    /// not UTF-8 encoded. At the moment, we've not discovered a need for this,
+    /// though, and using proper strings is convenient.
     fn read_cstr(&self) -> Result<&str, io::Error> {
         if let Some(pos) = self.cur_buf().iter().position(|b| *b == 0) {
             let val = std::str::from_utf8(&self.cur_buf()[..pos]).map_err(input_err)?;
@@ -428,6 +451,8 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Reads the next 16-bit unsigned integer, advancing the cursor by two
+    /// bytes.
     fn read_u16(&self) -> Result<u16, io::Error> {
         if self.cur_buf().len() < 2 {
             return Err(input_err("not enough buffer for an Int16"));
@@ -437,6 +462,8 @@ impl<'a> Cursor<'a> {
         Ok(val)
     }
 
+    /// Reads the next 32-bit unsigned integer, advancing the cursor by four
+    /// bytes.
     fn read_u32(&self) -> Result<u32, io::Error> {
         if self.cur_buf().len() < 4 {
             return Err(input_err("not enough buffer for an Int32"));
@@ -446,17 +473,20 @@ impl<'a> Cursor<'a> {
         Ok(val)
     }
 
-    /// Get the current buffer
+    /// Returns the remaining bytes to be read.
     fn cur_buf(&self) -> &[u8] {
         &self.buf[*self.offset.borrow()..]
     }
 }
 
+/// Constructs an error indicating that, while the pgwire instructions were
+/// valid, we don't currently support that functionality.
 fn unsupported_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, source.into())
 }
 
-/// An actual error in the input
+/// Constructs an error indicating that the client has violated the pgwire
+/// protocol.
 fn input_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, source.into())
 }
