@@ -201,6 +201,17 @@ impl Encoder for Codec {
     }
 }
 
+trait Pgbuf: BufMut {
+    fn put_string<T: IntoBuf>(&mut self, s: T);
+}
+
+impl<B: BufMut> Pgbuf for B {
+    fn put_string<T: IntoBuf>(&mut self, s: T) {
+        self.put(s);
+        self.put(b'\0');
+    }
+}
+
 #[derive(Debug)]
 enum DecodeState {
     Startup,
@@ -297,17 +308,6 @@ impl Decoder for Codec {
                 }
             }
         }
-    }
-}
-
-trait Pgbuf: BufMut {
-    fn put_string<T: IntoBuf>(&mut self, s: T);
-}
-
-impl<B: BufMut> Pgbuf for B {
-    fn put_string<T: IntoBuf>(&mut self, s: T) {
-        self.put(s);
-        self.put(b'\0');
     }
 }
 
