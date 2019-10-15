@@ -142,9 +142,7 @@ pub fn construct<A: Allocate>(
                                 // Dropped operators should result in a negative record for
                                 // the `operates` collection, cancelling out the initial
                                 // operator announcement.
-                                if let Some(event) =
-                                    operates_data.remove(&(event.id, worker))
-                                {
+                                if let Some(event) = operates_data.remove(&(event.id, worker)) {
                                     operates_session.give((
                                         vec![
                                             Datum::Int64(event.id as i64),
@@ -171,7 +169,9 @@ pub fn construct<A: Allocate>(
                                     // issue a deletion for channels in the dataflow.
                                     if event.addr.len() == 1 {
                                         let dataflow_id = event.addr[0];
-                                        if let Some(events) = channels_data.remove(&(dataflow_id, worker)) {
+                                        if let Some(events) =
+                                            channels_data.remove(&(dataflow_id, worker))
+                                        {
                                             for event in events {
                                                 // Retract channel description.
                                                 channels_session.give((
@@ -188,7 +188,9 @@ pub fn construct<A: Allocate>(
                                                 ));
 
                                                 // Enumerate the address of the scope containing the channel.
-                                                for (addr_slot, addr_value) in event.scope_addr.iter().enumerate() {
+                                                for (addr_slot, addr_value) in
+                                                    event.scope_addr.iter().enumerate()
+                                                {
                                                     addresses_session.give((
                                                         vec![
                                                             Datum::Int64(event.id as i64),

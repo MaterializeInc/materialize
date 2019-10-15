@@ -144,8 +144,8 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
                 .add_column("worker", ScalarType::Int64)
-                .add_column("address_slot", ScalarType::Int64)
-                .add_column("address_value", ScalarType::Int64)
+                .add_column("slot", ScalarType::Int64)
+                .add_column("value", ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
