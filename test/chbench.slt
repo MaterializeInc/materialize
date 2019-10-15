@@ -792,11 +792,7 @@ Project {
     predicates: [(i32todec #1 * 1000000dec) > #2],
     Join {
       variables: [],
-      Reduce {
-        group_key: [29],
-        aggregates: [sum(#14)],
-        Project { outputs: [0 .. 28, 0], Get { id-1 } }
-      },
+      Reduce { group_key: [0], aggregates: [sum(#14)], Get { id-1 } },
       Project {
         outputs: [1],
         Map {
