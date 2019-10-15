@@ -44,6 +44,7 @@ pub enum TimelyLog {
     Channels,
     Elapsed,
     Histogram,
+    Addresses,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
@@ -68,6 +69,7 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Channels),
             LogVariant::Timely(TimelyLog::Elapsed),
             LogVariant::Timely(TimelyLog::Histogram),
+            LogVariant::Timely(TimelyLog::Addresses),
             LogVariant::Differential(DifferentialLog::Arrangement),
             LogVariant::Differential(DifferentialLog::Sharing),
             LogVariant::Materialized(MaterializedLog::DataflowCurrent),
@@ -85,6 +87,7 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
             LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
             LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
+            LogVariant::Timely(TimelyLog::Addresses) => "logs_addresses",
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
             LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
@@ -115,15 +118,12 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
                 .add_column("worker", ScalarType::Int64)
-                .add_column("address_slot", ScalarType::Int64)
-                .add_column("address_value", ScalarType::Int64)
                 .add_column("name", ScalarType::String)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
                 .add_column("worker", ScalarType::Int64)
-                .add_column("scope", ScalarType::String)
                 .add_column("source_node", ScalarType::Int64)
                 .add_column("source_port", ScalarType::Int64)
                 .add_column("target_node", ScalarType::Int64)
@@ -140,6 +140,13 @@ impl LogVariant {
                 .add_column("duration_ns", ScalarType::Int64)
                 .add_column("count", ScalarType::Int64)
                 .add_keys(vec![0]),
+
+            LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
+                .add_column("id", ScalarType::Int64)
+                .add_column("worker", ScalarType::Int64)
+                .add_column("address_slot", ScalarType::Int64)
+                .add_column("address_value", ScalarType::Int64)
+                .add_keys(vec![0, 1]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
                 .add_column("operator", ScalarType::Int64)
