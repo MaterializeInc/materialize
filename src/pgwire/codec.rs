@@ -360,7 +360,6 @@ fn decode_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     match first_char {
         b'S' => Ok(FrontendMessage::DescribeStatement { name }),
         b'P' => Ok(FrontendMessage::DescribePortal { name }),
-        // Err(unsupported_err("Cannot handle Describe Portal")),
         other => Err(input_err(format!("Invalid describe type: {:#x?}", other))),
     }
 }
