@@ -3,6 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+// Whatever clippy...
+#![allow(clippy::clone_on_copy)]
+
 use crate::RelationExpr;
 
 /// Removes `Reduce` when the input has (compatible) keys.
