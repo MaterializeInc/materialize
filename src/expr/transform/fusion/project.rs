@@ -52,7 +52,7 @@ impl Project {
                     *key = outputs[*key];
                 }
                 for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.rewrite_columns(&outputs[..]);
+                    aggregate.expr.permute(&outputs[..]);
                 }
                 *input = Box::new(inner.take_dangerous());
             }
