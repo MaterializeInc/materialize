@@ -582,7 +582,7 @@ where
                         _,
                         _,
                         differential_dataflow::difference::DiffVector<i128>,
-                    >>(&format!("ReduceStage"))
+                    >>("ReduceStage".to_string())
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
                         "Reduce",
                         move |key, source, target| {
