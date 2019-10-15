@@ -234,14 +234,11 @@ Project {
       variables: [[(0, 2), (1, 0)]],
       Get { id-1 },
       Distinct {
-        group_key: [0],
-        Project {
-          outputs: [1, 0],
-          Join {
-            variables: [[(0, 0), (1, 0)]],
-            Get { t2 },
-            Distinct { group_key: [2], Get { id-1 } }
-          }
+        group_key: [1],
+        Join {
+          variables: [[(0, 0), (1, 0)]],
+          Get { t2 },
+          Distinct { group_key: [2], Get { id-1 } }
         }
       }
     }

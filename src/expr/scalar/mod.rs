@@ -150,6 +150,11 @@ impl ScalarExpr {
         f(self);
     }
 
+    /// Rewrites column indices with their value in `permutation`.
+    ///
+    /// This method is applicable even when `permutation` is not a
+    /// strict permutation, and it only needs to have entries for
+    /// each column referenced in `self`.
     pub fn permute(&mut self, permutation: &[usize]) {
         self.visit_mut(&mut |e| {
             if let ScalarExpr::Column(old_i) = e {
