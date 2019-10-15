@@ -4,6 +4,22 @@
 // distributed without the express permission of Materialize, Inc.
 
 //! The Materialize-specific runner for sqllogictest.
+//!
+//! slt tests expect a serialized execution of sql statements and queries.
+//! To get the same results in materialize we track current_timestamp and increment it whenever we execute a statement.
+//!
+//! The high-level workflow is:
+//!   for each record in the test file:
+//!     if record is a sql statement:
+//!       run sql in postgres, observe changes and copy them to materialize using LocalInput::Updates(..)
+//!       advance current_timestamp
+//!       promise to never send updates for times < current_timestamp using LocalInput::Watermark(..)
+//!       compare to expected results
+//!       if wrong, bail out and stop processing this file
+//!     if record is a sql query:
+//!       peek query at current_timestamp
+//!       compare to expected results
+//!       if wrong, record the error
 
 use std::borrow::ToOwned;
 use std::collections::HashMap;
