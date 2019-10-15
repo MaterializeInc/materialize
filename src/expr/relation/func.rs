@@ -379,6 +379,11 @@ impl AggregateFunc {
         }
     }
 
+    /// The output column type for the result of an aggregation.
+    ///
+    /// The output column type also contains nullability information, which
+    /// is (without further information) true for aggregations that are not
+    /// counts.
     pub fn output_type(self, input_type: ColumnType) -> ColumnType {
         let scalar_type = match self {
             AggregateFunc::Count => ScalarType::Int64,
@@ -388,7 +393,7 @@ impl AggregateFunc {
             _ => input_type.scalar_type,
         };
         let nullable = match self {
-            AggregateFunc::Count => false,
+            AggregateFunc::Count | AggregateFunc::CountAll => false,
             // max/min/sum return null on empty sets
             _ => true,
         };

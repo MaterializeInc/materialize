@@ -1446,17 +1446,19 @@ Project {
                       ],
                       Get { id-3 }
                     },
-                    Reduce {
-                      group_key: [0],
-                      aggregates: [any(true)],
-                      Project {
-                        outputs: [0, 1],
-                        Join {
-                          variables: [[(0, 0), (1, 0)]],
-                          Distinct { group_key: [1], Get { id-3 } },
-                          Filter {
-                            predicates: [#4 ~ /^co.*$/],
-                            Get { item }
+                    Project {
+                      outputs: [0, 2],
+                      Map {
+                        scalars: [true],
+                        Project {
+                          outputs: [0, 1],
+                          Join {
+                            variables: [[(0, 0), (1, 0)]],
+                            Distinct { group_key: [1], Get { id-3 } },
+                            Filter {
+                              predicates: [#4 ~ /^co.*$/],
+                              Get { item }
+                            }
                           }
                         }
                       }
