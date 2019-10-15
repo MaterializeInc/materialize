@@ -4,8 +4,10 @@
 // distributed without the express permission of Materialize, Inc.
 
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
+use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -23,6 +25,7 @@ use repr::Datum;
 
 use super::sink;
 use super::source;
+use crate::arrangement::manager::KeysValsSpine;
 use crate::arrangement::{manager::WithDrop, TraceManager};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 
@@ -54,9 +57,6 @@ pub fn build_dataflow<A: Allocate>(
                     source::local(scope, &src.name, c, worker_index == 0, local_input_mux)
                 }
             };
-
-            use crate::arrangement::manager::KeysValsSpine;
-            use differential_dataflow::operators::arrange::arrangement::Arrange;
 
             // Install arrangements indexed by any presented keys.
             // If no presented keys, use all columns for the index.
@@ -124,8 +124,11 @@ pub fn build_dataflow<A: Allocate>(
                         if let Some(traces) = manager.get_all_keyed(&name) {
                             for (key, trace) in traces {
                                 let token = trace.to_drop().clone();
-                                let (arranged, button) =
-                                    trace.import_frontier_core(scope, name, as_of.clone());
+                                let (arranged, button) = trace.import_frontier_core(
+                                    scope,
+                                    &format!("View({}, {:?})", name, key),
+                                    as_of.clone(),
+                                );
                                 let arranged = arranged.enter(region);
                                 context.set_trace(e, key, arranged);
                                 tokens.push((button.press_on_drop(), token));
@@ -143,9 +146,6 @@ pub fn build_dataflow<A: Allocate>(
                 });
 
                 let tokens = Rc::new(tokens);
-
-                use crate::arrangement::manager::KeysValsSpine;
-                use differential_dataflow::operators::arrange::arrangement::Arrange;
 
                 context.ensure_rendered(&view.relation_expr, region, worker_index);
 
@@ -395,7 +395,7 @@ where
                                 tuple,
                             )
                         })
-                        .arrange_by_key();
+                        .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", index));
 
                     // TODO: easier idioms for detecting, re-using, and stashing.
                     if self.arrangement(&input, &new_keys[..]).is_none() {
@@ -411,7 +411,10 @@ where
                                     tuple,
                                 )
                             })
-                            .arrange_by_key();
+                            .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
+                                "JoinIndex: {}",
+                                index
+                            ));
                         self.set_local(&input, &new_keys[..], new_keyed);
                     }
 
@@ -449,7 +452,6 @@ where
         } = relation_expr
         {
             use differential_dataflow::operators::reduce::ReduceCore;
-            use differential_dataflow::trace::implementations::ord::OrdValSpine;
             use timely::dataflow::operators::map::Map;
 
             let keys_clone = group_key.clone();
@@ -573,122 +575,133 @@ where
 
             // We now reduce by `keys`, performing both Abelian and non-Abelian aggregations.
             let aggregates = aggregates.clone();
-            let arrangement = exploded.reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-                "Reduce",
-                move |key, source, target| {
-                    sums.clear();
-                    sums.extend(&source[0].1[..]);
-                    for record in source[1..].iter() {
-                        for index in 0..sums.len() {
-                            sums[index] += record.1[index];
-                        }
-                    }
-
-                    // Our output will be [keys; aggregates].
-                    let mut result = Vec::with_capacity(key.len() + aggregates.len());
-                    result.extend(key.iter().cloned());
-
-                    let mut abelian_pos = 1; // <- advance past the count
-                    let mut non_abelian_pos = 0;
-
-                    for (agg, abl) in aggregates.iter().zip(abelian.iter()) {
-                        if *abl {
-                            let value = match agg.func {
-                                AggregateFunc::SumInt32 => {
-                                    let total = sums[abelian_pos] as i32;
-                                    let non_nulls = sums[abelian_pos + 1] as i32;
-                                    abelian_pos += 2;
-                                    if non_nulls > 0 {
-                                        Datum::Int32(total)
-                                    } else {
-                                        Datum::Null
-                                    }
+            let arrangement =
+                exploded
+                    .arrange_named::<OrdValSpine<
+                        Vec<Datum>,
+                        _,
+                        _,
+                        differential_dataflow::difference::DiffVector<i128>,
+                    >>(&format!("ReduceStage"))
+                    .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
+                        "Reduce",
+                        move |key, source, target| {
+                            sums.clear();
+                            sums.extend(&source[0].1[..]);
+                            for record in source[1..].iter() {
+                                for index in 0..sums.len() {
+                                    sums[index] += record.1[index];
                                 }
-                                AggregateFunc::SumInt64 => {
-                                    let total = sums[abelian_pos] as i64;
-                                    let non_nulls = sums[abelian_pos + 1] as i64;
-                                    abelian_pos += 2;
-                                    if non_nulls > 0 {
-                                        Datum::Int64(total)
-                                    } else {
-                                        Datum::Null
-                                    }
-                                }
-                                AggregateFunc::SumFloat32 => {
-                                    let total = sums[abelian_pos];
-                                    let non_nulls = sums[abelian_pos + 1];
-                                    abelian_pos += 2;
-                                    if non_nulls > 0 {
-                                        Datum::Float32(
-                                            (((total as f64) / float_scale) as f32).into(),
-                                        )
-                                    } else {
-                                        Datum::Null
-                                    }
-                                }
-                                AggregateFunc::SumFloat64 => {
-                                    let total = sums[abelian_pos];
-                                    let non_nulls = sums[abelian_pos + 1];
-                                    abelian_pos += 2;
-                                    if non_nulls > 0 {
-                                        Datum::Float64(((total as f64) / float_scale).into())
-                                    } else {
-                                        Datum::Null
-                                    }
-                                }
-                                AggregateFunc::SumDecimal => {
-                                    let total = sums[abelian_pos];
-                                    let non_nulls = sums[abelian_pos + 1];
-                                    abelian_pos += 2;
-                                    if non_nulls > 0 {
-                                        Datum::from(total)
-                                    } else {
-                                        Datum::Null
-                                    }
-                                }
-                                AggregateFunc::Count => {
-                                    // Does not count NULLs.
-                                    let total = sums[abelian_pos] as i64;
-                                    abelian_pos += 1;
-                                    Datum::Int64(total)
-                                }
-                                AggregateFunc::CountAll => {
-                                    let total = sums[0] as i64;
-                                    Datum::Int64(total)
-                                }
-                                x => panic!("Surprising Abelian aggregation: {:?}", x),
-                            };
-                            result.push(value);
-                        } else {
-                            if agg.distinct {
-                                let iter = source
-                                    .iter()
-                                    .flat_map(|(v, w)| {
-                                        if w[0] > 0 {
-                                            // <-- really should be true
-                                            Some(v[non_abelian_pos].clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect::<HashSet<_>>();
-                                result.push((agg.func.func())(iter));
-                            } else {
-                                let iter = source.iter().flat_map(|(v, w)| {
-                                    // let eval = agg.expr.eval(v);
-                                    std::iter::repeat(v[non_abelian_pos].clone())
-                                        .take(std::cmp::max(w[0], 0) as usize)
-                                });
-                                result.push((agg.func.func())(iter));
                             }
-                            non_abelian_pos += 1;
-                        }
-                    }
-                    target.push((result, 1isize));
-                },
-            );
 
-            self.set_local(relation_expr, &keys_clone[..], arrangement.clone());
+                            // Our output will be [keys; aggregates].
+                            let mut result = Vec::with_capacity(key.len() + aggregates.len());
+                            result.extend(key.iter().cloned());
+
+                            let mut abelian_pos = 1; // <- advance past the count
+                            let mut non_abelian_pos = 0;
+
+                            for (agg, abl) in aggregates.iter().zip(abelian.iter()) {
+                                if *abl {
+                                    let value = match agg.func {
+                                        AggregateFunc::SumInt32 => {
+                                            let total = sums[abelian_pos] as i32;
+                                            let non_nulls = sums[abelian_pos + 1] as i32;
+                                            abelian_pos += 2;
+                                            if non_nulls > 0 {
+                                                Datum::Int32(total)
+                                            } else {
+                                                Datum::Null
+                                            }
+                                        }
+                                        AggregateFunc::SumInt64 => {
+                                            let total = sums[abelian_pos] as i64;
+                                            let non_nulls = sums[abelian_pos + 1] as i64;
+                                            abelian_pos += 2;
+                                            if non_nulls > 0 {
+                                                Datum::Int64(total)
+                                            } else {
+                                                Datum::Null
+                                            }
+                                        }
+                                        AggregateFunc::SumFloat32 => {
+                                            let total = sums[abelian_pos];
+                                            let non_nulls = sums[abelian_pos + 1];
+                                            abelian_pos += 2;
+                                            if non_nulls > 0 {
+                                                Datum::Float32(
+                                                    (((total as f64) / float_scale) as f32).into(),
+                                                )
+                                            } else {
+                                                Datum::Null
+                                            }
+                                        }
+                                        AggregateFunc::SumFloat64 => {
+                                            let total = sums[abelian_pos];
+                                            let non_nulls = sums[abelian_pos + 1];
+                                            abelian_pos += 2;
+                                            if non_nulls > 0 {
+                                                Datum::Float64(
+                                                    ((total as f64) / float_scale).into(),
+                                                )
+                                            } else {
+                                                Datum::Null
+                                            }
+                                        }
+                                        AggregateFunc::SumDecimal => {
+                                            let total = sums[abelian_pos];
+                                            let non_nulls = sums[abelian_pos + 1];
+                                            abelian_pos += 2;
+                                            if non_nulls > 0 {
+                                                Datum::from(total)
+                                            } else {
+                                                Datum::Null
+                                            }
+                                        }
+                                        AggregateFunc::Count => {
+                                            // Does not count NULLs.
+                                            let total = sums[abelian_pos] as i64;
+                                            abelian_pos += 1;
+                                            Datum::Int64(total)
+                                        }
+                                        AggregateFunc::CountAll => {
+                                            let total = sums[0] as i64;
+                                            Datum::Int64(total)
+                                        }
+                                        x => panic!("Surprising Abelian aggregation: {:?}", x),
+                                    };
+                                    result.push(value);
+                                } else {
+                                    if agg.distinct {
+                                        let iter = source
+                                            .iter()
+                                            .flat_map(|(v, w)| {
+                                                if w[0] > 0 {
+                                                    // <-- really should be true
+                                                    Some(v[non_abelian_pos].clone())
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect::<HashSet<_>>();
+                                        result.push((agg.func.func())(iter));
+                                    } else {
+                                        let iter = source.iter().flat_map(|(v, w)| {
+                                            // let eval = agg.expr.eval(v);
+                                            std::iter::repeat(v[non_abelian_pos].clone())
+                                                .take(std::cmp::max(w[0], 0) as usize)
+                                        });
+                                        result.push((agg.func.func())(iter));
+                                    }
+                                    non_abelian_pos += 1;
+                                }
+                            }
+                            target.push((result, 1isize));
+                        },
+                    );
+
+            let index = (0..keys_clone.len()).collect::<Vec<_>>();
+            self.set_local(relation_expr, &index[..], arrangement.clone());
         }
     }
 
@@ -702,7 +715,6 @@ where
         } = relation_expr
         {
             use differential_dataflow::operators::reduce::ReduceCore;
-            use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
             let group_clone = group_key.clone();
             let order_clone = order_key.clone();
@@ -770,7 +782,8 @@ where
                     },
                 );
 
-            self.set_local(&relation_expr, &group_key[..], arrangement.clone());
+            let index = (0..group_key.len()).collect::<Vec<_>>();
+            self.set_local(relation_expr, &index[..], arrangement.clone());
         }
     }
 
@@ -802,7 +815,6 @@ where
             }
 
             use differential_dataflow::operators::reduce::ReduceCore;
-            use differential_dataflow::trace::implementations::ord::OrdValSpine;
 
             let arranged = match self.arrangement(&input, &keys[..]) {
                 Some(ArrangementFlavor::Local(local)) => local
@@ -826,7 +838,8 @@ where
                 }
             };
 
-            self.set_local(relation_expr, &keys[..], arranged.clone());
+            let index = (0..keys.len()).collect::<Vec<_>>();
+            self.set_local(relation_expr, &index[..], arranged.clone());
         }
     }
 }

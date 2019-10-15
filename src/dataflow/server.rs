@@ -480,10 +480,6 @@ where
                     .iter()
                     .all(|predicate| predicate.eval(record) == Datum::True)
                 {
-                    // TODO: Absent value iteration might be weird (in principle
-                    // the cursor *could* say no `()` values associated with the
-                    // key, though I can't imagine how that would happen for this
-                    // specific trace implementation).
                     let mut copies = 0;
                     cur.map_times(&storage, |time, diff| {
                         use timely::order::PartialOrder;
