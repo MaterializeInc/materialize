@@ -212,18 +212,25 @@ impl RelationExpr {
             | RelationExpr::Negate { input }
             | RelationExpr::Threshold { input }
             | RelationExpr::Reduce { input, .. }
-            | RelationExpr::TopK { input, .. }
-            | RelationExpr::Map { input, .. } => input.split_subquery_predicates(),
+            | RelationExpr::TopK { input, .. } => input.split_subquery_predicates(),
 
             RelationExpr::Join { left, right, .. } | RelationExpr::Union { left, right } => {
                 left.split_subquery_predicates();
                 right.split_subquery_predicates();
             }
 
+            RelationExpr::Map { input, scalars } => {
+                input.split_subquery_predicates();
+                for scalar in scalars {
+                    scalar.split_subquery_predicates();
+                }
+            }
+
             RelationExpr::Filter { input, predicates } => {
                 input.split_subquery_predicates();
                 let mut subqueries = vec![];
                 for predicate in &mut *predicates {
+                    predicate.split_subquery_predicates();
                     predicate.extract_conjucted_subqueries(&mut subqueries);
                 }
                 // TODO(benesch): we could be smarter about the order in which
@@ -587,6 +594,32 @@ impl ScalarExpr {
                 SS::Column(relation.arity() - 1)
             }
         })
+    }
+
+    /// Calls [`RelationExpr::split_subquery_predicates`] on any subqueries
+    /// contained within this scalar expression.
+    fn split_subquery_predicates(&mut self) {
+        match self {
+            ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => (),
+            ScalarExpr::Exists(input) | ScalarExpr::Select(input) => {
+                input.split_subquery_predicates()
+            }
+            ScalarExpr::CallUnary { expr, .. } => expr.split_subquery_predicates(),
+            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.split_subquery_predicates();
+                expr2.split_subquery_predicates();
+            }
+            ScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    expr.split_subquery_predicates();
+                }
+            }
+            ScalarExpr::If { cond, then, els } => {
+                cond.split_subquery_predicates();
+                then.split_subquery_predicates();
+                els.split_subquery_predicates();
+            }
+        }
     }
 
     /// Extracts subqueries from a conjuction into `out`.
