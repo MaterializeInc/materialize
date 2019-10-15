@@ -7,6 +7,7 @@ use expr as dataflow_expr;
 use ore::collections::CollectionExt;
 use repr::*;
 use std::collections::{HashMap, HashSet};
+use std::mem;
 
 // these happen to be unchanged at the moment, but there might be additions later
 pub use dataflow_expr::like;
@@ -163,12 +164,78 @@ impl RelationExpr {
     // TODO(jamii) this can't actually return an error atm - do we still need Result?
     /// Rewrite `self` into a `dataflow_expr::RelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `RelationExpr`s) into flat queries
-    pub fn decorrelate(self) -> Result<dataflow_expr::RelationExpr, failure::Error> {
+    pub fn decorrelate(mut self) -> Result<dataflow_expr::RelationExpr, failure::Error> {
         let mut id_gen = dataflow_expr::IdGen::default();
+        self.split_subquery_predicates();
         dataflow_expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
             .let_in(&mut id_gen, |id_gen, get_outer| {
                 self.applied_to(id_gen, get_outer)
             })
+    }
+
+    /// Rewrites predicates that contain subqueries so that the subqueries
+    /// appear in their own later predicate when possible.
+    ///
+    /// For example, this function rewrites this expression
+    ///
+    /// ```text
+    /// Filter {
+    ///     predicates: [a = b AND EXISTS (<subquery 1>) AND c = d AND (<subquery 2>) = e]
+    /// }
+    /// ```
+    ///
+    /// like so:
+    ///
+    /// ```text
+    /// Filter {
+    ///     predicates: [
+    ///         a = b AND c = d,
+    ///         EXISTS (<subquery>),
+    ///         (<subquery 2>) = e,
+    ///     ]
+    /// }
+    /// ```
+    ///
+    /// The rewrite causes decorrelation to incorporate prior predicates into
+    /// the outer relation upon which the subquery is evaluated. In the above
+    /// rewritten example, the `EXISTS (<subquery>)` will only be evaluated for
+    /// outer rows where `a = b AND c = d`. The second subquery, `(<subquery 2>)
+    /// = e`, will be further restricted to outer rows that match `A = b AND c =
+    /// d AND EXISTS(<subquery>)`. This can vastly reduce the cost of the
+    /// subquery, especially when the original conjuction contains join keys.
+    fn split_subquery_predicates(&mut self) {
+        match self {
+            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+
+            RelationExpr::Project { input, .. }
+            | RelationExpr::Distinct { input }
+            | RelationExpr::Negate { input }
+            | RelationExpr::Threshold { input }
+            | RelationExpr::Reduce { input, .. }
+            | RelationExpr::TopK { input, .. }
+            | RelationExpr::Map { input, .. } => input.split_subquery_predicates(),
+
+            RelationExpr::Join { left, right, .. } | RelationExpr::Union { left, right } => {
+                left.split_subquery_predicates();
+                right.split_subquery_predicates();
+            }
+
+            RelationExpr::Filter { input, predicates } => {
+                input.split_subquery_predicates();
+                let mut subqueries = vec![];
+                for predicate in &mut *predicates {
+                    predicate.extract_conjucted_subqueries(&mut subqueries);
+                }
+                // TODO(benesch): we could be smarter about the order in which
+                // we emit subqueries. At the moment we just emit in the order
+                // we discovered them, but ideally we'd emit them in an order
+                // that accounted for their cost/selectivity. E.g., low-cost,
+                // high-selectivity subqueries should go first.
+                for subquery in subqueries {
+                    predicates.push(subquery);
+                }
+            }
+        }
     }
 
     /// Return a `dataflow_expr::RelationExpr` which evaluates `self` once for each row returned by `get_outer`.
@@ -520,6 +587,55 @@ impl ScalarExpr {
                 SS::Column(relation.arity() - 1)
             }
         })
+    }
+
+    /// Extracts subqueries from a conjuction into `out`.
+    ///
+    /// For example, given an expression like
+    ///
+    /// ```text
+    /// a = b AND EXISTS (<subquery 1>) AND c = d AND (<subquery 2>) = e
+    /// ```
+    ///
+    /// this function rewrites the expression to
+    ///
+    /// ```text
+    /// a = b AND true AND c = d AND true
+    /// ```
+    ///
+    /// and returns the expression fragments `EXISTS (<subquery 1>)` and
+    //// `(<subquery 2>) = e` in the `out` vector.
+    fn extract_conjucted_subqueries(&mut self, out: &mut Vec<ScalarExpr>) {
+        fn contains_subquery(expr: &ScalarExpr) -> bool {
+            match expr {
+                ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => false,
+                ScalarExpr::Exists(_) | ScalarExpr::Select(_) => true,
+                ScalarExpr::CallUnary { expr, .. } => contains_subquery(expr),
+                ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                    contains_subquery(expr1) || contains_subquery(expr2)
+                }
+                ScalarExpr::CallVariadic { exprs, .. } => exprs.iter().any(contains_subquery),
+                ScalarExpr::If { cond, then, els } => {
+                    contains_subquery(cond) || contains_subquery(then) || contains_subquery(els)
+                }
+            }
+        }
+
+        match self {
+            ScalarExpr::CallBinary {
+                func: BinaryFunc::And,
+                expr1,
+                expr2,
+            } => {
+                expr1.extract_conjucted_subqueries(out);
+                expr2.extract_conjucted_subqueries(out);
+            }
+            expr => {
+                if contains_subquery(expr) {
+                    out.push(mem::replace(expr, LITERAL_TRUE))
+                }
+            }
+        }
     }
 
     /// Visits the column references in this scalar expression.

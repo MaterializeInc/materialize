@@ -215,3 +215,35 @@ Project {
     Distinct { group_key: [], Get { t2 } }
   }
 }
+
+query T multiline
+EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
+----
+Let {
+  id-1 = Join {
+    variables: [[(0, 0), (1, 0)]],
+    Get { t1 },
+    Get { t3 }
+  }
+} in
+Project {
+  outputs: [0 .. 2],
+  Map {
+    scalars: [true],
+    Join {
+      variables: [[(0, 2), (1, 0)]],
+      Get { id-1 },
+      Distinct {
+        group_key: [0],
+        Project {
+          outputs: [1, 0],
+          Join {
+            variables: [[(0, 0), (1, 0)]],
+            Get { t2 },
+            Distinct { group_key: [2], Get { id-1 } }
+          }
+        }
+      }
+    }
+  }
+}
