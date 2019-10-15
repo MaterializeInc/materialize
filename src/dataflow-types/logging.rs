@@ -97,6 +97,19 @@ impl LogVariant {
         }
     }
 
+    /// By which columns should the logs be indexed.
+    ///
+    /// This is distinct from the `keys` property of the type, which indicates uniqueness.
+    /// When keys exist these are good choices for indexing, but when they do not we still
+    /// require index guidance.
+    pub fn index_by(&self) -> Vec<usize> {
+        let typ = self.schema().typ().clone();
+        typ.keys
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| (0..typ.column_types.len()).collect::<Vec<_>>())
+    }
+
     pub fn schema(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
