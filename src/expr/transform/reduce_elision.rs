@@ -45,22 +45,16 @@ impl ReduceElision {
                     .map(|a| match a.func {
                         // Count is one if non-null, and zero if null.
                         AggregateFunc::Count => {
+                            let column_type = a.typ();
                             a.expr.clone().call_unary(UnaryFunc::IsNull).if_then_else(
-                                ScalarExpr::Literal(
-                                    Datum::Int64(0),
-                                    ColumnType::new(ScalarType::Int64).nullable(false),
-                                ),
-                                ScalarExpr::Literal(
-                                    Datum::Int64(1),
-                                    ColumnType::new(ScalarType::Int64).nullable(false),
-                                ),
+                                ScalarExpr::Literal(Datum::Int64(0), a.clone().nullable(false)),
+                                ScalarExpr::Literal(Datum::Int64(1), a.clone().nullable(false)),
                             )
                         }
                         // CountAll is one no matter what the input.
-                        AggregateFunc::CountAll => ScalarExpr::Literal(
-                            Datum::Int64(1),
-                            ColumnType::new(ScalarType::Int64).nullable(false),
-                        ),
+                        AggregateFunc::CountAll => {
+                            ScalarExpr::Literal(Datum::Int64(1), a.typ().nullable(false))
+                        }
                         // All other variants should return the argument to the aggregation.
                         _ => a.expr.clone(),
                     })
