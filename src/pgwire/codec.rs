@@ -270,26 +270,21 @@ impl Decoder for Codec {
                         return Ok(None);
                     }
                     let buf = src.split_to(frame_len).freeze();
-                    let mut buf = Cursor::new(&buf);
+                    let buf = Cursor::new(&buf);
                     let msg = match msg_type {
                         // Initialization and termination.
-                        b's' => {
-                            let version = buf.read_u32()?;
-                            FrontendMessage::Startup { version }
-                        }
-                        b'X' => FrontendMessage::Terminate,
+                        b's' => decode_startup(buf)?,
+                        b'X' => decode_terminate(buf)?,
 
                         // Simple query flow.
-                        b'Q' => FrontendMessage::Query {
-                            sql: buf.read_cstr()?.to_string(),
-                        },
+                        b'Q' => decode_query(buf)?,
 
                         // Extended query flow.
-                        b'P' => parse_parse_msg(buf)?,
-                        b'D' => parse_describe(buf)?,
-                        b'B' => parse_bind(buf)?,
-                        b'E' => parse_execute(buf)?,
-                        b'S' => FrontendMessage::Sync,
+                        b'P' => decode_parse(buf)?,
+                        b'D' => decode_describe(buf)?,
+                        b'B' => decode_bind(buf)?,
+                        b'E' => decode_execute(buf)?,
+                        b'S' => decode_sync(buf)?,
 
                         // Invalid.
                         _ => {
@@ -311,7 +306,23 @@ impl Decoder for Codec {
     }
 }
 
-fn parse_parse_msg(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let version = buf.read_u32()?;
+    Ok(FrontendMessage::Startup { version })
+}
+
+fn decode_terminate(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    // Nothing more to decode.
+    Ok(FrontendMessage::Terminate)
+}
+
+fn decode_query(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    Ok(FrontendMessage::Query {
+        sql: buf.read_cstr()?.to_string(),
+    })
+}
+
+fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?;
     let sql = buf.read_cstr()?;
 
@@ -343,7 +354,7 @@ fn parse_parse_msg(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(msg)
 }
 
-fn parse_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let first_char = buf.read_byte()?;
     let name = buf.read_cstr()?.to_string();
     match first_char {
@@ -354,7 +365,7 @@ fn parse_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     }
 }
 
-fn parse_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
@@ -380,7 +391,7 @@ fn parse_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     })
 }
 
-fn parse_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let max_rows = buf.read_u32()?;
     if max_rows > 0 {
@@ -391,6 +402,11 @@ fn parse_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
         );
     }
     Ok(FrontendMessage::Execute { portal_name })
+}
+
+fn decode_sync(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    // Nothing more to decode.
+    Ok(FrontendMessage::Sync)
 }
 
 /// Decodes data within pgwire messages.
