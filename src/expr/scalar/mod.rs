@@ -259,6 +259,15 @@ impl ScalarExpr {
         });
     }
 
+    /// Rewrites each column reference with the index in `columns`.
+    pub fn rewrite_columns(&mut self, columns: &[usize]) {
+        self.visit_mut(&mut |e| {
+            if let ScalarExpr::Column(col) = e {
+                *col = columns[*col];
+            }
+        })
+    }
+
     /// Adds any columns that *must* be non-Null for `self` to be non-Null.
     pub fn non_null_requirements(&self, columns: &mut HashSet<usize>) {
         match self {

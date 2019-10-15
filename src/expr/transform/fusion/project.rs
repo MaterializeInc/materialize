@@ -34,5 +34,28 @@ impl Project {
                 *relation = input.take_dangerous();
             }
         }
+
+        // Any reduce will absorb any project. Also, this happens often.
+        if let RelationExpr::Reduce {
+            input,
+            group_key,
+            aggregates,
+        } = relation
+        {
+            if let RelationExpr::Project {
+                input: inner,
+                outputs,
+            } = &mut **input
+            {
+                // Rewrite the group key using `inner` columns.
+                for key in group_key.iter_mut() {
+                    *key = outputs[*key];
+                }
+                for aggregate in aggregates.iter_mut() {
+                    aggregate.expr.rewrite_columns(&outputs[..]);
+                }
+                *input = Box::new(inner.take_dangerous());
+            }
+        }
     }
 }
