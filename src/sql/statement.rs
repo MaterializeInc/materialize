@@ -90,7 +90,7 @@ impl Planner {
         portal_name: &str,
     ) -> Result<Plan, failure::Error> {
         let portal = session
-            .get_portal(portal_name)
+            .get_portal(portal_name) // name for a parsed statement
             .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
         let prepared = session
             .get_prepared_statement(&portal.statement_name)
@@ -101,6 +101,7 @@ impl Planner {
                     portal.statement_name
                 )
             })?;
+        // instead of Peek, check what kind of statement prepared is -- do matching thing.
         Ok(Plan::Peek {
             source: prepared.source().clone(),
             desc: prepared.desc().clone(),
@@ -482,8 +483,8 @@ impl Planner {
                     name.clone(),
                     PreparedStatement::new(sql, relation_expr, desc, finishing),
                 );
-                Ok(Plan::Parsed { name })
-            }
+                Ok(Plan::Parsed { name }) // Parsed Statement or Parsed Everything Else
+            } // Not a query, return Parsed Everything Else.
             _ => bail!("PARSE unsupported for sql statement: {:?}", sql),
         }
     }
