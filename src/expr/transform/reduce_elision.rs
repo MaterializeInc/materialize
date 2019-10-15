@@ -32,20 +32,20 @@ impl ReduceElision {
             aggregates,
         } = relation
         {
-            let input_typ = input.typ();
-            if input_typ
+            let input_type = input.typ();
+            if input_type
                 .keys
                 .iter()
                 .any(|keys| keys.iter().all(|k| group_key.contains(k)))
             {
                 use crate::{AggregateFunc, ScalarExpr, UnaryFunc};
-                use repr::{ColumnType, Datum, ScalarType};
+                use repr::Datum;
                 let map_scalars = aggregates
                     .iter()
                     .map(|a| match a.func {
                         // Count is one if non-null, and zero if null.
                         AggregateFunc::Count => {
-                            let column_type = a.typ();
+                            let column_type = a.typ(&input_type);
                             a.expr.clone().call_unary(UnaryFunc::IsNull).if_then_else(
                                 ScalarExpr::Literal(
                                     Datum::Int64(0),
@@ -59,7 +59,7 @@ impl ReduceElision {
                         }
                         // CountAll is one no matter what the input.
                         AggregateFunc::CountAll => {
-                            ScalarExpr::Literal(Datum::Int64(1), a.typ().nullable(false))
+                            ScalarExpr::Literal(Datum::Int64(1), a.typ(&input_type).nullable(false))
                         }
                         // All other variants should return the argument to the aggregation.
                         _ => a.expr.clone(),
@@ -74,13 +74,13 @@ impl ReduceElision {
                 }
 
                 // We may require a project.
-                if group_key.len() != input_typ.column_types.len()
+                if group_key.len() != input_type.column_types.len()
                     || group_key.iter().enumerate().any(|(x, y)| x != *y)
                 {
                     let mut projection = group_key.clone();
                     projection.extend(
-                        input_typ.column_types.len()
-                            ..(input_typ.column_types.len() + aggregates.len()),
+                        input_type.column_types.len()
+                            ..(input_type.column_types.len() + aggregates.len()),
                     );
                     result = result.project(projection);
                 }
