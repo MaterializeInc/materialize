@@ -747,59 +747,6 @@ Project {
   }
 }
 
-
-# Query 11
-query T multiline
-EXPLAIN PLAN FOR
-SELECT s_i_id, sum(s_order_cnt) AS ordercount
-FROM stock, supplier, nation
-WHERE s_su_suppkey = su_suppkey
-AND su_nationkey = n_nationkey
-AND n_name = 'GERMANY'
-GROUP BY s_i_id
-HAVING sum(s_order_cnt) > (
-    SELECT sum(s_order_cnt) * 0.005
-    FROM stock, supplier, nation
-    WHERE s_su_suppkey = su_suppkey
-    AND su_nationkey = n_nationkey
-    AND n_name = 'GERMANY'
-)
-ORDER BY ordercount DESC
-----
-Let {
-  id-1 = Project {
-    outputs: [0 .. 24, 26 .. 29],
-    Join {
-      variables: [[(0, 17), (1, 7)], [(1, 3), (2, 0)]],
-      Get { stock },
-      Map { scalars: [i32toi64 #0], Get { supplier } },
-      Filter { predicates: [#1 = "GERMANY"], Get { nation } }
-    }
-  }
-} in
-Project {
-  outputs: [0, 1, 1],
-  Filter {
-    predicates: [(i32todec #1 * 1000000dec) > #2],
-    Join {
-      variables: [],
-      Reduce { group_key: [0], aggregates: [sum(#14)], Get { id-1 } },
-      Project {
-        outputs: [1],
-        Map {
-          scalars: [(i32todec #0 * 1000dec) * 5dec],
-          Reduce {
-            group_key: [],
-            aggregates: [sum(#14)],
-            Get { id-1 }
-          }
-        }
-      }
-    }
-  }
-}
-
-
 # Query 11
 query T multiline
 EXPLAIN PLAN FOR
