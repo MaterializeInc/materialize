@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 #include <mz-config.h>
+#include "materialized.h"
 
 const mz::Config& mz::defaultConfig() {
     static Config singleton {
@@ -41,10 +42,10 @@ const mz::Config& mz::defaultConfig() {
     return singleton;
 }
 
-const std::unordered_map<std::string, std::string> &mz::allHQueries() {
-    static std::unordered_map<std::string, std::string> singleton {
+const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
+    static std::unordered_map<std::string, ViewDefinition> singleton {
             {"q01",
-                    "SELECT\n"
+             {"SELECT\n"
                     "    ol_number,\n"
                     "    sum(ol_quantity) AS sum_qty,\n"
                     "    sum(ol_amount) AS sum_amount,\n"
@@ -53,10 +54,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "    count(*) AS count_order\n"
                     "FROM mysql_tpcch_orderline\n"
                     "WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "GROUP BY ol_number\n"
+                    "GROUP BY ol_number\n",
+
+                    "ol_number", std::nullopt}
             },
             {"q02",
-                    "SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment\n"
+                    {"SELECT su_suppkey, su_name, n_name, i_id, i_name, su_address, su_phone, su_comment\n"
                     "FROM\n"
                     "    mysql_tpcch_item, mysql_tpcch_supplier, mysql_tpcch_stock, mysql_tpcch_nation, mysql_tpcch_region,\n"
                     "    (\n"
@@ -77,10 +80,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND i_data like '%b'\n"
                     "AND r_name like 'EUROP%'\n"
                     "AND i_id = m_i_id\n"
-                    "AND s_quantity = m_s_quantity\n"
+                    "AND s_quantity = m_s_quantity\n",
+
+                    "n_name, su_name, i_id", std::nullopt}
             },
             {"q03",
-                    "SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d\n"
+                    {"SELECT ol_o_id, ol_w_id, ol_d_id, sum(ol_amount) AS revenue, o_entry_d\n"
                     "FROM mysql_tpcch_customer, mysql_tpcch_neworder, mysql_tpcch_order, mysql_tpcch_orderline\n"
                     "WHERE c_state LIKE 'A%'\n"
                     "AND c_id = o_c_id\n"
@@ -93,10 +98,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND ol_d_id = o_d_id\n"
                     "AND ol_o_id = o_id\n"
                     "AND o_entry_d > TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d\n"
+                    "GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d\n",
+
+                    "revenue desc, o_entry_d", std::nullopt}
             },
             {"q04",
-                    "SELECT o_ol_cnt, count(*) AS order_count\n"
+                    {"SELECT o_ol_cnt, count(*) AS order_count\n"
                     "FROM mysql_tpcch_order\n"
                     "WHERE o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
                     "AND o_entry_d < TIMESTAMP '2012-01-02 00:00:00.000000'\n"
@@ -108,10 +115,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "    AND o_d_id = ol_d_id\n"
                     "    AND ol_delivery_d >= o_entry_d\n"
                     ")\n"
-                    "GROUP BY o_ol_cnt\n"
+                    "GROUP BY o_ol_cnt\n",
+
+                    "o_ol_cnt", std::nullopt}
             },
             {"q05",
-                    "SELECT\n"
+                    {"SELECT\n"
                     "    n_name,\n"
                     "    sum(ol_amount) AS revenue\n"
                     "FROM mysql_tpcch_customer, mysql_tpcch_order, mysql_tpcch_orderline, mysql_tpcch_stock, mysql_tpcch_supplier, mysql_tpcch_nation, mysql_tpcch_region\n"
@@ -129,17 +138,21 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND n_regionkey = r_regionkey\n"
                     "AND r_name = 'EUROPE'\n"
                     "AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "GROUP BY n_name\n"
+                    "GROUP BY n_name\n",
+
+                    "revenue desc", std::nullopt}
             },
             {"q06",
-                    "SELECT sum(ol_amount) AS revenue\n"
+                    {"SELECT sum(ol_amount) AS revenue\n"
                     "FROM mysql_tpcch_orderline\n"
                     "WHERE ol_delivery_d >= TIMESTAMP '1999-01-01 00:00:00.000000'\n"
                     "AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'\n"
-                    "AND ol_quantity BETWEEN 1 AND 100000\n"
+                    "AND ol_quantity BETWEEN 1 AND 100000\n",
+
+                    std::nullopt, std::nullopt}
             },
             {"q07",
-                    "SELECT\n"
+                    {"SELECT\n"
                     "    su_nationkey AS supp_nation,\n"
                     "    substr(c_state,1,1) AS cust_nation,\n"
                     "    extract(year FROM o_entry_d) AS l_year,\n"
@@ -162,10 +175,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "    (n1.n_name = 'CAMBODIA' AND n2.n_name = 'GERMANY')\n"
                     ")\n"
                     "AND ol_delivery_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2012-01-02 00:00:00.000000'\n"
-                    "GROUP BY su_nationkey, substr(c_state, 1, 1), extract(year FROM o_entry_d)\n"
+                    "GROUP BY su_nationkey, substr(c_state, 1, 1), extract(year FROM o_entry_d)\n",
+
+                    "su_nationkey, cust_nation, l_year", std::nullopt}
             },
             {"q08",
-                    "SELECT\n"
+                    {"SELECT\n"
                     "    extract(year FROM o_entry_d) AS l_year,\n"
                     "    sum(CASE WHEN n2.n_name = 'GERMANY' THEN ol_amount ELSE 0 END) / sum(ol_amount) AS mkt_share\n"
                     "FROM mysql_tpcch_item, mysql_tpcch_supplier, mysql_tpcch_stock, mysql_tpcch_orderline, mysql_tpcch_order, mysql_tpcch_customer, mysql_tpcch_nation n1, mysql_tpcch_nation n2, mysql_tpcch_region\n"
@@ -187,10 +202,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND o_entry_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2012-01-02 00:00:00.000000'\n"
                     "AND i_data like '%b'\n"
                     "AND i_id = ol_i_id\n"
-                    "GROUP BY extract(year FROM o_entry_d)\n"
+                    "GROUP BY extract(year FROM o_entry_d)\n",
+
+                    "l_year", std::nullopt}
             },
             {"q09",
-                    "SELECT\n"
+                    {"SELECT\n"
                     "    n_name, extract(year FROM o_entry_d) AS l_year,\n"
                     "    sum(ol_amount) AS sum_profit\n"
                     "FROM mysql_tpcch_item, mysql_tpcch_stock, mysql_tpcch_supplier, mysql_tpcch_orderline, mysql_tpcch_order, mysql_tpcch_nation\n"
@@ -203,10 +220,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND ol_i_id = i_id\n"
                     "AND su_nationkey = n_nationkey\n"
                     "AND i_data like '%BB'\n"
-                    "GROUP BY n_name, extract(year FROM o_entry_d)\n"
+                    "GROUP BY n_name, extract(year FROM o_entry_d)\n",
+
+                    "n_name, l_year desc", std::nullopt}
             },
             {"q10",
-                    "SELECT\n"
+                    {"SELECT\n"
                     "    c_id, c_last, sum(ol_amount) AS revenue, c_city, c_phone, n_name\n"
                     "FROM mysql_tpcch_customer, mysql_tpcch_order, mysql_tpcch_orderline, mysql_tpcch_nation\n"
                     "WHERE c_id = o_c_id\n"
@@ -218,10 +237,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
                     "AND o_entry_d <= ol_delivery_d\n"
                     "AND n_nationkey = c_n_nationkey\n"
-                    "GROUP BY c_id, c_last, c_city, c_phone, n_name\n"
+                    "GROUP BY c_id, c_last, c_city, c_phone, n_name\n",
+
+                    "revenue desc", std::nullopt}
             },
             {"q11",
-                    "SELECT s_i_id, sum(s_order_cnt) AS ordercount\n"
+                    {"SELECT s_i_id, sum(s_order_cnt) AS ordercount\n"
                     "FROM mysql_tpcch_stock, mysql_tpcch_supplier, mysql_tpcch_nation\n"
                     "WHERE s_su_suppkey = su_suppkey\n"
                     "AND su_nationkey = n_nationkey\n"
@@ -233,25 +254,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "    WHERE s_su_suppkey = su_suppkey\n"
                     "    AND su_nationkey = n_nationkey\n"
                     "    AND n_name = 'GERMANY'\n"
-                    ")\n"
+                    ")\n",
+
+                    "ordercount desc", std::nullopt}
             },
             {"q12",
-                    "SELECT s_i_id, sum(s_order_cnt) AS ordercount\n"
-                    "FROM mysql_tpcch_stock, mysql_tpcch_supplier, mysql_tpcch_nation\n"
-                    "WHERE s_su_suppkey = su_suppkey\n"
-                    "AND su_nationkey = n_nationkey\n"
-                    "AND n_name = 'GERMANY'\n"
-                    "GROUP BY s_i_id\n"
-                    "HAVING sum(s_order_cnt) > (\n"
-                    "    SELECT sum(s_order_cnt) * 0.005\n"
-                    "    FROM mysql_tpcch_stock, mysql_tpcch_supplier, mysql_tpcch_nation\n"
-                    "    WHERE s_su_suppkey = su_suppkey\n"
-                    "    AND su_nationkey = n_nationkey\n"
-                    "    AND n_name = 'GERMANY'\n"
-                    ")\n"
-            },
-            {"q13",
-                    "SELECT\n"
+                    {"SELECT\n"
                     "    o_ol_cnt,\n"
                     "    sum(CASE WHEN o_carrier_id = 1 OR o_carrier_id = 2 THEN 1 ELSE 0 END) AS high_line_count,\n"
                     "    sum(CASE WHEN o_carrier_id <> 1 AND o_carrier_id <> 2 THEN 1 ELSE 0 END) AS low_line_count\n"
@@ -262,10 +270,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND ol_o_id = o_id\n"
                     "AND o_entry_d <= ol_delivery_d\n"
                     "AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'\n"
-                    "GROUP BY o_ol_cnt\n"
+                    "GROUP BY o_ol_cnt\n",
+
+                    "o_ol_cnt", std::nullopt}
             },
-            {"q14",
-                    "SELECT\n"
+            {"q13",
+                    {"SELECT\n"
                     "    c_count, count(*) AS custdist\n"
                     "FROM (\n"
                     "    SELECT c_id, count(o_id) as c_count\n"
@@ -275,18 +285,22 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "    )\n"
                     "    GROUP BY c_id\n"
                     ") AS c_orders\n"
-                    "GROUP BY c_count\n"
+                    "GROUP BY c_count\n",
+
+                    "custdist desc, c_count desc", std::nullopt}
             },
-            {"q15",
-                    "SELECT\n"
+            {"q14",
+                    {"SELECT\n"
                     "    100.00 * sum(CASE WHEN i_data LIKE 'PR%' THEN ol_amount ELSE 0 END) / (1 + sum(ol_amount)) AS promo_revenue\n"
                     "FROM mysql_tpcch_orderline, mysql_tpcch_item\n"
                     "WHERE ol_i_id = i_id\n"
                     "AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'\n"
+                    "AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'\n",
+
+                    std::nullopt, std::nullopt}
             },
-            {"q16",
-                    "SELECT su_suppkey, su_name, su_address, su_phone, total_revenue\n"
+            {"q15",
+                    {"SELECT su_suppkey, su_name, su_address, su_phone, total_revenue\n"
                     "FROM\n"
                     "    mysql_tpcch_supplier,\n"
                     "    (\n"
@@ -312,10 +326,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "        AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
                     "        GROUP BY s_su_suppkey\n"
                     "    ) AS revenue\n"
-                    ")\n"
+                    ")\n",
+
+                    "su_suppkey", std::nullopt}
             },
-            {"q17",
-                    "SELECT\n"
+            {"q16",
+                    {"SELECT\n"
                     "    i_name,\n"
                     "    substr(i_data, 1, 3) AS brand,\n"
                     "    i_price,\n"
@@ -326,10 +342,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND (\n"
                     "    s_su_suppkey NOT IN (SELECT su_suppkey FROM mysql_tpcch_supplier WHERE su_comment like '%bad%')\n"
                     ")\n"
-                    "GROUP BY i_name, substr(i_data, 1, 3), i_price\n"
+                    "GROUP BY i_name, substr(i_data, 1, 3), i_price\n",
+
+                    "supplier_cnt desc", std::nullopt}
             },
-            {"q18",
-                    "SELECT\n"
+            {"q17",
+                    {"SELECT\n"
                     "    sum(ol_amount) / 2.0 AS avg_yearly\n"
                     "FROM\n"
                     "    mysql_tpcch_orderline,\n"
@@ -340,10 +358,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "        GROUP BY i_id\n"
                     "    ) t\n"
                     "WHERE ol_i_id = t.i_id\n"
-                    "AND ol_quantity < t.a\n"
+                    "AND ol_quantity < t.a\n",
+
+                    std::nullopt, std::nullopt}
             },
-            {"q19",
-                    "SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount)\n"
+            {"q18",
+                    {"SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount)\n"
                     "FROM mysql_tpcch_customer, mysql_tpcch_order, mysql_tpcch_orderline\n"
                     "WHERE c_id = o_c_id\n"
                     "AND c_w_id = o_w_id\n"
@@ -352,10 +372,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "AND ol_d_id = o_d_id\n"
                     "AND ol_o_id = o_id\n"
                     "GROUP BY o_id, o_w_id, o_d_id, c_id, c_last, o_entry_d, o_ol_cnt\n"
-                    "HAVING sum(ol_amount) > 200\n"
+                    "HAVING sum(ol_amount) > 200\n",
+
+                    "sum(ol_amount)", std::nullopt}
             },
-            {"q20",
-                    "SELECT sum(ol_amount) AS revenue\n"
+            {"q19",
+                    {"SELECT sum(ol_amount) AS revenue\n"
                     "FROM mysql_tpcch_orderline, mysql_tpcch_item\n"
                     "WHERE (\n"
                     "    ol_i_id = i_id\n"
@@ -378,10 +400,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "    AND ol_quantity <= 10\n"
                     "    AND i_price BETWEEN 1 AND 400000\n"
                     "    AND ol_w_id in (1, 5, 3)\n"
-                    ")\n"
+                    ")\n",
+
+                    std::nullopt, std::nullopt}
             },
-            {"q21",
-                    "SELECT su_name, su_address\n"
+            {"q20",
+                    {"SELECT su_name, su_address\n"
                     "FROM mysql_tpcch_supplier, mysql_tpcch_nation\n"
                     "WHERE su_suppkey IN (\n"
                     "    SELECT mod(s_i_id * s_w_id, 10000)\n"
@@ -394,9 +418,11 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     ")\n"
                     "AND su_nationkey = n_nationkey\n"
                     "AND n_name = 'GERMANY'\n"
+
+                    "su_name", std::nullopt}
             },
-            {"q22",
-                    "SELECT\n"
+            {"q21",
+                    {"SELECT\n"
                     "    su_name, count(*) as numwait\n"
                     "FROM\n"
                     "    mysql_tpcch_supplier, mysql_tpcch_orderline l1, mysql_tpcch_order, mysql_tpcch_stock, mysql_tpcch_nation\n"
@@ -417,10 +443,12 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     ")\n"
                     "AND su_nationkey = n_nationkey\n"
                     "AND n_name = 'GERMANY'\n"
-                    "GROUP BY su_name\n"
+                    "GROUP BY su_name\n",
+
+                    "numwait desc, su_name", std::nullopt}
             },
-            {"q23",
-                    "SELECT\n"
+            {"q22",
+                    {"SELECT\n"
                     "    substr(c_state, 1, 1) AS country,\n"
                     "    count(*) AS numcust,\n"
                     "    sum(c_balance) AS totacctbal\n"
@@ -437,7 +465,9 @@ const std::unordered_map<std::string, std::string> &mz::allHQueries() {
                     "    FROM mysql_tpcch_order\n"
                     "    WHERE o_c_id = c_id AND o_w_id = c_w_id AND o_d_id = c_d_id\n"
                     ")\n"
-                    "GROUP BY substr(c_state, 1, 1)\n"
+                    "GROUP BY substr(c_state, 1, 1)\n",
+
+                    "substr(c_state, 1, 1)", std::nullopt}
             }
     };
     return singleton;

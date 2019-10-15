@@ -18,18 +18,21 @@ limitations under the License.
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "materialized.h"
 
 namespace mz {
-struct Config {
+
+    struct Config {
     std::unordered_set<std::string> expectedSources;
     std::string viewPattern;
     std::string materializedUrl;
     std::string kafkaUrl;
     std::string schemaRegistryUrl;
-    std::vector<std::pair<std::string, std::string>> hQueries;
+    std::vector<std::pair<std::string, ViewDefinition>> hQueries;
 };
 
 const Config& defaultConfig(); // The config that works with our current docker-compose setup
 
-const std::unordered_map<std::string, std::string>& allHQueries();
+
+const std::unordered_map<std::string, ViewDefinition>& allHQueries();
 }

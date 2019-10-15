@@ -41,6 +41,7 @@ limitations under the License.
 #include <thread>
 #include <vector>
 #include <utility>
+#include <assert.h>
 
 enum class RunState {
     off,
@@ -105,6 +106,21 @@ static void* analyticalThread(void* args) {
     return nullptr;
 }
 
+static void peekThread(pqxx::connection* pc, const mz::Config* pConfig, const std::atomic<RunState> *pRunState) {
+    const mz::Config& config = *pConfig;
+    const std::atomic<RunState>& runState = *pRunState;
+    pqxx::connection& c = *pc;
+    // FIXME
+    assert(!config.hQueries.empty());
+    auto iQuery = config.hQueries.begin();
+    while (runState == RunState::warmup) {
+        sleep(1);
+    }
+    while (runState == RunState::run) {
+        mz::peekView(c, iQuery->first, iQuery->second.order, iQuery->second.limit);
+    }
+}
+
 static void createSourcesThread(mz::Config config) {
     const auto& connUrl = config.materializedUrl;
     auto& expected = config.expectedSources;
@@ -125,9 +141,9 @@ static void createSourcesThread(mz::Config config) {
         sleep(1);
     }
     std::cout << "Done creating expected sources" << std::endl;
-    for (auto& vp: config.hQueries) {
+    for (const auto& vp: config.hQueries) {
         std::cout << "Creating query " << vp.first << std::endl;
-        mz::createMaterializedView(c, std::move(vp.first), std::move(vp.second));
+        mz::createMaterializedView(c, vp.first, vp.second.query);
     }
 }
 
@@ -468,7 +484,7 @@ static int run(int argc, char* argv[]) {
         const auto& allHQueries = mz::allHQueries();
         for (const auto& view: mzViews) {
             if (auto i = allHQueries.find(view); i != allHQueries.end()) {
-                mzCfg.hQueries.push_back(*i);
+                mzCfg.hQueries.emplace_back(*i);
             } else {
                 errx(1, "No such view: %s", view.c_str());
             }

@@ -20,6 +20,8 @@ limitations under the License.
 #include <optional>
 #include <string>
 #include <exception>
+#include <unordered_set>
+#include <unordered_map>
 
 namespace mz {
 class MaterializedException : public std::exception {
@@ -33,12 +35,21 @@ public:
     explicit UnexpectedCreateSourcesResult(const std::string &explanation);
 };
 
+struct ViewDefinition {
+    std::string query;
+    std::optional<std::string> order;
+    std::optional<unsigned> limit;
+};
+
 std::vector<std::string> createAllSources(
         pqxx::connection& c,
         std::string from,
         std::string registry,
         std::optional<std::string> like);
 
-void createMaterializedView(pqxx::connection& c, std::string&& name, std::string&& query);
+void createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query);
+
+pqxx::result peekView(pqxx::connection& c, const std::string& name, const std::optional<std::string>& order,
+        std::optional<unsigned> limit);
 }
 

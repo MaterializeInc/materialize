@@ -36,9 +36,23 @@ mz::createAllSources(pqxx::connection &c, std::string from, std::string registry
     return results;
 }
 
-void mz::createMaterializedView(pqxx::connection& c, std::string&& name, std::string&& query) {
+void mz::createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query) {
     pqxx::nontransaction w(c);
-    w.exec0("CREATE VIEW " + std::move(name) + " AS " + std::move(query));
+    w.exec0("CREATE VIEW " + name + " AS " + query);
+}
+
+pqxx::result mz::peekView(pqxx::connection &c, const std::string &name, const std::optional<std::string> &order,
+                  std::optional<unsigned> limit) {
+    std::string query = "SELECT * FROM " + name;
+    if (order) {
+        query += " ORDER BY " + order.value();
+    }
+    if (limit) {
+        query += " LIMIT " + std::to_string(limit.value());
+    }
+
+    pqxx::nontransaction w(c);
+    return w.exec(query);
 }
 
 const char *mz::UnexpectedCreateSourcesResult::what() const noexcept {
