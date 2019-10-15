@@ -11,7 +11,6 @@
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::convert::TryFrom;
 
 use byteorder::{ByteOrder, NetworkEndian};
@@ -260,7 +259,7 @@ impl Decoder for Codec {
                         return Ok(None);
                     }
                     let buf = src.split_to(frame_len).freeze();
-                    let buf = Cursor::new(&buf);
+                    let mut buf = Cursor::new(&buf);
                     let msg = match msg_type {
                         // Initialization and termination.
                         b's' => {
@@ -312,7 +311,7 @@ impl<B: BufMut> Pgbuf for B {
     }
 }
 
-fn parse_parse_msg(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn parse_parse_msg(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?;
     let sql = buf.read_cstr()?;
 
@@ -344,7 +343,7 @@ fn parse_parse_msg(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(msg)
 }
 
-fn parse_describe(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn parse_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let first_char = buf.read_byte()?;
     let name = buf.read_cstr()?.to_string();
     match first_char {
@@ -355,7 +354,7 @@ fn parse_describe(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     }
 }
 
-fn parse_bind(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn parse_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
@@ -381,7 +380,7 @@ fn parse_bind(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     })
 }
 
-fn parse_execute(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn parse_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let max_rows = buf.read_u32()?;
     if max_rows > 0 {
@@ -405,26 +404,22 @@ fn parse_execute(buf: Cursor) -> Result<FrontendMessage, io::Error> {
 #[derive(Debug)]
 struct Cursor<'a> {
     buf: &'a [u8],
-    offset: RefCell<usize>,
 }
 
 impl<'a> Cursor<'a> {
     /// Constructs a new `Cursor` from a byte slice. The cursor will begin
     /// decoding from the beginning of the slice.
     fn new(buf: &'a [u8]) -> Cursor {
-        Cursor {
-            buf,
-            offset: RefCell::new(0),
-        }
+        Cursor { buf }
     }
 
     /// Returns the next byte, advancing the cursor by one byte.
-    fn read_byte(&self) -> Result<u8, io::Error> {
+    fn read_byte(&mut self) -> Result<u8, io::Error> {
         let byte = self
-            .cur_buf()
+            .buf
             .get(0)
             .ok_or_else(|| input_err("No byte to read"))?;
-        *self.offset.borrow_mut() += 1;
+        self.advance(1);
         Ok(*byte)
     }
 
@@ -441,10 +436,10 @@ impl<'a> Cursor<'a> {
     /// we should be returning bytes, so that we can support messages that are
     /// not UTF-8 encoded. At the moment, we've not discovered a need for this,
     /// though, and using proper strings is convenient.
-    fn read_cstr(&self) -> Result<&str, io::Error> {
-        if let Some(pos) = self.cur_buf().iter().position(|b| *b == 0) {
-            let val = std::str::from_utf8(&self.cur_buf()[..pos]).map_err(input_err)?;
-            *self.offset.borrow_mut() += pos + 1;
+    fn read_cstr(&mut self) -> Result<&'a str, io::Error> {
+        if let Some(pos) = self.buf.iter().position(|b| *b == 0) {
+            let val = std::str::from_utf8(&self.buf[..pos]).map_err(input_err)?;
+            self.advance(pos + 1);
             Ok(val)
         } else {
             Err(input_err(CodecError::StringNoTerminator))
@@ -453,29 +448,29 @@ impl<'a> Cursor<'a> {
 
     /// Reads the next 16-bit unsigned integer, advancing the cursor by two
     /// bytes.
-    fn read_u16(&self) -> Result<u16, io::Error> {
-        if self.cur_buf().len() < 2 {
+    fn read_u16(&mut self) -> Result<u16, io::Error> {
+        if self.buf.len() < 2 {
             return Err(input_err("not enough buffer for an Int16"));
         }
-        let val = NetworkEndian::read_u16(self.cur_buf());
-        *self.offset.borrow_mut() += 2;
+        let val = NetworkEndian::read_u16(self.buf);
+        self.advance(2);
         Ok(val)
     }
 
     /// Reads the next 32-bit unsigned integer, advancing the cursor by four
     /// bytes.
-    fn read_u32(&self) -> Result<u32, io::Error> {
-        if self.cur_buf().len() < 4 {
+    fn read_u32(&mut self) -> Result<u32, io::Error> {
+        if self.buf.len() < 4 {
             return Err(input_err("not enough buffer for an Int32"));
         }
-        let val = NetworkEndian::read_u32(self.cur_buf());
-        *self.offset.borrow_mut() += 4;
+        let val = NetworkEndian::read_u32(self.buf);
+        self.advance(4);
         Ok(val)
     }
 
-    /// Returns the remaining bytes to be read.
-    fn cur_buf(&self) -> &[u8] {
-        &self.buf[*self.offset.borrow()..]
+    /// Advances the cursor by `n` bytes.
+    fn advance(&mut self, n: usize) {
+        self.buf = &self.buf[n..]
     }
 }
 
