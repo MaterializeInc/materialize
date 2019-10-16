@@ -16,9 +16,9 @@
 //! produces, though they can, in theory, be provided by something other than a
 //! pgwire server.
 
-use dataflow_types::Update;
+use dataflow_types::{PeekResponse, Update};
 use futures::Future;
-use repr::{Datum, RelationDesc};
+use repr::RelationDesc;
 use sql::Session;
 use std::fmt;
 
@@ -74,6 +74,9 @@ pub enum CommandKind {
 
     /// Execute a bound portal.
     Execute { portal_name: String },
+
+    /// Cancel the query currently running on another connection.
+    CancelRequest { conn_id: u32 },
 }
 
 /// Responses from the queue to SQL commands.
@@ -82,7 +85,7 @@ pub struct Response {
     pub session: Session,
 }
 
-pub type RowsFuture = Box<dyn Future<Item = Vec<Vec<Datum>>, Error = failure::Error> + Send>;
+pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error> + Send>;
 
 /// The SQL portition of [`Response`].
 pub enum SqlResponse {

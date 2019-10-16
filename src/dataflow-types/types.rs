@@ -35,6 +35,24 @@ pub enum PeekWhen {
     AtTimestamp(Timestamp),
 }
 
+/// The response from a `Peek`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PeekResponse {
+    Rows(Vec<Vec<Datum>>),
+    Canceled,
+}
+
+impl PeekResponse {
+    pub fn unwrap_rows(self) -> Vec<Vec<Datum>> {
+        match self {
+            PeekResponse::Rows(rows) => rows,
+            PeekResponse::Canceled => {
+                panic!("PeekResponse::unwrap_rows called on PeekResponse::Canceled")
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {

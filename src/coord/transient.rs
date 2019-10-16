@@ -59,6 +59,10 @@ where
                         CommandKind::Execute { portal_name } => {
                             planner.handle_execute_command(&cmd.session, &portal_name)
                         }
+                        CommandKind::CancelRequest { conn_id } => {
+                            coord.sequence_cancel(conn_id);
+                            continue;
+                        }
                     }
                     .map(|plan| {
                         coord.sequence_plan(plan, conn_id, None /* ts_override */)

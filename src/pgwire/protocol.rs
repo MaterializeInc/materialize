@@ -22,10 +22,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::codec::Codec;
 use crate::message::{
-    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity,
+    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity, VERSIONS,
+    VERSION_3,
 };
 use coord::{self, SqlResponse};
-use dataflow_types::Update;
+use dataflow_types::{PeekResponse, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{Datum, RelationDesc};
 use sql::Session;
@@ -52,27 +53,6 @@ pub struct Context {
     /// If true, we gather prometheus metrics
     pub gather_metrics: bool,
 }
-
-// Pgwire protocol versions are represented as 32-bit integers, where the
-// high 16 bits represent the major version and the low 16 bits represent the
-// minor version.
-//
-// There have only been three released protocol versions, v1.0, v2.0, and v3.0.
-// The protocol changes very infrequently: the most recent protocol version,
-// v3.0, was released with Postgres v7.4 in 2003.
-//
-// Somewhat unfortunately, the protocol overloads the version field to indicate
-// special types of connections, namely, SSL connections and cancellation
-// connections. These pseudo-versions were constructed to avoid ever matching
-// a true protocol version.
-
-const VERSION_1: u32 = 0x10000;
-const VERSION_2: u32 = 0x20000;
-const VERSION_3: u32 = 0x30000;
-const VERSION_SSL: u32 = (1234 << 16) + 5678;
-const VERSION_CANCEL: u32 = (1234 << 16) + 5679;
-
-const VERSIONS: &[u32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_SSL, VERSION_CANCEL];
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -129,7 +109,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
     Start { stream: A, session: Session },
 
-    #[state_machine_future(transitions(SendAuthenticationOk, SendError, Error))]
+    #[state_machine_future(transitions(SendAuthenticationOk, SendError, Done, Error))]
     RecvStartup { recv: Recv<A>, session: Session },
 
     #[state_machine_future(transitions(SendReadyForQuery, SendError, Error))]
@@ -234,7 +214,13 @@ pub enum StateMachine<A: Conn + 'static> {
         currently_extended: bool,
     },
 
-    #[state_machine_future(transitions(WaitForUpdates, SendUpdates, SendError, Error))]
+    #[state_machine_future(transitions(
+        WaitForUpdates,
+        SendUpdates,
+        SendError,
+        SendReadyForQuery,
+        Error
+    ))]
     WaitForUpdates {
         conn: A,
         session: Session,
@@ -311,13 +297,30 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_recv_startup<'s, 'c>(
         state: &'s mut RentToOwn<'s, RecvStartup<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
+        cx: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterRecvStartup<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         trace!("recv startup: {:?}", msg);
         let state = state.take();
         let version = match msg {
             FrontendMessage::Startup { version } => version,
+            FrontendMessage::CancelRequest {
+                conn_id,
+                secret_key: _,
+            } => {
+                // TODO(benesch): verify secret key.
+                let (tx, _rx) = futures::sync::oneshot::channel();
+                cx.cmdq_tx.unbounded_send(coord::Command {
+                    kind: coord::CommandKind::CancelRequest { conn_id },
+                    session: state.session,
+                    conn_id: cx.conn_id,
+                    tx,
+                })?;
+                // For security, the client is not told whether the cancel
+                // request succeeds or fails.
+                transition!(Done(()))
+            }
+
             _ => transition!(SendError {
                 send: conn.send(BackendMessage::ErrorResponse {
                     severity: Severity::Fatal,
@@ -351,6 +354,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     .iter()
                     .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
             )
+            .chain(iter::once(BackendMessage::BackendKeyData {
+                conn_id: cx.conn_id,
+                secret_key: 0, // TODO(benesch): generate a secret key
+            }))
             .collect();
 
         transition!(SendAuthenticationOk {
@@ -781,7 +788,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     rx: state.rx,
                 })
             }
-            Ok(Async::Ready(None)) => panic!("Connection to dataflow server closed unexpectedly"),
+            Ok(Async::Ready(None)) => {
+                trace!("update stream finished; readying for next query");
+                let state = state.take();
+                transition!(SendReadyForQuery {
+                    send: state.conn.send(BackendMessage::ReadyForQuery),
+                    session: state.session,
+                })
+            }
             Err(err) => panic!("error receiving tail results: {}", err),
         }
     }
@@ -790,22 +804,34 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, WaitForRows<A>>,
         _: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterWaitForRows<A>, failure::Error> {
-        let peek_results = try_ready!(state.rows_rx.poll());
-        let state = state.take();
-        let extended = state.currently_extended;
-        trace!(
-            "wait for rows: count={} extended={}",
-            peek_results.len(),
-            extended
-        );
-        transition!(send_rows(
-            state.conn,
-            state.session,
-            peek_results,
-            state.row_desc,
-            state.field_formats.clone(),
-            state.currently_extended,
-        ))
+        match try_ready!(state.rows_rx.poll()) {
+            PeekResponse::Canceled => {
+                let state = state.take();
+                transition!(SendError {
+                    send: state.conn.send(BackendMessage::ErrorResponse {
+                        severity: Severity::Error,
+                        code: "57014",
+                        message: "canceling statement due to user request".into(),
+                        detail: None,
+                    }),
+                    session: state.session,
+                    fatal: false,
+                });
+            }
+            PeekResponse::Rows(rows) => {
+                let state = state.take();
+                let extended = state.currently_extended;
+                trace!("wait for rows: count={} extended={}", rows.len(), extended);
+                transition!(send_rows(
+                    state.conn,
+                    state.session,
+                    rows,
+                    state.row_desc,
+                    state.field_formats.clone(),
+                    state.currently_extended,
+                ));
+            }
+        }
     }
 
     fn poll_send_updates<'s, 'c>(

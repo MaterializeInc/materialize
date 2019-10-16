@@ -18,7 +18,7 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::message::{BackendMessage, FieldFormat, FrontendMessage};
+use crate::message::{BackendMessage, FieldFormat, FrontendMessage, VERSION_CANCEL};
 use ore::netio;
 
 #[derive(Debug)]
@@ -89,6 +89,7 @@ impl Encoder for Codec {
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
             BackendMessage::ParameterStatus(_, _) => b'S',
+            BackendMessage::BackendKeyData { .. } => b'K',
             BackendMessage::ParameterDescription => b't',
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
@@ -164,6 +165,10 @@ impl Encoder for Codec {
             BackendMessage::ParameterStatus(name, value) => {
                 buf.put_string(name);
                 buf.put_string(value);
+            }
+            BackendMessage::BackendKeyData { conn_id, secret_key } => {
+                buf.put_u32_be(conn_id);
+                buf.put_u32_be(secret_key);
             }
             BackendMessage::ParameterDescription => {
                 // 7 bytes: b't', u32, 0 parameters
@@ -308,7 +313,14 @@ impl Decoder for Codec {
 
 fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let version = buf.read_u32()?;
-    Ok(FrontendMessage::Startup { version })
+    if version == VERSION_CANCEL {
+        Ok(FrontendMessage::CancelRequest {
+            conn_id: buf.read_u32()?,
+            secret_key: buf.read_u32()?,
+        })
+    } else {
+        Ok(FrontendMessage::Startup { version })
+    }
 }
 
 fn decode_terminate(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {

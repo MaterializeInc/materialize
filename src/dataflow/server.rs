@@ -22,6 +22,8 @@ use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use repr::Datum;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::collections::HashMap;
 use std::mem;
 use std::net::TcpStream;
 use std::sync::Mutex;
@@ -35,7 +37,9 @@ use crate::arrangement::{
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{compare_columns, Dataflow, LocalInput, RowSetFinishing, Timestamp};
+use dataflow_types::{
+    compare_columns, Dataflow, LocalInput, PeekResponse, RowSetFinishing, Timestamp,
+};
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
 /// Timely workers.
@@ -65,10 +69,12 @@ pub enum SequencedCommand {
     Peek {
         name: String,
         conn_id: u32,
-        tx: comm::mpsc::Sender<Vec<Vec<Datum>>>,
+        tx: comm::mpsc::Sender<PeekResponse>,
         timestamp: Timestamp,
         finishing: RowSetFinishing,
     },
+    /// Cancel the peek associated with the given `conn_id`.
+    CancelPeek { conn_id: u32 },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
@@ -155,6 +161,7 @@ where
             feedback_tx: None,
             command_rx,
             materialized_logger: None,
+            dataflow_drops: HashMap::new(),
         }
         .run()
     })
@@ -167,7 +174,7 @@ struct PendingPeek {
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
     /// A transmitter connected to the intended recipient of the peek.
-    tx: comm::mpsc::Sender<Vec<Vec<Datum>>>,
+    tx: comm::mpsc::Sender<PeekResponse>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -187,6 +194,7 @@ where
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
+    dataflow_drops: HashMap<String, Box<dyn Any>>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -332,6 +340,7 @@ where
                         dataflow,
                         &mut self.traces,
                         self.inner,
+                        &mut self.dataflow_drops,
                         &mut self.local_input_mux,
                         &mut self.materialized_logger,
                     );
@@ -344,6 +353,7 @@ where
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                     }
                     self.traces.del_trace(name);
+                    self.dataflow_drops.remove(name);
                 }
             }
 
@@ -382,6 +392,23 @@ where
                     ));
                 }
                 self.pending_peeks.push((pending_peek, trace));
+            }
+
+            SequencedCommand::CancelPeek { conn_id } => {
+                self.pending_peeks.retain(|(peek, _trace)| {
+                    if peek.conn_id == conn_id {
+                        peek.tx
+                            .connect()
+                            .wait()
+                            .unwrap()
+                            .send(PeekResponse::Canceled)
+                            .wait()
+                            .unwrap();
+                        false // don't retain
+                    } else {
+                        true // retain
+                    }
+                })
             }
 
             SequencedCommand::AllowCompaction(list) => {
@@ -437,16 +464,13 @@ where
                 return true; // retain
             }
 
-            let results = Worker::<A>::collect_finished_data(peek, &mut trace);
+            let rows = Worker::<A>::collect_finished_data(peek, &mut trace);
 
-            // TODO(benesch): investigate connection pooling for PEEK results,
-            // or multiplexing across one TCP stream. At the moment, every PEEK
-            // opens a new network connection.
             peek.tx
                 .connect()
                 .wait()
                 .unwrap()
-                .send(results)
+                .send(PeekResponse::Rows(rows))
                 .wait()
                 .unwrap();
             if let Some(logger) = self.materialized_logger.as_mut() {
