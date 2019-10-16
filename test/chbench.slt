@@ -1287,10 +1287,13 @@ Let {
   id-3 = Project {
     outputs: [0, 12 .. 29, 2 .. 11],
     Join {
-      variables: [[(0, 0), (1, 0)]],
+      variables: [[(0, 0), (1, 0)], [(2, 4), (3, 0)]],
       Get { id-2 },
       Get { id-2 },
-      Get { orderline },
+      Filter {
+        predicates: [datetots #6 > 2010-05-23 12:00:00],
+        Get { orderline }
+      },
       Get { stock }
     }
   }
@@ -1314,13 +1317,7 @@ Project {
               aggregates: [sum(#26)],
               Join {
                 variables: [[(0, 1), (1, 0)]],
-                Filter {
-                  predicates: [
-                    #1 = #23,
-                    datetots #25 > 2010-05-23 12:00:00
-                  ],
-                  Get { id-3 }
-                },
+                Get { id-3 },
                 Project {
                   outputs: [0, 6],
                   Map {
