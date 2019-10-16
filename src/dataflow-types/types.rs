@@ -220,6 +220,7 @@ pub struct KafkaSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
+    pub since: Timestamp,
 }
 
 /// A view transforms one dataflow into another.
