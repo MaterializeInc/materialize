@@ -264,9 +264,19 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, mut desc, finishing) = self.plan_toplevel_query(&query)?;
+                let (mut relation_expr, mut desc, finishing) = self.plan_toplevel_query(&query)?;
                 if !finishing.is_trivial() {
-                    bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
+                    //TODO: materialize#724 - persist finishing information with the view?
+                    relation_expr = RelationExpr::Project {
+                        input: Box::new(RelationExpr::TopK {
+                            input: Box::new(relation_expr),
+                            group_key: vec![],
+                            order_key: finishing.order_by,
+                            limit: finishing.limit,
+                            offset: finishing.offset,
+                        }),
+                        outputs: finishing.project,
+                    }
                 }
                 let typ = desc.typ();
                 if !columns.is_empty() {
