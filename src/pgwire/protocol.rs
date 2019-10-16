@@ -25,6 +25,7 @@ use crate::message::{
     self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity, VERSIONS,
     VERSION_3,
 };
+use crate::secrets::SecretManager;
 use coord::{self, SqlResponse};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::{Recv, StreamExt};
@@ -49,6 +50,7 @@ lazy_static! {
 
 pub struct Context {
     pub conn_id: u32,
+    pub conn_secrets: SecretManager,
     pub cmdq_tx: UnboundedSender<coord::Command>,
     /// If true, we gather prometheus metrics
     pub gather_metrics: bool,
@@ -306,16 +308,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Startup { version } => version,
             FrontendMessage::CancelRequest {
                 conn_id,
-                secret_key: _,
+                secret_key,
             } => {
-                // TODO(benesch): verify secret key.
-                let (tx, _rx) = futures::sync::oneshot::channel();
-                cx.cmdq_tx.unbounded_send(coord::Command {
-                    kind: coord::CommandKind::CancelRequest { conn_id },
-                    session: state.session,
-                    conn_id: cx.conn_id,
-                    tx,
-                })?;
+                if cx.conn_secrets.verify(conn_id, secret_key) {
+                    let (tx, _rx) = futures::sync::oneshot::channel();
+                    cx.cmdq_tx.unbounded_send(coord::Command {
+                        kind: coord::CommandKind::CancelRequest { conn_id },
+                        session: state.session,
+                        conn_id: cx.conn_id,
+                        tx,
+                    })?;
+                }
                 // For security, the client is not told whether the cancel
                 // request succeeds or fails.
                 transition!(Done(()))
@@ -356,7 +359,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             )
             .chain(iter::once(BackendMessage::BackendKeyData {
                 conn_id: cx.conn_id,
-                secret_key: 0, // TODO(benesch): generate a secret key
+                secret_key: cx.conn_secrets.get(cx.conn_id).unwrap(),
             }))
             .collect();
 
