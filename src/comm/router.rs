@@ -39,7 +39,7 @@ where
                     for conn in conns.drain(..) {
                         conn_tx.unbounded_send(conn).unwrap();
                     }
-                    *entry.get_mut() = RoutingTableEntry::Full;
+                    *entry.get_mut() = RoutingTableEntry::AwaitingConn(conn_tx);
                 }
                 _ => panic!("router: attempting to add dest {:?} twice", entry.key()),
             },
