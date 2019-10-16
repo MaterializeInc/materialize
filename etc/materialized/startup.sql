@@ -4,10 +4,15 @@
 -- distributed without the express permission of Materialize, Inc.
 
 CREATE VIEW logs_records_per_dataflow AS
-SELECT address_value AS dataflow, SUM(records) AS records
-FROM logs_operates AS lo
-JOIN logs_arrangement AS la
-ON lo.id = la.operator
-AND lo.worker = la.worker
-AND lo.address_slot = 0
-GROUP BY address_value;
+SELECT logs_addresses.value AS dataflow, SUM(records) AS records
+FROM
+    logs_operates,
+    logs_addresses,
+    logs_arrangement
+WHERE
+    logs_operates.id = logs_arrangement.operator AND
+    logs_operates.worker = logs_arrangement.worker AND
+    logs_addresses.id = logs_operates.id AND
+    logs_addresses.worker = logs_addresses.worker AND
+    logs_addresses.slot = 0
+GROUP BY logs_addresses.value;
