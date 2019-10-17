@@ -31,7 +31,6 @@ use std::collections::HashMap;
 
 use failure::bail;
 
-use dataflow_types::RowSetFinishing;
 use repr::RelationDesc;
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
@@ -223,6 +222,12 @@ impl Session {
         self.prepared_statements.insert(name, statement);
     }
 
+    /// Removes the prepared statement associated with `name`. It is not an
+    /// error if no such statement exists.
+    pub fn remove_prepared_statement(&mut self, name: &str) {
+        let _ = self.prepared_statements.remove(name);
+    }
+
     /// Retrieve the prepared statement in this session associated with `name`
     pub fn get_prepared_statement(&self, name: &str) -> Option<&PreparedStatement> {
         self.prepared_statements.get(name)
@@ -355,37 +360,21 @@ impl Var for SessionVar<bool> {
 /// A prepared statement
 #[derive(Debug)]
 pub struct PreparedStatement {
-    pub raw_sql: String,
-    source: ::expr::RelationExpr,
-    desc: RelationDesc,
-    finishing: RowSetFinishing,
+    sql: sqlparser::ast::Statement,
+    desc: Option<RelationDesc>,
 }
 
 impl PreparedStatement {
-    pub fn new(
-        raw_sql: String,
-        source: ::expr::RelationExpr,
-        desc: RelationDesc,
-        finishing: RowSetFinishing,
-    ) -> PreparedStatement {
-        PreparedStatement {
-            raw_sql,
-            source,
-            desc,
-            finishing,
-        }
+    pub fn new(sql: sqlparser::ast::Statement, desc: Option<RelationDesc>) -> PreparedStatement {
+        PreparedStatement { sql, desc }
     }
 
-    pub fn source(&self) -> &::expr::RelationExpr {
-        &self.source
+    pub fn sql(&self) -> &sqlparser::ast::Statement {
+        &self.sql
     }
 
-    pub fn desc(&self) -> &RelationDesc {
-        &self.desc
-    }
-
-    pub fn finishing(&self) -> &RowSetFinishing {
-        &self.finishing
+    pub fn desc(&self) -> Option<&RelationDesc> {
+        self.desc.as_ref()
     }
 }
 

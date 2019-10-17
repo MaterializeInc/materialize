@@ -7,7 +7,9 @@ use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use lazy_static::lazy_static;
 
 use super::types::PgType;
 use repr::decimal::Decimal;
@@ -153,6 +155,16 @@ pub enum FrontendMessage {
     /// This command is part of the extended query flow.
     Sync,
 
+    /// Close the named statement.
+    ///
+    /// This command is part of the extended query flow.
+    CloseStatement { name: String },
+
+    /// Close the named portal.
+    ///
+    // This command is part of the extended query flow.
+    ClosePortal { name: String },
+
     /// Terminate a connection.
     Terminate,
 }
@@ -177,6 +189,7 @@ pub enum BackendMessage {
         secret_key: u32,
     },
     ParameterDescription,
+    NoData,
     ParseComplete,
     BindComplete,
     ErrorResponse {
@@ -308,6 +321,11 @@ impl Iterator for FieldFormatIter {
     }
 }
 
+lazy_static! {
+    static ref EPOCH: NaiveDateTime = NaiveDate::from_ymd(2000, 1, 1).and_hms(0, 0, 0);
+    static ref EPOCH_NUM_DAYS_FROM_CE: i32 = EPOCH.num_days_from_ce();
+}
+
 /// PGWire-specific representations of Datums
 #[derive(Debug)]
 pub enum FieldValue {
@@ -380,23 +398,20 @@ impl FieldValue {
     ///
     /// Some "docs" are at https://www.npgsql.org/dev/types.html
     pub(crate) fn to_binary(&self) -> Result<Cow<[u8]>, failure::Error> {
-        use byteorder::{ByteOrder, NetworkEndian};
-
         Ok(match self {
             FieldValue::Bool(false) => [0u8][..].into(),
             FieldValue::Bool(true) => [1u8][..].into(),
             FieldValue::Bytea(b) => b.into(),
             // https://github.com/postgres/postgres/blob/59354ccef5d7/src/backend/utils/adt/date.c#L223
             FieldValue::Date(d) => {
-                let day = d.num_days_from_ce() - 719_163;
+                let day = d.num_days_from_ce() - *EPOCH_NUM_DAYS_FROM_CE;
                 let mut buf = vec![0u8; 4];
                 NetworkEndian::write_i32(&mut buf, day);
                 buf.into()
             }
             FieldValue::Timestamp(ts) => {
-                let timestamp =
-                    ts.timestamp() * 1_000_000 + i64::from(ts.timestamp_subsec_micros());
-
+                let timestamp = (ts.timestamp() - EPOCH.timestamp()) * 1_000_000
+                    + i64::from(ts.timestamp_subsec_micros());
                 let mut buf = vec![0u8; 8];
                 NetworkEndian::write_i64(&mut buf, timestamp);
                 buf.into()
@@ -423,7 +438,56 @@ impl FieldValue {
                 buf.into()
             }
             // https://github.com/postgres/postgres/blob/59354ccef5/src/backend/utils/adt/numeric.c#L868-L891
-            FieldValue::Numeric(_n) => failure::bail!("cannot serialize binary: numeric"),
+            FieldValue::Numeric(n) => {
+                // This implementation is derived from Diesel.
+                // https://github.com/diesel-rs/diesel/blob/bd13f24609c6893166aab2aaf92020bb5899f402/diesel/src/pg/types/numeric.rs
+                let mut significand = n.significand();
+                let scale = u16::from(n.scale());
+                let non_neg = significand >= 0;
+                significand = significand.abs();
+
+                // Ensure that the significand will always lie on a digit boundary
+                for _ in 0..(4 - scale % 4) {
+                    significand *= 10;
+                }
+
+                let mut digits = vec![];
+                while significand > 0 {
+                    digits.push((significand % 10_000) as i16);
+                    significand /= 10_000;
+                }
+                digits.reverse();
+                let digits_after_decimal = scale / 4 + 1;
+                let weight = digits.len() as i16 - digits_after_decimal as i16 - 1;
+
+                let unnecessary_zeroes = if weight >= 0 {
+                    let index_of_decimal = (weight + 1) as usize;
+                    digits
+                        .get(index_of_decimal..)
+                        .expect("enough digits exist")
+                        .iter()
+                        .rev()
+                        .take_while(|i| **i == 0)
+                        .count()
+                } else {
+                    0
+                };
+
+                let relevant_digits = digits.len() - unnecessary_zeroes;
+                digits.truncate(relevant_digits);
+
+                let sign = if non_neg { 0 } else { 0x4000 };
+
+                let mut buf = Vec::with_capacity(8 + 2 * digits.len());
+                buf.write_u16::<NetworkEndian>(digits.len() as u16)?;
+                buf.write_i16::<NetworkEndian>(weight)?;
+                buf.write_u16::<NetworkEndian>(sign)?;
+                buf.write_u16::<NetworkEndian>(scale)?;
+                for digit in digits.iter() {
+                    buf.write_i16::<NetworkEndian>(*digit)?;
+                }
+                buf.into()
+            }
             FieldValue::Text(ref s) => s.as_bytes().into(),
         })
     }

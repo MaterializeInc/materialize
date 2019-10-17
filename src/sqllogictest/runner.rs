@@ -519,7 +519,7 @@ impl State {
                 rows_affected = None;
             }
             postgres::Outcome::Dropped(names) => {
-                let mut dataflows = vec![];
+                let mut all_names = vec![];
                 // The only reason we would use RemoveMode::Restrict is to test
                 // expected errors, and we currently set should_run=false
                 // whenever errors are expected.
@@ -529,11 +529,16 @@ impl State {
                     if let Some(uuid) = self.local_input_uuids.remove(name) {
                         self.local_input_mux.write().unwrap().close(&uuid);
                     }
-                    self.planner
-                        .dataflows
-                        .remove(name, RemoveMode::Cascade, &mut dataflows)?;
+                    self.planner.dataflows.plan_remove(
+                        name,
+                        RemoveMode::Cascade,
+                        &mut all_names,
+                    )?;
                 }
-                self.coord.drop_dataflows(names);
+                for name in &all_names {
+                    self.planner.dataflows.remove(name)
+                }
+                self.coord.drop_dataflows(all_names);
                 rows_affected = None;
             }
             postgres::Outcome::Changed {

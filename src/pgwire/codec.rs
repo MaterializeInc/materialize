@@ -88,6 +88,7 @@ impl Encoder for Codec {
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
+            BackendMessage::NoData => b'n',
             BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::BackendKeyData { .. } => b'K',
             BackendMessage::ParameterDescription => b't',
@@ -156,8 +157,8 @@ impl Encoder for Codec {
             BackendMessage::CommandComplete { tag } => {
                 buf.put_string(tag);
             }
-            BackendMessage::ParseComplete => {}
-            BackendMessage::BindComplete => {}
+            BackendMessage::ParseComplete => (),
+            BackendMessage::BindComplete => (),
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
                 buf.put(b'I'); // transaction indicator
@@ -166,14 +167,13 @@ impl Encoder for Codec {
                 buf.put_string(name);
                 buf.put_string(value);
             }
+            BackendMessage::NoData => (),
             BackendMessage::BackendKeyData { conn_id, secret_key } => {
                 buf.put_u32_be(conn_id);
                 buf.put_u32_be(secret_key);
             }
             BackendMessage::ParameterDescription => {
-                // 7 bytes: b't', u32, 0 parameters
-                buf.put_u32_be(7);
-                buf.put_u16_be(0);
+                buf.put_u16_be(0); // the number of parameters used by the statement
             }
             BackendMessage::ErrorResponse {
                 severity,
@@ -290,6 +290,7 @@ impl Decoder for Codec {
                         b'B' => decode_bind(buf)?,
                         b'E' => decode_execute(buf)?,
                         b'S' => decode_sync(buf)?,
+                        b'C' => decode_close(buf)?,
 
                         // Invalid.
                         _ => {
@@ -366,6 +367,21 @@ fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(msg)
 }
 
+fn decode_close(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    match buf.read_byte()? {
+        b'S' => Ok(FrontendMessage::CloseStatement {
+            name: buf.read_cstr()?.to_owned(),
+        }),
+        b'P' => Ok(FrontendMessage::ClosePortal {
+            name: buf.read_cstr()?.to_owned(),
+        }),
+        b => Err(input_err(format!(
+            "invalid type byte in close message: {}",
+            b
+        ))),
+    }
+}
+
 fn decode_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let first_char = buf.read_byte()?;
     let name = buf.read_cstr()?.to_string();
@@ -380,10 +396,19 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
+    // The rules around parameter format codes are complicated. Zero means use
+    // text for all parameters, if any. One means use the specified format code
+    // for all parameters, if any. (Particularly confusingly, you can specify
+    // one text or binary parameter format code, and then proceed to bind zero
+    // parameters.) Any additional number of parameter format codes means that
+    // you're supplying one paramater format code per actual bound parameter.
+    //
+    // The simplest thing to do, since we don't actually support binding
+    // parameters, is to accept whatever parameters format codes folks want to
+    // supply, and then blow up if they actually try to bind any parameters.
     let parameter_format_code_count = buf.read_u16()?;
-    if parameter_format_code_count > 0 {
-        // Verify that we can skip parsing parameter format codes (C=Int16, Int16[C]),
-        return Err(unsupported_err("parameter format codes is not supported"));
+    for _ in 0..parameter_format_code_count {
+        let _ = buf.read_u16()?;
     }
     if buf.read_u16()? > 0 {
         return Err(unsupported_err("binding parameters is not supported"));

@@ -100,9 +100,7 @@ pub enum SqlResponse {
         rx: RowsFuture,
     },
     /// We have successfully parsed the query and stashed it in the [`Session`]
-    Parsed {
-        name: String,
-    },
+    Parsed,
     SetVariable,
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
@@ -116,9 +114,9 @@ impl fmt::Debug for SqlResponse {
             SqlResponse::CreatedSource => f.write_str("SqlResponse::CreatedSource"),
             SqlResponse::CreatedView => f.write_str("SqlResponse::CreatedView"),
             SqlResponse::DroppedSource => f.write_str("SqlResponse::DroppedSource"),
-            SqlResponse::DroppedView => f.write_str("SqlResposne::DroppedView"),
+            SqlResponse::DroppedView => f.write_str("SqlResponse::DroppedView"),
             SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
-            SqlResponse::Parsed { name } => write!(f, "SqlResponse::Parsed(name: {})", name),
+            SqlResponse::Parsed => write!(f, "SqlResponse::Parsed"),
             SqlResponse::SendRows { desc, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", desc),
             SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
             SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),

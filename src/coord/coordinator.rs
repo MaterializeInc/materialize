@@ -172,7 +172,7 @@ where
 
             Plan::EmptyQuery => SqlResponse::EmptyQuery,
 
-            Plan::DidSetVariable => SqlResponse::SetVariable,
+            Plan::SetVariable { .. } => SqlResponse::SetVariable,
 
             Plan::Peek {
                 mut source,
@@ -313,7 +313,7 @@ where
                 send_immediate_rows(desc, rows)
             }
 
-            Plan::Parsed { name } => SqlResponse::Parsed { name },
+            Plan::Parsed => SqlResponse::Parsed,
         }
     }
 

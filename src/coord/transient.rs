@@ -57,7 +57,7 @@ where
                             planner.handle_parse_command(&mut cmd.session, sql, name)
                         }
                         CommandKind::Execute { portal_name } => {
-                            planner.handle_execute_command(&cmd.session, &portal_name)
+                            planner.handle_execute_command(&mut cmd.session, &portal_name)
                         }
                         CommandKind::CancelRequest { conn_id } => {
                             coord.sequence_cancel(conn_id);
