@@ -313,7 +313,7 @@ where
                 send_immediate_rows(desc, rows)
             }
 
-            Plan::Parsed { name } => SqlResponse::Parsed { name },
+            Plan::Parsed => SqlResponse::Parsed,
         }
     }
 

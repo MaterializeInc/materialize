@@ -287,6 +287,18 @@ pub struct Decimal {
     scale: u8,
 }
 
+impl Decimal {
+    /// Returns the significand of the decimal.
+    pub fn significand(&self) -> i128 {
+        self.significand
+    }
+
+    /// Returns the scale of the decimal.
+    pub fn scale(&self) -> u8 {
+        self.scale
+    }
+}
+
 fn rounding_downscale(v: i128, scale: usize) -> i128 {
     if scale == 0 {
         v

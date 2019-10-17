@@ -74,23 +74,38 @@ impl Planner {
         }
     }
 
-    /// Convert some raw_sql into a parsed statement, and associate it with the current Session
+    /// Parses the specified SQL into a prepared statement.
+    ///
+    /// The prepared statement is saved in the connection's [`sql::Session`]
+    /// under the specified name.
     pub fn handle_parse_command(
         &self,
         session: &mut Session,
         sql: String,
         name: String,
     ) -> Result<Plan, failure::Error> {
-        let stmt = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
-        if stmt.len() != 1 {
+        let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
+        if stmts.len() != 1 {
             bail!("cannot parse zero or multiple queries: {}", sql);
         }
-        self.handle_parse_statement(session, stmt.into_element(), name, sql)
+        let stmt = stmts.into_element();
+        let plan = self.handle_statement(session, stmt.clone())?;
+        let desc = match plan {
+            Plan::Peek { desc, .. } => Some(desc),
+            Plan::SendRows { desc, .. } => Some(desc),
+            Plan::ExplainPlan { desc, .. } => Some(desc),
+            Plan::CreateSources { .. } => {
+                Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+            }
+            _ => None,
+        };
+        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
+        Ok(Plan::Parsed)
     }
 
     pub fn handle_execute_command(
-        &self,
-        session: &Session,
+        &mut self,
+        session: &mut Session,
         portal_name: &str,
     ) -> Result<Plan, failure::Error> {
         let portal = session
@@ -105,17 +120,19 @@ impl Planner {
                     portal.statement_name
                 )
             })?;
-        Ok(Plan::Peek {
-            source: prepared.source().clone(),
-            desc: prepared.desc().clone(),
-            when: PeekWhen::Immediately,
-            finishing: prepared.finishing().clone(),
-        })
+        let stmt = prepared.sql().clone();
+        let plan = self.handle_statement(session, stmt)?;
+        self.apply_plan(session, &plan)?;
+        Ok(plan)
     }
 
     /// Mutates the internal state of the planner and session according to the
     /// `plan`. Centralizing mutations here ensures the rest of the planning
     /// process is immutable, which is useful for prepared queries.
+    ///
+    /// Note that there are additional mutations that will be undertaken in the
+    /// dataflow layer according to this plan; this method only applies
+    /// mutations internal to the planner and session.
     fn apply_plan(&mut self, session: &mut Session, plan: &Plan) -> Result<(), failure::Error> {
         match plan {
             Plan::CreateView(view) => self.dataflows.insert(Dataflow::View(view.clone())),
@@ -449,6 +466,8 @@ impl Planner {
         for name in &names {
             self.dataflows.plan_remove(name, mode, &mut to_remove)?;
         }
+        to_remove.sort();
+        to_remove.dedup();
         Ok(match object_type {
             ObjectType::Source => Plan::DropSources(to_remove),
             ObjectType::View => Plan::DropViews(to_remove),
@@ -494,28 +513,6 @@ impl Planner {
             when: PeekWhen::Immediately,
             finishing,
         })
-    }
-
-    /// Convert a parse statement into a [`Plan::PreparedStatement`] and put it in the Session
-    fn handle_parse_statement(
-        &self,
-        session: &mut Session,
-        mut stmt: Statement,
-        name: String,
-        sql: String,
-    ) -> Result<Plan, failure::Error> {
-        super::transform::transform(&mut stmt);
-        match stmt {
-            Statement::Query(query) => {
-                let (relation_expr, desc, finishing) = self.plan_toplevel_query(&query)?;
-                session.set_prepared_statement(
-                    name.clone(),
-                    PreparedStatement::new(sql, relation_expr, desc, finishing),
-                );
-                Ok(Plan::Parsed { name })
-            }
-            _ => bail!("PARSE unsupported for sql statement: {:?}", sql),
-        }
     }
 
     pub fn handle_explain(&self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {

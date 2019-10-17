@@ -32,6 +32,7 @@ rand = "0.7.2"
 rdkafka = { version = "0.21", features = ["cmake_build"] }
 regex = "1"
 reqwest = "0.9.22"
+rust_decimal = { git = "https://github.com/MaterializeInc/rust-decimal.git", features = ["postgres", "tokio-postgres"] }
 termcolor = "1.0.5"
 
 [dev-dependencies]

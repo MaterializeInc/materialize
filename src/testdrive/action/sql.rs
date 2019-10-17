@@ -5,6 +5,9 @@
 
 use postgres::error::DbError;
 use postgres::error::Error as PostgresError;
+use postgres::types::Type;
+use postgres::Row;
+use rust_decimal::Decimal;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
@@ -90,30 +93,19 @@ impl Action for SqlAction {
 impl SqlAction {
     fn try_drop(&self, pgconn: &mut postgres::Client, query: &str) -> Result<(), String> {
         print_query(&query);
-        match pgconn.simple_query(query) {
+        match pgconn.query(query, &[]) {
             Err(err) => Err(err.to_string()),
             Ok(_) => Ok(()),
         }
     }
 
     fn try_redo(&self, pgconn: &mut postgres::Client, query: &str) -> Result<(), String> {
-        let mut rows = Vec::new();
-        let msgs = pgconn
-            .simple_query(query)
-            .map_err(|e| format!("query failed: {}", e))?;
-        for msg in &msgs {
-            match msg {
-                postgres::SimpleQueryMessage::CommandComplete(_) => (),
-                postgres::SimpleQueryMessage::Row(row) => {
-                    let mut row0 = Vec::new();
-                    for i in 0..row.len() {
-                        row0.push(row.get(i).unwrap_or("<null>").to_owned());
-                    }
-                    rows.push(row0);
-                }
-                _ => unimplemented!(),
-            }
-        }
+        let mut rows: Vec<_> = pgconn
+            .query(query, &[])
+            .map_err(|e| format!("query failed: {}", e))?
+            .into_iter()
+            .map(decode_row)
+            .collect::<Result<_, _>>()?;
         rows.sort();
         if rows == self.cmd.expected_rows {
             Ok(())
@@ -141,7 +133,7 @@ impl Action for FailSqlAction {
     fn redo(&self, state: &mut State) -> Result<(), String> {
         let query = &self.0.query;
         print_query(&query);
-        match state.pgconn.simple_query(&query) {
+        match state.pgconn.query(query.as_str(), &[]) {
             Ok(_) => Err(format!(
                 "query succeeded, but expected error '{}'",
                 self.0.expected_error
@@ -181,4 +173,37 @@ fn try_extract_db_error(err: PostgresError) -> Option<DbError> {
         }
     }
     None
+}
+
+fn decode_row(row: Row) -> Result<Vec<String>, String> {
+    let mut out = vec![];
+    for (i, col) in row.columns().iter().enumerate() {
+        let ty = col.type_();
+        out.push(
+            if ty == &Type::BOOL {
+                row.get::<_, Option<bool>>(i).map(|x| x.to_string())
+            } else if ty == &Type::CHAR || ty == &Type::TEXT {
+                row.get::<_, Option<String>>(i)
+            } else if ty == &Type::INT4 {
+                row.get::<_, Option<i32>>(i).map(|x| x.to_string())
+            } else if ty == &Type::INT8 {
+                row.get::<_, Option<i64>>(i).map(|x| x.to_string())
+            } else if ty == &Type::NUMERIC {
+                row.get::<_, Option<Decimal>>(i).map(|x| x.to_string())
+            } else if ty == &Type::TIMESTAMP {
+                row.get::<_, Option<chrono::NaiveDateTime>>(i)
+                    .map(|x| x.to_string())
+            } else if ty == &Type::TIMESTAMPTZ {
+                row.get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
+                    .map(|x| x.to_string())
+            } else if ty == &Type::DATE {
+                row.get::<_, Option<chrono::NaiveDate>>(i)
+                    .map(|x| x.to_string())
+            } else {
+                return Err(format!("unable to handle SQL type: {:?}", ty));
+            }
+            .unwrap_or_else(|| "<null>".into()),
+        )
+    }
+    Ok(out)
 }
