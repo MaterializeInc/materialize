@@ -544,7 +544,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                     .send(BackendMessage::CommandComplete { tag: $cmd.into() })
                             ),
                             session,
-                            currently_extended: state.field_formats.is_some(),
+                            currently_extended: state.extended,
                             label: $label
                         })
                     };
