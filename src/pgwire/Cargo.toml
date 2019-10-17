@@ -23,6 +23,7 @@ lazy_static = "1.4.0"
 log = "0.4"
 ore = { path = "../ore" }
 prometheus = { version = "0.7.0", default-features = false, features = ["process"] }
+rand = "0.7"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
 state_machine_future = { git = "https://github.com/benesch/state_machine_future.git", branch = "context-generic-bounds" }

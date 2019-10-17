@@ -32,12 +32,14 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::id_alloc::{IdAllocator, IdExhaustionError};
+use self::secrets::SecretManager;
 use ore::future::FutureExt;
 
 mod codec;
 mod id_alloc;
 mod message;
 mod protocol;
+mod secrets;
 mod types;
 
 pub use codec::Codec;
@@ -49,7 +51,8 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
     gather_metrics: bool,
 ) -> impl Future<Item = (), Error = failure::Error> {
     lazy_static! {
-        static ref CONN_ID_ALLOCATOR: id_alloc::IdAllocator = IdAllocator::new(1, 1 << 16);
+        static ref CONN_ID_ALLOCATOR: IdAllocator = IdAllocator::new(1, 1 << 16);
+        static ref CONN_SECRETS: SecretManager = SecretManager::new();
     }
     let conn_id = match CONN_ID_ALLOCATOR.alloc() {
         Ok(id) => id,
@@ -57,17 +60,20 @@ pub fn serve<A: AsyncRead + AsyncWrite + 'static + Send>(
             return future::err(format_err!("maximum number of connections reached")).left();
         }
     };
+    CONN_SECRETS.generate(conn_id);
     protocol::StateMachine::start(
         Framed::new(a, codec::Codec::new()),
         sql::Session::default(),
         protocol::Context {
             conn_id,
+            conn_secrets: CONN_SECRETS.clone(),
             cmdq_tx,
             gather_metrics,
         },
     )
     .then(move |res| {
         CONN_ID_ALLOCATOR.free(conn_id);
+        CONN_SECRETS.free(conn_id);
         res
     })
     .right()

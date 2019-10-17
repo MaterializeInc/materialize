@@ -18,9 +18,8 @@ where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<Vec<Datum>, Vec<Datum>, Timestamp, Diff>,
 {
+    let mut tx = connector.tx.connect().wait().unwrap();
     stream.sink(Pipeline, &name, move |input| {
-        let mut tx = connector.tx.connect().wait().unwrap();
-
         input.for_each(|_, batches| {
             let mut results: Vec<Update> = Vec::new();
             for batch in batches.iter() {

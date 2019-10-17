@@ -9,7 +9,8 @@ use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::AsCollection;
-use std::cell::Cell;
+use std::any::Any;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 use timely::communication::Allocate;
@@ -36,10 +37,10 @@ pub fn build_dataflow<A: Allocate>(
     dataflow: Dataflow,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
+    dataflow_drops: &mut HashMap<String, Box<dyn Any>>,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
     logger: &mut Option<Logger>,
 ) {
-    let worker_timer = worker.timer();
     let worker_index = worker.index();
     let worker_peers = worker.peers();
 
@@ -88,18 +89,16 @@ pub fn build_dataflow<A: Allocate>(
                 .expect("View missing")
                 .next()
                 .expect("No arrangements");
-            let _token = trace.to_drop().clone();
-            let (arrangement, _button) =
+            let token = trace.to_drop().clone();
+            let (arrangement, button) =
                 trace.import_core(scope, &format!("Import({:?})", sink.from));
 
             match sink.connector {
-                SinkConnector::Kafka(c) => {
-                    // TODO: This appears to be not shared at the moment.
-                    let done = Rc::new(Cell::new(false));
-                    sink::kafka(&arrangement.stream, &sink.name, c, done, worker_timer)
-                }
+                SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
                 SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
             }
+
+            dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
         }
         Dataflow::View(view) => {
             let as_of = view

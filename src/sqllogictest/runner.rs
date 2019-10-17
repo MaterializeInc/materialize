@@ -648,7 +648,7 @@ impl State {
         };
 
         // get actual output
-        let raw_output = rows_rx.wait()?;
+        let raw_output = rows_rx.wait()?.unwrap_rows();
 
         // unpack expected output
         let QueryOutput {

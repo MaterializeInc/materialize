@@ -20,6 +20,7 @@ use timely::progress::frontier::Antichain;
 
 use futures::{sink, Future, Sink as FuturesSink, Stream};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use uuid::Uuid;
 
 use crate::SqlResponse;
@@ -27,8 +28,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Dataflow, PeekWhen, RowSetFinishing, Sink, SinkConnector, TailSinkConnector,
-    Timestamp, View,
+    compare_columns, Dataflow, PeekResponse, PeekWhen, RowSetFinishing, Sink, SinkConnector,
+    TailSinkConnector, Timestamp, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
@@ -42,10 +43,14 @@ where
 {
     switchboard: comm::Switchboard<C>,
     broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
-    num_timely_workers: usize,
+    num_timely_workers: u64,
     optimizer: expr::transform::Optimizer,
     views: HashMap<String, ViewState>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
+    /// For each connection running a TAIL command, the name of the dataflow
+    /// that is servicing the TAIL. A connection can only run one TAIL at a
+    /// time.
+    active_tails: HashMap<u32, String>,
     log: bool,
 }
 
@@ -65,10 +70,11 @@ where
         let mut coordinator = Self {
             switchboard,
             broadcast_tx,
-            num_timely_workers,
+            num_timely_workers: u64::try_from(num_timely_workers).unwrap(),
             optimizer: Default::default(),
             views: HashMap::new(),
             since_updates: Vec::new(),
+            active_tails: HashMap::new(),
             log: logging_config.is_some(),
         };
 
@@ -80,6 +86,30 @@ where
         }
 
         coordinator
+    }
+
+    /// Instruct the dataflow layer to cancel any ongoing, interactive work for
+    /// the named `conn_id`. This means canceling the active PEEK or TAIL, if
+    /// one exists.
+    ///
+    /// NOTE(benesch): this function makes the assumption that a connection can
+    /// only have one active query at a time. This is true today, but will not
+    /// be true once we have full support for portals.
+    pub fn sequence_cancel(&mut self, conn_id: u32) {
+        if let Some(name) = self.active_tails.remove(&conn_id) {
+            // A TAIL is known to be active, so drop the dataflow that is
+            // servicing it. No need to try to cancel PEEKs in this case,
+            // because if a TAIL is active, a PEEK cannot be.
+            self.drop_dataflows(vec![name]);
+        } else {
+            // No TAIL is known to be active, so drop the PEEK that may be
+            // active on this connection. This is a no-op if no PEEKs are
+            // active.
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::CancelPeek { conn_id },
+            );
+        }
     }
 
     // TODO(benesch): the `ts_override` parameter exists only to support
@@ -158,7 +188,7 @@ where
 
                 self.optimizer.optimize(&mut source);
 
-                let (rows_tx, rows_rx) = self.switchboard.mpsc();
+                let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
                 // Choose a timestamp for all workers to use in the peek.
                 // We minimize over all participating views, to ensure that the query will not
@@ -212,33 +242,44 @@ where
                 }
 
                 let rows_rx = rows_rx
-                    .take(self.num_timely_workers as u64)
-                    .concat2()
-                    .map(move |mut rows| {
-                        let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
-                            compare_columns(&finishing.order_by, left, right)
-                        };
-                        let offset = finishing.offset;
-                        if offset > rows.len() {
-                            Vec::new()
-                        } else {
-                            if let Some(limit) = finishing.limit {
-                                let offset_plus_limit = offset + limit;
-                                if rows.len() > offset_plus_limit {
-                                    pdqselect::select_by(&mut rows, offset_plus_limit, sort_by);
-                                    rows.truncate(offset_plus_limit);
+                    .fold(PeekResponse::Rows(vec![]), |memo, resp| {
+                        match (memo, resp) {
+                            (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
+                                memo.extend(rows);
+                                let out: Result<_, bincode::Error> = Ok(PeekResponse::Rows(memo));
+                                out
+                            }
+                            _ => Ok(PeekResponse::Canceled),
+                        }
+                    })
+                    .map(move |mut resp| {
+                        if let PeekResponse::Rows(rows) = &mut resp {
+                            let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
+                                compare_columns(&finishing.order_by, left, right)
+                            };
+                            let offset = finishing.offset;
+                            if offset > rows.len() {
+                                *rows = Vec::new();
+                            } else {
+                                if let Some(limit) = finishing.limit {
+                                    let offset_plus_limit = offset + limit;
+                                    if rows.len() > offset_plus_limit {
+                                        pdqselect::select_by(rows, offset_plus_limit, sort_by);
+                                        rows.truncate(offset_plus_limit);
+                                    }
+                                }
+                                if offset > 0 {
+                                    pdqselect::select_by(rows, offset, sort_by);
+                                    rows.drain(..offset);
+                                }
+                                rows.sort_by(sort_by);
+                                for row in rows {
+                                    *row =
+                                        finishing.project.iter().map(|i| row[*i].clone()).collect();
                                 }
                             }
-                            if offset > 0 {
-                                pdqselect::select_by(&mut rows, offset, sort_by);
-                                rows.drain(..offset);
-                            }
-                            rows.sort_by(sort_by);
-                            for row in &mut rows {
-                                *row = finishing.project.iter().map(|i| row[*i].clone()).collect();
-                            }
-                            rows
                         }
+                        resp
                     })
                     .from_err()
                     .boxed();
@@ -247,11 +288,13 @@ where
             }
 
             Plan::Tail(source) => {
-                let (tx, rx) = self.switchboard.mpsc();
+                let name = format!("<tail_{}>", Uuid::new_v4());
+                self.active_tails.insert(conn_id, name.clone());
+                let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
-                        name: format!("<tail_{}>", Uuid::new_v4()),
+                        name,
                         from: (source.name().to_owned(), source.desc().clone()),
                         connector: SinkConnector::Tail(TailSinkConnector { tx }),
                     })]),
@@ -590,7 +633,7 @@ fn broadcast(
 /// after some computation.
 fn send_immediate_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> SqlResponse {
     let (tx, rx) = futures::sync::oneshot::channel();
-    tx.send(rows).unwrap();
+    tx.send(PeekResponse::Rows(rows)).unwrap();
     SqlResponse::SendRows {
         desc,
         rx: Box::new(rx.from_err()),
