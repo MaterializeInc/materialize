@@ -22,12 +22,11 @@ use url::Url;
 use crate::expr::like::build_like_regex_from_string;
 use crate::scope::Scope;
 use crate::session::{PreparedStatement, Session};
-use crate::store::{DataflowStore, RemoveMode};
+use crate::store::{Catalog, CatalogItem, RemoveMode};
 use crate::{extract_sql_object_name, Plan, Planner};
-use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
-    SinkConnector, Source, SourceConnector, View,
+    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink, SinkConnector,
+    Source, SourceConnector, View,
 };
 use expr::{ColumnOrder, RelationExpr};
 use interchange::avro;
@@ -35,43 +34,10 @@ use ore::collections::CollectionExt;
 use ore::option::OptionExt;
 use repr::{Datum, RelationDesc, RelationType, ScalarType};
 
-impl Planner {
-    pub fn new(logging_config: Option<&LoggingConfig>) -> Planner {
-        Planner {
-            dataflows: DataflowStore::new(logging_config),
-        }
-    }
-
-    /// Parses and plans several raw SQL queries.
-    pub fn handle_commands(
-        &mut self,
-        session: &mut Session,
-        sql: String,
-    ) -> Result<Vec<Plan>, failure::Error> {
-        let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
-        stmts
-            .into_iter()
-            .map(|stmt| self.handle_statement(session, stmt))
-            .collect::<Result<_, _>>()
-    }
-
-    /// Parses and plans a raw SQL query. See the documentation for
-    /// [`Result<Plan, failure::Error>`] for details about the meaning of the return type.
-    pub fn handle_command(
-        &mut self,
-        session: &mut Session,
-        sql: String,
-    ) -> Result<Plan, failure::Error> {
-        let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
-        match stmts.len() {
-            0 => Ok(Plan::EmptyQuery),
-            1 => {
-                let plan = self.handle_statement(session, stmts.into_element())?;
-                self.apply_plan(session, &plan)?;
-                Ok(plan)
-            }
-            _ => bail!("expected one statement, but got {}", stmts.len()),
-        }
+impl<'catalog> Planner<'catalog> {
+    /// Creates a new planner with a frozen catalog.
+    pub fn new(catalog: &'catalog Catalog) -> Self {
+        Self { dataflows: catalog }
     }
 
     /// Parses the specified SQL into a prepared statement.
@@ -103,60 +69,8 @@ impl Planner {
         Ok(Plan::Parsed)
     }
 
-    pub fn handle_execute_command(
-        &mut self,
-        session: &mut Session,
-        portal_name: &str,
-    ) -> Result<Plan, failure::Error> {
-        let portal = session
-            .get_portal(portal_name)
-            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
-        let prepared = session
-            .get_prepared_statement(&portal.statement_name)
-            .ok_or_else(|| {
-                failure::format_err!(
-                    "statement for portal does not exist portal={:?} statement={:?}",
-                    portal_name,
-                    portal.statement_name
-                )
-            })?;
-        let stmt = prepared.sql().clone();
-        let plan = self.handle_statement(session, stmt)?;
-        self.apply_plan(session, &plan)?;
-        Ok(plan)
-    }
-
-    /// Mutates the internal state of the planner and session according to the
-    /// `plan`. Centralizing mutations here ensures the rest of the planning
-    /// process is immutable, which is useful for prepared queries.
-    ///
-    /// Note that there are additional mutations that will be undertaken in the
-    /// dataflow layer according to this plan; this method only applies
-    /// mutations internal to the planner and session.
-    fn apply_plan(&mut self, session: &mut Session, plan: &Plan) -> Result<(), failure::Error> {
-        match plan {
-            Plan::CreateView(view) => self.dataflows.insert(Dataflow::View(view.clone())),
-            Plan::CreateSource(source) => self.dataflows.insert(Dataflow::Source(source.clone())),
-            Plan::CreateSources(sources) => {
-                for source in sources {
-                    self.dataflows.insert(Dataflow::Source(source.clone()))?
-                }
-                Ok(())
-            }
-            Plan::CreateSink(sink) => self.dataflows.insert(Dataflow::Sink(sink.clone())),
-            Plan::DropViews(names) | Plan::DropSources(names) => {
-                for name in names {
-                    self.dataflows.remove(name);
-                }
-                Ok(())
-            }
-            Plan::SetVariable { name, value } => session.set(name, value),
-            _ => Ok(()),
-        }
-    }
-
     /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
-    fn handle_statement(
+    pub fn handle_statement(
         &self,
         session: &Session,
         mut stmt: Statement,
@@ -671,13 +585,13 @@ fn sanitize_kafka_topic_name(topic_name: &str) -> String {
 ///
 /// For now tables are treated as a special kind of source in Materialize, so just
 /// allow `TABLE` to refer to either.
-fn object_type_matches(object_type: ObjectType, dataflow: &Dataflow) -> bool {
-    match dataflow {
-        Dataflow::Source { .. } => {
+fn object_type_matches(object_type: ObjectType, item: &CatalogItem) -> bool {
+    match item {
+        CatalogItem::Source { .. } => {
             object_type == ObjectType::Source || object_type == ObjectType::Table
         }
-        Dataflow::Sink { .. } => object_type == ObjectType::Sink,
-        Dataflow::View { .. } => object_type == ObjectType::View,
+        CatalogItem::Sink { .. } => object_type == ObjectType::Sink,
+        CatalogItem::View { .. } => object_type == ObjectType::View,
     }
 }
 

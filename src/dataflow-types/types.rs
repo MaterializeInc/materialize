@@ -10,7 +10,7 @@
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
 use expr::{ColumnOrder, RelationExpr, ScalarExpr};
-use repr::{Datum, RelationDesc, RelationType};
+use repr::{Datum, RelationDesc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use url::Url;
@@ -111,14 +111,37 @@ pub enum LocalInput {
     Watermark(u64),
 }
 
-// /// A named stream of data.
-// #[serde(rename_all = "snake_case")]
-// #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-// pub enum Dataflow {
-//     Source(Source),
-//     Sink(Sink),
-//     Views(Views),
-// }
+/// A named stream of data.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Dataflow {
+    Source(Source),
+    Sink(Sink),
+    View(View),
+}
+
+impl Dataflow {
+    pub fn name(&self) -> &str {
+        match self {
+            Dataflow::Source(source) => &source.name,
+            Dataflow::View(view) => &view.name,
+            Dataflow::Sink(sink) => &sink.name,
+        }
+    }
+
+    /// Collects the names of the dataflows that this dataflow depends upon.
+    pub fn uses(&self) -> Vec<&str> {
+        match self {
+            Dataflow::Source(_src) => Vec::new(),
+            Dataflow::Sink(sink) => vec![&sink.from.0],
+            Dataflow::View(view) => {
+                let mut out = Vec::new();
+                view.relation_expr.unbound_uses(&mut out);
+                out
+            }
+        }
+    }
+}
 
 /// A description of a dataflow to construct and results to surface.
 pub struct DataflowDescription {
@@ -136,40 +159,6 @@ pub struct DataflowDescription {
 }
 
 impl DataflowDescription {
-
-    // /// Reports the name of this dataflow.
-    // pub fn name(&self) -> &str {
-    //     match self {
-    //         Dataflow::Source(src) => &src.name,
-    //         Dataflow::Sink(sink) => &sink.name,
-    //         Dataflow::View(view) => &view.name,
-    //     }
-    // }
-
-    // /// Reports the description of the datums produced by this dataflow.
-    // pub fn desc(&self) -> &RelationDesc {
-    //     match self {
-    //         Dataflow::Source(src) => &src.desc,
-    //         Dataflow::Sink(_) => panic!(
-    //             "programming error: Dataflow.typ called on Sink variant, \
-    //              but sinks don't have a type"
-    //         ),
-    //         Dataflow::View(view) => &view.desc,
-    //     }
-    // }
-
-    // /// Reports the type of the datums produced by this dataflow.
-    // pub fn typ(&self) -> &RelationType {
-    //     match self {
-    //         Dataflow::Source(src) => src.desc.typ(),
-    //         Dataflow::Sink(_) => panic!(
-    //             "programming error: Dataflow.typ called on Sink variant, \
-    //              but sinks don't have a type"
-    //         ),
-    //         Dataflow::View(view) => view.desc.typ(),
-    //     }
-    // }
-
     /// Collects the names of the dataflows that this dataflow depends upon.
     pub fn uses(&self) -> Vec<&str> {
         let mut out = Vec::new();
@@ -211,6 +200,7 @@ pub struct View {
     pub name: String,
     pub relation_expr: RelationExpr,
     pub desc: RelationDesc,
+    pub as_of: Option<Vec<Timestamp>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -250,7 +240,6 @@ pub struct KafkaSinkConnector {
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
 }
-
 
 #[cfg(test)]
 mod tests {
