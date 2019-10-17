@@ -64,6 +64,12 @@ const DATE_STYLE: ServerVar<&'static str> = ServerVar {
     description: "Sets the display format for date and time values (PostgreSQL).",
 };
 
+const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
+    name: unicase::Ascii::new("extra_float_digits"),
+    value: &3,
+    description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
+};
+
 const SERVER_VERSION: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("server_version"),
     // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
@@ -86,6 +92,7 @@ pub struct Session {
     client_encoding: ServerVar<&'static str>,
     database: ServerVar<&'static str>,
     date_style: ServerVar<&'static str>,
+    extra_float_digits: SessionVar<i32>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     /// A map from statement names to SQL queries
@@ -104,6 +111,7 @@ impl fmt::Debug for Session {
             .field("client_encoding", &self.client_encoding())
             .field("database", &self.database())
             .field("date_style", &self.date_style())
+            .field("extra_float_digits", &self.extra_float_digits())
             .field("server_version", &self.server_version())
             .field("sql_safe_updates", &self.sql_safe_updates())
             .field("prepared_statements", &self.prepared_statements.keys())
@@ -120,6 +128,7 @@ impl std::default::Default for Session {
             client_encoding: CLIENT_ENCODING,
             database: DATABASE,
             date_style: DATE_STYLE,
+            extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             prepared_statements: HashMap::new(),
@@ -137,6 +146,7 @@ impl Session {
             &self.client_encoding,
             &self.database,
             &self.date_style,
+            &self.extra_float_digits,
             &self.server_version,
             &self.sql_safe_updates,
         ]
@@ -173,6 +183,8 @@ impl Session {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
             Ok(&self.date_style)
+        } else if name == EXTRA_FLOAT_DIGITS.name {
+            Ok(&self.extra_float_digits)
         } else if name == SERVER_VERSION.name {
             Ok(&self.server_version)
         } else if name == SQL_SAFE_UPDATES.name {
@@ -198,6 +210,8 @@ impl Session {
             bail!("parameter {} is read only", DATABASE.name);
         } else if name == DATE_STYLE.name {
             bail!("parameter {} is read only", DATE_STYLE.name);
+        } else if name == EXTRA_FLOAT_DIGITS.name {
+            self.extra_float_digits.set(value)
         } else if name == SERVER_VERSION.name {
             bail!("parameter {} is read only", SERVER_VERSION.name);
         } else if name == SQL_SAFE_UPDATES.name {
@@ -225,6 +239,11 @@ impl Session {
     /// Returns the value of the `database` configuration parameter.
     pub fn database(&self) -> &'static str {
         self.database.value
+    }
+
+    /// Returns the value of the `extra_float_digits` configuration parameter.
+    pub fn extra_float_digits(&self) -> i32 {
+        *self.extra_float_digits.value()
     }
 
     /// Returns the value of the `server_version` configuration parameter.
@@ -394,6 +413,32 @@ impl Var for SessionVar<str> {
 
     fn value(&self) -> String {
         SessionVar::value(self).to_owned()
+    }
+
+    fn description(&self) -> &'static str {
+        self.parent.description
+    }
+}
+
+impl SessionVar<i32> {
+    fn set(&mut self, value: &str) -> Result<(), failure::Error> {
+        match value.parse() {
+            Ok(value) => {
+                self.value = Some(value);
+                Ok(())
+            }
+            Err(_) => bail!("parameter {} requires an integer value", self.parent.name),
+        }
+    }
+}
+
+impl Var for SessionVar<i32> {
+    fn name(&self) -> &'static str {
+        &self.parent.name
+    }
+
+    fn value(&self) -> String {
+        SessionVar::value(self).to_string()
     }
 
     fn description(&self) -> &'static str {
