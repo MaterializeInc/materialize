@@ -151,6 +151,7 @@ pub enum StateMachine<A: Conn + 'static> {
         StartCopyOut,
         SendError,
         SendParseComplete,
+        SendParameterStatus,
         WaitForRows,
         Error
     ))]
@@ -232,6 +233,13 @@ pub enum StateMachine<A: Conn + 'static> {
         send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
         session: Session,
         rx: comm::mpsc::Receiver<Vec<Update>>,
+    },
+
+    #[state_machine_future(transitions(SendCommandComplete))]
+    SendParameterStatus {
+        send: SinkSend<A>,
+        session: Session,
+        extended: bool,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, RecvQuery, Error))]
@@ -347,7 +355,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             .chain(
                 state
                     .session
-                    .startup_vars()
+                    .notify_vars()
                     .iter()
                     .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
             )
@@ -586,7 +594,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             })
                         }
                     }
-                    SqlResponse::SetVariable => command_complete!("SET", "set"),
+                    SqlResponse::SetVariable { name } => {
+                        if let Some(var) = session.notify_vars().iter().find(|v| v.name() == name) {
+                            trace!("sending parameter status for {}", name);
+                            transition!(SendParameterStatus {
+                                send: state
+                                    .conn
+                                    .send(BackendMessage::ParameterStatus(var.name(), var.value())),
+                                session,
+                                extended: state.extended,
+                            })
+                        } else {
+                            command_complete!("SET", "set")
+                        }
+                    }
                     SqlResponse::Tailing { rx } => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
                         session,
@@ -630,12 +651,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendParameterDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        return Ok(Async::Ready(send_describe_response(
+        Ok(Async::Ready(send_describe_response(
             conn,
             state.session,
             state.name,
             DescribeKind::Statement,
-        )));
+        )))
     }
 
     fn poll_send_describe_response<'s, 'c>(
@@ -835,6 +856,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 })
             }
         }
+    }
+
+    fn poll_send_parameter_status<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendParameterStatus<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendParameterStatus<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        transition!(SendCommandComplete {
+            send: Box::new(conn.send(BackendMessage::CommandComplete { tag: "SET".into() })),
+            session: state.session,
+            currently_extended: state.extended,
+            label: "set",
+        })
     }
 
     fn poll_send_error<'s, 'c>(

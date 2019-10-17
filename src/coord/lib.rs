@@ -101,7 +101,9 @@ pub enum SqlResponse {
     },
     /// We have successfully parsed the query and stashed it in the [`Session`]
     Parsed,
-    SetVariable,
+    SetVariable {
+        name: String,
+    },
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
@@ -118,7 +120,7 @@ impl fmt::Debug for SqlResponse {
             SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
             SqlResponse::Parsed => write!(f, "SqlResponse::Parsed"),
             SqlResponse::SendRows { desc, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", desc),
-            SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
+            SqlResponse::SetVariable { name } => write!(f, "SqlResponse::SetVariable({})", name),
             SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),
         }
     }

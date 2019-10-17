@@ -172,7 +172,7 @@ where
 
             Plan::EmptyQuery => SqlResponse::EmptyQuery,
 
-            Plan::SetVariable { .. } => SqlResponse::SetVariable,
+            Plan::SetVariable { name, .. } => SqlResponse::SetVariable { name },
 
             Plan::Peek {
                 mut source,

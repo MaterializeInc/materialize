@@ -154,8 +154,8 @@ impl Session {
 
     /// Returns the configuration parameters (and their current values for this
     /// session) that are expected to be sent to the client when a new
-    /// connection is established.
-    pub fn startup_vars(&self) -> Vec<&dyn Var> {
+    /// connection is established or when their value changes.
+    pub fn notify_vars(&self) -> Vec<&dyn Var> {
         vec![
             &self.application_name,
             &self.client_encoding,
