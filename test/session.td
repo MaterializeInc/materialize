@@ -4,6 +4,7 @@
 # distributed without the express permission of Materialize, Inc.
 
 > SHOW ALL
+application_name  ""                  "Sets the application name to be reported in statistics and logs (PostgreSQL)."
 client_encoding   UTF8                "Sets the client's character set encoding (PostgreSQL)."
 database          default             "Sets the current database (CockroachDB)."
 DateStyle         "ISO, MDY"          "Sets the display format for date and time values (PostgreSQL)."

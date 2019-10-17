@@ -27,7 +27,9 @@
 
 #![forbid(missing_docs)]
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fmt;
 
 use failure::bail;
 
@@ -36,6 +38,12 @@ use repr::RelationDesc;
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
 // always write a macro.
+
+const APPLICATION_NAME: ServerVar<&'static str> = ServerVar {
+    name: unicase::Ascii::new("application_name"),
+    value: "",
+    description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
+};
 
 const CLIENT_ENCODING: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("client_encoding"),
@@ -66,14 +74,15 @@ const SERVER_VERSION: ServerVar<&'static str> = ServerVar {
     description: "Shows the server version (PostgreSQL).",
 };
 
-const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
+const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
     name: unicase::Ascii::new("sql_safe_updates"),
-    value: false,
+    value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
+    application_name: SessionVar<str>,
     client_encoding: ServerVar<&'static str>,
     database: ServerVar<&'static str>,
     date_style: ServerVar<&'static str>,
@@ -88,14 +97,15 @@ pub struct Session {
     portals: HashMap<String, Portal>,
 }
 
-impl std::fmt::Debug for Session {
+impl fmt::Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("Session")
-            .field("client_encoding", &self.client_encoding.value)
-            .field("database", &self.database.value)
-            .field("date_style", &self.date_style.value)
-            .field("server_version", &self.server_version.value)
-            .field("sql_safe_updates", &self.sql_safe_updates.value)
+            .field("application_name", &self.application_name())
+            .field("client_encoding", &self.client_encoding())
+            .field("database", &self.database())
+            .field("date_style", &self.date_style())
+            .field("server_version", &self.server_version())
+            .field("sql_safe_updates", &self.sql_safe_updates())
             .field("prepared_statements", &self.prepared_statements.keys())
             .field("portals", &self.portals.keys())
             .finish()
@@ -106,6 +116,7 @@ impl std::default::Default for Session {
     /// Constructs a new `Session` with default values.
     fn default() -> Session {
         Session {
+            application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
             database: DATABASE,
             date_style: DATE_STYLE,
@@ -122,6 +133,7 @@ impl Session {
     /// session.
     pub fn vars(&self) -> Vec<&dyn Var> {
         vec![
+            &self.application_name,
             &self.client_encoding,
             &self.database,
             &self.date_style,
@@ -135,6 +147,7 @@ impl Session {
     /// connection is established.
     pub fn startup_vars(&self) -> Vec<&dyn Var> {
         vec![
+            &self.application_name,
             &self.client_encoding,
             &self.date_style,
             &self.server_version,
@@ -152,7 +165,9 @@ impl Session {
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
     pub fn get(&self, name: &str) -> Result<&dyn Var, failure::Error> {
-        if name == CLIENT_ENCODING.name {
+        if name == APPLICATION_NAME.name {
+            Ok(&self.application_name)
+        } else if name == CLIENT_ENCODING.name {
             Ok(&self.client_encoding)
         } else if name == DATABASE.name {
             Ok(&self.database)
@@ -175,7 +190,9 @@ impl Session {
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
     pub fn set(&mut self, name: &str, value: &str) -> Result<(), failure::Error> {
-        if name == CLIENT_ENCODING.name {
+        if name == APPLICATION_NAME.name {
+            self.application_name.set(value)
+        } else if name == CLIENT_ENCODING.name {
             bail!("parameter {} is read only", CLIENT_ENCODING.name);
         } else if name == DATABASE.name {
             bail!("parameter {} is read only", DATABASE.name);
@@ -188,6 +205,11 @@ impl Session {
         } else {
             bail!("unknown parameter: {}", name)
         }
+    }
+
+    /// Returns the value of the `application_name` configuration parameter.
+    pub fn application_name(&self) -> &str {
+        self.application_name.value()
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.
@@ -306,17 +328,17 @@ struct ServerVar<V> {
 #[derive(Debug)]
 struct SessionVar<V>
 where
-    V: 'static,
+    V: ToOwned + ?Sized + 'static,
 {
-    value: Option<V>,
-    parent: &'static ServerVar<V>,
+    value: Option<V::Owned>,
+    parent: &'static ServerVar<&'static V>,
 }
 
 impl<V> SessionVar<V>
 where
-    V: 'static,
+    V: ToOwned + ?Sized + 'static,
 {
-    fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
+    fn new(parent: &'static ServerVar<&'static V>) -> SessionVar<V> {
         SessionVar {
             value: None,
             parent,
@@ -324,7 +346,10 @@ where
     }
 
     fn value(&self) -> &V {
-        self.value.as_ref().unwrap_or(&self.parent.value)
+        self.value
+            .as_ref()
+            .map(|v| v.borrow())
+            .unwrap_or(self.parent.value)
     }
 }
 
@@ -348,6 +373,27 @@ impl Var for SessionVar<bool> {
 
     fn value(&self) -> String {
         SessionVar::value(self).to_string()
+    }
+
+    fn description(&self) -> &'static str {
+        self.parent.description
+    }
+}
+
+impl SessionVar<str> {
+    fn set(&mut self, value: &str) -> Result<(), failure::Error> {
+        self.value = Some(value.to_owned());
+        Ok(())
+    }
+}
+
+impl Var for SessionVar<str> {
+    fn name(&self) -> &'static str {
+        &self.parent.name
+    }
+
+    fn value(&self) -> String {
+        SessionVar::value(self).to_owned()
     }
 
     fn description(&self) -> &'static str {
