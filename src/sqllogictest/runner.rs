@@ -39,7 +39,7 @@ use uuid::Uuid;
 use coord::{coordinator::Coordinator, SqlResponse};
 use dataflow;
 use dataflow_types::{
-    self, Dataflow, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
+    self, DataflowDescription, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
 };
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
@@ -507,7 +507,8 @@ impl State {
                 };
                 self.catalog
                     .insert(sql::store::CatalogItem::Source(source.clone()))?;
-                self.coord.create_dataflows(vec![Dataflow::Source(source)]);
+                self.coord
+                    .create_dataflows(vec![DataflowDescription::from(source)]);
                 {
                     self.local_input_mux
                         .read()

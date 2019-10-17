@@ -111,39 +111,40 @@ pub enum LocalInput {
     Watermark(u64),
 }
 
-/// A named stream of data.
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Dataflow {
-    Source(Source),
-    Sink(Sink),
-    View(View),
-}
+// /// A named stream of data.
+// #[serde(rename_all = "snake_case")]
+// #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+// pub enum Dataflow {
+//     Source(Source),
+//     Sink(Sink),
+//     View(View),
+// }
 
-impl Dataflow {
-    pub fn name(&self) -> &str {
-        match self {
-            Dataflow::Source(source) => &source.name,
-            Dataflow::View(view) => &view.name,
-            Dataflow::Sink(sink) => &sink.name,
-        }
-    }
+// impl Dataflow {
+//     pub fn name(&self) -> &str {
+//         match self {
+//             Dataflow::Source(source) => &source.name,
+//             Dataflow::View(view) => &view.name,
+//             Dataflow::Sink(sink) => &sink.name,
+//         }
+//     }
 
-    /// Collects the names of the dataflows that this dataflow depends upon.
-    pub fn uses(&self) -> Vec<&str> {
-        match self {
-            Dataflow::Source(_src) => Vec::new(),
-            Dataflow::Sink(sink) => vec![&sink.from.0],
-            Dataflow::View(view) => {
-                let mut out = Vec::new();
-                view.relation_expr.unbound_uses(&mut out);
-                out
-            }
-        }
-    }
-}
+//     /// Collects the names of the dataflows that this dataflow depends upon.
+//     pub fn uses(&self) -> Vec<&str> {
+//         match self {
+//             Dataflow::Source(_src) => Vec::new(),
+//             Dataflow::Sink(sink) => vec![&sink.from.0],
+//             Dataflow::View(view) => {
+//                 let mut out = Vec::new();
+//                 view.relation_expr.unbound_uses(&mut out);
+//                 out
+//             }
+//         }
+//     }
+// }
 
 /// A description of a dataflow to construct and results to surface.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DataflowDescription {
     /// Named sources used by the dataflow.
     pub sources: Vec<Source>,
@@ -159,6 +160,15 @@ pub struct DataflowDescription {
 }
 
 impl DataflowDescription {
+    pub fn new(as_of: Option<Vec<Timestamp>>) -> Self {
+        Self {
+            sources: Vec::new(),
+            views: Vec::new(),
+            sinks: Vec::new(),
+            as_of,
+        }
+    }
+
     /// Collects the names of the dataflows that this dataflow depends upon.
     pub fn uses(&self) -> Vec<&str> {
         let mut out = Vec::new();
@@ -168,6 +178,41 @@ impl DataflowDescription {
         out.sort();
         out.dedup();
         out
+    }
+
+    pub fn add_source(mut self, source: Source) -> Self {
+        self.sources.push(source);
+        self
+    }
+    pub fn add_view(mut self, view: View) -> Self {
+        self.views.push(view);
+        self
+    }
+    pub fn add_sink(mut self, sink: Sink) -> Self {
+        self.sinks.push(sink);
+        self
+    }
+    pub fn as_of(mut self, as_of: Option<Vec<Timestamp>>) -> Self {
+        self.as_of = as_of;
+        self
+    }
+}
+
+impl From<Source> for DataflowDescription {
+    fn from(s: Source) -> Self {
+        DataflowDescription::new(None).add_source(s)
+    }
+}
+
+impl From<View> for DataflowDescription {
+    fn from(v: View) -> Self {
+        DataflowDescription::new(None).add_view(v)
+    }
+}
+
+impl From<Sink> for DataflowDescription {
+    fn from(s: Sink) -> Self {
+        DataflowDescription::new(None).add_sink(s)
     }
 }
 
@@ -200,7 +245,7 @@ pub struct View {
     pub name: String,
     pub relation_expr: RelationExpr,
     pub desc: RelationDesc,
-    pub as_of: Option<Vec<Timestamp>>,
+    // pub as_of: Option<Vec<Timestamp>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

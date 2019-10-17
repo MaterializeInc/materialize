@@ -34,7 +34,7 @@ mod context;
 use context::{ArrangementFlavor, Context};
 
 pub fn build_dataflow<A: Allocate>(
-    dataflow: Dataflow,
+    dataflow: DataflowDescription,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<String, Box<dyn Any>>,
@@ -44,8 +44,8 @@ pub fn build_dataflow<A: Allocate>(
     let worker_index = worker.index();
     let worker_peers = worker.peers();
 
-    worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
-        Dataflow::Source(src) => {
+    worker.dataflow::<Timestamp, _, _>(|scope| {
+        for src in dataflow.sources {
             let (stream, capability) = match src.connector {
                 SourceConnector::Kafka(c) => {
                     // Distribute read responsibility among workers.
@@ -81,27 +81,9 @@ pub fn build_dataflow<A: Allocate>(
                 );
             }
         }
-        Dataflow::Sink(sink) => {
-            // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
-            // the concept of dropping a sink.
-            let (_key, trace) = manager
-                .get_all_keyed(&sink.from.0)
-                .expect("View missing")
-                .next()
-                .expect("No arrangements");
-            let token = trace.to_drop().clone();
-            let (arrangement, button) =
-                trace.import_core(scope, &format!("Import({:?})", sink.from));
 
-            match sink.connector {
-                SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
-                SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
-            }
-
-            dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
-        }
-        Dataflow::View(view) => {
-            let as_of = view
+        for view in dataflow.views {
+            let as_of = dataflow
                 .as_of
                 .as_ref()
                 .map(|x| x.to_vec())
@@ -179,6 +161,26 @@ pub fn build_dataflow<A: Allocate>(
                     );
                 }
             });
+        }
+
+        for sink in dataflow.sinks {
+            // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
+            // the concept of dropping a sink.
+            let (_key, trace) = manager
+                .get_all_keyed(&sink.from.0)
+                .expect("View missing")
+                .next()
+                .expect("No arrangements");
+            let token = trace.to_drop().clone();
+            let (arrangement, button) =
+                trace.import_core(scope, &format!("Import({:?})", sink.from));
+
+            match sink.connector {
+                SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
+                SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
+            }
+
+            dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
         }
     })
 }

@@ -253,7 +253,6 @@ impl<'catalog> Planner<'catalog> {
                     name: extract_sql_object_name(name)?,
                     relation_expr,
                     desc,
-                    as_of: None,
                 };
                 Ok(Plan::CreateView(view))
             }

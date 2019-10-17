@@ -38,7 +38,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Dataflow, LocalInput, PeekResponse, RowSetFinishing, Timestamp,
+    compare_columns, DataflowDescription, LocalInput, PeekResponse, RowSetFinishing, Timestamp,
 };
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
@@ -62,9 +62,9 @@ impl comm::broadcast::Token for BroadcastToken {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.
-    CreateDataflows(Vec<Dataflow>),
+    CreateDataflows(Vec<DataflowDescription>),
     /// Drop the dataflows bound to these names.
-    DropDataflows(Vec<String>),
+    DropThings(Vec<String>),
     /// Peek at a materialized view.
     Peek {
         name: String,
@@ -330,12 +330,12 @@ where
         match cmd {
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        logger.log(MaterializedEvent::Dataflow(
-                            dataflow.name().to_string(),
-                            true,
-                        ));
-                    }
+                    // if let Some(logger) = self.materialized_logger.as_mut() {
+                    //     logger.log(MaterializedEvent::Dataflow(
+                    //         dataflow.name().to_string(),
+                    //         true,
+                    //     ));
+                    // }
                     render::build_dataflow(
                         dataflow,
                         &mut self.traces,
@@ -347,7 +347,7 @@ where
                 }
             }
 
-            SequencedCommand::DropDataflows(dataflows) => {
+            SequencedCommand::DropThings(dataflows) => {
                 for name in &dataflows {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));

@@ -28,8 +28,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Dataflow, PeekResponse, PeekWhen, RowSetFinishing, Sink, SinkConnector,
-    TailSinkConnector, Timestamp, View,
+    compare_columns, DataflowDescription, PeekResponse, PeekWhen, RowSetFinishing, Sink,
+    SinkConnector, TailSinkConnector, Timestamp, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
@@ -79,9 +79,10 @@ where
         };
 
         if let Some(logging_config) = logging_config {
-            for log in logging_config.active_logs().iter() {
+            for _log in logging_config.active_logs().iter() {
                 // Insert with 1 second compaction latency.
-                coordinator.insert_source(log.name(), 1_000);
+                // coordinator.insert_source(log.name(), 1_000);
+                unimplemented!();
             }
         }
 
@@ -122,7 +123,7 @@ where
     ) -> SqlResponse {
         match plan {
             Plan::CreateSource(source) => {
-                self.create_dataflows(vec![Dataflow::Source(source)]);
+                self.create_dataflows(vec![DataflowDescription::from(source)]);
                 SqlResponse::CreatedSource
             }
 
@@ -130,7 +131,7 @@ where
                 self.create_dataflows(
                     sources
                         .iter()
-                        .map(|s| Dataflow::Source(s.clone()))
+                        .map(|s| DataflowDescription::from(s.clone()))
                         .collect(),
                 );
                 send_immediate_rows(
@@ -143,12 +144,12 @@ where
             }
 
             Plan::CreateSink(sink) => {
-                self.create_dataflows(vec![Dataflow::Sink(sink)]);
+                self.create_dataflows(vec![DataflowDescription::from(sink)]);
                 SqlResponse::CreatedSink
             }
 
             Plan::CreateView(view) => {
-                self.create_dataflows(vec![Dataflow::View(view)]);
+                self.create_dataflows(vec![DataflowDescription::from(view)]);
                 SqlResponse::CreatedView
             }
 
@@ -163,10 +164,7 @@ where
             Plan::DropViews(names) => {
                 // See note in `DropSources` about the conversion from plural to
                 // singular.
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::DropDataflows(names),
-                );
+                broadcast(&mut self.broadcast_tx, SequencedCommand::DropThings(names));
                 SqlResponse::DroppedView
             }
 
@@ -219,12 +217,14 @@ where
                     // peek completes.
                     let name = format!("<peek_{}>", Uuid::new_v4());
 
-                    self.create_dataflows(vec![Dataflow::View(View {
+                    let dataflow = DataflowDescription::from(View {
                         name: name.clone(),
                         relation_expr: source,
                         desc: desc.clone(),
-                        as_of: Some(vec![timestamp.clone()]),
-                    })]);
+                    })
+                    .as_of(Some(vec![timestamp.clone()]));
+
+                    self.create_dataflows(vec![dataflow]);
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::Peek {
@@ -237,7 +237,7 @@ where
                     );
                     broadcast(
                         &mut self.broadcast_tx,
-                        SequencedCommand::DropDataflows(vec![name]),
+                        SequencedCommand::DropThings(vec![name]),
                     );
                 }
 
@@ -293,7 +293,7 @@ where
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 broadcast(
                     &mut self.broadcast_tx,
-                    SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
+                    SequencedCommand::CreateDataflows(vec![DataflowDescription::from(Sink {
                         name,
                         from: (source.name().to_owned(), source.desc().clone()),
                         connector: SinkConnector::Tail(TailSinkConnector { tx }),
@@ -369,9 +369,9 @@ where
         use_finishing(expr, finishing);
     }
 
-    pub fn create_dataflows(&mut self, mut dataflows: Vec<Dataflow>) {
+    pub fn create_dataflows(&mut self, mut dataflows: Vec<DataflowDescription>) {
         for dataflow in dataflows.iter_mut() {
-            if let Dataflow::View(view) = dataflow {
+            for view in dataflow.views.iter_mut() {
                 self.optimizer.optimize(&mut view.relation_expr);
             }
         }
@@ -380,14 +380,14 @@ where
             SequencedCommand::CreateDataflows(dataflows.clone()),
         );
         for dataflow in dataflows.iter() {
-            self.insert_view(dataflow);
+            self.insert_views(dataflow);
         }
     }
 
     pub fn drop_dataflows(&mut self, dataflow_names: Vec<String>) {
         broadcast(
             &mut self.broadcast_tx,
-            SequencedCommand::DropDataflows(dataflow_names),
+            SequencedCommand::DropThings(dataflow_names),
         )
     }
 
@@ -475,14 +475,11 @@ where
     /// This method transitively traverses view definitions until it finds sources, and incorporates
     /// the accepted frontiers of each source into `bound`.
     fn sources_frontier(&self, name: &str, bound: &mut Antichain<Timestamp>) {
-        if let Some(uses) = &self.views[name].uses {
-            for name in uses {
-                self.sources_frontier(name, bound);
-            }
-        } else {
-            let upper = self.upper_of(name).expect("Name missing at coordinator");
-            bound.extend(upper.elements().iter().cloned());
+        for name in self.views[name].uses.iter() {
+            self.sources_frontier(name, bound);
         }
+        let upper = self.upper_of(name).expect("Name missing at coordinator");
+        bound.extend(upper.elements().iter().cloned());
     }
 
     /// Updates the upper frontier of a named view.
@@ -555,46 +552,48 @@ where
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    fn insert_view(&mut self, dataflow: &Dataflow) {
-        self.remove_view(dataflow.name());
-        let viewstate = ViewState::new(dataflow);
-        if self.log {
-            for time in viewstate.upper.elements() {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                        dataflow.name().to_string(),
-                        time.clone(),
-                        1,
-                    )),
-                );
+    fn insert_views(&mut self, dataflow: &DataflowDescription) {
+        for view in dataflow.views.iter() {
+            self.remove_view(&view.name);
+            let viewstate = ViewState::new(view);
+            if self.log {
+                for time in viewstate.upper.elements() {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                            view.name.clone(),
+                            time.clone(),
+                            1,
+                        )),
+                    );
+                }
             }
+            self.views.insert(view.name.clone(), viewstate);
         }
-        self.views.insert(dataflow.name().to_string(), viewstate);
     }
 
-    /// Inserts a source into the coordinator.
-    ///
-    /// Unlike `insert_view`, this method can be called without a dataflow argument.
-    /// This is most commonly used for internal sources such as logging.
-    fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
-        self.remove_view(name);
-        let mut viewstate = ViewState::new_source();
-        if self.log {
-            for time in viewstate.upper.elements() {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                        name.to_string(),
-                        time.clone(),
-                        1,
-                    )),
-                );
-            }
-        }
-        viewstate.set_compaction_latency(compaction_ms);
-        self.views.insert(name.to_string(), viewstate);
-    }
+    // /// Inserts a source into the coordinator.
+    // ///
+    // /// Unlike `insert_view`, this method can be called without a dataflow argument.
+    // /// This is most commonly used for internal sources such as logging.
+    // fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
+    //     self.remove_view(name);
+    //     let mut viewstate = ViewState::new_source();
+    //     if self.log {
+    //         for time in viewstate.upper.elements() {
+    //             broadcast(
+    //                 &mut self.broadcast_tx,
+    //                 SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+    //                     name.to_string(),
+    //                     time.clone(),
+    //                     1,
+    //                 )),
+    //             );
+    //         }
+    //     }
+    //     viewstate.set_compaction_latency(compaction_ms);
+    //     self.views.insert(name.to_string(), viewstate);
+    // }
 
     /// Removes a view from the coordinator.
     ///
@@ -642,8 +641,8 @@ fn send_immediate_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> SqlResponse
 
 /// Per-view state.
 pub struct ViewState {
-    /// Names of views on which this view depends, or `None` if a source.
-    uses: Option<Vec<String>>,
+    /// Names of views on which this view depends.
+    uses: Vec<String>,
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     upper: Antichain<Timestamp>,
@@ -663,26 +662,16 @@ impl ViewState {
     /// Initialize a new `ViewState` from a name and a dataflow.
     ///
     /// The upper bound and since compaction are initialized to the zero frontier.
-    pub fn new(dataflow: &Dataflow) -> Self {
+    pub fn new(view: &View) -> Self {
         // determine immediate dependencies.
-        let uses = match dataflow {
-            Dataflow::Source(_) => None,
-            Dataflow::Sink(_) => None,
-            v @ Dataflow::View(_) => Some(v.uses().iter().map(|x| x.to_string()).collect()),
-        };
+        let mut out = Vec::new();
+        view.relation_expr.unbound_uses(&mut out);
+        out.sort();
+        out.dedup();
+        let uses = out.iter().map(|x| x.to_string()).collect();
 
         ViewState {
             uses,
-            upper: Antichain::from_elem(0),
-            since: Antichain::from_elem(0),
-            compaction_latency_ms: 60_000,
-        }
-    }
-
-    /// Creates the state for a source, with no depedencies.
-    pub fn new_source() -> Self {
-        ViewState {
-            uses: None,
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
             compaction_latency_ms: 60_000,
