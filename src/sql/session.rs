@@ -58,13 +58,11 @@ const DATE_STYLE: ServerVar<&'static str> = ServerVar {
 
 const SERVER_VERSION: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("server_version"),
-    // Postgres client libraries sometimes check this,
-    // so pretend to be a recent version for their benefit
-    value: concat!(
-        "12.0.0+postgres ",
-        env!("CARGO_PKG_VERSION"),
-        "+materialized"
-    ),
+    // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
+    // be. Too new and some clients will emit a "server too new" warning. Too
+    // old and some clients will fall back to legacy code paths. v9.5.0
+    // empirically seems to be a good compromise.
+    value: "9.5.0",
     description: "Shows the server version (PostgreSQL).",
 };
 
