@@ -427,7 +427,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     conn,
                     rx,
                     field_formats: None,
-                    extended: true,
+                    extended: false,
                 })
             }
             FrontendMessage::Parse { name, sql, .. } => {
