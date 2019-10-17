@@ -37,7 +37,10 @@ pub enum Plan {
     DropSources(Vec<String>),
     DropViews(Vec<String>),
     EmptyQuery,
-    DidSetVariable,
+    SetVariable {
+        name: String,
+        value: String,
+    },
     Parsed {
         name: String,
     },
