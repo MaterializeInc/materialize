@@ -61,6 +61,7 @@ impl comm::broadcast::Token for BroadcastToken {
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
+    BindSources(Vec<dataflow_types::Source>),
     /// Create a sequence of dataflows.
     CreateDataflows(Vec<DataflowDescription>),
     /// Drop the dataflows bound to these names.
@@ -162,6 +163,7 @@ where
             command_rx,
             materialized_logger: None,
             dataflow_drops: HashMap::new(),
+            sources: HashMap::new(),
         }
         .run()
     })
@@ -195,6 +197,7 @@ where
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
     dataflow_drops: HashMap<String, Box<dyn Any>>,
+    sources: HashMap<String, dataflow_types::Source>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -328,14 +331,23 @@ where
 
     fn handle_command(&mut self, cmd: SequencedCommand) {
         match cmd {
+            SequencedCommand::BindSources(sources) => {
+                for source in sources {
+                    self.sources.insert(source.name.to_string(), source);
+                }
+            }
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-                    // if let Some(logger) = self.materialized_logger.as_mut() {
-                    //     logger.log(MaterializedEvent::Dataflow(
-                    //         dataflow.name().to_string(),
-                    //         true,
-                    //     ));
-                    // }
+
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        for view in dataflow.views.iter() {
+                            logger.log(MaterializedEvent::Dataflow(
+                                view.name.to_string(),
+                                true,
+                            ));
+                        }
+                    }
+
                     render::build_dataflow(
                         dataflow,
                         &mut self.traces,
@@ -347,11 +359,12 @@ where
                 }
             }
 
-            SequencedCommand::DropThings(dataflows) => {
-                for name in &dataflows {
+            SequencedCommand::DropThings(names) => {
+                for name in &names {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                     }
+                    self.sources.remove(name);
                     self.traces.del_trace(name);
                     self.dataflow_drops.remove(name);
                 }

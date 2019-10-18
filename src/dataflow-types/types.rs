@@ -252,6 +252,7 @@ pub struct View {
 pub enum SourceConnector {
     Kafka(KafkaSourceConnector),
     Local(LocalSourceConnector),
+    Logging(LogSourceConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -266,6 +267,18 @@ pub struct KafkaSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LocalSourceConnector {
     pub uuid: Uuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LogSourceConnector {
+    pub layer: LogLayer,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum LogLayer {
+    Timely,
+    Differential,
+    Materialized,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
