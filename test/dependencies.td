@@ -15,23 +15,23 @@
 > CREATE MATERIALIZED VIEW test3b AS SELECT * FROM test2;
 
 ! DROP VIEW test1;
-cannot delete test1: still depended upon by dataflow 'test2'
+cannot delete test1: still depended upon by catalog item 'test2'
 
 ! DROP VIEW test2;
-cannot delete test2: still depended upon by dataflow 'test3a'
+cannot delete test2: still depended upon by catalog item 'test3a'
 
 > DROP VIEW test3a;
 
 ! DROP VIEW test1;
-cannot delete test1: still depended upon by dataflow 'test2'
+cannot delete test1: still depended upon by catalog item 'test2'
 
 ! DROP VIEW test2;
-cannot delete test2: still depended upon by dataflow 'test3b'
+cannot delete test2: still depended upon by catalog item 'test3b'
 
 > DROP VIEW test3b;
 
 ! DROP VIEW test1;
-cannot delete test1: still depended upon by dataflow 'test2'
+cannot delete test1: still depended upon by catalog item 'test2'
 
 > DROP VIEW test2;
 
@@ -51,10 +51,10 @@ cannot delete test1: still depended upon by dataflow 'test2'
 # rather than verifying the drop by checking whether DROP VIEW fails.
 
 ! DROP VIEW test1;
-dataflow test1 does not exist
+catalog item test1 does not exist
 
 ! DROP VIEW test2;
-dataflow test2 does not exist
+catalog item test2 does not exist
 
 # Test that DROP VIEW IF EXISTS succeeds even if the view does not exist.
 
@@ -67,4 +67,4 @@ dataflow test2 does not exist
 > CREATE SINK s1 FROM v1 INTO 'kafka://${testdrive.kafka-addr}/v'
 
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
-dataflow s1 is a sink and cannot be depended upon
+catalog item s1 is a sink and cannot be depended upon

@@ -96,8 +96,8 @@ impl TraceManager {
     }
 
     /// Removes all remnants of a named trace.
-    pub fn del_trace(&mut self, name: &str) {
-        self.traces.remove(name);
+    pub fn del_trace(&mut self, name: &str) -> Option<CollectionTraces> {
+        self.traces.remove(name)
     }
 
     /// Removes all remnants of all named traces.

@@ -358,11 +358,12 @@ where
 
             SequencedCommand::DropThings(names) => {
                 for name in &names {
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
-                    }
                     self.sources.remove(name);
-                    self.traces.del_trace(name);
+                    if self.traces.del_trace(name).is_some() {
+                        if let Some(logger) = self.materialized_logger.as_mut() {
+                            logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
+                        }
+                    }
                     self.dataflow_drops.remove(name);
                 }
             }
