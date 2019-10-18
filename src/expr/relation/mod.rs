@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 #![deny(missing_docs)]
-
 // Clippy is wrong.
 #![allow(clippy::op_ref, clippy::len_zero)]
 
@@ -14,6 +13,7 @@ use self::func::AggregateFunc;
 use crate::pretty_pretty::{
     compact_intersperse_doc, tighten_outputs, to_braced_doc, to_tightly_braced_doc,
 };
+use crate::transform::binding::IdGen;
 use crate::ScalarExpr;
 use failure::ResultExt;
 use pretty::Doc::Space;
@@ -793,7 +793,7 @@ impl RelationExpr {
             // already done
             body(id_gen, self)
         } else {
-            let name = format!("tmp_{}", id_gen.allocate_id());
+            let name = id_gen.fresh_id();
             let get = RelationExpr::Get {
                 name: name.clone(),
                 typ: self.typ(),
@@ -865,20 +865,6 @@ pub struct ColumnOrder {
     pub column: usize,
     /// Whether to sort in descending order
     pub desc: bool,
-}
-
-/// Manages the allocation of locally unique IDs when building a [`RelationExpr`].
-#[derive(Debug, Default)]
-pub struct IdGen {
-    id: usize,
-}
-
-impl IdGen {
-    fn allocate_id(&mut self) -> usize {
-        let id = self.id;
-        self.id += 1;
-        id
-    }
 }
 
 /// Describes an aggregation expression.

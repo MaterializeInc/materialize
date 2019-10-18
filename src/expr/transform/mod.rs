@@ -87,7 +87,10 @@ impl Default for Optimizer {
             Box::new(crate::transform::fusion::join::Join),
             Box::new(crate::transform::join_elision::JoinElision),
             Box::new(crate::transform::empty_map::EmptyMap),
-            // Unbinding increases the complexity, but exposes more optimization opportunities.
+            // Yes, Unbind runs twice, since the first run may just create more opportunities.
+            // Though we should move Unbind + Deduplicate into a fixed point, since Deduplicate
+            // may also create more opportunities for Unbind.
+            Box::new(crate::transform::binding::Unbind),
             Box::new(crate::transform::binding::Unbind),
             Box::new(crate::transform::binding::Deduplicate),
             // Early actions include "no-brainer" transformations that reduce complexity in linear passes.
@@ -122,7 +125,6 @@ impl Default for Optimizer {
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
             Box::new(crate::transform::fusion::project::Project),
-            Box::new(crate::transform::binding::Normalize),
             Box::new(crate::transform::constant_join::ConstantJoin),
         ];
         Self { transforms }

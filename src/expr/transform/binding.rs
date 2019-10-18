@@ -3,98 +3,85 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Processing Bindings
+//! # Optimizing Bindings
 //!
-//! This module implements functionality for inspecting and modifying dataflow
-//! graphs in the presence of local bindings. [`RelationExpr`] includes the
-//! ability to abstract over values through [`RelationExpr::Let`]. Each such let
-//! expression associates a name with a value and makes that *binding* available
-//! within a body, which can then access the value again through
-//! [`RelationExpr::Get`]. At the same time, the binding's visibility is
-//! restricted to the body. It is *scoped*.
+//! This module provides optimizations for bindings, i.e., [`RelationExpr::Let`]
+//! and [`RelationExpr::Get`] operators. The former associate the *value*
+//! relation with a symbolic name that can be referenced in the *body* relation
+//! through the latter. While eminently useful, bindings violate referential
+//! transparency and thereby complicate the analysis, optimization, and
+//! execution of dataflow graphs. Fundamentally, that is because __Let__ and
+//! __Get__ introduce non-local dependencies, i.e., all __Get__ operators for
+//! some `id` in the body of the closest __Let__ for `id` depend on that binding
+//! and thereby its value. Any correct transformation of a dataflow must
+//! preserve these dependencies.
 //!
-//! While all of this is familiar from programming languages, it does have
-//! non-trivial implications on optimizations. Notably, a [`RelationExpr`]
-//! with let and get expressions is not referentially transparent and thus
-//! restricts how it can be transformed. In particular, the body of a let
-//! expression depends on the binding and the binding, in turn, depends on
-//! its value. Shadowing introduces further constraints that are difficult
-//! to preserve in a system that may just execute several independent queries
-//! at the same time. To avoid that, we introduce our first invariant:
+//! Notably, this module provides:
 //!
-//! >   **Invariant 1**: Every binding has a unique name, i.e., there is *no*
-//! >   shadowing of names.
-//!
-//! But even without shadowing the *depends-on* relationship just introduced
-//! imposes certain ordering constraints when processing bindings.
-//!
-//! Since preserving *depends-on* constraints during arbitrary optimizations can
-//! be difficult, we may want to hoist bindings to the top of the dataflow
-//! graph. Our second invariant covers that case:
-//!
-//! >   **Invariant 2**: The value of a local binding must be processed before
-//! >   its body.
-//!
-//! All methods for visiting [`RelationExpr`] including `visit1()` and
-//! `visit1_must()` already preserve that invariant. Our third invariant follows
-//! directly from the second invariant and covers the hoisting of existing local
-//! bindings:
-//!
-//! >   **Invariant 3**: When extracting bindings from a dataflow graph, e.g.,
-//! >   during hoisting, they must be extracted *in-order*.
-//!
-//! Our fourth invariant also follows from the second one and covers the
-//! introduction of new bindings, notably when deduplicating repeated subgraphs:
-//!
-//! >   **Invariant 4**: When injecting bindings into a dataflow graph, e.g.,
-//! >   during deduplication, they must be injected in *post-order*.
-//!
-//! Please do note that hoisting and deduplication interact with each other.
-//! While it is possible to first perform hoisting, deduplication still needs
-//! to process the values of the hoisted local bindings while preserving the
-//! second invariant, i.e., inserting new bindings just above the hoisted
-//! binding currently being processed. Also, the reversed pre-order of a tree
-//! does *not* result in the post-order.
+//!   * [`IdGen`] for generating fresh identifiers. The struct relies on a
+//!     counter so that identifier names are deterministic, which matters
+//!     both for testing and for fixed-points.
+//!   * [`Environment`] for storing the name, value pairs of bindings while
+//!     processing dataflow graphs. Bindings are stored in an [`IndexMap`] to
+//!     preserve their order and thus their dependencies, while also supporting
+//!     speedy lookup by name.
+//!   * [`Unbind`] for optimizing a dataflow graph by eliminating unnecessary
+//!     bindings. That includes eliminating bindings that are not references,
+//!     inlining bindings that are referenced once, and folding bindings to
+//!     references.
 
 use crate::RelationExpr;
 use indexmap::IndexMap;
 use repr::RelationType;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-// -----------------------------------------------------------------------------
+// =======================================================================================
 
-/// For now, an identifier is just a string,
-type Identifier = String;
+/// The type of identifiers.
+pub type Identifier = String;
 
-/// Create a fresh identifier that is guaranteed not to be bound.
-pub fn fresh_id() -> Identifier {
-    format!("bdg-{}", uuid::Uuid::new_v4())
+/// A deterministic source of fresh identifiers.
+#[derive(Debug)]
+pub struct IdGen<'pre> {
+    prefix: &'pre str,
+    count: usize,
 }
 
-/// Determine whether the expression is bindable, i.e., does not produce a
-/// constant or access the value of a binding. This function is used to suppress
-/// bindings for such expressions.
-pub fn is_bindable(expr: &RelationExpr) -> bool {
-    match expr {
-        RelationExpr::Constant { .. } => false,
-        RelationExpr::Get { .. } => false,
-        _ => true,
+impl<'pre> IdGen<'pre> {
+    /// Create a new identifier generator.
+    pub fn new() -> Self {
+        Self {
+            prefix: "tmp",
+            count: 0,
+        }
+    }
+
+    /// Create a new identifier generator with the given prefix.
+    pub fn with_prefix(prefix: &'pre str) -> Self {
+        Self { prefix, count: 0 }
+    }
+
+    /// Create a new identifier generator with the given prefix and count.
+    pub fn with_prefix_and_count(prefix: &'pre str, count: usize) -> Self {
+        Self { prefix, count }
+    }
+
+    /// Create a new identifier.
+    pub fn fresh_id(&mut self) -> Identifier {
+        self.count += 1;
+        format!("{}-{}", self.prefix, self.count)
     }
 }
 
-/// Create a new *local* binding, i.e., [`RelationExpr::Let`].
-pub fn bind_local<I>(name: I, value: RelationExpr, body: RelationExpr) -> RelationExpr
-where
-    I: Into<Identifier>,
-{
-    RelationExpr::Let {
-        name: name.into(),
-        value: Box::new(value),
-        body: Box::new(body),
+impl Default for IdGen<'_> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-// -----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------
 
 /// A local binding that is automatically removed from its environment again.
 #[derive(Debug)]
@@ -102,6 +89,18 @@ pub struct LocalBinding<'a> {
     env: &'a mut Environment,
     name: String,
     prior: Option<RelationExpr>,
+}
+
+impl AsRef<Environment> for LocalBinding<'_> {
+    fn as_ref(&self) -> &Environment {
+        self.env
+    }
+}
+
+impl AsMut<Environment> for LocalBinding<'_> {
+    fn as_mut(&mut self) -> &mut Environment {
+        self.env
+    }
 }
 
 impl Drop for LocalBinding<'_> {
@@ -117,43 +116,30 @@ impl Drop for LocalBinding<'_> {
 }
 
 /// An environment.
-///
-/// Environments track bindings from names to values in insertion order.
-/// In contrast to [`RelationExpr::Let`], environment bindings have no
-/// body. Nonetheless, their scope is implicit in the ordering, namely all
-/// subsequent bindings.
 #[derive(Debug, Default)]
 pub struct Environment {
     bindings: IndexMap<Identifier, RelationExpr>,
 }
 
 impl Environment {
-    /// Determine whether the name is bound in this environment.
-    #[allow(clippy::ptr_arg)]
-    pub fn is_bound(&self, name: &Identifier) -> bool {
-        self.bindings.contains_key(name)
-    }
-
-    #[allow(clippy::ptr_arg)]
-    fn ensure_unbound(&self, name: &Identifier) {
-        if self.bindings.contains_key(name) {
-            panic!("environment already contains binding for {}", name);
-        }
+    /// Create a new environment.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Add a new binding for the given name and value to this environment.
     /// This method panics if this environment already contains a binding
-    /// with the given name. See also [`Environment::bind_local`].
-    pub fn bind(&mut self, name: Identifier, value: RelationExpr) -> &mut Self {
-        self.ensure_unbound(&name);
+    /// with the given name.
+    pub fn bind(&mut self, name: Identifier, value: RelationExpr) {
+        if self.bindings.contains_key(&name) {
+            panic!("environment already contains binding for {}", name);
+        }
         self.bindings.insert(name, value);
-        self
     }
 
-    /// Add a new, *local* binding for the given name and value to this
-    /// environment. This method does support shadowed identifiers but
-    /// the binding only persists as long as the returned object. See also
-    /// [`Environment::bind`].
+    /// Add a new, scoped binding for the given name and value to this
+    /// environment. This method correctly handles shadowed identifiers but
+    /// to do so it bindings only persist as long as the returned guard object.
     pub fn bind_local(&mut self, name: Identifier, value: RelationExpr) -> LocalBinding {
         let prior = self.bindings.insert(name.clone(), value);
         LocalBinding {
@@ -161,6 +147,12 @@ impl Environment {
             name,
             prior,
         }
+    }
+
+    /// Determine whether the name is bound in this environment.
+    #[allow(clippy::ptr_arg)]
+    pub fn is_bound(&self, name: &Identifier) -> bool {
+        self.bindings.contains_key(name)
     }
 
     /// Look up the given name in this environment.
@@ -177,7 +169,11 @@ impl Environment {
         self.bindings
             .into_iter()
             .rev()
-            .fold(body, |body, (name, value)| bind_local(name, value, body))
+            .fold(body, |body, (name, value)| RelationExpr::Let {
+                name,
+                value: Box::new(value),
+                body: Box::new(body),
+            })
     }
 
     /// Inject this environment's bindings into the given dataflow graph. This
@@ -187,339 +183,381 @@ impl Environment {
     }
 }
 
-// =============================================================================
+// =======================================================================================
 
-/// The hoist optimization.
-#[derive(Debug)]
-pub struct Hoist;
-
-impl Hoist {
-    /// Hoist all bindings to the top of a dataflow graph.
-    pub fn hoist(expr: &mut RelationExpr) {
-        let mut env = Environment::default();
-
-        fn extract_all(expr: &mut RelationExpr, env: &mut Environment) {
-            // NB: visit1_mut() invokes the callback on the children of a
-            // RelationExpr. That is not good enough for RelationExpr::Let since
-            // the value and body might just be RelationExpr::Let's, too. Hence
-            // we recurse on extract().
-            if let RelationExpr::Let { .. } = expr {
-                if let RelationExpr::Let {
-                    name,
-                    mut value,
-                    body,
-                } = expr.take_dangerous()
-                {
-                    extract_all(&mut *value, env);
-                    env.bind(name, *value);
-                    *expr = *body;
-                    // By the magic vested in extract1(), expr now is let's body.
-                    extract_all(expr, env);
-                } else {
-                    unreachable!();
-                }
-            } else {
-                expr.visit1_mut(|e| extract_all(e, env));
-            }
-        }
-
-        extract_all(expr, &mut env);
-        env.inject(expr);
-    }
-}
-
-impl super::Transform for Hoist {
-    /// Hoist all bindings to the top of a dataflow graph.
-    fn transform(&self, expr: &mut RelationExpr) {
-        Hoist::hoist(expr);
-    }
-}
-
-// =============================================================================
-
+/// # Unbind
+///
+/// Optimize a relation expression by eliminating superfluous bindings:
+///
+///  1. Remove `Let` expressions without corresponding `Get`.
+///  2. Eliminate indirection for `Let` expressions binding a `Get`.
+///  3. Inline value of `Let` expressions with a single `Get`.
+///
+/// This optimization may generate new opportunities for itself. Notably, the
+/// elimination of indirections may create new opportunities for inlining. For
+/// this reason, it should be invoked twice to yield a fixed point.
+///
+/// # Panics
+///
+/// This optimization panics if the dataflow relation contains more than one
+/// binding for the same identifier. It does not matter whether those bindings
+/// are independent from each other, i.e., in distinct subgraphs, or nested
+/// within each other, i.e., one shadowing the other.
 #[derive(Debug)]
 pub struct Unbind;
 
 impl Unbind {
-    /// Eliminate all let expressions by replacing get expressions with the
-    /// bound value. This optimization correctly handles shadowed bindings.
-    /// Since it eliminates all local bindings, it also eliminates local
-    /// bindings that are referenced only once and thus superfluous. It is
-    /// highly recommend to perform the [`Deduplicate`] optimization next.
-    /// Since all bindings have been eliminated, `Deduplicate` can correctly
-    /// identify all actually shared subgraphs and introduce bindings for them.
-    ///
-    /// `Unbind` has worst-case exponential space requirements. The alternative
-    /// is to compute a fixed-point of `UnbindTrivial` followed by
-    /// `Deduplicate`. The not yet implemented `UnbindTrivial` optimization
-    /// eliminates only let expressions that bind get expressions. In other
-    /// words, it is the equivalent of alpha-renaming in the lambda calculus.
-    pub fn unbind(expr: &mut RelationExpr) {
-        let mut env = Environment::default();
+    /// Unbind unnecessary bindings.
+    pub fn unbind(relation: &mut RelationExpr) {
+        struct Metadata {
+            count: usize,
+            name: Identifier,
+            value: Option<RelationExpr>,
+        }
 
-        fn unbind_all(expr: &mut RelationExpr, env: &mut Environment) {
-            match expr {
-                RelationExpr::Let { .. } => {
+        fn inspect(
+            relation: &RelationExpr,
+            census: &mut HashMap<Identifier, Rc<RefCell<Metadata>>>,
+        ) {
+            if let RelationExpr::Let { name, value, .. } = relation {
+                if census.contains_key(name) {
+                    panic!("duplicate binding for \"{}\"", name)
+                } else if let RelationExpr::Get { name: other, .. } = &**value {
+                    census.insert(name.clone(), census.get(other).unwrap().clone());
+                } else {
+                    census.insert(
+                        name.clone(),
+                        Rc::new(RefCell::new(Metadata {
+                            count: 0,
+                            name: name.clone(),
+                            value: None,
+                        })),
+                    );
+                }
+            } else if let RelationExpr::Get { name, .. } = relation {
+                if census.contains_key(name) {
+                    let mut metadata = census.get(name).unwrap().borrow_mut();
+                    metadata.count += 1;
+                }
+            }
+
+            relation.visit1(|expr| inspect(expr, census));
+        }
+
+        fn update(
+            relation: &mut RelationExpr,
+            census: &mut HashMap<Identifier, Rc<RefCell<Metadata>>>,
+        ) {
+            if let RelationExpr::Let { name, .. } = relation {
+                let (count, is_alias) = {
+                    let metadata = census.get(name).unwrap().borrow();
+                    (metadata.count, metadata.name != *name)
+                };
+
+                if count <= 1 || is_alias {
                     if let RelationExpr::Let {
                         name,
                         mut value,
                         body,
-                    } = expr.take_dangerous()
+                    } = relation.take_dangerous()
                     {
-                        unbind_all(&mut value, env);
-
-                        let local = env.bind_local(name.clone(), *value.clone());
-                        *expr = *body;
-                        unbind_all(expr, local.env);
+                        update(&mut value, census);
+                        if count == 1 && !is_alias {
+                            census.get(&name).unwrap().borrow_mut().value = Some(*value);
+                        }
+                        *relation = *body; // Makes up for take_dangerous!
+                        update(relation, census);
                     } else {
                         unreachable!();
                     }
+                } else {
+                    relation.visit1_mut(|expr| update(expr, census));
                 }
-                RelationExpr::Get { name, .. } => {
-                    if let Some(value) = env.lookup(name) {
-                        *expr = value.clone();
+            } else if let RelationExpr::Get { name, .. } = relation {
+                if census.contains_key(name) {
+                    let mut metadata = census.get(name).unwrap().borrow_mut();
+
+                    // NB: if's are *not* mutually exclusive, but ordered.
+                    if *name != metadata.name {
+                        *name = metadata.name.clone();
+                    }
+                    if let Some(value) = metadata.value.take() {
+                        *relation = value;
                     }
                 }
-                _ => expr.visit1_mut(|e| unbind_all(e, env)),
+            } else {
+                relation.visit1_mut(|expr| update(expr, census));
             }
         }
 
-        unbind_all(expr, &mut env);
+        let mut census = HashMap::new();
+        inspect(relation, &mut census);
+        update(relation, &mut census);
     }
 }
 
 impl super::Transform for Unbind {
-    /// Perform the unbind optimization.
-    fn transform(&self, expr: &mut RelationExpr) {
-        Unbind::unbind(expr);
+    fn transform(&self, relation: &mut RelationExpr) {
+        Unbind::unbind(relation);
     }
 }
 
-// =============================================================================
+// =======================================================================================
 
-/// A count. It is used during the first phase of deduplication to
-/// track the number of times a dataflow subgraph appears in a larger
-/// dataflow graph.
-#[derive(Debug, Default)]
-pub struct Count {
-    count: usize,
-}
+mod dedup_helper {
+    use super::{IdGen, Identifier, RelationExpr, RelationType};
 
-impl Count {
-    /// Increment the count.
-    pub fn incr(&mut self) {
-        self.count += 1;
+    /// The metadata associated with a relation expression during deduplication.
+    /// If it has some relation type, then it also must have some identifier.
+    /// The existence of a relation type indicates that the binding for a
+    /// repeated relation expression has been emitted.
+    #[derive(Debug)]
+    pub(super) struct Metadata {
+        /// The number of times the corresponding relation expression appears in
+        /// the larger dataflow.
+        count: usize,
+        /// The name when binding a repeated relation expression.
+        name: Option<Identifier>,
+        /// The type when binding a repeated relation expression.
+        typ: Option<RelationType>,
     }
 
-    /// Determine whether the count is larger than one.
-    pub fn is_repeated(&self) -> bool {
-        self.count > 1
-    }
-}
-
-/// A patch. It is used during the second phase of deduplication to
-/// track the name and type of a repeated dataflow graph.
-#[derive(Clone, Debug)]
-pub struct Patch {
-    name: Identifier,
-    typ: RelationType,
-}
-
-impl From<Patch> for RelationExpr {
-    /// Convert a patch into a [`RelationExpr::Get`].
-    fn from(patch: Patch) -> Self {
-        RelationExpr::Get {
-            name: patch.name,
-            typ: patch.typ,
-        }
-    }
-}
-
-/// The metadata record associated with a dataflow graph during deduplication.
-#[derive(Debug)]
-pub enum Metadata {
-    Counting(Count),
-    Patching(Patch),
-}
-
-impl Default for Metadata {
-    fn default() -> Self {
-        Metadata::Counting(Count::default())
-    }
-}
-
-impl Metadata {
-    /// Determine whether the metadata is a count.
-    pub fn is_count(&self) -> bool {
-        if let Metadata::Counting(_) = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Unwrap a count. This method panics, if the metadata is a patch.
-    pub fn unwrap_count(&mut self) -> &mut Count {
-        if let Metadata::Counting(count) = self {
-            count
-        } else {
-            panic!("trying to unwrap a patch as a count")
-        }
-    }
-
-    /// Unwrap a patch. This method panics if the metadata is a count.
-    pub fn unwrap_patch(&self) -> &Patch {
-        if let Metadata::Patching(patch) = self {
-            patch
-        } else {
-            panic!("trying to unwrap a count as a patch")
-        }
-    }
-
-    /// Start patching the given dataflow graph. This method transitions
-    /// the metadata from counting to patching. The resulting patch has
-    /// a fresh name and the value's type. This method panics if the
-    /// metadata is a count smaller than two or already a patch.
-    pub fn start_patching(&mut self, value: &RelationExpr) -> (Identifier, RelationExpr) {
-        if let Metadata::Counting(Count { count }) = self {
-            if *count < 2 {
-                panic!("trying to patch dataflow node that isn't duplicated");
+    impl Metadata {
+        /// Create a new metadata record.
+        pub fn new() -> Self {
+            Self {
+                count: 0,
+                name: None,
+                typ: None,
             }
+        }
 
-            let patch = Patch {
-                name: fresh_id(),
-                typ: value.typ(),
-            };
-            let name = patch.name.clone();
-            let reference = patch.clone().into();
+        /// Increment the count for this metadata record.
+        pub fn incr(&mut self) {
+            self.count += 1;
+        }
 
-            *self = Metadata::Patching(patch);
-            (name, reference)
-        } else {
-            panic!("trying to patch dataflow node that has been patched already");
+        /// Determine whether the relation expression occurs more than once.
+        pub fn is_repeated(&self) -> bool {
+            self.count >= 2
+        }
+
+        /// Set the name if it has not yet been set.
+        pub fn maybe_set_name<F>(&mut self, name: F)
+        where
+            F: FnOnce() -> Identifier,
+        {
+            if self.name.is_none() {
+                self.name = Some(name());
+            }
+        }
+
+        /// Determine whether the relation expression has a relation type.
+        pub fn has_type(&self) -> bool {
+            self.typ.is_some()
+        }
+
+        /// Set the relation type. This method panics if the type has already
+        /// been set.
+        pub fn set_type(&mut self, relation: &RelationExpr) {
+            match self.typ {
+                None => self.typ = Some(relation.typ()),
+                Some(_) => panic!("already set type for {}", relation.pretty()),
+            }
+        }
+
+        /// Prepare the metadata for emitting a binding and corresponding
+        /// references. This method sets the type to that of the given relation
+        /// expression and the name if it is not already set.
+        pub fn prepare_binding(
+            &mut self,
+            id_gen: &mut IdGen,
+            relation: &RelationExpr,
+        ) -> (Identifier, RelationExpr) {
+            self.maybe_set_name(|| id_gen.fresh_id());
+            self.set_type(relation);
+            (self.name.clone().unwrap(), self.new_reference())
+        }
+
+        /// Create a new __Get__ operator for the named binding.
+        pub fn new_reference(&self) -> RelationExpr {
+            RelationExpr::Get {
+                name: self.name.clone().unwrap(),
+                typ: self.typ.clone().unwrap(),
+            }
         }
     }
 }
 
-// -----------------------------------------------------------------------------
-
-/// The deduplicate optimization.
+/// # Deduplicate
+///
+/// This optimization eliminates duplicate or repeated relation expressions
+/// from a larger dataflow graph by capturing the value on its first occurrence
+/// in a __Let__ binding and replacing later occurrences with __Get__ operators.
+/// The optimization correctly picks the largest common subexpression for
+/// deduplication. It also preserves the identifiers of existing bindings, even
+/// if the same expression appears first unbound and later again as the value of
+/// a __Let__ binding.
+///
+/// However, to ensure that newly introduced __Get__ operators are in scope of
+/// their bindings, this optimization also hoists bindings to the top of the
+/// dataflow graph, i.e., closest to the output. For correctness, it does that
+/// for newly created bindings and existing bindings alike. In other words, in
+/// the absence of duplicated expressions, this optimization is equivalent to a
+/// hoist optimization by itself.
+///
+/// This optimization may create new opportunities for [`Unbind`] (also defined
+/// in this module).
 #[derive(Debug)]
 pub struct Deduplicate;
 
 impl Deduplicate {
-    /// Determine how many times each dataflow graph appears in the given
-    /// dataflow graph. This method assumes that the given census is empty.
-    pub fn count_all<'a>(expr: &'a RelationExpr, census: &mut HashMap<&'a RelationExpr, Metadata>) {
-        let metadata = census
-            .entry(expr)
-            .or_insert_with(Metadata::default)
-            .unwrap_count();
-        metadata.incr();
-        if !metadata.is_repeated() {
-            expr.visit1(|e| Deduplicate::count_all(e, census));
-        }
-    }
+    pub fn deduplicate(relation: &mut RelationExpr) {
+        use dedup_helper::Metadata;
 
-    /// Patch the dataflow graph. This method adds a binding to the given
-    /// environment for each repeated subgraph, while also replacing each
-    /// occurrence with a [`RelationExpr::Get`] for the binding. It relies
-    /// on the given census for identifying repeated subgraphs. It assumes
-    /// that the census contains a metadata entry for each subgraph and
-    /// that each entry is a count.
-    pub fn patch_all(
-        expr: &mut RelationExpr,
-        census: &mut HashMap<&RelationExpr, Metadata>,
-        env: &mut Environment,
-    ) {
-        let metadata = census
-            .get_mut(expr)
-            .expect("metadata for dataflow graph is missing from census");
-
-        if let Metadata::Counting(Count { count }) = metadata {
-            if *count <= 1 || !is_bindable(expr) {
-                expr.visit1_mut(|e| Deduplicate::patch_all(e, census, env));
-            } else {
-                let (name, reference) = metadata.start_patching(expr);
-                expr.visit1_mut(|e| Deduplicate::patch_all(e, census, env));
-                let value = std::mem::replace(expr, reference);
-                env.bind(name, value);
+        /// Determine whether the relation is a __Let__ expression. Correctly
+        /// processing such expressions during Deduplicate is quite a bit more
+        /// complicated than that for other relation expressions. That includes
+        /// how __Let__ expressions are traversed, hence this helper function.
+        fn is_let_relation(relation: &RelationExpr) -> bool {
+            match relation {
+                RelationExpr::Let { .. } => true,
+                _ => false,
             }
-        } else {
-            *expr = metadata.unwrap_patch().clone().into();
         }
-    }
 
-    /// Deduplicate repeated subgraphs.
-    pub fn deduplicate(expr: &mut RelationExpr) {
+        fn inspect<'rel>(
+            relation: &'rel RelationExpr,
+            census: &mut HashMap<&'rel RelationExpr, Metadata>,
+        ) {
+            match relation {
+                RelationExpr::Constant { .. } | RelationExpr::Get { .. } => {
+                    // Dolce far niente!
+                }
+                RelationExpr::Let { name, value, body } => {
+                    let metadata = census.entry(value).or_insert_with(Metadata::new);
+                    // Record the name (unless we have already done so). This
+                    // lets us reuse existing names instead of obscuring them
+                    // with freshly created ones.
+                    metadata.maybe_set_name(|| name.clone());
+                    metadata.incr();
+                    if !metadata.is_repeated() {
+                        // Don't count Lets. Also don't double-count value.
+                        if is_let_relation(value) {
+                            inspect(value, census);
+                        } else {
+                            value.visit1(|expr| inspect(expr, census));
+                        }
+                    }
+
+                    // Independent of type, we still need to account for body.
+                    inspect(body, census);
+                }
+                _ => {
+                    let metadata = census.entry(relation).or_insert_with(Metadata::new);
+                    metadata.incr();
+                    if !metadata.is_repeated() {
+                        relation.visit1(|expr| inspect(expr, census));
+                    }
+                }
+            }
+        }
+
+        fn update(
+            relation: &mut RelationExpr,
+            census: &mut HashMap<&RelationExpr, Metadata>,
+            id_gen: &mut IdGen,
+            env: &mut Environment,
+        ) {
+            match relation {
+                RelationExpr::Constant { .. } | RelationExpr::Get { .. } => {
+                    // Dolce far niente!
+                }
+                RelationExpr::Let { .. } => {
+                    // The dangerously taken value is replaced at the very end of this block.
+                    if let RelationExpr::Let {
+                        name,
+                        mut value,
+                        mut body,
+                    } = relation.take_dangerous()
+                    {
+                        let metadata = census.get_mut(&*value).unwrap();
+                        if !metadata.is_repeated() {
+                            // >>> A pre-existing binding. Hoist it. <<<
+                            if is_let_relation(&*value) {
+                                // Correctly handle value being another Let.
+                                update(&mut *value, census, id_gen, env);
+                            } else {
+                                value.visit1_mut(|expr| update(expr, census, id_gen, env));
+                            }
+                            env.bind(name, *value);
+                        } else if !metadata.has_type() {
+                            // >>> A binding with duplicated value. Hoist it & reuse it. <<<
+                            metadata.set_type(&*value);
+                            if is_let_relation(&*value) {
+                                // Correctly handle value being another Let.
+                                update(&mut *value, census, id_gen, env);
+                            } else {
+                                value.visit1_mut(|expr| update(expr, census, id_gen, env));
+                            }
+                            env.bind(name, *value);
+                        } else {
+                            // >>> A binding with duplicated value. Hoisted already. <<<
+                        }
+
+                        // Process body. Replace Let with body.
+                        update(&mut *body, census, id_gen, env);
+                        *relation = *body; // Fixes take_dangerous() above!
+                    } else {
+                        unreachable!();
+                    }
+                }
+                _ => {
+                    let metadata = census.get_mut(relation).unwrap();
+                    if !metadata.is_repeated() {
+                        relation.visit1_mut(|expr| update(expr, census, id_gen, env));
+                    } else if !metadata.has_type() {
+                        let (name, reference) = metadata.prepare_binding(id_gen, relation);
+                        relation.visit1_mut(|expr| update(expr, census, id_gen, env));
+                        let value = std::mem::replace(relation, reference);
+                        env.bind(name, value);
+                    } else {
+                        *relation = metadata.new_reference();
+                    }
+                }
+            }
+        }
+
         let mut census = HashMap::new();
-        let expr_prime = expr.clone();
-        Deduplicate::count_all(&expr_prime, &mut census);
+        let relation_prime = relation.clone();
+        inspect(&relation_prime, &mut census);
 
-        let mut env = Environment::default();
-        Deduplicate::patch_all(expr, &mut census, &mut env);
-        env.inject(expr);
+        let mut id_gen = IdGen::new();
+        let mut env = Environment::new();
+        update(relation, &mut census, &mut id_gen, &mut env);
+        env.inject(relation);
     }
 }
 
 impl super::Transform for Deduplicate {
-    /// Deduplicate repeated subgraphs.
-    fn transform(&self, expr: &mut RelationExpr) {
-        Deduplicate::deduplicate(expr);
+    fn transform(&self, relation: &mut RelationExpr) {
+        Deduplicate::deduplicate(relation);
     }
 }
 
-// =============================================================================
-
-/// The normalize optimization.
-#[derive(Debug)]
-pub struct Normalize;
-
-impl Normalize {
-    /// Normalize the names of local bindings.
-    pub fn normalize(expr: &mut RelationExpr) {
-        let mut count: usize = 0;
-        let mut names = HashMap::new();
-
-        fn rename(expr: &mut RelationExpr, count: &mut usize, names: &mut HashMap<String, String>) {
-            if let RelationExpr::Let { name, value, body } = expr {
-                rename(value, count, names);
-
-                *count += 1;
-                let stale = std::mem::replace(name, format!("id-{}", count));
-                names.insert(stale, name.clone());
-
-                rename(body, count, names);
-            } else if let RelationExpr::Get { name, .. } = expr {
-                if let Some(n) = names.get(name) {
-                    *name = n.clone();
-                }
-            } else {
-                expr.visit1_mut(|e| rename(e, count, names));
-            }
-        }
-
-        rename(expr, &mut count, &mut names);
-    }
-}
-
-impl super::Transform for Normalize {
-    /// Normalize names of local bindings.
-    fn transform(&self, expr: &mut RelationExpr) {
-        Normalize::normalize(expr);
-    }
-}
-
-// =============================================================================
+// =======================================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use repr::Datum;
 
-    fn trace(label: &str, expr: &RelationExpr) {
+    /// Trace a label and relation expression.
+    pub fn trace(label: &str, expr: &RelationExpr) {
+        // Emit all text with a single println!() because otherwise the test
+        // harness may interleave output of different trace() invocations.
         println!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n",
             "━".repeat(80),
             label,
             "┈".repeat(80),
@@ -527,68 +565,163 @@ mod tests {
         );
     }
 
-    fn not_my_type() -> RelationType {
-        RelationType::new(vec![])
+    /// Fix the types of [`RelationExpr::Get`] operators in the given relation
+    /// expression. This function patches a dataflow graph created via the
+    /// helper functions [`i`], [`b`], and [`r`] below to use correct types.
+    /// In turn, that ensures that assertions on transformed relations do not
+    /// fail because of incorrect types.
+    pub fn retype(relation: RelationExpr) -> RelationExpr {
+        fn do_retype(relation: &mut RelationExpr, env: &mut Environment) {
+            match relation {
+                RelationExpr::Let { name, value, body } => {
+                    do_retype(value, env);
+
+                    let mut local = env.bind_local(name.clone(), *value.clone());
+                    do_retype(body, local.as_mut());
+                }
+                RelationExpr::Get { name, typ } => match env.lookup(name) {
+                    Some(value) => *typ = value.typ(),
+                    None => (),
+                },
+                _ => {
+                    relation.visit1_mut(|expr| {
+                        do_retype(expr, env);
+                    });
+                }
+            }
+        }
+
+        let mut relation = relation;
+        let mut env = Environment::new();
+        do_retype(&mut relation, &mut env);
+        relation
     }
 
-    fn n(i: i32) -> RelationExpr {
-        RelationExpr::constant(vec![vec![Datum::Int32(i)]], not_my_type())
+    /// Create an *Integer* constant.
+    pub fn i(i: i32) -> RelationExpr {
+        RelationExpr::constant(vec![vec![Datum::Int32(i)]], RelationType::new(vec![]))
     }
 
-    fn r<N>(n: N) -> RelationExpr
+    /// Create a *Binding* for the given name and value.
+    pub fn b<ID>(name: ID, value: RelationExpr, body: RelationExpr) -> RelationExpr
     where
-        N: Into<String>,
+        ID: Into<Identifier>,
     {
-        RelationExpr::Get {
-            name: n.into(),
-            typ: not_my_type(),
+        RelationExpr::Let {
+            name: name.into(),
+            value: Box::new(value),
+            body: Box::new(body),
         }
     }
 
+    /// Create a *Reference* a binding.
+    pub fn r<ID>(name: ID) -> RelationExpr
+    where
+        ID: Into<Identifier>,
+    {
+        RelationExpr::Get {
+            name: name.into(),
+            typ: RelationType::new(vec![]),
+        }
+    }
+
+    // -----------------------------------------------------------------------------------
+
     #[test]
-    fn test_hoist() {
-        let b = bind_local;
+    fn test_unbind1() {
+        let mut expr = b(
+            "id-1",
+            i(665),
+            b(
+                "id-2",
+                r("id-1"),
+                b("id-3", r("id-2"), r("id-3").union(r("id-3"))),
+            ),
+        );
+
+        trace("IN unbind #1", &expr);
+        Unbind::unbind(&mut expr);
+        trace("OUT unbind #1", &expr);
+        assert_eq!(expr, b("id-1", i(665), r("id-1").union(r("id-1"))));
+    }
+
+    #[test]
+    fn test_unbind2() {
+        let mut expr = b(
+            "id-1",
+            i(665),
+            b("id-2", r("id-1"), b("id-3", r("id-2"), r("id-3"))),
+        );
+
+        trace("IN unbind #2", &expr);
+        Unbind::unbind(&mut expr);
+        trace("OUT unbind #2, round 1", &expr);
+        //assert_eq!(e2, b("id-1", i(655), r("id-1")));
+
+        Unbind::unbind(&mut expr);
+        trace("OUT unbind #2, round 2", &expr);
+        assert_eq!(expr, i(665));
+    }
+
+    #[test]
+    fn test_unbind3() {
+        let mut expr = b("id-2", i(42), b("id-1", i(13), i(665)));
+
+        trace("IN unbind #3", &expr);
+        Unbind::unbind(&mut expr);
+        trace("OUT unbind #3", &expr);
+        assert_eq!(expr, i(665));
+    }
+
+    // -----------------------------------------------------------------------------------
+
+    #[test]
+    fn test_deduplicate1() {
+        // This test was originally written for the Hoist optimization. That
+        // optimization no longer exists, since hoisting of existing bindings
+        // cannot be separated from hoisting newly introduced bindings during
+        // Deduplicate. Hence the new and improved version of Deduplicate
+        // integrates Hoist and the test now exercises Deduplicate.
         let mut expr = b(
             "h",
             b(
                 "d",
-                b("b", b("a", n(1), n(2)), b("c", n(3), n(4))),
-                b("f", b("e", n(5), n(6)), b("g", n(7), n(8))),
+                b("b", b("a", i(1), i(2)), b("c", i(3), i(4))),
+                b("f", b("e", i(5), i(6)), b("g", i(7), i(8))),
             ),
-            b("i", n(9), b("j", n(10), n(11)).distinct().negate()),
+            b("i", i(9), b("j", i(10), i(11)).distinct().negate()),
         );
 
-        trace("IN hoist", &expr);
-        Hoist::hoist(&mut expr);
-        trace("OUT hoist", &expr);
-
+        trace("IN deduplicate #1", &expr);
+        Deduplicate::deduplicate(&mut expr);
+        trace("OUT deduplicate #1", &expr);
         assert_eq!(
             expr,
             b(
                 "a",
-                n(1),
+                i(1),
                 b(
                     "b",
-                    n(2),
+                    i(2),
                     b(
                         "c",
-                        n(3),
+                        i(3),
                         b(
                             "d",
-                            n(4),
+                            i(4),
                             b(
                                 "e",
-                                n(5),
+                                i(5),
                                 b(
                                     "f",
-                                    n(6),
+                                    i(6),
                                     b(
                                         "g",
-                                        n(7),
+                                        i(7),
                                         b(
                                             "h",
-                                            n(8),
-                                            b("i", n(9), b("j", n(10), n(11).distinct().negate()))
+                                            i(8),
+                                            b("i", i(9), b("j", i(10), i(11).distinct().negate()))
                                         )
                                     )
                                 )
@@ -601,83 +734,67 @@ mod tests {
     }
 
     #[test]
-    fn test_unbind() {
-        let b = bind_local;
-        let mut expr = b(
-            "a",
-            b("b", n(1), r("b").union(r("b"))),
-            r("a").union(b("a", n(2), r("a"))),
+    fn test_deduplicate2() {
+        let mut expr = retype(b(
+            "preexisting",
+            i(665).distinct().negate(),
+            r("preexisting").union(i(665).distinct().negate().threshold()),
+        ));
+
+        trace("IN deduplicate #2", &expr);
+        Deduplicate::deduplicate(&mut expr);
+        trace("OUT deduplicate #2", &expr);
+        assert_eq!(
+            expr,
+            retype(b(
+                "preexisting",
+                i(665).distinct().negate(),
+                r("preexisting").union(r("preexisting").threshold())
+            ))
         );
-
-        trace("IN unbind", &expr);
-        Unbind::unbind(&mut expr);
-        trace("OUT unbind", &expr);
-
-        assert_eq!(expr, n(1).union(n(1)).union(n(2)))
-    }
-
-    fn extract_names(expr: &RelationExpr) -> (String, String) {
-        if let RelationExpr::Let { name, body, .. } = expr {
-            let n1 = name.clone();
-
-            if let RelationExpr::Let { name, .. } = &**body {
-                (n1, name.clone())
-            } else {
-                panic!("body of outermost expression expected to be local binding");
-            }
-        } else {
-            panic!("outermost expression expected to be local binding");
-        }
     }
 
     #[test]
-    fn test_deduplicate() {
-        let expr1 = n(1).negate().union(n(2));
-        let expr2 = n(3).negate().union(n(4));
-        let expr3 = expr1.clone().union(expr2.clone());
-        let expr4 = expr3.clone().union(n(5).distinct()).threshold();
-        let expr5 = expr3.clone().distinct().union(expr2.clone());
-        let mut expr = expr4.union(expr5);
+    fn test_deduplicate3() {
+        let mut expr = retype(i(665).distinct().negate().union(b(
+            "preexisting",
+            i(665).distinct().negate(),
+            r("preexisting").threshold(),
+        )));
 
-        trace("IN deduplicate", &expr);
+        trace("IN deduplicate #3", &expr);
         Deduplicate::deduplicate(&mut expr);
-        trace("OUT deduplicate", &expr);
-
-        let b = bind_local;
-        let (n1, n2) = extract_names(&expr);
-
-        let expected = r(n2.clone()).union(n(5).distinct()).threshold();
-        let expected2 = r(n2.clone()).distinct().union(r(n1.clone()));
-        let expected = expected.union(expected2);
-        let expected2 = n(1).negate().union(n(2)).union(r(n1.clone()));
-        let expected = b(n2, expected2, expected);
-        let expected2 = n(3).negate().union(n(4));
-        let expected = b(n1, expected2, expected);
-        assert_eq!(expr, expected);
+        trace("OUT deduplicate #3", &expr);
+        assert_eq!(
+            expr,
+            retype(b(
+                "preexisting",
+                i(665).distinct().negate(),
+                r("preexisting").union(r("preexisting").threshold())
+            ))
+        );
     }
 
     #[test]
-    fn test_normalize() {
-        let expr1 = n(1).negate().union(n(2));
-        let expr2 = n(3).negate().union(n(4));
+    fn test_deduplicate4() {
+        let expr1 = i(1).negate().union(i(2));
+        let expr2 = i(3).negate().union(i(4));
         let expr3 = expr1.clone().union(expr2.clone());
-        let expr4 = expr3.clone().union(n(5).distinct()).threshold();
+        let expr4 = expr3.clone().union(i(5).distinct()).threshold();
         let expr5 = expr3.clone().distinct().union(expr2.clone());
-        let mut expr = expr4.union(expr5);
+        let mut expr = retype(expr4.union(expr5));
 
-        trace("IN normalize", &expr);
+        trace("IN deduplicate #4", &expr);
         Deduplicate::deduplicate(&mut expr);
-        Normalize::normalize(&mut expr);
-        trace("OUT normalize", &expr);
+        trace("OUT deduplicate #4", &expr);
 
-        let b = bind_local;
-        let expected = r("id-2").union(n(5).distinct()).threshold();
-        let expected2 = r("id-2").distinct().union(r("id-1"));
+        let expected = r("tmp-1").union(i(5).distinct()).threshold();
+        let expected2 = r("tmp-1").distinct().union(r("tmp-2"));
         let expected = expected.union(expected2);
-        let expected2 = n(1).negate().union(n(2)).union(r("id-1"));
-        let expected = b("id-2", expected2, expected);
-        let expected2 = n(3).negate().union(n(4));
-        let expected = b("id-1", expected2, expected);
+        let expected2 = i(1).negate().union(i(2)).union(r("tmp-2"));
+        let expected = b("tmp-1", expected2, expected);
+        let expected2 = i(3).negate().union(i(4));
+        let expected = retype(b("tmp-2", expected2, expected));
         assert_eq!(expr, expected);
     }
 }

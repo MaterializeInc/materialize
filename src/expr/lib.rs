@@ -17,6 +17,7 @@ mod scalar;
 pub mod transform;
 
 pub use relation::func::AggregateFunc;
-pub use relation::{AggregateExpr, ColumnOrder, IdGen, RelationExpr};
+pub use relation::{AggregateExpr, ColumnOrder, RelationExpr};
 pub use scalar::func::{BinaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::ScalarExpr;
+pub use transform::binding::IdGen;
