@@ -21,7 +21,7 @@ add_executable(chbenchmark
         src/Transactions.cc
         src/TupleGen.cc
         src/materialized.cc
-        src/mz-config.cpp)
+        src/mz-config.cpp src/Histogram.cc src/Histogram.h)
 
 target_link_libraries(chbenchmark
         odbc

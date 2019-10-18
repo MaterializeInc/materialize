@@ -15,6 +15,8 @@ limitations under the License.
 */
 
 #include "materialized.h"
+#include <chrono>
+#include "timing.h"
 
 std::vector<std::string>
 mz::createAllSources(pqxx::connection &c, std::string from, std::string registry, std::optional<std::string> like) {
@@ -41,8 +43,8 @@ void mz::createMaterializedView(pqxx::connection& c, const std::string &name, co
     w.exec0("CREATE VIEW " + name + " AS " + query);
 }
 
-pqxx::result mz::peekView(pqxx::connection &c, const std::string &name, const std::optional<std::string> &order,
-                  std::optional<unsigned> limit) {
+mz::PeekResults mz::peekView(pqxx::connection &c, const std::string &name, const std::optional<std::string> &order,
+                             std::optional<unsigned> limit) {
     std::string query = "SELECT * FROM " + name;
     if (order) {
         query += " ORDER BY " + order.value();
@@ -51,8 +53,12 @@ pqxx::result mz::peekView(pqxx::connection &c, const std::string &name, const st
         query += " LIMIT " + std::to_string(limit.value());
     }
 
-    pqxx::nontransaction w(c);
-    return w.exec(query);
+    auto [time, results] = timeInvocation([&query, &c]() {
+        pqxx::nontransaction w(c);
+        return w.exec(query);
+    });
+    
+    return {time, results};
 }
 
 const char *mz::UnexpectedCreateSourcesResult::what() const noexcept {

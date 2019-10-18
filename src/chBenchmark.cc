@@ -29,6 +29,7 @@ limitations under the License.
 #include "TupleGen.h"
 #include "dialect/DialectStrategy.h"
 #include "mz-config.h"
+#include "Histogram.h"
 
 #include <atomic>
 #include <err.h>
@@ -42,6 +43,7 @@ limitations under the License.
 #include <vector>
 #include <utility>
 #include <assert.h>
+#include <future>
 
 enum class RunState {
     off,
@@ -106,7 +108,8 @@ static void* analyticalThread(void* args) {
     return nullptr;
 }
 
-static void peekThread(pqxx::connection* pc, const mz::Config* pConfig, const std::atomic<RunState> *pRunState) {
+static void peekThread(pqxx::connection* pc, const mz::Config* pConfig, const std::atomic<RunState> *pRunState,
+        std::promise<Histogram> promHist) {
     const mz::Config& config = *pConfig;
     const std::atomic<RunState>& runState = *pRunState;
     pqxx::connection& c = *pc;
@@ -114,11 +117,22 @@ static void peekThread(pqxx::connection* pc, const mz::Config* pConfig, const st
     assert(!config.hQueries.empty());
     auto iQuery = config.hQueries.begin();
     while (runState == RunState::warmup) {
-        sleep(1);
-    }
-    while (runState == RunState::run) {
         mz::peekView(c, iQuery->first, iQuery->second.order, iQuery->second.limit);
+        ++iQuery;
+        if (iQuery == config.hQueries.end()) {
+            iQuery = config.hQueries.begin();
+        }
     }
+    Histogram hist;
+    while (runState == RunState::run) {
+        auto latency = mz::peekView(c, iQuery->first, iQuery->second.order, iQuery->second.limit).latency;
+        hist.increment(latency.count());
+        ++iQuery;
+        if (iQuery == config.hQueries.end()) {
+            iQuery = config.hQueries.begin();
+        }
+    }
+    promHist.set_value(std::move(hist));
 }
 
 static void createSourcesThread(mz::Config config) {
