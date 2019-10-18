@@ -61,6 +61,7 @@ impl comm::broadcast::Token for BroadcastToken {
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
+    /// Binds source descriptions to names.
     BindSources(Vec<dataflow_types::Source>),
     /// Create a sequence of dataflows.
     CreateDataflows(Vec<DataflowDescription>),
@@ -75,9 +76,7 @@ pub enum SequencedCommand {
         finishing: RowSetFinishing,
     },
     /// Cancel the peek associated with the given `conn_id`.
-    CancelPeek {
-        conn_id: u32,
-    },
+    CancelPeek { conn_id: u32 },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which

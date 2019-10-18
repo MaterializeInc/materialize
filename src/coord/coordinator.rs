@@ -122,17 +122,13 @@ where
     ) -> SqlResponse {
         match plan {
             Plan::CreateSource(source) => {
-                self.create_dataflows(vec![DataflowDescription::from(source)]);
+                let sources = vec![source];
+                self.create_sources(sources);
                 SqlResponse::CreatedSource
             }
 
             Plan::CreateSources(sources) => {
-                self.create_dataflows(
-                    sources
-                        .iter()
-                        .map(|s| DataflowDescription::from(s.clone()))
-                        .collect(),
-                );
+                self.create_sources(sources.clone());
                 send_immediate_rows(
                     RelationDesc::empty().add_column("Topic", ScalarType::String),
                     sources
@@ -153,6 +149,11 @@ where
             }
 
             Plan::DropSources(names) => {
+                let raw_names = names
+                    .iter()
+                    .map(|n| format!("{}-RAW", n))
+                    .collect::<Vec<_>>();
+                self.drop_dataflows(raw_names);
                 self.drop_dataflows(names);
                 // Though the plan specifies a number of sources to drop, multiple
                 // sources can only be dropped via DROP SOURCE root CASCADE, so
@@ -316,6 +317,41 @@ where
         }
     }
 
+    fn create_sources(&mut self, sources: Vec<dataflow_types::Source>) {
+        let raw_sources = sources
+            .iter()
+            .map(|s| {
+                let mut source = s.clone();
+                source.name = format!("{}-RAW", s.name);
+                source
+            })
+            .collect::<Vec<_>>();
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::BindSources(raw_sources),
+        );
+        let dataflows = sources
+            .iter()
+            .map(|s| {
+                DataflowDescription::new(None)
+                    .add_source({
+                        let mut source = s.clone();
+                        source.name = format!("{}-RAW", s.name);
+                        source
+                    })
+                    .add_view(View {
+                        name: s.name.to_string(),
+                        relation_expr: RelationExpr::Get {
+                            name: format!("{}-RAW", s.name),
+                            typ: s.desc.typ().clone(),
+                        },
+                        desc: s.desc.clone(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        self.create_dataflows(dataflows);
+    }
+
     /// Maybe use finishing instructions instead of relation expressions. This
     /// method may replace top-level dataflow operators in the given dataflow
     /// graph with semantically equivalent finishing instructions.
@@ -469,13 +505,7 @@ where
         }
     }
 
-    /// Introduces all frontier elements from sources (not views) into `bound`.
-    ///
-    /// This method traverses all views whose only inputs are other views (no
-    /// sources) until it arrives at views that either depend on at least one
-    /// source, or which have no other views as inputs. This latter case is a
-    /// bit silly, but is how logging works for the moment (until we migrate
-    /// to logging being a flavor of source).
+    /// Collects frontiers from the earliest views.
     fn sources_frontier(&self, name: &str, bound: &mut Antichain<Timestamp>) {
         let no_inputs = self.views[name].uses.is_empty();
         let no_sources = self.views[name]
@@ -483,8 +513,8 @@ where
             .iter()
             .all(|n| self.views.contains_key(n));
         if no_sources && !no_inputs {
-            for name in self.views[name].uses.iter() {
-                self.sources_frontier(name, bound);
+            for name2 in self.views[name].uses.iter() {
+                self.sources_frontier(name2, bound);
             }
         } else {
             let upper = self.upper_of(name).expect("Name missing at coordinator");
