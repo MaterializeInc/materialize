@@ -79,10 +79,9 @@ where
         };
 
         if let Some(logging_config) = logging_config {
-            for _log in logging_config.active_logs().iter() {
+            for log in logging_config.active_logs().iter() {
                 // Insert with 1 second compaction latency.
-                // coordinator.insert_source(log.name(), 1_000);
-                unimplemented!();
+                coordinator.insert_name(log.name(), 1_000);
             }
         }
 
@@ -472,14 +471,25 @@ where
 
     /// Introduces all frontier elements from sources (not views) into `bound`.
     ///
-    /// This method transitively traverses view definitions until it finds sources, and incorporates
-    /// the accepted frontiers of each source into `bound`.
+    /// This method traverses all views whose only inputs are other views (no
+    /// sources) until it arrives at views that either depend on at least one
+    /// source, or which have no other views as inputs. This latter case is a
+    /// bit silly, but is how logging works for the moment (until we migrate
+    /// to logging being a flavor of source).
     fn sources_frontier(&self, name: &str, bound: &mut Antichain<Timestamp>) {
-        for name in self.views[name].uses.iter() {
-            self.sources_frontier(name, bound);
+        let no_inputs = self.views[name].uses.is_empty();
+        let no_sources = self.views[name]
+            .uses
+            .iter()
+            .all(|n| self.views.contains_key(n));
+        if no_sources && !no_inputs {
+            for name in self.views[name].uses.iter() {
+                self.sources_frontier(name, bound);
+            }
+        } else {
+            let upper = self.upper_of(name).expect("Name missing at coordinator");
+            bound.extend(upper.elements().iter().cloned());
         }
-        let upper = self.upper_of(name).expect("Name missing at coordinator");
-        bound.extend(upper.elements().iter().cloned());
     }
 
     /// Updates the upper frontier of a named view.
@@ -555,7 +565,7 @@ where
     fn insert_views(&mut self, dataflow: &DataflowDescription) {
         for view in dataflow.views.iter() {
             self.remove_view(&view.name);
-            let viewstate = ViewState::new(view);
+            let viewstate = ViewState::from(view);
             if self.log {
                 for time in viewstate.upper.elements() {
                     broadcast(
@@ -572,28 +582,28 @@ where
         }
     }
 
-    // /// Inserts a source into the coordinator.
-    // ///
-    // /// Unlike `insert_view`, this method can be called without a dataflow argument.
-    // /// This is most commonly used for internal sources such as logging.
-    // fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
-    //     self.remove_view(name);
-    //     let mut viewstate = ViewState::new_source();
-    //     if self.log {
-    //         for time in viewstate.upper.elements() {
-    //             broadcast(
-    //                 &mut self.broadcast_tx,
-    //                 SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-    //                     name.to_string(),
-    //                     time.clone(),
-    //                     1,
-    //                 )),
-    //             );
-    //         }
-    //     }
-    //     viewstate.set_compaction_latency(compaction_ms);
-    //     self.views.insert(name.to_string(), viewstate);
-    // }
+    /// Inserts a source into the coordinator.
+    ///
+    /// Unlike `insert_view`, this method can be called without a dataflow argument.
+    /// This is most commonly used for internal sources such as logging.
+    fn insert_name(&mut self, name: &str, compaction_ms: Timestamp) {
+        self.remove_view(name);
+        let mut viewstate = ViewState::default();
+        if self.log {
+            for time in viewstate.upper.elements() {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AppendLog(MaterializedEvent::Frontier(
+                        name.to_string(),
+                        time.clone(),
+                        1,
+                    )),
+                );
+            }
+        }
+        viewstate.set_compaction_latency(compaction_ms);
+        self.views.insert(name.to_string(), viewstate);
+    }
 
     /// Removes a view from the coordinator.
     ///
@@ -659,27 +669,31 @@ pub struct ViewState {
 }
 
 impl ViewState {
-    /// Initialize a new `ViewState` from a name and a dataflow.
-    ///
-    /// The upper bound and since compaction are initialized to the zero frontier.
-    pub fn new(view: &View) -> Self {
-        // determine immediate dependencies.
-        let mut out = Vec::new();
-        view.relation_expr.unbound_uses(&mut out);
-        out.sort();
-        out.dedup();
-        let uses = out.iter().map(|x| x.to_string()).collect();
+    /// Sets the latency behind the collection frontier at which compaction occurs.
+    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
+        self.compaction_latency_ms = latency_ms;
+    }
+}
 
-        ViewState {
-            uses,
+impl Default for ViewState {
+    fn default() -> Self {
+        Self {
+            uses: Vec::new(),
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
             compaction_latency_ms: 60_000,
         }
     }
+}
 
-    /// Sets the latency behind the collection frontier at which compaction occurs.
-    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
-        self.compaction_latency_ms = latency_ms;
+impl<'view> From<&'view View> for ViewState {
+    fn from(view: &'view View) -> Self {
+        let mut view_state = Self::default();
+        let mut out = Vec::new();
+        view.relation_expr.unbound_uses(&mut out);
+        out.sort();
+        out.dedup();
+        view_state.uses = out.iter().map(|x| x.to_string()).collect();
+        view_state
     }
 }

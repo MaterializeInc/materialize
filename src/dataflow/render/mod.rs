@@ -57,9 +57,6 @@ pub fn build_dataflow<A: Allocate>(
                 SourceConnector::Local(c) => {
                     source::local(scope, &src.name, c, worker_index == 0, local_input_mux)
                 }
-                SourceConnector::Logging(l) => {
-                    unimplemented!();
-                }
             };
 
             // Install arrangements indexed by any presented keys.

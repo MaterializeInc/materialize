@@ -9,6 +9,9 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
+// Clippy doesn't understand `as_of` and complains.
+#![allow(clippy::wrong_self_convention)]
+
 use expr::{ColumnOrder, RelationExpr, ScalarExpr};
 use repr::{Datum, RelationDesc};
 use serde::{Deserialize, Serialize};
@@ -245,14 +248,12 @@ pub struct View {
     pub name: String,
     pub relation_expr: RelationExpr,
     pub desc: RelationDesc,
-    // pub as_of: Option<Vec<Timestamp>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SourceConnector {
     Kafka(KafkaSourceConnector),
     Local(LocalSourceConnector),
-    Logging(LogSourceConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -267,18 +268,6 @@ pub struct KafkaSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LocalSourceConnector {
     pub uuid: Uuid,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LogSourceConnector {
-    pub layer: LogLayer,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum LogLayer {
-    Timely,
-    Differential,
-    Materialized,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -305,12 +294,12 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use repr::{ColumnType, ScalarType};
+    use repr::{ColumnType, RelationType, ScalarType};
 
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = Dataflow::View(View {
+        let dataflow = DataflowDescription::new(None).add_view(View {
             name: "report".into(),
             relation_expr: RelationExpr::Project {
                 outputs: vec![1, 2],
@@ -338,10 +327,10 @@ mod tests {
             desc: RelationDesc::empty()
                 .add_column("name", ScalarType::String)
                 .add_column("quantity", ScalarType::String),
-            as_of: None,
         });
 
-        let decoded: Dataflow = serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
+        let decoded: DataflowDescription =
+            serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
         assert_eq!(decoded, dataflow);
 
         Ok(())

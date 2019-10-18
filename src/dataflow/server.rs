@@ -75,7 +75,9 @@ pub enum SequencedCommand {
         finishing: RowSetFinishing,
     },
     /// Cancel the peek associated with the given `conn_id`.
-    CancelPeek { conn_id: u32 },
+    CancelPeek {
+        conn_id: u32,
+    },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
@@ -338,13 +340,9 @@ where
             }
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
-
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         for view in dataflow.views.iter() {
-                            logger.log(MaterializedEvent::Dataflow(
-                                view.name.to_string(),
-                                true,
-                            ));
+                            logger.log(MaterializedEvent::Dataflow(view.name.to_string(), true));
                         }
                     }
 
