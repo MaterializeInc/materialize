@@ -138,6 +138,7 @@ pub enum StateMachine<A: Conn + 'static> {
         SendParseComplete,
         SendReadyForQuery,
         SendParameterDescription,
+        SendDescribeResponse,
         HandleBind,
         Error,
         Done
@@ -150,6 +151,7 @@ pub enum StateMachine<A: Conn + 'static> {
         StartCopyOut,
         SendError,
         SendParseComplete,
+        SendParameterStatus,
         WaitForRows,
         Error
     ))]
@@ -176,12 +178,11 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
     SendBindComplete { send: SinkSend<A>, session: Session },
 
-    #[state_machine_future(transitions(SendDescribeResponse, Error))]
+    #[state_machine_future(transitions(SendDescribeResponse, SendError, Error))]
     SendParameterDescription {
         send: SinkSend<A>,
         session: Session,
         name: String,
-        is_statement: bool, // true if a statement, false if a portal.
     },
 
     #[state_machine_future(transitions(RecvQuery, Error))]
@@ -232,6 +233,13 @@ pub enum StateMachine<A: Conn + 'static> {
         send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
         session: Session,
         rx: comm::mpsc::Receiver<Vec<Update>>,
+    },
+
+    #[state_machine_future(transitions(SendCommandComplete))]
+    SendParameterStatus {
+        send: SinkSend<A>,
+        session: Session,
+        extended: bool,
     },
 
     #[state_machine_future(transitions(SendReadyForQuery, RecvQuery, Error))]
@@ -347,7 +355,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             .chain(
                 state
                     .session
-                    .startup_vars()
+                    .notify_vars()
                     .iter()
                     .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
             )
@@ -459,11 +467,16 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     session: state.session,
                 });
             }
+            FrontendMessage::DescribePortal { name } => Ok(Async::Ready(send_describe_response(
+                conn,
+                state.session,
+                name,
+                DescribeKind::Portal,
+            ))),
             FrontendMessage::DescribeStatement { name } => transition!(SendParameterDescription {
                 send: conn.send(BackendMessage::ParameterDescription),
                 session: state.session,
                 name,
-                is_statement: true,
             }),
             FrontendMessage::Bind {
                 portal_name,
@@ -514,7 +527,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 session: state.session,
                 kind: ErrorKind::Fatal,
             }),
-        };
+        }
     }
 
     fn poll_handle_query<'s, 'c>(
@@ -539,7 +552,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                     .send(BackendMessage::CommandComplete { tag: $cmd.into() })
                             ),
                             session,
-                            currently_extended: state.field_formats.is_some(),
+                            currently_extended: state.extended,
                             label: $label
                         })
                     };
@@ -581,7 +594,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             })
                         }
                     }
-                    SqlResponse::SetVariable => command_complete!("SET", "set"),
+                    SqlResponse::SetVariable { name } => {
+                        if let Some(var) = session.notify_vars().iter().find(|v| v.name() == name) {
+                            trace!("sending parameter status for {}", name);
+                            transition!(SendParameterStatus {
+                                send: state
+                                    .conn
+                                    .send(BackendMessage::ParameterStatus(var.name(), var.value())),
+                                session,
+                                extended: state.extended,
+                            })
+                        } else {
+                            command_complete!("SET", "set")
+                        }
+                    }
                     SqlResponse::Tailing { rx } => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
                         session,
@@ -625,37 +651,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendParameterDescription<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        trace!("send describe response for statement={:?}", state.name);
-        let statement = if state.is_statement {
-            state.session.get_prepared_statement(&state.name)
-        } else {
-            let name = &state
-                .session
-                .get_portal(&state.name)
-                .ok_or_else(|| failure::format_err!("Portal does not exist: {:?}", state.name))?
-                .statement_name;
-            state.session.get_prepared_statement(&name)
-        };
-        match statement {
-            Some(ps) => match ps.desc() {
-                Some(desc) => {
-                    let desc = super::message::row_description_from_desc(&desc);
-                    trace!("sending row description {:?}", desc);
-                    transition!(SendDescribeResponse {
-                        send: conn.send(BackendMessage::RowDescription(desc)),
-                        session: state.session,
-                    })
-                }
-                None => {
-                    trace!("sending no data");
-                    transition!(SendDescribeResponse {
-                        send: conn.send(BackendMessage::NoData),
-                        session: state.session,
-                    });
-                }
-            },
-            None => failure::bail!("prepared statement does not exist name={:?}", state.name),
-        }
+        Ok(Async::Ready(send_describe_response(
+            conn,
+            state.session,
+            state.name,
+            DescribeKind::Statement,
+        )))
     }
 
     fn poll_send_describe_response<'s, 'c>(
@@ -857,6 +858,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         }
     }
 
+    fn poll_send_parameter_status<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendParameterStatus<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendParameterStatus<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        transition!(SendCommandComplete {
+            send: Box::new(conn.send(BackendMessage::CommandComplete { tag: "SET".into() })),
+            session: state.session,
+            currently_extended: state.extended,
+            label: "set",
+        })
+    }
+
     fn poll_send_error<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendError<A>>,
         context: &'c mut RentToOwn<'c, Context>,
@@ -916,5 +931,60 @@ where
         session,
         currently_extended,
         label: "select",
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DescribeKind {
+    Statement,
+    Portal,
+}
+
+fn send_describe_response<A, R>(conn: A, session: Session, name: String, kind: DescribeKind) -> R
+where
+    A: Conn + 'static,
+    R: From<SendError<A>> + From<SendDescribeResponse<A>>,
+{
+    trace!("send describe response for statement={:?}", name);
+    let stmt = match kind {
+        DescribeKind::Statement => session.get_prepared_statement(&name),
+        DescribeKind::Portal => session
+            .get_portal(&name)
+            .and_then(|portal| session.get_prepared_statement(&portal.statement_name)),
+    };
+    let stmt = match stmt {
+        Some(stmt) => stmt,
+        None => {
+            return SendError {
+                send: conn.send(BackendMessage::ErrorResponse {
+                    severity: Severity::Fatal,
+                    code: "08P01",
+                    message: "portal or prepared statement does not exist".into(),
+                    detail: Some(format!("name: {}", name)),
+                }),
+                session,
+                kind: ErrorKind::Fatal,
+            }
+            .into()
+        }
+    };
+    match stmt.desc() {
+        Some(desc) => {
+            let desc = super::message::row_description_from_desc(&desc);
+            trace!("sending row description {:?}", desc);
+            SendDescribeResponse {
+                send: conn.send(BackendMessage::RowDescription(desc)),
+                session,
+            }
+            .into()
+        }
+        None => {
+            trace!("sending no data");
+            SendDescribeResponse {
+                send: conn.send(BackendMessage::NoData),
+                session,
+            }
+            .into()
+        }
     }
 }
