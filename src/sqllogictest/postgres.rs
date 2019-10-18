@@ -8,13 +8,12 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::env;
-use std::io::Cursor;
 
-use ::postgres::row::Row as PostgresRow;
-use ::postgres::types::{FromSql, Type as PostgresType};
-use ::postgres::{Client, NoTls};
-use byteorder::{NetworkEndian, ReadBytesExt};
+use ::postgres::rows::Row as PostgresRow;
+use ::postgres::types::FromSql;
+use ::postgres::{Connection, TlsMode};
 use failure::{bail, ensure, format_err};
+use rust_decimal::Decimal;
 use sqlparser::ast::ColumnOption;
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
@@ -23,7 +22,7 @@ use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, ScalarType};
 use sql::scalar_type_from_sql;
 
 pub struct Postgres {
-    client: Client,
+    conn: Connection,
     table_types: HashMap<String, (Vec<DataType>, RelationDesc)>,
 }
 
@@ -49,18 +48,20 @@ impl Postgres {
         //
         // [0]: https://www.postgresql.org/docs/current/libpq-envars.html
         let user = env::var("PGUSER").unwrap_or_else(|_| whoami::username());
-        let mut client = postgres::config::Config::new()
-            .user(&user)
-            .password(env::var("PGPASSWORD").unwrap_or_else(|_| "".into()))
-            .dbname(&env::var("PGDATABASE").unwrap_or(user))
-            .port(match env::var("PGPORT") {
-                Ok(port) => port.parse()?,
-                Err(_) => 5432,
-            })
-            .host(&env::var("PGHOST").unwrap_or_else(|_| "localhost".into()))
-            .connect(NoTls)?;
+        let password = env::var("PGPASSWORD").unwrap_or_else(|_| "".into());
+        let dbname = env::var("PGDATABASE").unwrap_or_else(|_| user.clone());
+        let port = match env::var("PGPORT") {
+            Ok(port) => port.parse()?,
+            Err(_) => 5432,
+        };
+        let host = env::var("PGHOST").unwrap_or_else(|_| "localhost".into());
+        let url = format!(
+            "postgresql://{}:{}@{}:{}/{}",
+            user, password, host, port, dbname
+        );
+        let conn = Connection::connect(url, TlsMode::None)?;
         // drop all tables
-        client.execute(
+        conn.execute(
             r#"
 DO $$ DECLARE
     r RECORD;
@@ -73,7 +74,7 @@ END $$;
             &[],
         )?;
         Ok(Self {
-            client,
+            conn,
             table_types: HashMap::new(),
         })
     }
@@ -90,7 +91,7 @@ END $$;
                 constraints,
                 ..
             } => {
-                self.client.execute(sql, &[])?;
+                self.conn.execute(sql, &[])?;
                 let sql_types = columns
                     .iter()
                     .map(|column| column.data_type.clone())
@@ -148,7 +149,7 @@ END $$;
                 object_type: ObjectType::Table,
                 ..
             } => {
-                self.client.execute(sql, &[])?;
+                self.conn.execute(sql, &[])?;
                 Outcome::Dropped(names.iter().map(|name| name.to_string()).collect())
             }
             Statement::Delete { table_name, .. } => {
@@ -216,7 +217,7 @@ END $$;
             .ok_or_else(|| format_err!("Unknown table: {:?}", table_name))?
             .clone();
         let mut rows = vec![];
-        let postgres_rows = self.client.query(&*query, &[])?;
+        let postgres_rows = self.conn.query(&*query, &[])?;
         for postgres_row in postgres_rows.iter() {
             let row = (0..postgres_row.len())
                 .map(|c| {
@@ -291,26 +292,27 @@ fn get_column(
             Datum::Timestamp(d)
         }
         DataType::Interval => {
-            let pgi = get_column_inner::<PgInterval>(postgres_row, i, nullable)?.unwrap();
-            if pgi.months != 0 && (pgi.days != 0 || pgi.micros != 0) {
+            let pgi =
+                get_column_inner::<pg_interval::Interval>(postgres_row, i, nullable)?.unwrap();
+            if pgi.months != 0 && (pgi.days != 0 || pgi.microseconds != 0) {
                 bail!("can't handle pg intervals that have both months and times");
             }
             if pgi.months != 0 {
                 Datum::Interval(Interval::Months(pgi.months.into()))
             } else {
                 // TODO(quodlibetor): I can't find documentation about how
-                // micros and days are supposed to sum before the epoch.
+                // microseconds and days are supposed to sum before the epoch.
                 // Hopefully we only ever end up with one. Since we don't
                 // actually use pg in prod anywhere so I'm not digging further
                 // until this breaks.
-                if pgi.days > 0 && pgi.micros < 0 || pgi.days < 0 && pgi.micros > 0 {
+                if pgi.days > 0 && pgi.microseconds < 0 || pgi.days < 0 && pgi.microseconds > 0 {
                     panic!(
-                        "postgres interval parts do not agree on sign days={} micros={}",
-                        pgi.days, pgi.micros
+                        "postgres interval parts do not agree on sign days={} microseconds={}",
+                        pgi.days, pgi.microseconds
                     );
                 }
-                let seconds = i64::from(pgi.days) * 86_400 + pgi.micros / 1_000_000;
-                let nanos = (pgi.micros.abs() % 1_000_000) as u32 * 1_000;
+                let seconds = i64::from(pgi.days) * 86_400 + pgi.microseconds / 1_000_000;
+                let nanos = (pgi.microseconds.abs() % 1_000_000) as u32 * 1_000;
 
                 Datum::Interval(Interval::Duration {
                     is_positive: seconds >= 0,
@@ -324,17 +326,17 @@ fn get_column(
 
                 _ => unreachable!(),
             };
-            match get_column_inner::<DecimalWrapper>(postgres_row, i, nullable)? {
+            match get_column_inner::<Decimal>(postgres_row, i, nullable)? {
                 None => Datum::Null,
-                Some(DecimalWrapper {
-                    mut significand,
-                    scale: current_scale,
-                }) => {
+                Some(d) => {
+                    let d = d.unpack();
+                    let mut significand =
+                        i128::from(d.lo) + (i128::from(d.mid) << 32) + (i128::from(d.hi) << 64);
                     // TODO(jamii) lots of potential for unchecked edge cases here eg 10^scale_correction could overflow
                     // current representation is `significand * 10^current_scale`
                     // want to get to `significand2 * 10^desired_scale`
                     // so `significand2 = significand * 10^(current_scale - desired_scale)`
-                    let scale_correction = current_scale - (i64::from(desired_scale));
+                    let scale_correction = (d.scale as isize) - (desired_scale as isize);
                     if scale_correction > 0 {
                         significand /= 10i128.pow(scale_correction.try_into()?);
                     } else {
@@ -352,103 +354,30 @@ fn get_column(
     })
 }
 
-fn get_column_inner<'a, T>(
-    postgres_row: &'a PostgresRow,
+fn get_column_inner<T>(
+    postgres_row: &PostgresRow,
     i: usize,
     nullable: bool,
 ) -> Result<Option<T>, failure::Error>
 where
-    T: FromSql<'a>,
+    T: FromSql,
 {
     if nullable {
-        let value: Option<T> = postgres_row.try_get(i)?;
+        let value: Option<T> = get_column_raw(postgres_row, i)?;
         Ok(value)
     } else {
-        let value: T = postgres_row.try_get(i)?;
+        let value: T = get_column_raw(postgres_row, i)?;
         Ok(Some(value))
     }
 }
 
-struct DecimalWrapper {
-    significand: i128,
-    scale: i64,
-}
-
-impl FromSql<'_> for DecimalWrapper {
-    fn from_sql(
-        _ty: &PostgresType,
-        raw: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        // TODO(jamii) how do we attribute this?
-        // based on:
-        //   https://docs.diesel.rs/src/diesel/pg/types/floats/mod.rs.html#55-82
-        //   https://docs.diesel.rs/src/diesel/pg/types/numeric.rs.html#41-73
-
-        let mut raw = Cursor::new(raw);
-        let digit_count = raw.read_u16::<NetworkEndian>()?;
-        let mut digits = Vec::with_capacity(digit_count as usize);
-        let weight = raw.read_i16::<NetworkEndian>()?;
-        let sign = raw.read_u16::<NetworkEndian>()?;
-        let _scale = raw.read_u16::<NetworkEndian>()?;
-        for _ in 0..digit_count {
-            digits.push(raw.read_i16::<NetworkEndian>()?);
-        }
-
-        let mut significand: i128 = 0;
-        let count = digits.len() as i64;
-        for digit in digits {
-            significand *= 10_000i128;
-            significand += i128::from(digit);
-        }
-        significand *= match sign {
-            0 => 1,
-            0x4000 => -1,
-            0xC000 => return Err(format_err!("Got a decimal NaN").into()),
-            _ => return Err(format_err!("Got an invalid sign byte: {:?}", sign).into()),
-        };
-
-        // first digit got factor 10_000^(digits.len() - 1), but should get 10_000^weight
-        let current_scale = -(4 * (i64::from(weight) - count + 1));
-
-        Ok(DecimalWrapper {
-            significand,
-            scale: current_scale,
-        })
-    }
-
-    fn accepts(ty: &PostgresType) -> bool {
-        match *ty {
-            PostgresType::NUMERIC => true,
-            _ => false,
-        }
-    }
-}
-
-/// The interal representation of an interval in pg
-#[derive(Debug)]
-struct PgInterval {
-    pub micros: i64,
-    pub days: i32,
-    pub months: i32,
-}
-
-impl FromSql<'_> for PgInterval {
-    fn from_sql(
-        _ty: &PostgresType,
-        raw: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + 'static + Send + Sync>> {
-        let mut raw = Cursor::new(raw);
-        Ok(PgInterval {
-            micros: raw.read_i64::<NetworkEndian>()?,
-            days: raw.read_i32::<NetworkEndian>()?,
-            months: raw.read_i32::<NetworkEndian>()?,
-        })
-    }
-
-    fn accepts(ty: &PostgresType) -> bool {
-        match *ty {
-            PostgresType::INTERVAL => true,
-            _ => false,
-        }
+fn get_column_raw<T>(postgres_row: &PostgresRow, i: usize) -> Result<T, failure::Error>
+where
+    T: FromSql,
+{
+    match postgres_row.get_opt(i) {
+        None => bail!("missing column at index {}", i),
+        Some(Ok(t)) => Ok(t),
+        Some(Err(err)) => Err(err.into()),
     }
 }
