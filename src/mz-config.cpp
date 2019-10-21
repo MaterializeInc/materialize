@@ -106,7 +106,7 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     {"SELECT o_ol_cnt, count(*) AS order_count\n"
                     "FROM mysql_tpcch_order\n"
                     "WHERE o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "AND o_entry_d < TIMESTAMP '2012-01-02 00:00:00.000000'\n"
+                    "AND o_entry_d < TIMESTAMP '2020-01-02 00:00:00.000000'\n"
                     "AND EXISTS (\n"
                     "    SELECT *\n"
                     "    FROM mysql_tpcch_orderline\n"
@@ -174,7 +174,7 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "    OR\n"
                     "    (n1.n_name = 'CAMBODIA' AND n2.n_name = 'GERMANY')\n"
                     ")\n"
-                    "AND ol_delivery_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2012-01-02 00:00:00.000000'\n"
+                    "AND ol_delivery_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2020-01-02 00:00:00.000000'\n"
                     "GROUP BY su_nationkey, substr(c_state, 1, 1), extract(year FROM o_entry_d)\n",
 
                     "su_nationkey, cust_nation, l_year", std::nullopt}
@@ -199,7 +199,7 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND ol_i_id < 1000\n"
                     "AND r_name = 'EUROPE'\n"
                     "AND su_nationkey = n2.n_nationkey\n"
-                    "AND o_entry_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2012-01-02 00:00:00.000000'\n"
+                    "AND o_entry_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2020-01-02 00:00:00.000000'\n"
                     "AND i_data like '%b'\n"
                     "AND i_id = ol_i_id\n"
                     "GROUP BY extract(year FROM o_entry_d)\n",
