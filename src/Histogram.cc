@@ -2,6 +2,7 @@
 // Created by brennan on 10/17/19.
 //
 
+#include <cstdio>
 #include "Histogram.h"
 
 // This takes around 64 CPU cycles in the worst case (each loop iteration will take 1 on a modern CPU).
@@ -19,7 +20,7 @@ static unsigned nextPow2(uint64_t val) {
 void Histogram::increment(uint64_t val) {
     unsigned slot = nextPow2(val);
     if (counts.size() <= slot) {
-        counts.resize(slot);
+        counts.resize(slot + 1);
     }
     ++counts[slot];
 }
@@ -33,7 +34,7 @@ Histogram &Histogram::operator+=(const Histogram &other) {
         counts.resize(other.counts.size());
     }
     for (size_t i = 0; i < other.counts.size(); ++i) {
-        ++counts[i];
+        counts[i] += other.counts[i];
     }
     return *this;
 }

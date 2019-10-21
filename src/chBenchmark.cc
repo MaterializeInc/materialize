@@ -110,11 +110,11 @@ static void* analyticalThread(void* args) {
     return nullptr;
 }
 
-static void peekThread(pqxx::connection* pc, const mz::Config* pConfig, const std::atomic<RunState> *pRunState,
+static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *pRunState,
         std::promise<std::vector<Histogram>> promHist) {
     const mz::Config& config = *pConfig;
     const std::atomic<RunState>& runState = *pRunState;
-    pqxx::connection& c = *pc;
+    pqxx::connection c(config.materializedUrl);
     // FIXME
     assert(!config.hQueries.empty());
     size_t iQuery = 0;
@@ -136,7 +136,7 @@ static void peekThread(pqxx::connection* pc, const mz::Config* pConfig, const st
 }
 
 static void createSourcesThread(mz::Config config, std::promise<std::vector<Histogram>> promHist,
-        int peekThreads, const std::atomic<RunState> *pRunState) {
+        int peekConns, const std::atomic<RunState> *pRunState) {
     const auto& connUrl = config.materializedUrl;
     auto& expected = config.expectedSources;
     const auto& kafkaUrl = config.kafkaUrl;
@@ -160,19 +160,20 @@ static void createSourcesThread(mz::Config config, std::promise<std::vector<Hist
         std::cout << "Creating query " << vp.first << std::endl;
         mz::createMaterializedView(c, vp.first, vp.second.query);
     }
-    if (peekThreads) {
+    if (peekConns) {
         std::vector<Histogram> hists;
         hists.resize(config.hQueries.size());
         std::vector<std::future<std::vector<Histogram>>> futs;
-        for (int i = 0; i < peekThreads; ++i) {
+        for (int i = 0; i < peekConns; ++i) {
             std::promise<std::vector<Histogram>> prom;
             futs.push_back(prom.get_future());
-            std::thread(peekThread, &c, &config, pRunState, std::move(prom)).detach();
+            std::thread(peekThread, &config, pRunState, std::move(prom)).detach();
         }
         for (auto& fut: futs) {
             auto threadHists = fut.get();
             assert(hists.size() == threadHists.size());
             for (size_t i = 0; i < hists.size(); ++i) {
+                assert(threadHists[i].getCounts().back() != 0);
                 hists[i] += threadHists[i];
             }
         }
@@ -338,7 +339,7 @@ static int run(int argc, char* argv[]) {
         {"max-delay", required_argument, nullptr, 'M'},
         {"mz-sources", no_argument, nullptr, 'S'},
         {"mz-views", required_argument, nullptr, 'V'},
-        {"peek-threads", required_argument, nullptr, 'P'},
+        {"peek-conns", required_argument, nullptr, 'P'},
         {"peek-min-delay", required_argument, nullptr, 'k'},
         {"peek-max-delay", required_argument, nullptr, 'K'},
         {nullptr, 0, nullptr, 0}};
@@ -351,7 +352,7 @@ static int run(int argc, char* argv[]) {
     int transactionalThreads = 10;
     int warmupSeconds = 0;
     int runSeconds = 10;
-    int peekThreads = 0;
+    int peekConns = 0;
     double minDelay = 0;
     double maxDelay = 0;
     double peekMinDelay = 0;
@@ -403,7 +404,7 @@ static int run(int argc, char* argv[]) {
             mzViews = parseCommaSeparated(optarg);
             break;
         case 'P':
-            peekThreads = parseInt("Materialized peek threads", optarg);
+            peekConns = parseInt("Materialized peek threads", optarg);
             break;
         case 'k':
             peekMinDelay = parseDouble("minimum delay between peeks (s)", optarg);
@@ -439,10 +440,10 @@ static int run(int argc, char* argv[]) {
         errx(1, "run seconds cannot be negative");
     if (!mzViews.empty() && !createSources)
         errx(1, "--mz-views requires --mz-sources");
-    if (peekThreads < 0)
+    if (peekConns < 0)
         errx(1, "peek threads cannot be negative");
-    if (mzViews.empty() && peekThreads)
-        errx(1, "--peek-threads requires --mz-views and --mz-sources");
+    if (mzViews.empty() && peekConns)
+        errx(1, "--peek-conns requires --mz-views and --mz-sources");
 
     if (logFile)
         Log::open(logFile);
@@ -550,7 +551,7 @@ static int run(int argc, char* argv[]) {
         std::thread(createSourcesThread,
                 mzCfg,
                 std::move(promHist),
-                peekThreads,
+                peekConns,
                 &runState
                 ).detach();
     }
@@ -595,15 +596,21 @@ static int run(int argc, char* argv[]) {
     printf("OLAP throughput [QphH]: %llu\n", qphh);
     printf("OLTP throughput [tpmC]: %llu\n", tpmc);
 
-    if (peekThreads) {
+    if (peekConns) {
         auto hists = futHist.get();
         printf("\n\nQuery latencies:\n");
         assert(mzCfg.hQueries.size() == hists.size());
         for (size_t i = 0; i < hists.size(); ++i) {
-            printf("\n%s:\n", mzCfg.hQueries[i].first.c_str());
+            printf("\n%s:\ncount\t|\tlatency (ns)\n----------------------------\n", mzCfg.hQueries[i].first.c_str());
             uint64_t nanos = 1;
+            bool printed_first = false;
             for (auto bucketCount : hists[i].getCounts()) {
-                printf("%" PRIu64 "\t|\t%" PRIu64 "\n", bucketCount, nanos);
+                if (bucketCount) {
+                    printed_first = true;
+                }
+                if (printed_first) {
+                    printf("%" PRIu64 "\t|\t%" PRIu64 "\n", bucketCount, nanos);
+                }
                 nanos *= 2;
             }
         }
