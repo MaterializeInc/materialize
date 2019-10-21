@@ -291,14 +291,22 @@ where
                 let name = format!("<tail_{}>", Uuid::new_v4());
                 self.active_tails.insert(conn_id, name.clone());
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+                let since = self
+                    .upper_of(source.name())
+                    .expect("name missing at coordinator")
+                    .elements()
+                    .get(0)
+                    .copied()
+                    .unwrap_or(Timestamp::max_value());
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![Dataflow::Sink(Sink {
                         name,
                         from: (source.name().to_owned(), source.desc().clone()),
-                        connector: SinkConnector::Tail(TailSinkConnector { tx }),
+                        connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                     })]),
                 );
+
                 SqlResponse::Tailing { rx }
             }
 
