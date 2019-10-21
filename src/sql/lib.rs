@@ -37,10 +37,11 @@ pub enum Plan {
     DropSources(Vec<String>),
     DropViews(Vec<String>),
     EmptyQuery,
-    DidSetVariable,
-    Parsed {
+    SetVariable {
         name: String,
+        value: String,
     },
+    Parsed,
     Peek {
         source: ::expr::RelationExpr,
         desc: RelationDesc,

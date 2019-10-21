@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use super::{DifferentialLog, LogVariant};
-use crate::arrangement::KeysOnlyHandle;
+use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use differential_dataflow::logging::DifferentialEvent;
 use repr::Datum;
@@ -17,12 +17,11 @@ pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, DifferentialEvent)>>,
-) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
+) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::arrange::arrangement::ArrangeBySelf;
         use differential_dataflow::operators::reduce::Count;
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::Map;
@@ -79,8 +78,7 @@ pub fn construct<A: Allocate>(
                     Datum::Int64(count[0] as i64),
                     Datum::Int64(count[1] as i64),
                 ]
-            })
-            .arrange_by_self();
+            });
 
         // Duration statistics derive from the non-rounded event times.
         let sharing = logs
@@ -100,22 +98,30 @@ pub fn construct<A: Allocate>(
                     Datum::Int64(worker as i64),
                     Datum::Int64(count as i64),
                 ]
-            })
-            .arrange_by_self();
+            });
 
-        vec![
+        let logs = vec![
             (
                 LogVariant::Differential(DifferentialLog::Arrangement),
-                arrangements.trace,
+                arrangements,
             ),
-            (
-                LogVariant::Differential(DifferentialLog::Sharing),
-                sharing.trace,
-            ),
-        ]
-        .into_iter()
-        .filter(|(name, _trace)| config.active_logs().contains(name))
-        .collect()
+            (LogVariant::Differential(DifferentialLog::Sharing), sharing),
+        ];
+
+        use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+        let mut result = std::collections::HashMap::new();
+        for (variant, collection) in logs {
+            if config.active_logs().contains(&variant) {
+                let key = variant.index_by();
+                let key_clone = key.clone();
+                let trace = collection
+                    .map(move |record| (key.iter().map(|k| record[*k].clone()).collect(), record))
+                    .arrange_by_key()
+                    .trace;
+                result.insert(variant, (key_clone, trace));
+            }
+        }
+        result
     });
 
     traces

@@ -268,10 +268,21 @@ where
     where
         D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     {
+        self.mpsc_limited(u64::max_value())
+    }
+
+    /// Like [`Switchboard::mpsc`], but limits the number of producers to
+    /// `max_producers`. Once `max_producers` have connected, no additional
+    /// producers will be permitted to connect; once each permitted producer has
+    /// disconnected, the receiver will be closed.
+    pub fn mpsc_limited<D>(&self, max_producers: u64) -> (mpsc::Sender<D>, mpsc::Receiver<D>)
+    where
+        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+    {
         let uuid = Uuid::new_v4();
         let addr = self.0.nodes[self.0.id].clone();
         let tx = mpsc::Sender::new(addr, uuid);
-        let rx = mpsc::Receiver::new(self.new_rx(uuid), self.clone());
+        let rx = mpsc::Receiver::new(self.new_rx(uuid).take(max_producers), self.clone());
         (tx, rx)
     }
 

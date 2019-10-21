@@ -22,6 +22,8 @@ use ore::future::FutureExt;
 use ore::mpmc::Mux;
 use repr::Datum;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::collections::HashMap;
 use std::mem;
 use std::net::TcpStream;
 use std::sync::Mutex;
@@ -29,13 +31,15 @@ use uuid::Uuid;
 
 use super::render;
 use crate::arrangement::{
-    manager::{KeysOnlyHandle, WithDrop},
+    manager::{KeysValsHandle, WithDrop},
     TraceManager,
 };
 use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{compare_columns, Dataflow, LocalInput, RowSetFinishing, Timestamp};
+use dataflow_types::{
+    compare_columns, Dataflow, LocalInput, PeekResponse, RowSetFinishing, Timestamp,
+};
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
 /// Timely workers.
@@ -65,10 +69,12 @@ pub enum SequencedCommand {
     Peek {
         name: String,
         conn_id: u32,
-        tx: comm::mpsc::Sender<Vec<Vec<Datum>>>,
+        tx: comm::mpsc::Sender<PeekResponse>,
         timestamp: Timestamp,
         finishing: RowSetFinishing,
     },
+    /// Cancel the peek associated with the given `conn_id`.
+    CancelPeek { conn_id: u32 },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
@@ -155,6 +161,7 @@ where
             feedback_tx: None,
             command_rx,
             materialized_logger: None,
+            dataflow_drops: HashMap::new(),
         }
         .run()
     })
@@ -167,7 +174,7 @@ struct PendingPeek {
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
     /// A transmitter connected to the intended recipient of the peek.
-    tx: comm::mpsc::Sender<Vec<Vec<Datum>>>,
+    tx: comm::mpsc::Sender<PeekResponse>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -181,12 +188,13 @@ where
 {
     inner: &'w mut TimelyWorker<A>,
     local_input_mux: Mux<Uuid, LocalInput>,
-    pending_peeks: Vec<(PendingPeek, WithDrop<KeysOnlyHandle>)>,
+    pending_peeks: Vec<(PendingPeek, WithDrop<KeysValsHandle>)>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
+    dataflow_drops: HashMap<String, Box<dyn Any>>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -238,17 +246,17 @@ where
                 );
 
             // Install traces as maintained views.
-            for (log, trace) in t_traces {
+            for (log, (key, trace)) in t_traces {
                 self.traces
-                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
+                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
             }
-            for (log, trace) in d_traces {
+            for (log, (key, trace)) in d_traces {
                 self.traces
-                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
+                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
             }
-            for (log, trace) in m_traces {
+            for (log, (key, trace)) in m_traces {
                 self.traces
-                    .set_by_self(log.name().to_string(), WithDrop::from(trace));
+                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -288,9 +296,10 @@ where
             if let Some(feedback_tx) = &mut self.feedback_tx {
                 let mut upper = Antichain::new();
                 let mut progress = Vec::new();
-                for name in self.traces.traces.keys() {
-                    if let Some(by_self) = self.traces.get_by_self(name) {
-                        by_self.clone().read_upper(&mut upper);
+                let names = self.traces.traces.keys().cloned().collect::<Vec<_>>();
+                for name in names {
+                    if let Some(mut traces) = self.traces.get_all_keyed(&name) {
+                        traces.next().unwrap().1.clone().read_upper(&mut upper);
                         progress.push((name.to_owned(), upper.elements().to_vec()));
                     }
                 }
@@ -331,6 +340,7 @@ where
                         dataflow,
                         &mut self.traces,
                         self.inner,
+                        &mut self.dataflow_drops,
                         &mut self.local_input_mux,
                         &mut self.materialized_logger,
                     );
@@ -343,6 +353,7 @@ where
                         logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                     }
                     self.traces.del_trace(name);
+                    self.dataflow_drops.remove(name);
                 }
             }
 
@@ -355,8 +366,11 @@ where
             } => {
                 let mut trace = self
                     .traces
-                    .get_by_self(&name)
-                    .expect("Failed to find trace for peek")
+                    .get_all_keyed(&name)
+                    .unwrap()
+                    .next()
+                    .unwrap()
+                    .1
                     .clone();
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
@@ -378,6 +392,23 @@ where
                     ));
                 }
                 self.pending_peeks.push((pending_peek, trace));
+            }
+
+            SequencedCommand::CancelPeek { conn_id } => {
+                self.pending_peeks.retain(|(peek, _trace)| {
+                    if peek.conn_id == conn_id {
+                        peek.tx
+                            .connect()
+                            .wait()
+                            .unwrap()
+                            .send(PeekResponse::Canceled)
+                            .wait()
+                            .unwrap();
+                        false // don't retain
+                    } else {
+                        true // retain
+                    }
+                })
             }
 
             SequencedCommand::AllowCompaction(list) => {
@@ -433,16 +464,13 @@ where
                 return true; // retain
             }
 
-            let results = Worker::<A>::collect_finished_data(peek, &mut trace);
+            let rows = Worker::<A>::collect_finished_data(peek, &mut trace);
 
-            // TODO(benesch): investigate connection pooling for PEEK results,
-            // or multiplexing across one TCP stream. At the moment, every PEEK
-            // opens a new network connection.
             peek.tx
                 .connect()
                 .wait()
                 .unwrap()
-                .send(results)
+                .send(PeekResponse::Rows(rows))
                 .wait()
                 .unwrap();
             if let Some(logger) = self.materialized_logger.as_mut() {
@@ -462,41 +490,40 @@ where
 
     fn collect_finished_data(
         peek: &PendingPeek,
-        trace: &mut WithDrop<KeysOnlyHandle>,
+        trace: &mut WithDrop<KeysValsHandle>,
     ) -> Vec<Vec<Datum>> {
         let (mut cur, storage) = trace.cursor();
         let mut results = Vec::new();
-        while let Some(record) = cur.get_key(&storage) {
-            // Before (expensively) determining how many copies of a record
-            // we have, let's eliminate records that we don't care about.
-            if peek
-                .finishing
-                .filter
-                .iter()
-                .all(|predicate| predicate.eval(record) == Datum::True)
-            {
-                // TODO: Absent value iteration might be weird (in principle
-                // the cursor *could* say no `()` values associated with the
-                // key, though I can't imagine how that would happen for this
-                // specific trace implementation).
-                let mut copies = 0;
-                cur.map_times(&storage, |time, diff| {
-                    use timely::order::PartialOrder;
-                    if time.less_equal(&peek.timestamp) {
-                        copies += diff;
-                    }
-                });
-                assert!(
-                    copies >= 0,
-                    "Negative multiplicity: {} for {:?} in view {}",
-                    copies,
-                    record,
-                    peek.name
-                );
+        while let Some(_key) = cur.get_key(&storage) {
+            while let Some(record) = cur.get_val(&storage) {
+                // Before (expensively) determining how many copies of a record
+                // we have, let's eliminate records that we don't care about.
+                if peek
+                    .finishing
+                    .filter
+                    .iter()
+                    .all(|predicate| predicate.eval(record) == Datum::True)
+                {
+                    let mut copies = 0;
+                    cur.map_times(&storage, |time, diff| {
+                        use timely::order::PartialOrder;
+                        if time.less_equal(&peek.timestamp) {
+                            copies += diff;
+                        }
+                    });
+                    assert!(
+                        copies >= 0,
+                        "Negative multiplicity: {} for {:?} in view {}",
+                        copies,
+                        record,
+                        peek.name
+                    );
 
-                for _ in 0..copies {
-                    results.push(record.clone());
+                    for _ in 0..copies {
+                        results.push(record.clone());
+                    }
                 }
+                cur.step_val(&storage);
             }
             cur.step_key(&storage)
         }

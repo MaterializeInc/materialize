@@ -3,6 +3,8 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+mode cockroach
+
 statement ok
 create table foo(a int, b text);
 
@@ -54,3 +56,329 @@ select a from foo order by exists (select * from bar where bar.a = foo.a), a;
 0
 2
 1
+
+###sorts, limits, and offsets in subqueries ###
+
+#these tests have been designed to cover a wide range of situations where there
+#may be a subquery. be sure when modifying these tests to maintain a representation
+#for each situation.
+
+statement ok
+create table fizz(a int, b text);
+
+statement ok
+insert into fizz(a,b) values (2079, 'thirteen'), (12345, 'one'), (12345, 'two'), (12345, 'three'),
+(6745, 'five'), (24223, 'four'), (21243, 'four'), (1735, 'two'), (25040, 'two');
+
+#the order by's inside the subquery are technically meaningless because they do not
+#propagate to the outer query, but we should still return correct results.
+#TODO: materialize#696 replace the current query with the one below
+#SELECT b FROM (SELECT min(b) as b FROM fizz GROUP BY a ORDER BY a DESC)
+query T rowsort
+SELECT b FROM (SELECT a, min(b) as b FROM fizz GROUP BY a ORDER BY a DESC)
+----
+five
+four
+four
+one
+thirteen
+two
+two
+
+query I rowsort
+SELECT ascii(b) FROM (SELECT a, b FROM fizz ORDER BY a ASC, b DESC)
+----
+102
+102
+102
+111
+116
+116
+116
+116
+116
+
+statement ok
+create table baz (val1 int, val2 int);
+
+statement ok
+insert into baz values (12345, 1735), (12345, 1735), (12345, 1735), (1735, 24223), 
+(12345, 12345), (2079, 24223), (1735, 2079), (1735, 2079), (1735, 2079);
+
+#offset
+query I rowsort
+SELECT a FROM fizz where a > ANY(SELECT val1 from baz order by val1 offset 3 ROWS)
+----
+12345
+12345
+12345
+2079
+21243
+24223
+25040
+6745
+
+query I rowsort
+SELECT a from fizz where a in (SELECT val1 from baz order by val1 offset 0 rows)
+----
+12345
+12345
+12345
+1735
+2079
+
+#limit
+query I
+SELECT a FROM fizz WHERE a < ALL(SELECT val1 from baz order by val1 desc limit 5)
+----
+1735
+
+query I
+SELECT count(*) from fizz where exists(SELECT val1 from baz order by val1 limit 0)
+----
+0
+
+#offset + limit
+query TI
+SELECT b, (SELECT val1 from baz where val2 = a order by val1 limit 1 offset 1 rows) c from fizz order by b, c desc
+----
+five      NULL
+four      2079
+four      NULL
+one       NULL
+thirteen  1735
+three     NULL
+two       12345
+two       NULL
+two       NULL
+
+#limit + offset return correct results when there are identical rows
+query I
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 LIMIT 2)
+----
+12345
+12345
+
+query I
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 DESC OFFSET 7 ROWS)
+----
+12345
+12345
+
+query I rowsort
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 LIMIT 2 OFFSET 2 ROWS)
+----
+1735
+12345
+
+query I
+SELECT val1 FROM (SELECT val1, val2 FROM baz ORDER BY val2 DESC LIMIT 1 OFFSET 7 ROWS)
+----
+12345
+
+#order by/limit/offset in subqueries still works after deleting some entries
+#note: the parentheses around the select statement currently makes it a subquery test.
+#change the test if we optimize so that the select is no longer treated as a subquery
+statement ok
+CREATE view bazv AS (SELECT val1, val2 FROM baz ORDER BY val2 DESC, val1 LIMIT 2 OFFSET 1 ROW);
+
+query II rowsort
+PEEK bazv
+----
+2079   24223
+12345  12345
+
+statement ok
+DELETE FROM baz WHERE val1=12345;
+
+query II rowsort
+PEEK bazv
+----
+1735   2079
+2079   24223
+
+### order by/offset/limit in toplevel select query in view creation ###
+
+statement ok
+CREATE VIEW fizzorderview as SELECT a, b FROM fizz ORDER BY a desc, b;
+
+#TODO: materialize#724 take out the rowsort and rearrange results
+#when order by's persist past the view creation
+query IT rowsort
+PEEK fizzorderview
+----
+12345 one
+12345 three
+12345 two
+1735  two
+2079  thirteen
+6745  five
+21243 four
+24223 four
+25040 two
+
+statement ok
+CREATE VIEW fizzlimitview as SELECT a, b FROM fizz LIMIT 4;
+
+query II
+SELECT count(a), count(b) FROM fizzlimitview;
+----
+4 4
+
+statement ok
+CREATE VIEW fizzlimitview2 as SELECT b, a from fizz ORDER BY a asc LIMIT 2;
+
+query TI rowsort
+PEEK fizzlimitview2
+----
+thirteen 2079
+two      1735
+
+statement ok
+CREATE VIEW fizzoffsetview as SELECT a, b FROM fizz OFFSET 6 ROWS;
+
+query II
+SELECT count(b), count(a) FROM fizzoffsetview;
+----
+3 3
+
+statement ok
+CREATE VIEW fizzoffsetview2 as SELECT b, a from fizz ORDER BY b desc, a OFFSET 3 ROWS
+
+query TI rowsort
+PEEK fizzoffsetview2
+----
+four     21243 
+four     24223
+five     6745
+one      12345
+thirteen 2079
+three    12345
+
+statement ok
+CREATE VIEW fizzlimitoffsetview as SELECT sum(a) as tot, b FROM fizz GROUP BY b ORDER BY tot LIMIT 1 OFFSET 4 ROWS;
+
+query I
+SELECT count(tot) from fizzlimitoffsetview;
+----
+1
+
+statement ok
+CREATE VIEW fizzlimitoffsetview2 as SELECT avg(a), b FROM fizz GROUP BY b ORDER BY b desc LIMIT 3 OFFSET 2 ROWS;
+
+query RT rowsort
+PEEK fizzlimitoffsetview2;
+----
+12345.000000 one
+2079.000000  thirteen
+22733.000000 four
+
+# delete and add an entry; see how views update
+statement ok
+DELETE FROM fizz WHERE b='thirteen';
+
+query IT rowsort
+PEEK fizzorderview
+----
+12345 one
+12345 three
+12345 two
+1735  two
+21243 four
+24223 four
+25040 two
+6745  five
+
+query TI rowsort
+PEEK fizzlimitview2
+----
+five     6745
+two      1735
+
+query II
+SELECT count(b), count(a) FROM fizzoffsetview;
+----
+2 2
+
+query TI rowsort
+PEEK fizzoffsetview2
+----
+five     6745
+four     21243 
+four     24223
+one      12345
+three    12345 
+
+query RT rowsort
+PEEK fizzlimitoffsetview2;
+----
+12345.000000 one
+22733.000000 four
+6745.000000  five
+
+statement ok
+DELETE FROM fizz WHERE b='five';
+
+query II
+SELECT count(a), count(b) FROM fizzlimitview;
+----
+4 4
+
+query I
+SELECT count(tot) from fizzlimitoffsetview;
+----
+0
+
+statement ok
+INSERT INTO fizz VALUES (7584, 'twelve'), (21758, 'fourteen')
+
+query IT rowsort
+PEEK fizzorderview
+----
+12345 one
+12345 three
+12345 two
+1735  two
+21243 four
+21758 fourteen
+24223 four
+25040 two
+7584  twelve
+
+query II
+SELECT count(a), count(b) FROM fizzlimitview;
+----
+4 4
+
+query TI rowsort
+PEEK fizzlimitview2
+----
+twelve   7584
+two      1735
+
+query II
+SELECT count(b), count(a) FROM fizzoffsetview;
+----
+3 3
+
+query TI rowsort
+PEEK fizzoffsetview2
+----
+four     21243 
+four     24223
+fourteen 21758
+one      12345
+three    12345
+twelve   7584
+
+query I
+SELECT count(tot) from fizzlimitoffsetview;
+----
+1
+
+query RT rowsort
+PEEK fizzlimitoffsetview2;
+----
+12345.000000 one
+21758.000000 fourteen
+12345.000000 three

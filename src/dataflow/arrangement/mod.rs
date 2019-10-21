@@ -6,4 +6,4 @@
 //! Types related to the arrangement and management of collections.
 
 pub mod manager;
-pub use manager::{KeysOnlyHandle, KeysValsHandle, TraceManager};
+pub use manager::{KeysValsHandle, TraceManager};

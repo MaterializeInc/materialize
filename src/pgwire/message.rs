@@ -7,11 +7,34 @@ use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use lazy_static::lazy_static;
 
 use super::types::PgType;
 use repr::decimal::Decimal;
 use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, ScalarType};
+
+// Pgwire protocol versions are represented as 32-bit integers, where the
+// high 16 bits represent the major version and the low 16 bits represent the
+// minor version.
+//
+// There have only been three released protocol versions, v1.0, v2.0, and v3.0.
+// The protocol changes very infrequently: the most recent protocol version,
+// v3.0, was released with Postgres v7.4 in 2003.
+//
+// Somewhat unfortunately, the protocol overloads the version field to indicate
+// special types of connections, namely, SSL connections and cancellation
+// connections. These pseudo-versions were constructed to avoid ever matching
+// a true protocol version.
+
+pub const VERSION_1: u32 = 0x10000;
+pub const VERSION_2: u32 = 0x20000;
+pub const VERSION_3: u32 = 0x30000;
+pub const VERSION_CANCEL: u32 = (1234 << 16) + 5678;
+pub const VERSION_SSL: u32 = (1234 << 16) + 5679;
+
+pub const VERSIONS: &[u32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_CANCEL, VERSION_SSL];
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -41,56 +64,108 @@ impl Severity {
     }
 }
 
-/// A parsed frontend [message]
+/// A decoded frontend pgwire [message], representing instructions for the
+/// backend.
 ///
 /// [message]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 #[derive(Debug)]
 pub enum FrontendMessage {
-    Startup {
-        version: u32,
+    /// Begin a connection.
+    Startup { version: u32 },
+
+    /// Cancel a query that is running on another connection.
+    CancelRequest {
+        /// The target connection ID.
+        conn_id: u32,
+        /// The secret key for the target connection.
+        secret_key: u32,
     },
-    /// A simple query from the frontend
+
+    /// Execute the specified SQL.
+    ///
+    /// This is issued as part of the simple query flow.
     Query {
+        /// The SQL to execute.
         sql: String,
     },
-    /// Start an extended query
+
+    /// Parse the specified SQL into a prepared statement.
+    ///
+    /// This starts the extended query flow.
     Parse {
+        /// The name of the prepared statement to create. An empty string
+        /// specifies the unnamed prepared statement.
         name: String,
+        /// The SQL to parse.
         sql: String,
+        /// The number of parameter data types specified. It can be zero.
+        /// Note that this is not an indication of the number of parameters that
+        /// might appear in the query string, but only the number that the
+        /// frontend wants to prespecify types for.
         parameter_data_type_count: u16,
+        /// The OID of each parameter data type. Placing a zero here is
+        /// equivalent to leaving the type unspecified.
         parameter_data_types: Vec<u32>,
     },
-    /// Describe a statement by name during an extended query.
-    DescribeStatement {
-        name: String,
-    },
-    /// Describe a portal by name during an extended query.
-    DescribePortal {
-        name: String,
-    },
-    /// Connect the Prepared statement from `Parse` to a `Portal`
+
+    /// Describe an existing prepared statement.
     ///
-    /// Note that we can't actually bind parameters yet (issue#609), but that is an
-    /// important part of this command.
+    /// This command is part of the extended query flow.
+    DescribeStatement {
+        /// The name of the prepared statement to describe.
+        name: String,
+    },
+
+    /// Describe an existing portal.
+    ///
+    /// This command is part of the extended query flow.
+    DescribePortal {
+        /// The name of the portal to describe.
+        name: String,
+    },
+
+    /// Bind an existing prepared statement to a portal.
+    ///
+    /// Note that we can't actually bind parameters yet (issue#609), but that is
+    /// an important part of this command.
+    ///
+    /// This command is part of the extended query flow.
     Bind {
-        /// The portal being bound to
-        ///
-        /// All `Bind' commands are followed by an execute, which just names this portal
+        /// The destination portal. An empty string selects the unnamed
+        /// portal. The portal can later be executed with the `Execute` command.
         portal_name: String,
+        /// The source prepared statement. An empty string selects the unnamed
+        /// prepared statement.
         statement_name: String,
-        /// The format of each field, if the field is empty then it should be Text
+        /// The format of each field. If a field is missing from the vector,
+        /// then `FieldFormat::Text` should be assumed.
         return_field_formats: Vec<FieldFormat>,
     },
 
-    /// Execute a bound portal
+    /// Execute a bound portal.
+    ///
+    /// This command is part of the extended query flow.
     Execute {
+        /// The name of the portal to execute.
         portal_name: String,
     },
 
-    /// Finish an extended query
+    /// Finish an extended query.
+    ///
+    /// This command is part of the extended query flow.
     Sync,
 
-    /// Terminate a connection
+    /// Close the named statement.
+    ///
+    /// This command is part of the extended query flow.
+    CloseStatement { name: String },
+
+    /// Close the named portal.
+    ///
+    // This command is part of the extended query flow.
+    ClosePortal { name: String },
+
+    /// Terminate a connection.
     Terminate,
 }
 
@@ -109,7 +184,12 @@ pub enum BackendMessage {
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<FieldValue>>, FieldFormatIter),
     ParameterStatus(&'static str, String),
+    BackendKeyData {
+        conn_id: u32,
+        secret_key: u32,
+    },
     ParameterDescription,
+    NoData,
     ParseComplete,
     BindComplete,
     ErrorResponse {
@@ -241,6 +321,11 @@ impl Iterator for FieldFormatIter {
     }
 }
 
+lazy_static! {
+    static ref EPOCH: NaiveDateTime = NaiveDate::from_ymd(2000, 1, 1).and_hms(0, 0, 0);
+    static ref EPOCH_NUM_DAYS_FROM_CE: i32 = EPOCH.num_days_from_ce();
+}
+
 /// PGWire-specific representations of Datums
 #[derive(Debug)]
 pub enum FieldValue {
@@ -313,23 +398,20 @@ impl FieldValue {
     ///
     /// Some "docs" are at https://www.npgsql.org/dev/types.html
     pub(crate) fn to_binary(&self) -> Result<Cow<[u8]>, failure::Error> {
-        use byteorder::{ByteOrder, NetworkEndian};
-
         Ok(match self {
             FieldValue::Bool(false) => [0u8][..].into(),
             FieldValue::Bool(true) => [1u8][..].into(),
             FieldValue::Bytea(b) => b.into(),
             // https://github.com/postgres/postgres/blob/59354ccef5d7/src/backend/utils/adt/date.c#L223
             FieldValue::Date(d) => {
-                let day = d.num_days_from_ce() - 719_163;
+                let day = d.num_days_from_ce() - *EPOCH_NUM_DAYS_FROM_CE;
                 let mut buf = vec![0u8; 4];
                 NetworkEndian::write_i32(&mut buf, day);
                 buf.into()
             }
             FieldValue::Timestamp(ts) => {
-                let timestamp =
-                    ts.timestamp() * 1_000_000 + i64::from(ts.timestamp_subsec_micros());
-
+                let timestamp = (ts.timestamp() - EPOCH.timestamp()) * 1_000_000
+                    + i64::from(ts.timestamp_subsec_micros());
                 let mut buf = vec![0u8; 8];
                 NetworkEndian::write_i64(&mut buf, timestamp);
                 buf.into()
@@ -356,7 +438,56 @@ impl FieldValue {
                 buf.into()
             }
             // https://github.com/postgres/postgres/blob/59354ccef5/src/backend/utils/adt/numeric.c#L868-L891
-            FieldValue::Numeric(_n) => failure::bail!("cannot serialize binary: numeric"),
+            FieldValue::Numeric(n) => {
+                // This implementation is derived from Diesel.
+                // https://github.com/diesel-rs/diesel/blob/bd13f24609c6893166aab2aaf92020bb5899f402/diesel/src/pg/types/numeric.rs
+                let mut significand = n.significand();
+                let scale = u16::from(n.scale());
+                let non_neg = significand >= 0;
+                significand = significand.abs();
+
+                // Ensure that the significand will always lie on a digit boundary
+                for _ in 0..(4 - scale % 4) {
+                    significand *= 10;
+                }
+
+                let mut digits = vec![];
+                while significand > 0 {
+                    digits.push((significand % 10_000) as i16);
+                    significand /= 10_000;
+                }
+                digits.reverse();
+                let digits_after_decimal = scale / 4 + 1;
+                let weight = digits.len() as i16 - digits_after_decimal as i16 - 1;
+
+                let unnecessary_zeroes = if weight >= 0 {
+                    let index_of_decimal = (weight + 1) as usize;
+                    digits
+                        .get(index_of_decimal..)
+                        .expect("enough digits exist")
+                        .iter()
+                        .rev()
+                        .take_while(|i| **i == 0)
+                        .count()
+                } else {
+                    0
+                };
+
+                let relevant_digits = digits.len() - unnecessary_zeroes;
+                digits.truncate(relevant_digits);
+
+                let sign = if non_neg { 0 } else { 0x4000 };
+
+                let mut buf = Vec::with_capacity(8 + 2 * digits.len());
+                buf.write_u16::<NetworkEndian>(digits.len() as u16)?;
+                buf.write_i16::<NetworkEndian>(weight)?;
+                buf.write_u16::<NetworkEndian>(sign)?;
+                buf.write_u16::<NetworkEndian>(scale)?;
+                for digit in digits.iter() {
+                    buf.write_i16::<NetworkEndian>(*digit)?;
+                }
+                buf.into()
+            }
             FieldValue::Text(ref s) => s.as_bytes().into(),
         })
     }

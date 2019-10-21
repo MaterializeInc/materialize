@@ -11,7 +11,6 @@
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::convert::TryFrom;
 
 use byteorder::{ByteOrder, NetworkEndian};
@@ -19,7 +18,7 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::message::{BackendMessage, FieldFormat, FrontendMessage};
+use crate::message::{BackendMessage, FieldFormat, FrontendMessage, VERSION_CANCEL};
 use ore::netio;
 
 #[derive(Debug)]
@@ -89,7 +88,9 @@ impl Encoder for Codec {
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery => b'Z',
+            BackendMessage::NoData => b'n',
             BackendMessage::ParameterStatus(_, _) => b'S',
+            BackendMessage::BackendKeyData { .. } => b'K',
             BackendMessage::ParameterDescription => b't',
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
@@ -107,9 +108,9 @@ impl Encoder for Codec {
             // psql doesn't actually care about the number of columns.
             // It should be saved in the message if we ever need to care about it; until then,
             // 0 is fine.
-            BackendMessage::CopyOutResponse/*(n_cols)*/ => {
+            BackendMessage::CopyOutResponse /* (n_cols) */ => {
                 buf.put_u8(0); // textual format
-                buf.put_i16_be(0/*n_cols*/);
+                buf.put_i16_be(0); // n_cols
                 /*
                 for _ in 0..n_cols {
                     buf.put_i16_be(0); // textual format for this column
@@ -156,8 +157,8 @@ impl Encoder for Codec {
             BackendMessage::CommandComplete { tag } => {
                 buf.put_string(tag);
             }
-            BackendMessage::ParseComplete => {}
-            BackendMessage::BindComplete => {}
+            BackendMessage::ParseComplete => (),
+            BackendMessage::BindComplete => (),
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery => {
                 buf.put(b'I'); // transaction indicator
@@ -166,10 +167,13 @@ impl Encoder for Codec {
                 buf.put_string(name);
                 buf.put_string(value);
             }
+            BackendMessage::NoData => (),
+            BackendMessage::BackendKeyData { conn_id, secret_key } => {
+                buf.put_u32_be(conn_id);
+                buf.put_u32_be(secret_key);
+            }
             BackendMessage::ParameterDescription => {
-                // 7 bytes: b't', u32, 0 parameters
-                buf.put_u32_be(7);
-                buf.put_u16_be(0);
+                buf.put_u16_be(0); // the number of parameters used by the statement
             }
             BackendMessage::ErrorResponse {
                 severity,
@@ -199,6 +203,17 @@ impl Encoder for Codec {
 
         dst.extend(buf);
         Ok(())
+    }
+}
+
+trait Pgbuf: BufMut {
+    fn put_string<T: IntoBuf>(&mut self, s: T);
+}
+
+impl<B: BufMut> Pgbuf for B {
+    fn put_string<T: IntoBuf>(&mut self, s: T) {
+        self.put(s);
+        self.put(b'\0');
     }
 }
 
@@ -262,24 +277,22 @@ impl Decoder for Codec {
                     let buf = src.split_to(frame_len).freeze();
                     let buf = Cursor::new(&buf);
                     let msg = match msg_type {
-                        // initialization
-                        b's' => {
-                            let version = buf.read_u32()?;
-                            FrontendMessage::Startup { version }
-                        }
-                        // Simple query
-                        b'Q' => FrontendMessage::Query {
-                            sql: buf.read_cstr()?.to_string(),
-                        },
-                        // Extended query flow
-                        b'P' => parse_parse_msg(buf)?,
-                        b'D' => parse_describe(buf)?,
-                        b'B' => parse_bind(buf)?,
-                        b'E' => parse_execute(buf)?,
-                        b'S' => FrontendMessage::Sync,
+                        // Initialization and termination.
+                        b's' => decode_startup(buf)?,
+                        b'X' => decode_terminate(buf)?,
 
-                        // end
-                        b'X' => FrontendMessage::Terminate,
+                        // Simple query flow.
+                        b'Q' => decode_query(buf)?,
+
+                        // Extended query flow.
+                        b'P' => decode_parse(buf)?,
+                        b'D' => decode_describe(buf)?,
+                        b'B' => decode_bind(buf)?,
+                        b'E' => decode_execute(buf)?,
+                        b'S' => decode_sync(buf)?,
+                        b'C' => decode_close(buf)?,
+
+                        // Invalid.
                         _ => {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -299,18 +312,30 @@ impl Decoder for Codec {
     }
 }
 
-trait Pgbuf: BufMut {
-    fn put_string<T: IntoBuf>(&mut self, s: T);
-}
-
-impl<B: BufMut> Pgbuf for B {
-    fn put_string<T: IntoBuf>(&mut self, s: T) {
-        self.put(s);
-        self.put(b'\0');
+fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    let version = buf.read_u32()?;
+    if version == VERSION_CANCEL {
+        Ok(FrontendMessage::CancelRequest {
+            conn_id: buf.read_u32()?,
+            secret_key: buf.read_u32()?,
+        })
+    } else {
+        Ok(FrontendMessage::Startup { version })
     }
 }
 
-fn parse_parse_msg(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_terminate(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    // Nothing more to decode.
+    Ok(FrontendMessage::Terminate)
+}
+
+fn decode_query(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    Ok(FrontendMessage::Query {
+        sql: buf.read_cstr()?.to_string(),
+    })
+}
+
+fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?;
     let sql = buf.read_cstr()?;
 
@@ -342,26 +367,48 @@ fn parse_parse_msg(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(msg)
 }
 
-fn parse_describe(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_close(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    match buf.read_byte()? {
+        b'S' => Ok(FrontendMessage::CloseStatement {
+            name: buf.read_cstr()?.to_owned(),
+        }),
+        b'P' => Ok(FrontendMessage::ClosePortal {
+            name: buf.read_cstr()?.to_owned(),
+        }),
+        b => Err(input_err(format!(
+            "invalid type byte in close message: {}",
+            b
+        ))),
+    }
+}
+
+fn decode_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let first_char = buf.read_byte()?;
     let name = buf.read_cstr()?.to_string();
     match first_char {
         b'S' => Ok(FrontendMessage::DescribeStatement { name }),
         b'P' => Ok(FrontendMessage::DescribePortal { name }),
-        // Err(unsupported_err("Cannot handle Describe Portal")),
         other => Err(input_err(format!("Invalid describe type: {:#x?}", other))),
     }
 }
 
-/// Parse a `Byte1('B')`
-fn parse_bind(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
+    // The rules around parameter format codes are complicated. Zero means use
+    // text for all parameters, if any. One means use the specified format code
+    // for all parameters, if any. (Particularly confusingly, you can specify
+    // one text or binary parameter format code, and then proceed to bind zero
+    // parameters.) Any additional number of parameter format codes means that
+    // you're supplying one paramater format code per actual bound parameter.
+    //
+    // The simplest thing to do, since we don't actually support binding
+    // parameters, is to accept whatever parameters format codes folks want to
+    // supply, and then blow up if they actually try to bind any parameters.
     let parameter_format_code_count = buf.read_u16()?;
-    if parameter_format_code_count > 0 {
-        // Verify that we can skip parsing parameter format codes (C=Int16, Int16[C]),
-        return Err(unsupported_err("parameter format codes is not supported"));
+    for _ in 0..parameter_format_code_count {
+        let _ = buf.read_u16()?;
     }
     if buf.read_u16()? > 0 {
         return Err(unsupported_err("binding parameters is not supported"));
@@ -380,7 +427,7 @@ fn parse_bind(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     })
 }
 
-fn parse_execute(buf: Cursor) -> Result<FrontendMessage, io::Error> {
+fn decode_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let max_rows = buf.read_u32()?;
     if max_rows > 0 {
@@ -393,70 +440,100 @@ fn parse_execute(buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Execute { portal_name })
 }
 
-/// Read postgres-formatted items from the network
+fn decode_sync(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    // Nothing more to decode.
+    Ok(FrontendMessage::Sync)
+}
+
+/// Decodes data within pgwire messages.
+///
+/// The API provided is very similar to [`bytes::Buf`], but operations return
+/// errors rather than panicking. This is important for safety, as we don't want
+/// to crash if the user sends us malformatted pgwire messages.
+///
+/// There are also some special-purpose methods, like [`Cursor::read_cstr`],
+/// that are specific to pgwire messages.
 #[derive(Debug)]
 struct Cursor<'a> {
     buf: &'a [u8],
-    offset: RefCell<usize>,
 }
 
 impl<'a> Cursor<'a> {
+    /// Constructs a new `Cursor` from a byte slice. The cursor will begin
+    /// decoding from the beginning of the slice.
     fn new(buf: &'a [u8]) -> Cursor {
-        Cursor {
-            buf,
-            offset: RefCell::new(0),
-        }
+        Cursor { buf }
     }
 
-    fn read_byte(&self) -> Result<u8, io::Error> {
+    /// Returns the next byte, advancing the cursor by one byte.
+    fn read_byte(&mut self) -> Result<u8, io::Error> {
         let byte = self
-            .cur_buf()
+            .buf
             .get(0)
             .ok_or_else(|| input_err("No byte to read"))?;
-        *self.offset.borrow_mut() += 1;
+        self.advance(1);
         Ok(*byte)
     }
 
-    /// Read the first full null-terminated string in `self`
-    fn read_cstr(&self) -> Result<&str, io::Error> {
-        if let Some(pos) = self.cur_buf().iter().position(|b| *b == 0) {
-            let val = std::str::from_utf8(&self.cur_buf()[..pos]).map_err(input_err)?;
-            *self.offset.borrow_mut() += pos + 1;
+    /// Returns the next null-terminated string. The null character is not
+    /// included the returned string. The cursor is advanced past the null-
+    /// terminated string.
+    ///
+    /// If there is no null byte remaining in the string, returns
+    /// `CodecError::StringNoTerminator`. If the string is not valid UTF-8,
+    /// returns an `io::Error` with an error kind of
+    /// `io::ErrorKind::InvalidInput`.
+    ///
+    /// NOTE(benesch): it is possible that returning a string here is wrong, and
+    /// we should be returning bytes, so that we can support messages that are
+    /// not UTF-8 encoded. At the moment, we've not discovered a need for this,
+    /// though, and using proper strings is convenient.
+    fn read_cstr(&mut self) -> Result<&'a str, io::Error> {
+        if let Some(pos) = self.buf.iter().position(|b| *b == 0) {
+            let val = std::str::from_utf8(&self.buf[..pos]).map_err(input_err)?;
+            self.advance(pos + 1);
             Ok(val)
         } else {
             Err(input_err(CodecError::StringNoTerminator))
         }
     }
 
-    fn read_u16(&self) -> Result<u16, io::Error> {
-        if self.cur_buf().len() < 2 {
+    /// Reads the next 16-bit unsigned integer, advancing the cursor by two
+    /// bytes.
+    fn read_u16(&mut self) -> Result<u16, io::Error> {
+        if self.buf.len() < 2 {
             return Err(input_err("not enough buffer for an Int16"));
         }
-        let val = NetworkEndian::read_u16(self.cur_buf());
-        *self.offset.borrow_mut() += 2;
+        let val = NetworkEndian::read_u16(self.buf);
+        self.advance(2);
         Ok(val)
     }
 
-    fn read_u32(&self) -> Result<u32, io::Error> {
-        if self.cur_buf().len() < 4 {
+    /// Reads the next 32-bit unsigned integer, advancing the cursor by four
+    /// bytes.
+    fn read_u32(&mut self) -> Result<u32, io::Error> {
+        if self.buf.len() < 4 {
             return Err(input_err("not enough buffer for an Int32"));
         }
-        let val = NetworkEndian::read_u32(self.cur_buf());
-        *self.offset.borrow_mut() += 4;
+        let val = NetworkEndian::read_u32(self.buf);
+        self.advance(4);
         Ok(val)
     }
 
-    /// Get the current buffer
-    fn cur_buf(&self) -> &[u8] {
-        &self.buf[*self.offset.borrow()..]
+    /// Advances the cursor by `n` bytes.
+    fn advance(&mut self, n: usize) {
+        self.buf = &self.buf[n..]
     }
 }
 
+/// Constructs an error indicating that, while the pgwire instructions were
+/// valid, we don't currently support that functionality.
 fn unsupported_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, source.into())
 }
 
-/// An actual error in the input
+/// Constructs an error indicating that the client has violated the pgwire
+/// protocol.
 fn input_err(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, source.into())
 }

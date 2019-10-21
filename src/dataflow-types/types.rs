@@ -9,7 +9,7 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
-use expr::{RelationExpr, ScalarExpr};
+use expr::{ColumnOrder, RelationExpr, ScalarExpr};
 use repr::{Datum, RelationDesc, RelationType};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -35,18 +35,30 @@ pub enum PeekWhen {
     AtTimestamp(Timestamp),
 }
 
+/// The response from a `Peek`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PeekResponse {
+    Rows(Vec<Vec<Datum>>),
+    Canceled,
+}
+
+impl PeekResponse {
+    pub fn unwrap_rows(self) -> Vec<Vec<Datum>> {
+        match self {
+            PeekResponse::Rows(rows) => rows,
+            PeekResponse::Canceled => {
+                panic!("PeekResponse::unwrap_rows called on PeekResponse::Canceled")
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {
     pub row: Vec<Datum>,
     pub timestamp: u64,
     pub diff: isize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ColumnOrder {
-    pub column: usize,
-    pub desc: bool,
 }
 
 pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -> Ordering {
@@ -87,7 +99,7 @@ pub struct RowSetFinishing {
 
 impl RowSetFinishing {
     pub fn is_trivial(&self) -> bool {
-        (self.limit == None) && self.order_by.is_empty()
+        (self.limit == None) && self.order_by.is_empty() && self.offset == 0
     }
 }
 
@@ -208,6 +220,7 @@ pub struct KafkaSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
+    pub since: Timestamp,
 }
 
 /// A view transforms one dataflow into another.

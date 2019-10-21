@@ -114,6 +114,14 @@ where
         }
     }
 
+    /// Enumerates all local arrangements for a supplied expression.
+    pub fn get_all_local(
+        &self,
+        relation_expr: &P,
+    ) -> Option<&HashMap<Vec<usize>, Arrangement<S, V>>> {
+        self.local.get(relation_expr)
+    }
+
     /// Produces an arrangement if available.
     ///
     /// A context store multiple types of arrangements, and prioritizes

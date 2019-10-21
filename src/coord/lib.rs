@@ -3,25 +3,37 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-//! Strictly ordered queues.
+//! Coordinates client requests with the dataflow layer.
 //!
-//! The queues in this module will eventually grow to include queues that
-//! provide distribution, replication, and durability. At the moment,
-//! only a simple, transient, single-node queue is provided.
+//! Client requests are either a "simple" query, in which SQL is parsed,
+//! planned, and executed in one shot, or an "extended" query, where the client
+//! controls the parsing, planning, and execution via individual messages,
+//! allowing it to reuse pre-parsed and pre-planned queries (i.e., via "prepared
+//! statements"), which can be more efficient when the same query is executed
+//! multiple times.
+//!
+//! These commands are derived directly from the commands that [`pgwire`]
+//! produces, though they can, in theory, be provided by something other than a
+//! pgwire server.
 
-use dataflow_types::Update;
+use dataflow_types::{PeekResponse, Update};
 use futures::Future;
-use repr::{Datum, RelationDesc};
+use repr::RelationDesc;
 use sql::Session;
 use std::fmt;
 
 pub mod coordinator;
 pub mod transient;
 
+/// An incoming client request.
 pub struct Command {
+    /// The kind of request.
     pub kind: CommandKind,
+    /// The ID of the connection making the request.
     pub conn_id: u32,
+    /// The connection's session.
     pub session: sql::Session,
+    /// A transmitter over which the response to the request should be sent.
     pub tx: futures::sync::oneshot::Sender<Response>,
 }
 
@@ -36,28 +48,35 @@ impl fmt::Debug for Command {
     }
 }
 
-/// Things a user could request of the dataflow layer
-///
-/// [`CommandKind::Query`] is the most general command. Everything else is part of the
-/// extended query flow
+/// The kinds of requests the client can make of the coordinator.
 #[derive(Debug)]
 pub enum CommandKind {
-    /// Incoming raw sql from users, arbitrary one-off queries come in this way
+    /// Parse and execute the specified SQL.
     Query { sql: String },
 
-    // Extended query flow
-    /// Parse a statement but do not execute it
+    /// Parse the specified SQL into a prepared statement.
     ///
-    /// This results in a Prepared Statement and begins the extended query flow, see the
-    /// `pgwire::protocol` module for the full flow, some parts of it don't need to go
-    /// all the way to the query layer so they aren't reflected here.
+    /// The prepared statement is saved in the connection's [`sql::Session`]
+    /// under the specified name.
     Parse { name: String, sql: String },
-    /// Execute a bound statement
+
+    /// Bind a prepared statement to a portal, filling in any placeholders
+    /// in the prepared statement.
     ///
-    /// Bind doesn't need to go through the planner, so there is no `Bind` command right
-    /// now, although we could imagine creating a dataflow at that point, which would
-    /// make it show up in this enum
+    /// Not currently enabled. Since we don't support placeholders yet,
+    /// parameter "binding" takes place entirely in the pgwire crate.
+    ///
+    // Bind {
+    //     statement_name: String,
+    //     portal_name: String,
+    //     parameter_values: Vec<Datum>,
+    // }
+
+    /// Execute a bound portal.
     Execute { portal_name: String },
+
+    /// Cancel the query currently running on another connection.
+    CancelRequest { conn_id: u32 },
 }
 
 /// Responses from the queue to SQL commands.
@@ -66,7 +85,7 @@ pub struct Response {
     pub session: Session,
 }
 
-pub type RowsFuture = Box<dyn Future<Item = Vec<Vec<Datum>>, Error = failure::Error> + Send>;
+pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error> + Send>;
 
 /// The SQL portition of [`Response`].
 pub enum SqlResponse {
@@ -81,10 +100,10 @@ pub enum SqlResponse {
         rx: RowsFuture,
     },
     /// We have successfully parsed the query and stashed it in the [`Session`]
-    Parsed {
+    Parsed,
+    SetVariable {
         name: String,
     },
-    SetVariable,
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
@@ -97,11 +116,11 @@ impl fmt::Debug for SqlResponse {
             SqlResponse::CreatedSource => f.write_str("SqlResponse::CreatedSource"),
             SqlResponse::CreatedView => f.write_str("SqlResponse::CreatedView"),
             SqlResponse::DroppedSource => f.write_str("SqlResponse::DroppedSource"),
-            SqlResponse::DroppedView => f.write_str("SqlResposne::DroppedView"),
+            SqlResponse::DroppedView => f.write_str("SqlResponse::DroppedView"),
             SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
-            SqlResponse::Parsed { name } => write!(f, "SqlResponse::Parsed(name: {})", name),
+            SqlResponse::Parsed => write!(f, "SqlResponse::Parsed"),
             SqlResponse::SendRows { desc, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", desc),
-            SqlResponse::SetVariable => f.write_str("SqlResponse::SetVariable"),
+            SqlResponse::SetVariable { name } => write!(f, "SqlResponse::SetVariable({})", name),
             SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),
         }
     }

@@ -42,11 +42,9 @@ pub enum LogVariant {
 pub enum TimelyLog {
     Operates,
     Channels,
-    Messages,
-    Shutdown,
-    Text,
     Elapsed,
     Histogram,
+    Addresses,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
@@ -69,11 +67,9 @@ impl LogVariant {
         vec![
             LogVariant::Timely(TimelyLog::Operates),
             LogVariant::Timely(TimelyLog::Channels),
-            LogVariant::Timely(TimelyLog::Messages),
-            LogVariant::Timely(TimelyLog::Shutdown),
-            LogVariant::Timely(TimelyLog::Text),
             LogVariant::Timely(TimelyLog::Elapsed),
             LogVariant::Timely(TimelyLog::Histogram),
+            LogVariant::Timely(TimelyLog::Addresses),
             LogVariant::Differential(DifferentialLog::Arrangement),
             LogVariant::Differential(DifferentialLog::Sharing),
             LogVariant::Materialized(MaterializedLog::DataflowCurrent),
@@ -89,11 +85,9 @@ impl LogVariant {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => "logs_operates",
             LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
-            LogVariant::Timely(TimelyLog::Messages) => "logs_messages",
-            LogVariant::Timely(TimelyLog::Shutdown) => "logs_shutdown",
-            LogVariant::Timely(TimelyLog::Text) => "logs_text",
             LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
             LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
+            LogVariant::Timely(TimelyLog::Addresses) => "logs_addresses",
             LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
             LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
@@ -106,39 +100,35 @@ impl LogVariant {
         }
     }
 
+    /// By which columns should the logs be indexed.
+    ///
+    /// This is distinct from the `keys` property of the type, which indicates uniqueness.
+    /// When keys exist these are good choices for indexing, but when they do not we still
+    /// require index guidance.
+    pub fn index_by(&self) -> Vec<usize> {
+        let typ = self.schema().typ().clone();
+        typ.keys
+            .get(0)
+            .cloned()
+            .unwrap_or_else(|| (0..typ.column_types.len()).collect::<Vec<_>>())
+    }
+
     pub fn schema(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
                 .add_column("worker", ScalarType::Int64)
-                .add_column("address_slot", ScalarType::Int64)
-                .add_column("address_value", ScalarType::Int64)
                 .add_column("name", ScalarType::String)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
                 .add_column("worker", ScalarType::Int64)
-                .add_column("scope", ScalarType::String)
                 .add_column("source_node", ScalarType::Int64)
                 .add_column("source_port", ScalarType::Int64)
                 .add_column("target_node", ScalarType::Int64)
                 .add_column("target_port", ScalarType::Int64)
                 .add_keys(vec![0, 1]),
-
-            LogVariant::Timely(TimelyLog::Messages) => RelationDesc::empty()
-                .add_column("channel", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
-                .add_keys(vec![0]),
-
-            LogVariant::Timely(TimelyLog::Shutdown) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
-
-            LogVariant::Timely(TimelyLog::Text) => RelationDesc::empty()
-                .add_column("text", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
                 .add_column("id", ScalarType::Int64)
@@ -150,6 +140,13 @@ impl LogVariant {
                 .add_column("duration_ns", ScalarType::Int64)
                 .add_column("count", ScalarType::Int64)
                 .add_keys(vec![0]),
+
+            LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
+                .add_column("id", ScalarType::Int64)
+                .add_column("worker", ScalarType::Int64)
+                .add_column("slot", ScalarType::Int64)
+                .add_column("value", ScalarType::Int64)
+                .add_keys(vec![0, 1]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
                 .add_column("operator", ScalarType::Int64)

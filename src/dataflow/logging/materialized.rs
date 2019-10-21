@@ -12,7 +12,7 @@ use timely::dataflow::operators::generic::operator::Operator;
 use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, MaterializedLog};
-use crate::arrangement::KeysOnlyHandle;
+use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use repr::Datum;
 
@@ -61,12 +61,11 @@ pub fn construct<A: Allocate>(
     worker: &mut timely::worker::Worker<A>,
     config: &dataflow_types::logging::LoggingConfig,
     linked: std::rc::Rc<EventLink<Timestamp, (Duration, WorkerIdentifier, MaterializedEvent)>>,
-) -> std::collections::HashMap<LogVariant, KeysOnlyHandle> {
+) -> std::collections::HashMap<LogVariant, (Vec<usize>, KeysValsHandle)> {
     let granularity_ms = std::cmp::max(1, config.granularity_ns() / 1_000_000) as Timestamp;
 
     let traces = worker.dataflow(move |scope| {
         use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::arrange::arrangement::ArrangeBySelf;
         use timely::dataflow::operators::capture::Replay;
         use timely::dataflow::operators::Map;
 
@@ -170,8 +169,7 @@ pub fn construct<A: Allocate>(
                 ((name, worker), time_ms, if is_create { 1 } else { -1 })
             })
             .as_collection()
-            .map(|(name, worker)| vec![Datum::String(name), Datum::Int64(worker as i64)])
-            .arrange_by_self();
+            .map(|(name, worker)| vec![Datum::String(name), Datum::Int64(worker as i64)]);
 
         let dependency_current = dependency
             .map(move |(dataflow, source, worker, is_create, time_ns)| {
@@ -187,8 +185,7 @@ pub fn construct<A: Allocate>(
                     Datum::String(source),
                     Datum::Int64(worker as i64),
                 ]
-            })
-            .arrange_by_self();
+            });
 
         let peek_current = peek
             .map(move |(name, worker, is_install, time_ns)| {
@@ -205,8 +202,7 @@ pub fn construct<A: Allocate>(
                     Datum::String(peek.name),
                     Datum::Int64(peek.time as i64),
                 ]
-            })
-            .arrange_by_self();
+            });
 
         let frontier_current = frontier
             .map(move |(name, logical, delta, time_ns)| {
@@ -216,8 +212,7 @@ pub fn construct<A: Allocate>(
                 ((name, logical), time_ms, delta)
             })
             .as_collection()
-            .map(|(name, logical)| vec![Datum::String(name), Datum::Int64(logical as i64)])
-            .arrange_by_self();
+            .map(|(name, logical)| vec![Datum::String(name), Datum::Int64(logical as i64)]);
 
         // Duration statistics derive from the non-rounded event times.
         use differential_dataflow::operators::reduce::Count;
@@ -263,34 +258,45 @@ pub fn construct<A: Allocate>(
                     Datum::Int64(pow as i64),
                     Datum::Int64(count as i64),
                 ]
-            })
-            .arrange_by_self();
+            });
 
-        vec![
+        let logs = vec![
             (
                 LogVariant::Materialized(MaterializedLog::DataflowCurrent),
-                dataflow_current.trace,
+                dataflow_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::DataflowDependency),
-                dependency_current.trace,
+                dependency_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::FrontierCurrent),
-                frontier_current.trace,
+                frontier_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::PeekCurrent),
-                peek_current.trace,
+                peek_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::PeekDuration),
-                peek_duration.trace,
+                peek_duration,
             ),
-        ]
-        .into_iter()
-        .filter(|(name, _trace)| config.active_logs().contains(name))
-        .collect()
+        ];
+
+        use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+        let mut result = std::collections::HashMap::new();
+        for (variant, collection) in logs {
+            if config.active_logs().contains(&variant) {
+                let key = variant.index_by();
+                let key_clone = key.clone();
+                let trace = collection
+                    .map(move |record| (key.iter().map(|k| record[*k].clone()).collect(), record))
+                    .arrange_by_key()
+                    .trace;
+                result.insert(variant, (key_clone, trace));
+            }
+        }
+        result
     });
 
     traces

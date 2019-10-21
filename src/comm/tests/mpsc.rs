@@ -4,9 +4,10 @@
 // distributed without the express permission of Materialize, Inc.
 
 use comm::Switchboard;
-use futures::{Future, Sink, Stream};
+use futures::{stream, Future, Sink, Stream};
 use ore::future::StreamExt;
 use std::error::Error;
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
@@ -36,6 +37,31 @@ fn test_mpsc_select() -> Result<(), Box<dyn Error>> {
     if msgs != &[3, 4] && msgs != [4, 3] {
         panic!("received unexpected messages: {:#?}", msgs);
     }
+
+    Ok(())
+}
+
+/// Verifies that `mpsc_limited` will close the receiver after the expected
+/// number of producers have connected and then disconnected.
+#[test]
+fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
+    let (switchboard, _runtime) = Switchboard::local()?;
+
+    let (tx, rx) = switchboard.mpsc_limited(2);
+    let tx1 = tx.clone().connect().wait()?;
+    let tx2 = tx.clone().connect().wait()?;
+
+    let _ = tx1
+        .send_all(stream::iter_ok::<_, io::Error>(vec![1, 2]))
+        .wait()?;
+    let _ = tx2
+        .send_all(stream::iter_ok::<_, io::Error>(vec![3, 4, 5]))
+        .wait()?;
+    // If had created an unlimited channel, or specified more than two expected
+    // producers, we'd be here forever waiting for the channel to close.
+    let mut msgs = rx.collect().wait()?;
+    msgs.sort();
+    assert_eq!(msgs, &[1, 2, 3, 4, 5]);
 
     Ok(())
 }

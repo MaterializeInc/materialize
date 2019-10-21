@@ -131,7 +131,7 @@ Project {
       ((#8 * 10000000dec) / (i64todec #9 * 100dec)) * 10dec
     ],
     Reduce {
-      group_key: [16, 17],
+      group_key: [8, 9],
       aggregates: [
         sum(#4),
         sum(#5),
@@ -147,10 +147,7 @@ Project {
         countall(null),
         countall(null)
       ],
-      Project {
-        outputs: [0 .. 15, 8, 9],
-        Filter { predicates: [#10 <= 1998-12-01], Get { lineitem } }
-      }
+      Filter { predicates: [#10 <= 1998-12-01], Get { lineitem } }
     }
   }
 }
