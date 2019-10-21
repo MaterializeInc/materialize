@@ -22,7 +22,7 @@ limitations under the License.
 
 namespace mz {
 
-    struct Config {
+struct Config {
     std::unordered_set<std::string> expectedSources;
     std::string viewPattern;
     std::string materializedUrl;
