@@ -600,6 +600,8 @@ static int run(int argc, char* argv[]) {
         auto hists = futHist.get();
         printf("\n\nQuery latencies:\n");
         assert(mzCfg.hQueries.size() == hists.size());
+        // for thousands separator in printf output
+        setlocale(LC_NUMERIC, "en_US.UTF-8");
         for (size_t i = 0; i < hists.size(); ++i) {
             printf("\n%s:\ncount\t|\tlatency (ns)\n----------------------------\n", mzCfg.hQueries[i].first.c_str());
             uint64_t nanos = 1;
@@ -609,7 +611,7 @@ static int run(int argc, char* argv[]) {
                     printed_first = true;
                 }
                 if (printed_first) {
-                    printf("%" PRIu64 "\t|\t%" PRIu64 "\n", bucketCount, nanos);
+                    printf("%'" PRIu64 "\t|\t%'" PRIu64 "\n", bucketCount, nanos);
                 }
                 nanos *= 2;
             }
