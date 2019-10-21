@@ -12,14 +12,14 @@
 extern crate prometheus;
 
 use std::collections::HashMap;
-use std::fmt::Write;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use chrono::Utc;
+use postgres::{Client, NoTls};
 use prometheus::Histogram;
-use regex::Regex;
+use std::time::{Duration, Instant};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + 'static>>;
 
@@ -31,27 +31,50 @@ fn main() {
 fn measure_peek_times() -> ! {
     init();
     let (sender, receiver) = mpsc::channel();
-    let query = "q01";
-    let command = format!("peek {};", query); // TODO@jldlaughlin: parameterize the SQL command?
+    let mut postgres_client = create_postgres_client();
+
+    let query = "SELECT COUNT(*) FROM q01;";
     thread::spawn(move || {
+        let mut sleep_duration = Duration::from_secs(1);
         loop {
-            // TODO@jldlaughlin: use rust postgres package instead, look at sql logic test
-            let output = run(&command);
-            match output {
-                Ok(output) => sender.send(output).unwrap(),
-                Err(error) => {
-                    println!("Hit error running PEEK: {:#?}", error);
+            let start = Instant::now();
+            let query_result = postgres_client.simple_query(query);
+            let query_duration = start.elapsed().as_millis();
+            match query_result {
+                Ok(_rows) => sender.send(query_duration).unwrap(),
+                Err(err) => {
+                    println!("Hit error trying to run metrics query. Sleeping for {:#?} seconds and trying again. Error: {:#?}", sleep_duration, err);
+                    thread::sleep(sleep_duration);
+                    sleep_duration *= 2;
                     init();
                 }
             }
         }
     });
-
     listen_and_push_metrics(receiver, query);
 }
 
-fn listen_and_push_metrics(receiver: Receiver<std::process::Output>, query: &str) -> ! {
-    let re = Regex::new(r"Time: (\d*).(\d*) ms").unwrap();
+fn create_postgres_client() -> Client {
+    let mut sleep_duration = Duration::from_secs(1);
+    loop {
+        match postgres::config::Config::new()
+            .host("materialized")
+            .port(6875)
+            .dbname("tpcch")
+            .connect(NoTls)
+        {
+            Ok(client) => return client,
+            Err(err) => {
+                println!("Hit error creating postgres client. Sleeping for {:#?} seconds and trying again. Error: {:#?}", sleep_duration, err);
+                thread::sleep(sleep_duration);
+                sleep_duration *= 2;
+                init();
+            }
+        }
+    }
+}
+
+fn listen_and_push_metrics(receiver: Receiver<u128>, query: &str) -> ! {
     let address = String::from("http://pushgateway:9091");
     let hist_vec = register_histogram_vec!(
         "mz_client_peek_millis",
@@ -64,52 +87,49 @@ fn listen_and_push_metrics(receiver: Receiver<std::process::Output>, query: &str
 
     let mut count = 0;
     loop {
-        let mut buf = String::new();
-        if let Err(e) = push_metrics(&mut buf, &re, &receiver, &hist, &mut count, &address) {
+        if let Err(e) = push_metrics(&receiver, &hist, &mut count, &address) {
             println!("error pushing metrics: {}", e);
         }
     }
 }
 
 fn push_metrics(
-    buf: &mut String,
-    re: &Regex,
-    receiver: &Receiver<std::process::Output>,
+    receiver: &Receiver<u128>,
     hist: &Histogram,
     count: &mut usize,
     address: &str,
 ) -> Result<()> {
     let psql_output = receiver.recv()?;
-    match re.captures(std::str::from_utf8(&psql_output.stdout)?) {
-        Some(matched) => {
-            buf.clear();
-            write!(buf, "{}.{}", &matched[1], &matched[2])?;
-            let val: f64 = buf.parse()?;
-            hist.observe(val);
-            *count += 1;
-            if *count % 10 == 0 {
-                prometheus::push_metrics(
-                    "mz_client_peek",
-                    HashMap::new(),
-                    &address,
-                    prometheus::gather(),
-                    None,
-                )
-                .map_err(|err| format!("Hit error trying to send to pushgateway: {:#?}", err))?;
+    hist.observe(psql_output as f64); // why?
+    *count += 1;
+    if *count % 10 == 0 {
+        //
+        match prometheus::push_metrics(
+            "mz_client_peek",
+            HashMap::new(),
+            &address,
+            prometheus::gather(),
+            None,
+        ) {
+            Ok(_ok) => {
+                // do nothing.
+            }
+            Err(_err) => {
+                // todo: merge change and report actual errors!
+                // Ignore noisy errors from: https://github.com/pingcap/rust-prometheus/issues/287
             }
         }
-        None => println!("No timing information from psql!"),
     }
     Ok(())
 }
 
 fn init() {
-    run_ignore_errors(
+    run_psql_command_ignore_errors(
         "CREATE SOURCES LIKE 'mysql.tpcch.%'
          FROM 'kafka://kafka:9092'
          USING SCHEMA REGISTRY 'http://schema-registry:8081';",
     );
-    run_ignore_errors(
+    run_psql_command_ignore_errors(
         "CREATE VIEW q01 as SELECT
                  ol_number,
                  sum(ol_quantity) as sum_qty,
@@ -126,22 +146,8 @@ fn init() {
     );
 }
 
-fn run_ignore_errors(cmd: &str) {
-    match run(cmd) {
-        Ok(out) => println!(
-            "mz> {}\n\
-             out| {}\n\
-             err| {}",
-            cmd,
-            String::from_utf8(out.stdout).unwrap(),
-            String::from_utf8(out.stderr).unwrap()
-        ),
-        Err(e) => println!("ERROR mz> {}\n| {}", cmd, e),
-    }
-}
-
-fn run(cmd: &str) -> Result<std::process::Output> {
-    Ok(Command::new("psql")
+fn run_psql_command_ignore_errors(cmd: &str) {
+    let result = Command::new("psql")
         .arg("-q")
         .arg("-h")
         .arg("materialized")
@@ -152,5 +158,16 @@ fn run(cmd: &str) -> Result<std::process::Output> {
         .arg("\\timing")
         .arg("-c")
         .arg(cmd)
-        .output()?)
+        .output();
+    match result {
+        Ok(out) => println!(
+            "mz> {}\n\
+             out| {}\n\
+             err| {}",
+            cmd,
+            String::from_utf8(out.stdout).unwrap(),
+            String::from_utf8(out.stderr).unwrap()
+        ),
+        Err(e) => println!("ERROR mz> {}\n| {}", cmd, e),
+    }
 }
