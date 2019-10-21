@@ -302,10 +302,7 @@ impl Iterator for FieldFormatIter {
     type Item = FieldFormat;
     fn next(&mut self) -> Option<Self::Item> {
         Some(match &mut self.formats {
-            Some(values) if values.is_empty() => {
-                log::trace!("Empty field formatter; using default field format.");
-                FieldFormat::Text
-            }
+            Some(values) if values.is_empty() => FieldFormat::Text,
             Some(values) if values.len() == 1 => values[0],
             Some(values) => {
                 self.idx += 1;
