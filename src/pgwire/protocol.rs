@@ -13,7 +13,7 @@ use futures::stream;
 use futures::sync::mpsc::UnboundedSender;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use lazy_static::lazy_static;
-use log::trace;
+use log::{debug, trace};
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
 use tokio::codec::Framed;
@@ -424,6 +424,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let state = state.take();
         match msg {
             FrontendMessage::Query { sql } => {
+                debug!("query sql: {}", sql);
                 let (tx, rx) = futures::sync::oneshot::channel();
                 context.cmdq_tx.unbounded_send(coord::Command {
                     kind: coord::CommandKind::Query { sql },
@@ -439,6 +440,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 })
             }
             FrontendMessage::Parse { name, sql, .. } => {
+                debug!("parse sql: {}", sql);
                 let (tx, rx) = futures::sync::oneshot::channel();
                 context.cmdq_tx.unbounded_send(coord::Command {
                     kind: coord::CommandKind::Parse { name, sql },
