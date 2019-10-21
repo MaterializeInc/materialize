@@ -3,10 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use postgres::error::DbError;
-use postgres::error::Error as PostgresError;
-use postgres::types::Type;
-use postgres::Row;
+use postgres::rows::Row;
 use rust_decimal::Decimal;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::AnsiDialect;
@@ -91,7 +88,7 @@ impl Action for SqlAction {
 }
 
 impl SqlAction {
-    fn try_drop(&self, pgconn: &mut postgres::Client, query: &str) -> Result<(), String> {
+    fn try_drop(&self, pgconn: &mut postgres::Connection, query: &str) -> Result<(), String> {
         print_query(&query);
         match pgconn.query(query, &[]) {
             Err(err) => Err(err.to_string()),
@@ -99,7 +96,7 @@ impl SqlAction {
         }
     }
 
-    fn try_redo(&self, pgconn: &mut postgres::Client, query: &str) -> Result<(), String> {
+    fn try_redo(&self, pgconn: &mut postgres::Connection, query: &str) -> Result<(), String> {
         let mut rows: Vec<_> = pgconn
             .query(query, &[])
             .map_err(|e| format!("query failed: {}", e))?
@@ -140,9 +137,9 @@ impl Action for FailSqlAction {
             )),
             Err(err) => {
                 let err_string = err.to_string();
-                match try_extract_db_error(err) {
+                match err.as_db() {
                     Some(err) => {
-                        if err.message().contains(&self.0.expected_error) {
+                        if err.message.contains(&self.0.expected_error) {
                             Ok(())
                         } else {
                             Err(format!(
@@ -166,37 +163,28 @@ fn print_query(query: &str) {
     }
 }
 
-fn try_extract_db_error(err: PostgresError) -> Option<DbError> {
-    if let Some(err) = err.into_source() {
-        if let Ok(err) = err.downcast::<DbError>() {
-            return Some(*err);
-        }
-    }
-    None
-}
-
 fn decode_row(row: Row) -> Result<Vec<String>, String> {
     let mut out = vec![];
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
         out.push(
-            if ty == &Type::BOOL {
+            if ty == &postgres::types::BOOL {
                 row.get::<_, Option<bool>>(i).map(|x| x.to_string())
-            } else if ty == &Type::CHAR || ty == &Type::TEXT {
+            } else if ty == &postgres::types::CHAR || ty == &postgres::types::TEXT {
                 row.get::<_, Option<String>>(i)
-            } else if ty == &Type::INT4 {
+            } else if ty == &postgres::types::INT4 {
                 row.get::<_, Option<i32>>(i).map(|x| x.to_string())
-            } else if ty == &Type::INT8 {
+            } else if ty == &postgres::types::INT8 {
                 row.get::<_, Option<i64>>(i).map(|x| x.to_string())
-            } else if ty == &Type::NUMERIC {
+            } else if ty == &postgres::types::NUMERIC {
                 row.get::<_, Option<Decimal>>(i).map(|x| x.to_string())
-            } else if ty == &Type::TIMESTAMP {
+            } else if ty == &postgres::types::TIMESTAMP {
                 row.get::<_, Option<chrono::NaiveDateTime>>(i)
                     .map(|x| x.to_string())
-            } else if ty == &Type::TIMESTAMPTZ {
+            } else if ty == &postgres::types::TIMESTAMPTZ {
                 row.get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
                     .map(|x| x.to_string())
-            } else if ty == &Type::DATE {
+            } else if ty == &postgres::types::DATE {
                 row.get::<_, Option<chrono::NaiveDate>>(i)
                     .map(|x| x.to_string())
             } else {
