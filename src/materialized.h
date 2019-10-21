@@ -22,6 +22,7 @@ limitations under the License.
 #include <exception>
 #include <unordered_set>
 #include <unordered_map>
+#include <chrono>
 
 namespace mz {
 class MaterializedException : public std::exception {
@@ -41,6 +42,11 @@ struct ViewDefinition {
     std::optional<unsigned> limit;
 };
 
+struct PeekResults {
+    std::chrono::nanoseconds latency;
+    pqxx::result inner;
+};
+
 std::vector<std::string> createAllSources(
         pqxx::connection& c,
         std::string from,
@@ -49,7 +55,7 @@ std::vector<std::string> createAllSources(
 
 void createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query);
 
-pqxx::result peekView(pqxx::connection& c, const std::string& name, const std::optional<std::string>& order,
-        std::optional<unsigned> limit);
+PeekResults peekView(pqxx::connection& c, const std::string& name, const std::optional<std::string>& order,
+                     std::optional<unsigned> limit);
 }
 

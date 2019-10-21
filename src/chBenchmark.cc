@@ -29,6 +29,7 @@ limitations under the License.
 #include "TupleGen.h"
 #include "dialect/DialectStrategy.h"
 #include "mz-config.h"
+#include "Histogram.h"
 
 #include <atomic>
 #include <err.h>
@@ -42,6 +43,9 @@ limitations under the License.
 #include <vector>
 #include <utility>
 #include <assert.h>
+#include <future>
+#include <cinttypes>
+
 
 enum class RunState {
     off,
@@ -106,22 +110,33 @@ static void* analyticalThread(void* args) {
     return nullptr;
 }
 
-static void peekThread(pqxx::connection* pc, const mz::Config* pConfig, const std::atomic<RunState> *pRunState) {
+static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *pRunState,
+        std::promise<std::vector<Histogram>> promHist) {
     const mz::Config& config = *pConfig;
     const std::atomic<RunState>& runState = *pRunState;
-    pqxx::connection& c = *pc;
+    pqxx::connection c(config.materializedUrl);
     // FIXME
     assert(!config.hQueries.empty());
-    auto iQuery = config.hQueries.begin();
+    size_t iQuery = 0;
+    size_t size = config.hQueries.size();
     while (runState == RunState::warmup) {
-        sleep(1);
+        const auto& q = config.hQueries[iQuery];
+        mz::peekView(c, q.first, q.second.order, q.second.limit);
+        iQuery = (iQuery + 1) % size;
     }
+    std::vector<Histogram> hists;
+    hists.resize(size);
     while (runState == RunState::run) {
-        mz::peekView(c, iQuery->first, iQuery->second.order, iQuery->second.limit);
+        const auto& q = config.hQueries[iQuery];
+        auto latency = mz::peekView(c, q.first, q.second.order, q.second.limit).latency;
+        hists[iQuery].increment(latency.count());
+        iQuery = (iQuery + 1) % size;
     }
+    promHist.set_value(std::move(hists));
 }
 
-static void createSourcesThread(mz::Config config) {
+static void createSourcesThread(mz::Config config, std::promise<std::vector<Histogram>> promHist,
+        int peekConns, const std::atomic<RunState> *pRunState) {
     const auto& connUrl = config.materializedUrl;
     auto& expected = config.expectedSources;
     const auto& kafkaUrl = config.kafkaUrl;
@@ -144,6 +159,25 @@ static void createSourcesThread(mz::Config config) {
     for (const auto& vp: config.hQueries) {
         std::cout << "Creating query " << vp.first << std::endl;
         mz::createMaterializedView(c, vp.first, vp.second.query);
+    }
+    if (peekConns) {
+        std::vector<Histogram> hists;
+        hists.resize(config.hQueries.size());
+        std::vector<std::future<std::vector<Histogram>>> futs;
+        for (int i = 0; i < peekConns; ++i) {
+            std::promise<std::vector<Histogram>> prom;
+            futs.push_back(prom.get_future());
+            std::thread(peekThread, &config, pRunState, std::move(prom)).detach();
+        }
+        for (auto& fut: futs) {
+            auto threadHists = fut.get();
+            assert(hists.size() == threadHists.size());
+            for (size_t i = 0; i < hists.size(); ++i) {
+                assert(threadHists[i].getCounts().back() != 0);
+                hists[i] += threadHists[i];
+            }
+        }
+        promHist.set_value(std::move(hists));
     }
 }
 
@@ -305,6 +339,9 @@ static int run(int argc, char* argv[]) {
         {"max-delay", required_argument, nullptr, 'M'},
         {"mz-sources", no_argument, nullptr, 'S'},
         {"mz-views", required_argument, nullptr, 'V'},
+        {"peek-conns", required_argument, nullptr, 'P'},
+        {"peek-min-delay", required_argument, nullptr, 'k'},
+        {"peek-max-delay", required_argument, nullptr, 'K'},
         {nullptr, 0, nullptr, 0}};
 
     int c;
@@ -315,8 +352,11 @@ static int run(int argc, char* argv[]) {
     int transactionalThreads = 10;
     int warmupSeconds = 0;
     int runSeconds = 10;
+    int peekConns = 0;
     double minDelay = 0;
     double maxDelay = 0;
+    double peekMinDelay = 0;
+    double peekMaxDelay = 0;
     std::string genDir = "gen";
     const char* logFile = nullptr;
     bool createSources = false;
@@ -363,6 +403,15 @@ static int run(int argc, char* argv[]) {
         case 'V':
             mzViews = parseCommaSeparated(optarg);
             break;
+        case 'P':
+            peekConns = parseInt("Materialized peek threads", optarg);
+            break;
+        case 'k':
+            peekMinDelay = parseDouble("minimum delay between peeks (s)", optarg);
+            break;
+        case 'K':
+            peekMaxDelay = parseDouble("maximum delay between peeks (s)", optarg);
+            break;
         default:
             return 1;
         }
@@ -371,7 +420,9 @@ static int run(int argc, char* argv[]) {
     argv += optind;
 
     if (minDelay < 0.0 || maxDelay < 0.0 || minDelay > maxDelay
-        || minDelay * 1'000'000 > UINT_MAX || maxDelay * 1'000'000 > UINT_MAX)
+        || minDelay * 1'000'000 > UINT_MAX || maxDelay * 1'000'000 > UINT_MAX
+        || peekMinDelay < 0.0 || peekMaxDelay < 0.0 || peekMinDelay > peekMaxDelay
+        || peekMinDelay * 1'000'000 > UINT_MAX || peekMaxDelay * 1'000'000 > UINT_MAX)
         errx(1, "Invalid between-query delay bounds specified");
     if (!dsn)
         errx(1, "data source name (DSN) must be specified");
@@ -389,6 +440,10 @@ static int run(int argc, char* argv[]) {
         errx(1, "run seconds cannot be negative");
     if (!mzViews.empty() && !createSources)
         errx(1, "--mz-views requires --mz-sources");
+    if (peekConns < 0)
+        errx(1, "peek threads cannot be negative");
+    if (mzViews.empty() && peekConns)
+        errx(1, "--peek-conns requires --mz-views and --mz-sources");
 
     if (logFile)
         Log::open(logFile);
@@ -479,8 +534,11 @@ static int run(int argc, char* argv[]) {
         }
         pthread_create(&tpt[i], nullptr, transactionalThread, &tprm[i]);
     }
+    std::promise<std::vector<Histogram>> promHist;
+    auto futHist = promHist.get_future();
+    runState = RunState::warmup;
+    mz::Config mzCfg = mz::defaultConfig();
     if (createSources) {
-        mz::Config mzCfg = mz::defaultConfig();
         const auto& allHQueries = mz::allHQueries();
         for (const auto& view: mzViews) {
             if (auto i = allHQueries.find(view); i != allHQueries.end()) {
@@ -489,12 +547,15 @@ static int run(int argc, char* argv[]) {
                 errx(1, "No such view: %s", view.c_str());
             }
         }
+        // TODO - kick off peeks
         std::thread(createSourcesThread,
-                std::move(mzCfg)
+                mzCfg,
+                std::move(promHist),
+                peekConns,
+                &runState
                 ).detach();
     }
 
-    runState = RunState::warmup;
     Log::l2() << Log::tm() << "Wait for threads to initialize:\n";
     pthread_barrier_wait(&barStart);
     Log::l2() << Log::tm() << "-all threads initialized\n";
@@ -534,6 +595,26 @@ static int run(int argc, char* argv[]) {
     printf("\n");
     printf("OLAP throughput [QphH]: %llu\n", qphh);
     printf("OLTP throughput [tpmC]: %llu\n", tpmc);
+
+    if (peekConns) {
+        auto hists = futHist.get();
+        printf("\n\nQuery latencies:\n");
+        assert(mzCfg.hQueries.size() == hists.size());
+        for (size_t i = 0; i < hists.size(); ++i) {
+            printf("\n%s:\ncount\t|\tlatency (ns)\n----------------------------\n", mzCfg.hQueries[i].first.c_str());
+            uint64_t nanos = 1;
+            bool printed_first = false;
+            for (auto bucketCount : hists[i].getCounts()) {
+                if (bucketCount) {
+                    printed_first = true;
+                }
+                if (printed_first) {
+                    printf("%" PRIu64 "\t|\t%" PRIu64 "\n", bucketCount, nanos);
+                }
+                nanos *= 2;
+            }
+        }
+    }
 
     Log::l2() << Log::tm()
               << "Wait for clients to return from database calls:\n";
