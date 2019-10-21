@@ -25,7 +25,7 @@ getopts = "0.2"
 interchange = { path = "../interchange" }
 lazy_static = "1.4.0"
 ore = { path = "../ore" }
-postgres = "0.16.0-rc.2"  # pre-release for simple_query support
+postgres = "0.17.0-alpha.1"  # pre-release for simple_query support
 serde_json = { version = "1.0.41", features = ["preserve_order"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rand = "0.7.2"
