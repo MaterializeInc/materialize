@@ -449,17 +449,27 @@ impl Var for SessionVar<i32> {
 /// A prepared statement
 #[derive(Debug)]
 pub struct PreparedStatement {
-    sql: sqlparser::ast::Statement,
+    sql: Option<sqlparser::ast::Statement>,
     desc: Option<RelationDesc>,
 }
 
 impl PreparedStatement {
     pub fn new(sql: sqlparser::ast::Statement, desc: Option<RelationDesc>) -> PreparedStatement {
-        PreparedStatement { sql, desc }
+        PreparedStatement {
+            sql: Some(sql),
+            desc,
+        }
     }
 
-    pub fn sql(&self) -> &sqlparser::ast::Statement {
-        &self.sql
+    pub(crate) fn empty() -> PreparedStatement {
+        PreparedStatement {
+            sql: None,
+            desc: None,
+        }
+    }
+
+    pub fn sql(&self) -> Option<&sqlparser::ast::Statement> {
+        self.sql.as_ref()
     }
 
     pub fn desc(&self) -> Option<&RelationDesc> {
