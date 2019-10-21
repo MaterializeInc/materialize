@@ -85,21 +85,25 @@ impl Planner {
         name: String,
     ) -> Result<Plan, failure::Error> {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
-        if stmts.len() != 1 {
-            bail!("cannot parse zero or multiple queries: {}", sql);
-        }
-        let stmt = stmts.into_element();
-        let plan = self.handle_statement(session, stmt.clone())?;
-        let desc = match plan {
-            Plan::Peek { desc, .. } => Some(desc),
-            Plan::SendRows { desc, .. } => Some(desc),
-            Plan::ExplainPlan { desc, .. } => Some(desc),
-            Plan::CreateSources { .. } => {
-                Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+        match stmts.len() {
+            0 => session.set_prepared_statement(name, PreparedStatement::empty()),
+            1 => {
+                let stmt = stmts.into_element();
+                let plan = self.handle_statement(session, stmt.clone())?;
+                let desc = match plan {
+                    Plan::Peek { desc, .. } => Some(desc),
+                    Plan::SendRows { desc, .. } => Some(desc),
+                    Plan::ExplainPlan { desc, .. } => Some(desc),
+                    Plan::CreateSources { .. } => {
+                        Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+                    }
+                    _ => None,
+                };
+                session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
             }
-            _ => None,
-        };
-        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
+            n => bail!("expected one statement but got {}: {:?}", n, sql),
+        }
+
         Ok(Plan::Parsed)
     }
 
@@ -120,10 +124,14 @@ impl Planner {
                     portal.statement_name
                 )
             })?;
-        let stmt = prepared.sql().clone();
-        let plan = self.handle_statement(session, stmt)?;
-        self.apply_plan(session, &plan)?;
-        Ok(plan)
+        match prepared.sql() {
+            Some(sql) => {
+                let plan = self.handle_statement(session, sql.clone())?;
+                self.apply_plan(session, &plan)?;
+                Ok(plan)
+            }
+            None => Ok(Plan::EmptyQuery),
+        }
     }
 
     /// Mutates the internal state of the planner and session according to the
