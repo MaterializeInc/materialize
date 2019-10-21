@@ -200,11 +200,11 @@ impl Planner {
             bail!("SET LOCAL ... is not supported");
         }
         Ok(Plan::SetVariable {
-            name: variable,
+            name: variable.value,
             value: match value {
                 SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
                 SetVariableValue::Literal(lit) => lit.to_string(),
-                SetVariableValue::Ident(ident) => ident,
+                SetVariableValue::Ident(ident) => ident.value,
             },
         })
     }
@@ -214,7 +214,7 @@ impl Planner {
         session: &Session,
         variable: Ident,
     ) -> Result<Plan, failure::Error> {
-        if variable == unicase::Ascii::new("ALL") {
+        if variable.value == unicase::Ascii::new("ALL") {
             Ok(Plan::SendRows {
                 desc: RelationDesc::empty()
                     .add_column("name", ScalarType::String)
@@ -227,7 +227,7 @@ impl Planner {
                     .collect(),
             })
         } else {
-            let variable = session.get(&variable)?;
+            let variable = session.get(&variable.value)?;
             Ok(Plan::SendRows {
                 desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
                 rows: vec![vec![variable.value().into()]],
@@ -332,7 +332,7 @@ impl Planner {
                         )
                     }
                     for (i, name) in columns.iter().enumerate() {
-                        desc.set_name(i, Some(name.into()));
+                        desc.set_name(i, Some(name.value.to_owned()));
                     }
                 }
                 let view = View {
@@ -683,6 +683,7 @@ fn object_type_matches(object_type: ObjectType, dataflow: &Dataflow) -> bool {
 
 fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
     match object_type {
+        ObjectType::Index => "INDEXES",
         ObjectType::Table => "TABLES",
         ObjectType::View => "VIEWS",
         ObjectType::Source => "SOURCES",

@@ -28,7 +28,7 @@ use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
-    BinaryOperator, DataType, DateTimeField, Expr, Function, JoinConstraint, JoinOperator,
+    BinaryOperator, DataType, DateTimeField, Expr, Function, Ident, JoinConstraint, JoinOperator,
     ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
     TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
@@ -539,7 +539,7 @@ impl Planner {
                     if !columns.is_empty() {
                         bail!("aliasing columns is not yet supported");
                     }
-                    name.to_owned()
+                    name.value.to_owned()
                 } else {
                     name
                 };
@@ -561,7 +561,7 @@ impl Planner {
                     if !columns.is_empty() {
                         bail!("aliasing columns is not yet supported");
                     }
-                    Some(name.as_str())
+                    Some(name.value.as_str())
                 } else {
                     None
                 };
@@ -607,7 +607,7 @@ impl Planner {
                     0,
                     ScopeItemName {
                         table_name: None,
-                        column_name: Some(alias.clone()),
+                        column_name: Some(alias.value.clone()),
                     },
                 );
                 scope_item.expr = Some(sql_expr.clone());
@@ -761,7 +761,10 @@ impl Planner {
                 (joined, product_scope)
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
-                &column_names,
+                &column_names
+                    .iter()
+                    .map(|ident| ident.value.to_owned())
+                    .collect::<Vec<_>>(),
                 left,
                 left_scope,
                 right,
@@ -882,11 +885,13 @@ impl Planner {
         } else {
             match e {
                 Expr::Identifier(name) => {
-                    let (i, _) = ctx.scope.resolve_column(name)?;
+                    let (i, _) = ctx.scope.resolve_column(&name.value)?;
                     Ok(ScalarExpr::Column(i))
                 }
                 Expr::CompoundIdentifier(names) if names.len() == 2 => {
-                    let (i, _) = ctx.scope.resolve_table_column(&names[0], &names[1])?;
+                    let (i, _) = ctx
+                        .scope
+                        .resolve_table_column(&names[0].value, &names[1].value)?;
                     Ok(ScalarExpr::Column(i))
                 }
                 Expr::Value(val) => self.plan_literal(val),
@@ -1055,7 +1060,12 @@ impl Planner {
             inner_relation_type: &right.typ(&typ),
             allow_aggregates: false,
         };
-        let op_expr = self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
+        let op_expr = self.plan_binary_op(
+            &any_ctx,
+            op,
+            left,
+            &Expr::Identifier(Ident::new(right_name)),
+        )?;
 
         // plan subquery
         let expr = right
@@ -1220,7 +1230,7 @@ impl Planner {
 
                 "substr" => {
                     let func = Function {
-                        name: ObjectName(vec![String::from("substring")]),
+                        name: ObjectName(vec![Ident::new("substring")]),
                         args: sql_func.args.clone(),
                         over: sql_func.over.clone(),
                         distinct: sql_func.distinct,

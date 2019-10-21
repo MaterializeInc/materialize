@@ -109,7 +109,7 @@ END $$;
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
                 );
-                let names = columns.iter().map(|column| Some(column.name.clone()));
+                let names = columns.iter().map(|column| Some(column.name.value.clone()));
 
                 for constraint in constraints {
                     use sqlparser::ast::TableConstraint;
