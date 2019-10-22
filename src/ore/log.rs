@@ -134,7 +134,9 @@ pub fn init() {
                             None => file,
                         }
                         .trim_start_matches("registry/src/")
-                        .trim_start_matches("git/checkouts/");
+                        .trim_start_matches("git/checkouts/")
+                        .trim_start_matches("src/")
+                        .trim_end_matches(".rs");
                         write!(buf, "{}:{}", file, line)?;
                     }
                     _ => write!(buf, "(unknown)")?,
