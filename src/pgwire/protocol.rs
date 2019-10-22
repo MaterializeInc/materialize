@@ -572,7 +572,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     SqlResponse::EmptyQuery => transition!(SendCommandComplete {
                         send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
                         session,
-                        currently_extended: false,
+                        currently_extended: state.extended,
                         label: "empty",
                     }),
                     SqlResponse::SendRows { desc, rx } => {
