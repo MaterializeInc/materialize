@@ -12,41 +12,43 @@
 extern crate prometheus;
 
 use std::collections::HashMap;
-use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use chrono::Utc;
-use postgres::{Client, NoTls};
+use postgres::Connection;
 use prometheus::Histogram;
 use std::time::{Duration, Instant};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + 'static>>;
+static MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 fn main() {
     println!("startup {}", Utc::now());
     measure_peek_times();
 }
 
-fn measure_peek_times() -> ! {
-    init();
-    let (sender, receiver) = mpsc::channel();
-    let mut postgres_client = create_postgres_client();
+fn measure_peek_times() {
+    let postgres_connection = create_postgres_connection();
+    init_ignore_errors(&postgres_connection);
 
+    let (sender, receiver) = mpsc::channel();
     let query = "SELECT COUNT(*) FROM q01;";
+    let mut backoff = Duration::from_secs(1);
     thread::spawn(move || {
-        let mut sleep_duration = Duration::from_secs(1);
         loop {
             let start = Instant::now();
-            let query_result = postgres_client.simple_query(query);
+            let query_result = postgres_connection.query(query, &[]);
             let query_duration = start.elapsed().as_millis();
             match query_result {
-                Ok(_rows) => sender.send(query_duration).unwrap(),
+                Ok(_rows) => {
+                    sender.send(query_duration).unwrap()
+                },
                 Err(err) => {
-                    println!("Hit error trying to run metrics query. Sleeping for {:#?} seconds and trying again. Error: {:#?}", sleep_duration, err);
-                    thread::sleep(sleep_duration);
-                    sleep_duration *= 2;
-                    init();
+                    backoff_or_panic(
+                        &mut backoff,
+                        err.to_string(),
+                        format!("Hit error running metrics query on multiple attempts: {}", err.to_string()));
+                    init_ignore_errors(&postgres_connection);
                 }
             }
         }
@@ -54,23 +56,30 @@ fn measure_peek_times() -> ! {
     listen_and_push_metrics(receiver, query);
 }
 
-fn create_postgres_client() -> Client {
-    let mut sleep_duration = Duration::from_secs(1);
+fn create_postgres_connection() -> Connection {
+    let mut backoff = Duration::from_secs(1);
     loop {
-        match postgres::config::Config::new()
-            .host("materialized")
-            .port(6875)
-            .dbname("tpcch")
-            .connect(NoTls)
-        {
-            Ok(client) => return client,
-            Err(err) => {
-                println!("Hit error creating postgres client. Sleeping for {:#?} seconds and trying again. Error: {:#?}", sleep_duration, err);
-                thread::sleep(sleep_duration);
-                sleep_duration *= 2;
-                init();
-            }
+        match postgres::Connection::connect(
+            "postgres://ignoreuser@materialized:6875/tpcch",
+            postgres::TlsMode::None,
+        ) {
+            Ok(connection) => return connection,
+            Err(err) => backoff_or_panic(
+                &mut backoff,
+                err.to_string(),
+                format!("Unable to create postgres client after multiple attempts: {}", err.to_string()),
+            ),
         }
+    }
+}
+
+fn backoff_or_panic(backoff: &mut Duration, error_message: String, panic_message: String) {
+    if *backoff < MAX_BACKOFF {
+        println!("{}. Sleeping for {:#?} seconds.", error_message, *backoff);
+        thread::sleep(*backoff);
+        *backoff = Duration::from_secs(backoff.as_secs() * 2);
+    } else {
+        panic!("Exceeded MAX_BACKOFF. {}", panic_message);
     }
 }
 
@@ -94,9 +103,7 @@ fn listen_and_push_metrics(receiver: Receiver<u128>, query: &str) -> ! {
 
     let mut count = 0;
     loop {
-        if let Err(e) = push_metrics(&receiver, &hist, &mut count, &address) {
-            println!("error pushing metrics: {}", e);
-        }
+        push_metrics(&receiver, &hist, &mut count, &address);
     }
 }
 
@@ -105,39 +112,47 @@ fn push_metrics(
     hist: &Histogram,
     count: &mut usize,
     address: &str,
-) -> Result<()> {
-    let psql_output = receiver.recv()?;
-    hist.observe(psql_output as f64); // why?
-    *count += 1;
-    if *count % 10 == 0 {
-        //
-        match prometheus::push_metrics(
-            "mz_client_peek",
-            HashMap::new(),
-            &address,
-            prometheus::gather(),
-            None,
-        ) {
-            Ok(_ok) => {
-                // do nothing.
+) {
+    match receiver.recv() {
+        Ok(query_duration) => {
+            hist.observe(query_duration as f64);
+            *count += 1;
+            if *count % 10 == 0 {
+                //
+                match prometheus::push_metrics(
+                    "mz_client_peek",
+                    HashMap::new(),
+                    &address,
+                    prometheus::gather(),
+                    None,
+                ) {
+                    Ok(_ok) => {
+                        // do nothing.
+                    }
+                    Err(err) => {
+                        // todo: merge change and report actual errors!
+                        // Ignore noisy errors from: https://github.com/pingcap/rust-prometheus/issues/287
+                        println!("Error pushing metrics: {}", err.to_string())
+                    }
+                }
             }
-            Err(_err) => {
-                // todo: merge change and report actual errors!
-                // Ignore noisy errors from: https://github.com/pingcap/rust-prometheus/issues/287
-            }
-        }
+        },
+        Err(err) => println!("Error receiving metric from sender: {}", err.to_string())
     }
-    Ok(())
 }
 
-fn init() {
-    run_psql_command_ignore_errors(
-        "CREATE SOURCES LIKE 'mysql.tpcch.%'
-         FROM 'kafka://kafka:9092'
-         USING SCHEMA REGISTRY 'http://schema-registry:8081';",
-    );
-    run_psql_command_ignore_errors(
-        "CREATE VIEW q01 as SELECT
+fn init_ignore_errors(postgres_connection: &Connection) {
+    if let Err(err) = postgres_connection.execute(
+        "CREATE SOURCES LIKE 'mysql.tpcch.%' FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';",
+        &[],
+    ) {
+        println!(
+            "CREATE SOURCES produced the following error: {}",
+            err.to_string()
+        )
+    }
+
+    if let Err(err) = postgres_connection.execute("CREATE VIEW q01 as SELECT
                  ol_number,
                  sum(ol_quantity) as sum_qty,
                  sum(ol_amount) as sum_amount,
@@ -149,32 +164,10 @@ fn init() {
          WHERE
                  ol_delivery_d > date '1998-12-01'
          GROUP BY
-                 ol_number;",
-    );
-}
-
-fn run_psql_command_ignore_errors(cmd: &str) {
-    let result = Command::new("psql")
-        .arg("-q")
-        .arg("-h")
-        .arg("materialized")
-        .arg("-p")
-        .arg("6875")
-        .arg("sslmode=disable")
-        .arg("-c")
-        .arg("\\timing")
-        .arg("-c")
-        .arg(cmd)
-        .output();
-    match result {
-        Ok(out) => println!(
-            "mz> {}\n\
-             out| {}\n\
-             err| {}",
-            cmd,
-            String::from_utf8(out.stdout).unwrap(),
-            String::from_utf8(out.stderr).unwrap()
-        ),
-        Err(e) => println!("ERROR mz> {}\n| {}", cmd, e),
+                 ol_number;", &[]) {
+        println!(
+            "CREATE VIEW produced the following error: {}",
+            err.to_string()
+        )
     }
 }
