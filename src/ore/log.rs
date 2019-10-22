@@ -125,7 +125,7 @@ pub fn init() {
             .format(|buf, record| {
                 let ts = buf.timestamp_nanos();
                 let level = buf.default_styled_level(record.level());
-                write!(buf, "[{} {} ", ts, level)?;
+                write!(buf, "[{} {:>5} ", ts, level)?;
                 match (record.file(), record.line()) {
                     (Some(file), Some(line)) => {
                         let search = "/.cargo/";
