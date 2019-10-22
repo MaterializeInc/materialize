@@ -361,7 +361,7 @@ static int run(int argc, char* argv[]) {
     const char* logFile = nullptr;
     bool createSources = false;
     std::vector<std::string> mzViews;
-    while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:", longOpts,
+    while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:l:", longOpts,
                             nullptr)) != -1) {
         switch (c) {
         case 'd':
