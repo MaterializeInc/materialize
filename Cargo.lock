@@ -312,9 +312,6 @@ name = "cc"
 version = "1.0.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39f75544d7bbaf57560d2168f28fd649ff9c76153874db88bdbdfd839b1a7e7d"
-dependencies = [
- "rayon",
-]
 
 [[package]]
 name = "ccsr"
@@ -2436,7 +2433,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.21.0"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#9c1e424a295ff13ac4c756fa1d916b4c8ead147b"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#ab21b70320a87f62d08708752c6efe5c6d2dfe9e"
 dependencies = [
  "futures",
  "libc",
@@ -2450,14 +2447,13 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "1.2.1"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#9c1e424a295ff13ac4c756fa1d916b4c8ead147b"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#ab21b70320a87f62d08708752c6efe5c6d2dfe9e"
 dependencies = [
  "bindgen",
  "cmake",
  "libz-sys",
  "num_cpus 0.2.13",
  "pkg-config",
- "zstd-sys",
 ]
 
 [[package]]
@@ -2850,7 +2846,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
- "byteorder 1.3.2",
+ "byteorder 0.5.3",
  "chrono",
  "comm",
  "coord",
@@ -3642,15 +3638,4 @@ checksum = "d59cefebd0c892fa2dd6de581e937301d8552cb44489cdff035c6187cb63fa5e"
 dependencies = [
  "winapi 0.2.8",
  "winapi-build",
-]
-
-[[package]]
-name = "zstd-sys"
-version = "1.4.12+zstd.1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e650014b0086a1588dfbe3cd4a8c19b03bc60eca5fd8043406e07f130a4f8bc"
-dependencies = [
- "cc",
- "glob",
- "libc",
 ]
