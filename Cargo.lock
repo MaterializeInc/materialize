@@ -2433,7 +2433,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.21.0"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#ab21b70320a87f62d08708752c6efe5c6d2dfe9e"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#880a8c8132515512efe21c099ba721cf724f1f73"
 dependencies = [
  "futures",
  "libc",
@@ -2447,7 +2447,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "1.2.1"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#ab21b70320a87f62d08708752c6efe5c6d2dfe9e"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#880a8c8132515512efe21c099ba721cf724f1f73"
 dependencies = [
  "bindgen",
  "cmake",
