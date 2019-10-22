@@ -4,11 +4,44 @@
 // distributed without the express permission of Materialize, Inc.
 
 use comm::{broadcast, Switchboard};
-use futures::{Future, Sink};
+use futures::{Future, Sink, Stream};
 use ore::future::sync::mpsc::ReceiverExt;
 use std::error::Error;
 use std::thread;
 use tokio::runtime::TaskExecutor;
+
+/// Verifies that a pathological interleaving of broadcast transmitter and
+/// receiver creation does not result in dropped messages. We previously had
+/// a bug where the second broadcast transmitter would not be connected to
+/// the broadcast receiver.
+#[test]
+fn test_broadcast_interleaving() -> Result<(), Box<dyn Error>> {
+    struct TestToken;
+
+    impl broadcast::Token for TestToken {
+        type Item = usize;
+
+        fn loopback() -> bool {
+            true
+        }
+    }
+
+    let (switchboard, _runtime) = Switchboard::local()?;
+
+    // Create a transmitter and send a message before the receiver is created.
+    switchboard.broadcast_tx::<TestToken>().send(42).wait()?;
+
+    // Create the receiver.
+    let rx = switchboard.broadcast_rx::<TestToken>();
+
+    // Create a new transmitter and send another message.
+    switchboard.broadcast_tx::<TestToken>().send(42).wait()?;
+
+    // Verify that the receiver sees both messages.
+    assert_eq!(rx.take(2).collect().wait()?, &[42, 42]);
+
+    Ok(())
+}
 
 #[test]
 fn test_broadcast_fanout() -> Result<(), Box<dyn Error>> {

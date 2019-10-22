@@ -38,18 +38,20 @@ pub const INT8: PgType = PgType { oid: 20, typlen: 8 };
 /// 32-bit integer.
 pub const INT4: PgType = PgType { oid: 23, typlen: 4 };
 
-/// A date. Internally a 32-bit number of days from the epoch.
+/// Date. Represented as the 32-bit number of days since January 1, 2000.
 pub const DATE: PgType = PgType {
     oid: 1082,
     typlen: 4,
 };
 
-/// A Date/Time. Internally a 64-bit number of microseconds since the epoch
-pub const TIMESTAMP_TZ: PgType = PgType {
-    oid: 1184,
+/// Timestamp. Represented as the 64-bit number of microseconds since January 1,
+/// 2000 00:00:00.000.
+pub const TIMESTAMP: PgType = PgType {
+    oid: 1114,
     typlen: 8,
 };
 
+/// Time interval.
 pub const INTERVAL: PgType = PgType {
     oid: 1186,
     typlen: 16,
@@ -102,7 +104,7 @@ impl From<&ScalarType> for PgType {
             ScalarType::Float64 => FLOAT8,
             ScalarType::Decimal { .. } => NUMERIC,
             ScalarType::Date => DATE,
-            ScalarType::Timestamp => TIMESTAMP_TZ,
+            ScalarType::Timestamp => TIMESTAMP,
             ScalarType::Interval => INTERVAL,
             ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Bytes => BYTEA,

@@ -27,16 +27,23 @@
 
 #![forbid(missing_docs)]
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fmt;
 
 use failure::bail;
 
-use dataflow_types::RowSetFinishing;
 use repr::RelationDesc;
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
 // always write a macro.
+
+const APPLICATION_NAME: ServerVar<&'static str> = ServerVar {
+    name: unicase::Ascii::new("application_name"),
+    value: "",
+    description: "Sets the application name to be reported in statistics and logs (PostgreSQL).",
+};
 
 const CLIENT_ENCODING: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("client_encoding"),
@@ -57,29 +64,35 @@ const DATE_STYLE: ServerVar<&'static str> = ServerVar {
     description: "Sets the display format for date and time values (PostgreSQL).",
 };
 
+const EXTRA_FLOAT_DIGITS: ServerVar<&i32> = ServerVar {
+    name: unicase::Ascii::new("extra_float_digits"),
+    value: &3,
+    description: "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
+};
+
 const SERVER_VERSION: ServerVar<&'static str> = ServerVar {
     name: unicase::Ascii::new("server_version"),
-    // Postgres client libraries sometimes check this,
-    // so pretend to be a recent version for their benefit
-    value: concat!(
-        "12.0.0+postgres ",
-        env!("CARGO_PKG_VERSION"),
-        "+materialized"
-    ),
+    // Pretend to be Postgres v9.5.0, which is also what CockroachDB pretends to
+    // be. Too new and some clients will emit a "server too new" warning. Too
+    // old and some clients will fall back to legacy code paths. v9.5.0
+    // empirically seems to be a good compromise.
+    value: "9.5.0",
     description: "Shows the server version (PostgreSQL).",
 };
 
-const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
+const SQL_SAFE_UPDATES: ServerVar<&bool> = ServerVar {
     name: unicase::Ascii::new("sql_safe_updates"),
-    value: false,
+    value: &false,
     description: "Prohibits SQL statements that may be overly destructive (CockroachDB).",
 };
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
+    application_name: SessionVar<str>,
     client_encoding: ServerVar<&'static str>,
     database: ServerVar<&'static str>,
     date_style: ServerVar<&'static str>,
+    extra_float_digits: SessionVar<i32>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
     /// A map from statement names to SQL queries
@@ -91,14 +104,16 @@ pub struct Session {
     portals: HashMap<String, Portal>,
 }
 
-impl std::fmt::Debug for Session {
+impl fmt::Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("Session")
-            .field("client_encoding", &self.client_encoding.value)
-            .field("database", &self.database.value)
-            .field("date_style", &self.date_style.value)
-            .field("server_version", &self.server_version.value)
-            .field("sql_safe_updates", &self.sql_safe_updates.value)
+            .field("application_name", &self.application_name())
+            .field("client_encoding", &self.client_encoding())
+            .field("database", &self.database())
+            .field("date_style", &self.date_style())
+            .field("extra_float_digits", &self.extra_float_digits())
+            .field("server_version", &self.server_version())
+            .field("sql_safe_updates", &self.sql_safe_updates())
             .field("prepared_statements", &self.prepared_statements.keys())
             .field("portals", &self.portals.keys())
             .finish()
@@ -109,9 +124,11 @@ impl std::default::Default for Session {
     /// Constructs a new `Session` with default values.
     fn default() -> Session {
         Session {
+            application_name: SessionVar::new(&APPLICATION_NAME),
             client_encoding: CLIENT_ENCODING,
             database: DATABASE,
             date_style: DATE_STYLE,
+            extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             prepared_statements: HashMap::new(),
@@ -125,9 +142,11 @@ impl Session {
     /// session.
     pub fn vars(&self) -> Vec<&dyn Var> {
         vec![
+            &self.application_name,
             &self.client_encoding,
             &self.database,
             &self.date_style,
+            &self.extra_float_digits,
             &self.server_version,
             &self.sql_safe_updates,
         ]
@@ -135,9 +154,10 @@ impl Session {
 
     /// Returns the configuration parameters (and their current values for this
     /// session) that are expected to be sent to the client when a new
-    /// connection is established.
-    pub fn startup_vars(&self) -> Vec<&dyn Var> {
+    /// connection is established or when their value changes.
+    pub fn notify_vars(&self) -> Vec<&dyn Var> {
         vec![
+            &self.application_name,
             &self.client_encoding,
             &self.date_style,
             &self.server_version,
@@ -155,12 +175,16 @@ impl Session {
     /// example, `self.get("sql_safe_updates").value()` returns the string
     /// `"true"` or `"false"`, while `self.sql_safe_updates()` returns a bool.
     pub fn get(&self, name: &str) -> Result<&dyn Var, failure::Error> {
-        if name == CLIENT_ENCODING.name {
+        if name == APPLICATION_NAME.name {
+            Ok(&self.application_name)
+        } else if name == CLIENT_ENCODING.name {
             Ok(&self.client_encoding)
         } else if name == DATABASE.name {
             Ok(&self.database)
         } else if name == DATE_STYLE.name {
             Ok(&self.date_style)
+        } else if name == EXTRA_FLOAT_DIGITS.name {
+            Ok(&self.extra_float_digits)
         } else if name == SERVER_VERSION.name {
             Ok(&self.server_version)
         } else if name == SQL_SAFE_UPDATES.name {
@@ -178,12 +202,16 @@ impl Session {
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.
     pub fn set(&mut self, name: &str, value: &str) -> Result<(), failure::Error> {
-        if name == CLIENT_ENCODING.name {
+        if name == APPLICATION_NAME.name {
+            self.application_name.set(value)
+        } else if name == CLIENT_ENCODING.name {
             bail!("parameter {} is read only", CLIENT_ENCODING.name);
         } else if name == DATABASE.name {
             bail!("parameter {} is read only", DATABASE.name);
         } else if name == DATE_STYLE.name {
             bail!("parameter {} is read only", DATE_STYLE.name);
+        } else if name == EXTRA_FLOAT_DIGITS.name {
+            self.extra_float_digits.set(value)
         } else if name == SERVER_VERSION.name {
             bail!("parameter {} is read only", SERVER_VERSION.name);
         } else if name == SQL_SAFE_UPDATES.name {
@@ -191,6 +219,11 @@ impl Session {
         } else {
             bail!("unknown parameter: {}", name)
         }
+    }
+
+    /// Returns the value of the `application_name` configuration parameter.
+    pub fn application_name(&self) -> &str {
+        self.application_name.value()
     }
 
     /// Returns the value of the `client_encoding` configuration parameter.
@@ -208,6 +241,11 @@ impl Session {
         self.database.value
     }
 
+    /// Returns the value of the `extra_float_digits` configuration parameter.
+    pub fn extra_float_digits(&self) -> i32 {
+        *self.extra_float_digits.value()
+    }
+
     /// Returns the value of the `server_version` configuration parameter.
     pub fn server_version(&self) -> &'static str {
         self.server_version.value
@@ -221,6 +259,12 @@ impl Session {
     /// Ensure that the given prepared statement is present in this session
     pub fn set_prepared_statement(&mut self, name: String, statement: PreparedStatement) {
         self.prepared_statements.insert(name, statement);
+    }
+
+    /// Removes the prepared statement associated with `name`. It is not an
+    /// error if no such statement exists.
+    pub fn remove_prepared_statement(&mut self, name: &str) {
+        let _ = self.prepared_statements.remove(name);
     }
 
     /// Retrieve the prepared statement in this session associated with `name`
@@ -303,17 +347,17 @@ struct ServerVar<V> {
 #[derive(Debug)]
 struct SessionVar<V>
 where
-    V: 'static,
+    V: ToOwned + ?Sized + 'static,
 {
-    value: Option<V>,
-    parent: &'static ServerVar<V>,
+    value: Option<V::Owned>,
+    parent: &'static ServerVar<&'static V>,
 }
 
 impl<V> SessionVar<V>
 where
-    V: 'static,
+    V: ToOwned + ?Sized + 'static,
 {
-    fn new(parent: &'static ServerVar<V>) -> SessionVar<V> {
+    fn new(parent: &'static ServerVar<&'static V>) -> SessionVar<V> {
         SessionVar {
             value: None,
             parent,
@@ -321,7 +365,10 @@ where
     }
 
     fn value(&self) -> &V {
-        self.value.as_ref().unwrap_or(&self.parent.value)
+        self.value
+            .as_ref()
+            .map(|v| v.borrow())
+            .unwrap_or(self.parent.value)
     }
 }
 
@@ -352,40 +399,81 @@ impl Var for SessionVar<bool> {
     }
 }
 
+impl SessionVar<str> {
+    fn set(&mut self, value: &str) -> Result<(), failure::Error> {
+        self.value = Some(value.to_owned());
+        Ok(())
+    }
+}
+
+impl Var for SessionVar<str> {
+    fn name(&self) -> &'static str {
+        &self.parent.name
+    }
+
+    fn value(&self) -> String {
+        SessionVar::value(self).to_owned()
+    }
+
+    fn description(&self) -> &'static str {
+        self.parent.description
+    }
+}
+
+impl SessionVar<i32> {
+    fn set(&mut self, value: &str) -> Result<(), failure::Error> {
+        match value.parse() {
+            Ok(value) => {
+                self.value = Some(value);
+                Ok(())
+            }
+            Err(_) => bail!("parameter {} requires an integer value", self.parent.name),
+        }
+    }
+}
+
+impl Var for SessionVar<i32> {
+    fn name(&self) -> &'static str {
+        &self.parent.name
+    }
+
+    fn value(&self) -> String {
+        SessionVar::value(self).to_string()
+    }
+
+    fn description(&self) -> &'static str {
+        self.parent.description
+    }
+}
+
 /// A prepared statement
 #[derive(Debug)]
 pub struct PreparedStatement {
-    pub raw_sql: String,
-    source: ::expr::RelationExpr,
-    desc: RelationDesc,
-    finishing: RowSetFinishing,
+    sql: Option<sqlparser::ast::Statement>,
+    desc: Option<RelationDesc>,
 }
 
 impl PreparedStatement {
-    pub fn new(
-        raw_sql: String,
-        source: ::expr::RelationExpr,
-        desc: RelationDesc,
-        finishing: RowSetFinishing,
-    ) -> PreparedStatement {
+    pub fn new(sql: sqlparser::ast::Statement, desc: Option<RelationDesc>) -> PreparedStatement {
         PreparedStatement {
-            raw_sql,
-            source,
+            sql: Some(sql),
             desc,
-            finishing,
         }
     }
 
-    pub fn source(&self) -> &::expr::RelationExpr {
-        &self.source
+    pub(crate) fn empty() -> PreparedStatement {
+        PreparedStatement {
+            sql: None,
+            desc: None,
+        }
     }
 
-    pub fn desc(&self) -> &RelationDesc {
-        &self.desc
+    pub fn sql(&self) -> Option<&sqlparser::ast::Statement> {
+        self.sql.as_ref()
     }
 
-    pub fn finishing(&self) -> &RowSetFinishing {
-        &self.finishing
+    pub fn desc(&self) -> Option<&RelationDesc> {
+        self.desc.as_ref()
     }
 }
 

@@ -5,9 +5,7 @@
 
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
-use std::cell::Cell;
 use std::fmt;
-use std::rc::Rc;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -15,13 +13,8 @@ use timely::Data;
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
 
-pub fn kafka<G, B, K, V>(
-    stream: &Stream<G, B>,
-    name: &str,
-    _connector: KafkaSinkConnector,
-    _done: Rc<Cell<bool>>,
-    _timer: std::time::Instant,
-) where
+pub fn kafka<G, B, K, V>(stream: &Stream<G, B>, name: &str, _connector: KafkaSinkConnector)
+where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<K, V, Timestamp, Diff>,
     K: fmt::Debug,

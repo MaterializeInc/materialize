@@ -16,19 +16,19 @@
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
 use super::expr::{
-    AggregateExpr, AggregateFunc, BinaryFunc, ColumnRef, JoinKind, RelationExpr, ScalarExpr,
-    UnaryFunc, VariadicFunc, LITERAL_NULL, LITERAL_TRUE,
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
+    ScalarExpr, UnaryFunc, VariadicFunc, LITERAL_NULL, LITERAL_TRUE,
 };
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 use super::{extract_sql_object_name, Planner};
-use dataflow_types::{ColumnOrder, RowSetFinishing};
+use dataflow_types::RowSetFinishing;
 use failure::{bail, ensure, format_err, ResultExt};
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnType, Datum, RelationType, ScalarType};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
-    BinaryOperator, DataType, DateTimeField, Expr, Function, JoinConstraint, JoinOperator,
+    BinaryOperator, DataType, DateTimeField, Expr, Function, Ident, JoinConstraint, JoinOperator,
     ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
     TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
 };
@@ -64,6 +64,7 @@ impl Planner {
         let output_typ = expr.typ(outer_relation_type);
         let mut order_by = vec![];
         let mut map_exprs = vec![];
+
         for obe in &q.order_by {
             match &obe.expr {
                 Expr::Value(Value::Number(n)) => {
@@ -111,6 +112,7 @@ impl Planner {
                 }
             }
         }
+
         let finishing = RowSetFinishing {
             filter: vec![],
             order_by,
@@ -119,6 +121,31 @@ impl Planner {
             offset,
         };
         Ok((expr.map(map_exprs), scope, finishing))
+    }
+
+    pub fn plan_subquery(
+        &self,
+        q: &Query,
+        outer_scope: &Scope,
+        outer_relation_type: &RelationType,
+    ) -> Result<(RelationExpr, Scope), failure::Error> {
+        let (mut expr, scope, finishing) = self.plan_query(q, outer_scope, outer_relation_type)?;
+        if finishing.limit.is_some() || finishing.offset > 0 {
+            expr = RelationExpr::TopK {
+                input: Box::new(expr),
+                group_key: vec![],
+                order_key: finishing.order_by,
+                limit: finishing.limit,
+                offset: finishing.offset,
+            };
+        }
+        Ok((
+            RelationExpr::Project {
+                input: Box::new(expr),
+                outputs: finishing.project,
+            },
+            scope,
+        ))
     }
 
     fn plan_set_expr(
@@ -261,11 +288,7 @@ impl Planner {
                 Ok((expr.unwrap(), scope))
             }
             SetExpr::Query(query) => {
-                let (expr, scope, finishing) =
-                    self.plan_query(query, outer_scope, outer_relation_type)?;
-                if !finishing.is_trivial() {
-                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
-                }
+                let (expr, scope) = self.plan_subquery(query, outer_scope, outer_relation_type)?;
                 Ok((expr, scope))
             }
         }
@@ -516,7 +539,7 @@ impl Planner {
                     if !columns.is_empty() {
                         bail!("aliasing columns is not yet supported");
                     }
-                    name.to_owned()
+                    name.value.to_owned()
                 } else {
                     name
                 };
@@ -532,16 +555,13 @@ impl Planner {
                 if *lateral {
                     bail!("LATERAL derived tables are not yet supported");
                 }
-                let (expr, scope, finishing) =
-                    self.plan_query(&subquery, &Scope::empty(None), &RelationType::empty())?;
-                if !finishing.is_trivial() {
-                    bail!("ORDER BY and LIMIT are not yet supported in subqueries");
-                }
+                let (expr, scope) =
+                    self.plan_subquery(&subquery, &Scope::empty(None), &RelationType::empty())?;
                 let alias = if let Some(TableAlias { name, columns }) = alias {
                     if !columns.is_empty() {
                         bail!("aliasing columns is not yet supported");
                     }
-                    Some(name.as_str())
+                    Some(name.value.as_str())
                 } else {
                     None
                 };
@@ -587,7 +607,7 @@ impl Planner {
                     0,
                     ScopeItemName {
                         table_name: None,
-                        column_name: Some(alias.clone()),
+                        column_name: Some(alias.value.clone()),
                     },
                 );
                 scope_item.expr = Some(sql_expr.clone());
@@ -741,7 +761,10 @@ impl Planner {
                 (joined, product_scope)
             }
             JoinConstraint::Using(column_names) => self.plan_using_constraint(
-                &column_names,
+                &column_names
+                    .iter()
+                    .map(|ident| ident.value.to_owned())
+                    .collect::<Vec<_>>(),
                 left,
                 left_scope,
                 right,
@@ -862,11 +885,13 @@ impl Planner {
         } else {
             match e {
                 Expr::Identifier(name) => {
-                    let (i, _) = ctx.scope.resolve_column(name)?;
+                    let (i, _) = ctx.scope.resolve_column(&name.value)?;
                     Ok(ScalarExpr::Column(i))
                 }
                 Expr::CompoundIdentifier(names) if names.len() == 2 => {
-                    let (i, _) = ctx.scope.resolve_table_column(&names[0], &names[1])?;
+                    let (i, _) = ctx
+                        .scope
+                        .resolve_table_column(&names[0].value, &names[1].value)?;
                     Ok(ScalarExpr::Column(i))
                 }
                 Expr::Value(val) => self.plan_literal(val),
@@ -904,10 +929,7 @@ impl Planner {
                             .chain(ctx.inner_relation_type.column_types.iter().cloned())
                             .collect(),
                     );
-                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope, &typ)?;
-                    if !finishing.is_trivial() {
-                        bail!("ORDER BY and LIMIT are not yet supported in subqueries");
-                    }
+                    let (expr, _scope) = self.plan_subquery(query, &ctx.scope, &typ)?;
                     Ok(expr.exists())
                 }
                 Expr::Subquery(query) => {
@@ -919,10 +941,7 @@ impl Planner {
                             .chain(ctx.inner_relation_type.column_types.iter().cloned())
                             .collect(),
                     );
-                    let (expr, _scope, finishing) = self.plan_query(query, &ctx.scope, &typ)?;
-                    if !finishing.is_trivial() {
-                        bail!("ORDER BY and LIMIT are not yet supported in subqueries");
-                    }
+                    let (expr, _scope) = self.plan_subquery(query, &ctx.scope, &typ)?;
                     let column_types = expr.typ(&typ).column_types;
                     if column_types.len() != 1 {
                         bail!(
@@ -1013,10 +1032,8 @@ impl Planner {
                 .collect(),
         );
         // plan right
-        let (right, _scope, finishing) = self.plan_query(right, &ctx.scope, &typ)?;
-        if !finishing.is_trivial() {
-            bail!("ORDER BY and LIMIT are not yet supported in subqueries");
-        }
+
+        let (right, _scope) = self.plan_subquery(right, &ctx.scope, &typ)?;
         let column_types = right.typ(&typ).column_types;
         if column_types.len() != 1 {
             bail!(
@@ -1043,7 +1060,12 @@ impl Planner {
             inner_relation_type: &right.typ(&typ),
             allow_aggregates: false,
         };
-        let op_expr = self.plan_binary_op(&any_ctx, op, left, &Expr::Identifier(right_name))?;
+        let op_expr = self.plan_binary_op(
+            &any_ctx,
+            op,
+            left,
+            &Expr::Identifier(Ident::new(right_name)),
+        )?;
 
         // plan subquery
         let expr = right
@@ -1208,7 +1230,7 @@ impl Planner {
 
                 "substr" => {
                     let func = Function {
-                        name: ObjectName(vec![String::from("substring")]),
+                        name: ObjectName(vec![Ident::new("substring")]),
                         args: sql_func.args.clone(),
                         over: sql_func.over.clone(),
                         distinct: sql_func.distinct,

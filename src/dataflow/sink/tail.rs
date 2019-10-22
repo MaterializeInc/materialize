@@ -11,29 +11,34 @@ use repr::Datum;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
+use timely::order::PartialOrder;
 use timely::Data;
 
 pub fn tail<G, B>(stream: &Stream<G, B>, name: &str, connector: TailSinkConnector)
 where
     G: Scope<Timestamp = Timestamp>,
-    B: Data + BatchReader<Vec<Datum>, (), Timestamp, Diff>,
+    B: Data + BatchReader<Vec<Datum>, Vec<Datum>, Timestamp, Diff>,
 {
+    let mut tx = connector.tx.connect().wait().unwrap();
     stream.sink(Pipeline, &name, move |input| {
-        let mut tx = connector.tx.connect().wait().unwrap();
-
         input.for_each(|_, batches| {
             let mut results: Vec<Update> = Vec::new();
             for batch in batches.iter() {
                 let mut cur = batch.cursor();
-                while let Some(key) = cur.get_key(&batch) {
-                    cur.map_times(&batch, |time, diff| {
-                        results.push(Update {
-                            row: key.clone(),
-                            timestamp: *time,
-                            diff: *diff,
+                while let Some(_key) = cur.get_key(&batch) {
+                    while let Some(row) = cur.get_val(&batch) {
+                        cur.map_times(&batch, |time, diff| {
+                            if connector.since.less_than(time) {
+                                results.push(Update {
+                                    row: row.clone(),
+                                    timestamp: *time,
+                                    diff: *diff,
+                                });
+                            }
                         });
-                    });
-                    cur.step_key(&batch);
+                        cur.step_val(&batch)
+                    }
+                    cur.step_key(&batch)
                 }
             }
 

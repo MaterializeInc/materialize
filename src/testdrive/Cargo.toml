@@ -19,19 +19,20 @@ backoff = "0.1.5"
 byteorder = "1.3"
 ccsr = { path = "../ccsr" }
 chrono = "0.4"
-failure = "0.1.5"
+failure = "0.1.6"
 futures = "0.1"
 getopts = "0.2"
 interchange = { path = "../interchange" }
 lazy_static = "1.4.0"
 ore = { path = "../ore" }
-postgres = "0.16.0-rc.2"  # pre-release for simple_query support
+postgres = "0.15"
 serde_json = { version = "1.0.41", features = ["preserve_order"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 rand = "0.7.2"
 rdkafka = { version = "0.21", features = ["cmake_build"] }
 regex = "1"
-reqwest = "0.9.21"
+reqwest = "0.9.22"
+rust_decimal = { version = "1.0", features = ["postgres"] }
 termcolor = "1.0.5"
 
 [dev-dependencies]

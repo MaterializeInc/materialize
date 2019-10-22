@@ -26,10 +26,10 @@ use crate::store::{DataflowStore, RemoveMode};
 use crate::{extract_sql_object_name, Plan, Planner};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    ColumnOrder, Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing,
-    Sink, SinkConnector, Source, SourceConnector, View,
+    Dataflow, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
-use expr::RelationExpr;
+use expr::{ColumnOrder, RelationExpr};
 use interchange::avro;
 use ore::collections::CollectionExt;
 use ore::option::OptionExt;
@@ -65,28 +65,51 @@ impl Planner {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
         match stmts.len() {
             0 => Ok(Plan::EmptyQuery),
-            1 => self.handle_statement(session, stmts.into_element()),
+            1 => {
+                let plan = self.handle_statement(session, stmts.into_element())?;
+                self.apply_plan(session, &plan)?;
+                Ok(plan)
+            }
             _ => bail!("expected one statement, but got {}", stmts.len()),
         }
     }
 
-    /// Convert some raw_sql into a parsed statement, and associate it with the current Session
+    /// Parses the specified SQL into a prepared statement.
+    ///
+    /// The prepared statement is saved in the connection's [`sql::Session`]
+    /// under the specified name.
     pub fn handle_parse_command(
-        &mut self,
+        &self,
         session: &mut Session,
         sql: String,
         name: String,
     ) -> Result<Plan, failure::Error> {
-        let stmt = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
-        if stmt.len() != 1 {
-            bail!("cannot parse zero or multiple queries: {}", sql);
+        let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
+        match stmts.len() {
+            0 => session.set_prepared_statement(name, PreparedStatement::empty()),
+            1 => {
+                let stmt = stmts.into_element();
+                let plan = self.handle_statement(session, stmt.clone())?;
+                let desc = match plan {
+                    Plan::Peek { desc, .. } => Some(desc),
+                    Plan::SendRows { desc, .. } => Some(desc),
+                    Plan::ExplainPlan { desc, .. } => Some(desc),
+                    Plan::CreateSources { .. } => {
+                        Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+                    }
+                    _ => None,
+                };
+                session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
+            }
+            n => bail!("expected one statement but got {}: {:?}", n, sql),
         }
-        self.handle_parse_statement(session, stmt.into_element(), name, sql)
+
+        Ok(Plan::Parsed)
     }
 
     pub fn handle_execute_command(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         portal_name: &str,
     ) -> Result<Plan, failure::Error> {
         let portal = session
@@ -101,18 +124,49 @@ impl Planner {
                     portal.statement_name
                 )
             })?;
-        Ok(Plan::Peek {
-            source: prepared.source().clone(),
-            desc: prepared.desc().clone(),
-            when: PeekWhen::Immediately,
-            finishing: prepared.finishing().clone(),
-        })
+        match prepared.sql() {
+            Some(sql) => {
+                let plan = self.handle_statement(session, sql.clone())?;
+                self.apply_plan(session, &plan)?;
+                Ok(plan)
+            }
+            None => Ok(Plan::EmptyQuery),
+        }
+    }
+
+    /// Mutates the internal state of the planner and session according to the
+    /// `plan`. Centralizing mutations here ensures the rest of the planning
+    /// process is immutable, which is useful for prepared queries.
+    ///
+    /// Note that there are additional mutations that will be undertaken in the
+    /// dataflow layer according to this plan; this method only applies
+    /// mutations internal to the planner and session.
+    fn apply_plan(&mut self, session: &mut Session, plan: &Plan) -> Result<(), failure::Error> {
+        match plan {
+            Plan::CreateView(view) => self.dataflows.insert(Dataflow::View(view.clone())),
+            Plan::CreateSource(source) => self.dataflows.insert(Dataflow::Source(source.clone())),
+            Plan::CreateSources(sources) => {
+                for source in sources {
+                    self.dataflows.insert(Dataflow::Source(source.clone()))?
+                }
+                Ok(())
+            }
+            Plan::CreateSink(sink) => self.dataflows.insert(Dataflow::Sink(sink.clone())),
+            Plan::DropViews(names) | Plan::DropSources(names) => {
+                for name in names {
+                    self.dataflows.remove(name);
+                }
+                Ok(())
+            }
+            Plan::SetVariable { name, value } => session.set(name, value),
+            _ => Ok(()),
+        }
     }
 
     /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
     fn handle_statement(
-        &mut self,
-        session: &mut Session,
+        &self,
+        session: &Session,
         mut stmt: Statement,
     ) -> Result<Plan, failure::Error> {
         super::transform::transform(&mut stmt);
@@ -129,7 +183,7 @@ impl Planner {
                 local,
                 variable,
                 value,
-            } => self.handle_set_variable(session, local, variable, value),
+            } => self.handle_set_variable(local, variable, value),
             Statement::ShowVariable { variable } => self.handle_show_variable(session, variable),
             Statement::ShowObjects { object_type: ot } => self.handle_show_objects(ot),
             Statement::ShowColumns {
@@ -145,8 +199,7 @@ impl Planner {
     }
 
     fn handle_set_variable(
-        &mut self,
-        session: &mut Session,
+        &self,
         local: bool,
         variable: Ident,
         value: SetVariableValue,
@@ -154,23 +207,22 @@ impl Planner {
         if local {
             bail!("SET LOCAL ... is not supported");
         }
-        session.set(
-            &variable,
-            &match value {
+        Ok(Plan::SetVariable {
+            name: variable.value,
+            value: match value {
                 SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
                 SetVariableValue::Literal(lit) => lit.to_string(),
-                SetVariableValue::Ident(ident) => ident,
+                SetVariableValue::Ident(ident) => ident.value,
             },
-        )?;
-        Ok(Plan::DidSetVariable)
+        })
     }
 
     fn handle_show_variable(
-        &mut self,
+        &self,
         session: &Session,
         variable: Ident,
     ) -> Result<Plan, failure::Error> {
-        if variable == unicase::Ascii::new("ALL") {
+        if variable.value == unicase::Ascii::new("ALL") {
             Ok(Plan::SendRows {
                 desc: RelationDesc::empty()
                     .add_column("name", ScalarType::String)
@@ -183,7 +235,7 @@ impl Planner {
                     .collect(),
             })
         } else {
-            let variable = session.get(&variable)?;
+            let variable = session.get(&variable.value)?;
             Ok(Plan::SendRows {
                 desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
                 rows: vec![vec![variable.value().into()]],
@@ -191,13 +243,13 @@ impl Planner {
         }
     }
 
-    fn handle_tail(&mut self, from: ObjectName) -> Result<Plan, failure::Error> {
+    fn handle_tail(&self, from: ObjectName) -> Result<Plan, failure::Error> {
         let from = extract_sql_object_name(&from)?;
         let dataflow = self.dataflows.get(&from)?;
         Ok(Plan::Tail(dataflow.clone()))
     }
 
-    fn handle_show_objects(&mut self, object_type: ObjectType) -> Result<Plan, failure::Error> {
+    fn handle_show_objects(&self, object_type: ObjectType) -> Result<Plan, failure::Error> {
         let mut rows: Vec<Vec<Datum>> = self
             .dataflows
             .iter()
@@ -214,7 +266,7 @@ impl Planner {
 
     /// Create an immediate result that describes all the columns for the given table
     fn handle_show_columns(
-        &mut self,
+        &self,
         extended: bool,
         full: bool,
         table_name: &ObjectName,
@@ -252,7 +304,7 @@ impl Planner {
         })
     }
 
-    fn handle_create_dataflow(&mut self, stmt: Statement) -> Result<Plan, failure::Error> {
+    fn handle_create_dataflow(&self, stmt: Statement) -> Result<Plan, failure::Error> {
         match &stmt {
             Statement::CreateView {
                 name,
@@ -264,9 +316,19 @@ impl Planner {
                 if !with_options.is_empty() {
                     bail!("WITH options are not yet supported");
                 }
-                let (relation_expr, mut desc, finishing) = self.plan_toplevel_query(&query)?;
+                let (mut relation_expr, mut desc, finishing) = self.plan_toplevel_query(&query)?;
                 if !finishing.is_trivial() {
-                    bail!("ORDER BY and LIMIT are not yet supported in view definitions.");
+                    //TODO: materialize#724 - persist finishing information with the view?
+                    relation_expr = RelationExpr::Project {
+                        input: Box::new(RelationExpr::TopK {
+                            input: Box::new(relation_expr),
+                            group_key: vec![],
+                            order_key: finishing.order_by,
+                            limit: finishing.limit,
+                            offset: finishing.offset,
+                        }),
+                        outputs: finishing.project,
+                    }
                 }
                 let typ = desc.typ();
                 if !columns.is_empty() {
@@ -278,7 +340,7 @@ impl Planner {
                         )
                     }
                     for (i, name) in columns.iter().enumerate() {
-                        desc.set_name(i, Some(name.into()));
+                        desc.set_name(i, Some(name.value.to_owned()));
                     }
                 }
                 let view = View {
@@ -287,7 +349,6 @@ impl Planner {
                     desc,
                     as_of: None,
                 };
-                self.dataflows.insert(Dataflow::View(view.clone()))?;
                 Ok(Plan::CreateView(view))
             }
             Statement::CreateSource {
@@ -302,7 +363,6 @@ impl Planner {
                 let name = extract_sql_object_name(name)?;
                 let (addr, topic) = parse_kafka_topic_url(url)?;
                 let source = build_source(schema, addr, name, topic)?;
-                self.dataflows.insert(Dataflow::Source(source.clone()))?;
                 Ok(Plan::CreateSource(source))
             }
             Statement::CreateSources {
@@ -354,9 +414,6 @@ impl Planner {
                         )?)
                     })
                     .collect::<Result<Vec<_>, failure::Error>>()?;
-                for source in &sources {
-                    self.dataflows.insert(Dataflow::Source(source.clone()))?;
-                }
                 Ok(Plan::CreateSources(sources))
             }
             Statement::CreateSink {
@@ -381,14 +438,13 @@ impl Planner {
                         schema_id: 0,
                     }),
                 };
-                self.dataflows.insert(Dataflow::Sink(sink.clone()))?;
                 Ok(Plan::CreateSink(sink))
             }
             other => bail!("Unsupported statement: {:?}", other),
         }
     }
 
-    fn handle_drop_dataflow(&mut self, stmt: Statement) -> Result<Plan, failure::Error> {
+    fn handle_drop_dataflow(&self, stmt: Statement) -> Result<Plan, failure::Error> {
         let (object_type, if_exists, names, cascade) = match stmt {
             Statement::Drop {
                 object_type,
@@ -414,19 +470,20 @@ impl Planner {
             }
         }
         let mode = RemoveMode::from_cascade(cascade);
-        let mut removed = vec![];
+        let mut to_remove = vec![];
         for name in &names {
-            self.dataflows.remove(name, mode, &mut removed)?;
+            self.dataflows.plan_remove(name, mode, &mut to_remove)?;
         }
-        let removed = removed.iter().map(|d| d.name().to_owned()).collect();
+        to_remove.sort();
+        to_remove.dedup();
         Ok(match object_type {
-            ObjectType::Source => Plan::DropSources(removed),
-            ObjectType::View => Plan::DropViews(removed),
+            ObjectType::Source => Plan::DropSources(to_remove),
+            ObjectType::View => Plan::DropViews(to_remove),
             _ => bail!("unsupported SQL statement: DROP {}", object_type),
         })
     }
 
-    fn handle_peek(&mut self, name: ObjectName, immediate: bool) -> Result<Plan, failure::Error> {
+    fn handle_peek(&self, name: ObjectName, immediate: bool) -> Result<Plan, failure::Error> {
         let name = name.to_string();
         let dataflow = self.dataflows.get(&name)?.clone();
         let typ = dataflow.typ();
@@ -456,7 +513,7 @@ impl Planner {
         })
     }
 
-    pub fn handle_select(&mut self, query: Query) -> Result<Plan, failure::Error> {
+    pub fn handle_select(&self, query: Query) -> Result<Plan, failure::Error> {
         let (relation_expr, desc, finishing) = self.plan_toplevel_query(&query)?;
         Ok(Plan::Peek {
             source: relation_expr,
@@ -466,29 +523,7 @@ impl Planner {
         })
     }
 
-    /// Convert a parse statement into a [`Plan::PreparedStatement`] and put it in the Session
-    fn handle_parse_statement(
-        &mut self,
-        session: &mut Session,
-        mut stmt: Statement,
-        name: String,
-        sql: String,
-    ) -> Result<Plan, failure::Error> {
-        super::transform::transform(&mut stmt);
-        match stmt {
-            Statement::Query(query) => {
-                let (relation_expr, desc, finishing) = self.plan_toplevel_query(&query)?;
-                session.set_prepared_statement(
-                    name.clone(),
-                    PreparedStatement::new(sql, relation_expr, desc, finishing),
-                );
-                Ok(Plan::Parsed { name })
-            }
-            _ => bail!("PARSE unsupported for sql statement: {:?}", sql),
-        }
-    }
-
-    pub fn handle_explain(&mut self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
+    pub fn handle_explain(&self, stage: Stage, query: Query) -> Result<Plan, failure::Error> {
         let (relation_expr, _desc, _finishing) = self.plan_toplevel_query(&query)?;
         // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
@@ -512,7 +547,7 @@ impl Planner {
     /// Note that the returned `RelationDesc` describes the expression after
     /// applying the returned `RowSetFinishing`.
     fn plan_toplevel_query(
-        &mut self,
+        &self,
         query: &Query,
     ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
         let (expr, scope, finishing) =
@@ -564,13 +599,11 @@ fn build_source(
         }
     };
 
-    let desc = avro::validate_value_schema(&value_schema)?;
-    let pkey_indices = match key_schema {
-        Some(key_schema) => avro::validate_key_schema(&key_schema, &desc)?,
-        None => Vec::new(),
-    };
-
-    let desc = desc.add_keys(pkey_indices);
+    let mut desc = avro::validate_value_schema(&value_schema)?;
+    if let Some(key_schema) = key_schema {
+        let keys = avro::validate_key_schema(&key_schema, &desc)?;
+        desc = desc.add_keys(keys);
+    }
 
     Ok(Source {
         name,
@@ -658,6 +691,7 @@ fn object_type_matches(object_type: ObjectType, dataflow: &Dataflow) -> bool {
 
 fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
     match object_type {
+        ObjectType::Index => "INDEXES",
         ObjectType::Table => "TABLES",
         ObjectType::View => "VIEWS",
         ObjectType::Source => "SOURCES",

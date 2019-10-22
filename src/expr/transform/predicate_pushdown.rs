@@ -170,7 +170,7 @@ impl PredicatePushdown {
                                                 .call_unary(UnaryFunc::Not),
                                         );
                                         push_downs[relation2].push(
-                                            ScalarExpr::Column(*c2 - prior_arities[relation2])
+                                            ScalarExpr::Column(column2)
                                                 .call_unary(UnaryFunc::IsNull)
                                                 .call_unary(UnaryFunc::Not),
                                         );
