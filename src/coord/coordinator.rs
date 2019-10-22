@@ -221,6 +221,7 @@ where
 
                     self.create_dataflows(vec![Dataflow::View(View {
                         name: name.clone(),
+                        raw_sql: "<none>".into(),
                         relation_expr: source,
                         desc: desc.clone(),
                         as_of: Some(vec![timestamp.clone()]),
