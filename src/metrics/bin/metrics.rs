@@ -20,6 +20,7 @@ use postgres::Connection;
 use prometheus::Histogram;
 use std::time::{Duration, Instant};
 
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + 'static>>;
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 fn main() {
@@ -34,22 +35,22 @@ fn measure_peek_times() {
     let (sender, receiver) = mpsc::channel();
     let query = "SELECT COUNT(*) FROM q01;";
     let mut backoff = Duration::from_secs(1);
-    thread::spawn(move || {
-        loop {
-            let start = Instant::now();
-            let query_result = postgres_connection.query(query, &[]);
-            let query_duration = start.elapsed().as_millis();
-            match query_result {
-                Ok(_rows) => {
-                    sender.send(query_duration).unwrap()
-                },
-                Err(err) => {
-                    backoff_or_panic(
-                        &mut backoff,
-                        err.to_string(),
-                        format!("Hit error running metrics query on multiple attempts: {}", err.to_string()));
-                    init_ignore_errors(&postgres_connection);
-                }
+    thread::spawn(move || loop {
+        let start = Instant::now();
+        let query_result = postgres_connection.query(query, &[]);
+        let query_duration = start.elapsed().as_millis();
+        match query_result {
+            Ok(_rows) => sender.send(query_duration).unwrap(),
+            Err(err) => {
+                backoff_or_panic(
+                    &mut backoff,
+                    err.to_string(),
+                    format!(
+                        "Hit error running metrics query on multiple attempts: {}",
+                        err.to_string()
+                    ),
+                );
+                init_ignore_errors(&postgres_connection);
             }
         }
     });
@@ -67,7 +68,10 @@ fn create_postgres_connection() -> Connection {
             Err(err) => backoff_or_panic(
                 &mut backoff,
                 err.to_string(),
-                format!("Unable to create postgres client after multiple attempts: {}", err.to_string()),
+                format!(
+                    "Unable to create postgres client after multiple attempts: {}",
+                    err.to_string()
+                ),
             ),
         }
     }
@@ -107,37 +111,25 @@ fn listen_and_push_metrics(receiver: Receiver<u128>, query: &str) -> ! {
     }
 }
 
-fn push_metrics(
-    receiver: &Receiver<u128>,
-    hist: &Histogram,
-    count: &mut usize,
-    address: &str,
-) {
+fn push_metrics(receiver: &Receiver<u128>, hist: &Histogram, count: &mut usize, address: &str) {
     match receiver.recv() {
         Ok(query_duration) => {
             hist.observe(query_duration as f64);
             *count += 1;
             if *count % 10 == 0 {
-                //
-                match prometheus::push_metrics(
+                if let Err(err) = prometheus::push_metrics(
                     "mz_client_peek",
                     HashMap::new(),
                     &address,
                     prometheus::gather(),
                     None,
                 ) {
-                    Ok(_ok) => {
-                        // do nothing.
-                    }
-                    Err(err) => {
-                        // todo: merge change and report actual errors!
-                        // Ignore noisy errors from: https://github.com/pingcap/rust-prometheus/issues/287
-                        println!("Error pushing metrics: {}", err.to_string())
-                    }
+                    // Ignore noisy errors from: https://github.com/pingcap/rust-prometheus/issues/287
+                    // todo: Replace nothing with something like: println!("Error pushing metrics: {}", err.to_string())
                 }
             }
-        },
-        Err(err) => println!("Error receiving metric from sender: {}", err.to_string())
+        }
+        Err(err) => println!("Error receiving metric from sender: {}", err.to_string()),
     }
 }
 
@@ -152,7 +144,8 @@ fn init_ignore_errors(postgres_connection: &Connection) {
         )
     }
 
-    if let Err(err) = postgres_connection.execute("CREATE VIEW q01 as SELECT
+    if let Err(err) = postgres_connection.execute(
+        "CREATE VIEW q01 as SELECT
                  ol_number,
                  sum(ol_quantity) as sum_qty,
                  sum(ol_amount) as sum_amount,
@@ -164,7 +157,9 @@ fn init_ignore_errors(postgres_connection: &Connection) {
          WHERE
                  ol_delivery_d > date '1998-12-01'
          GROUP BY
-                 ol_number;", &[]) {
+                 ol_number;",
+        &[],
+    ) {
         println!(
             "CREATE VIEW produced the following error: {}",
             err.to_string()
