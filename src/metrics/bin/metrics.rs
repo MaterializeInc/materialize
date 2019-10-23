@@ -43,7 +43,7 @@ fn measure_peek_times() -> ! {
             };
 
             if let Err(err) = query_result {
-                backoff(&mut backoff, err.to_string());
+                print_error_and_backoff(&mut backoff, err.to_string());
                 init_ignore_errors(&postgres_connection);
             }
         }
@@ -76,12 +76,12 @@ fn create_postgres_connection() -> Connection {
             postgres::TlsMode::None,
         ) {
             Ok(connection) => return connection,
-            Err(err) => backoff(&mut backoff, err.to_string()),
+            Err(err) => print_error_and_backoff(&mut backoff, err.to_string()),
         }
     }
 }
 
-fn backoff(backoff: &mut Duration, error_message: String) {
+fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
     let current_backoff = min(*backoff, MAX_BACKOFF);
     println!(
         "{}. Sleeping for {:#?} seconds.\n",
