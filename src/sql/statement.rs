@@ -51,21 +51,25 @@ impl<'catalog> Planner<'catalog> {
         name: String,
     ) -> Result<Plan, failure::Error> {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
-        if stmts.len() != 1 {
-            bail!("cannot parse zero or multiple queries: {}", sql);
-        }
-        let stmt = stmts.into_element();
-        let plan = self.handle_statement(session, stmt.clone())?;
-        let desc = match plan {
-            Plan::Peek { desc, .. } => Some(desc),
-            Plan::SendRows { desc, .. } => Some(desc),
-            Plan::ExplainPlan { desc, .. } => Some(desc),
-            Plan::CreateSources { .. } => {
-                Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+        match stmts.len() {
+            0 => session.set_prepared_statement(name, PreparedStatement::empty()),
+            1 => {
+                let stmt = stmts.into_element();
+                let plan = self.handle_statement(session, stmt.clone())?;
+                let desc = match plan {
+                    Plan::Peek { desc, .. } => Some(desc),
+                    Plan::SendRows { desc, .. } => Some(desc),
+                    Plan::ExplainPlan { desc, .. } => Some(desc),
+                    Plan::CreateSources { .. } => {
+                        Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+                    }
+                    _ => None,
+                };
+                session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
             }
-            _ => None,
-        };
-        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
+            n => bail!("expected one statement but got {}: {:?}", n, sql),
+        }
+
         Ok(Plan::Parsed)
     }
 
@@ -98,6 +102,7 @@ impl<'catalog> Planner<'catalog> {
                 table_name,
                 filter,
             } => self.handle_show_columns(extended, full, &table_name, filter.as_ref()),
+            Statement::ShowCreateView { view_name } => self.handle_show_create_view(view_name),
             Statement::Explain { stage, query } => self.handle_explain(stage, *query),
 
             _ => bail!("unsupported SQL statement: {:?}", stmt),
@@ -114,11 +119,11 @@ impl<'catalog> Planner<'catalog> {
             bail!("SET LOCAL ... is not supported");
         }
         Ok(Plan::SetVariable {
-            name: variable,
+            name: variable.value,
             value: match value {
                 SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
                 SetVariableValue::Literal(lit) => lit.to_string(),
-                SetVariableValue::Ident(ident) => ident,
+                SetVariableValue::Ident(ident) => ident.value,
             },
         })
     }
@@ -128,7 +133,7 @@ impl<'catalog> Planner<'catalog> {
         session: &Session,
         variable: Ident,
     ) -> Result<Plan, failure::Error> {
-        if variable == unicase::Ascii::new("ALL") {
+        if variable.value == unicase::Ascii::new("ALL") {
             Ok(Plan::SendRows {
                 desc: RelationDesc::empty()
                     .add_column("name", ScalarType::String)
@@ -141,7 +146,7 @@ impl<'catalog> Planner<'catalog> {
                     .collect(),
             })
         } else {
-            let variable = session.get(&variable)?;
+            let variable = session.get(&variable.value)?;
             Ok(Plan::SendRows {
                 desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
                 rows: vec![vec![variable.value().into()]],
@@ -210,13 +215,28 @@ impl<'catalog> Planner<'catalog> {
         })
     }
 
-    fn handle_create_dataflow(&self, stmt: Statement) -> Result<Plan, failure::Error> {
-        match &stmt {
+    fn handle_show_create_view(&self, object_name: ObjectName) -> Result<Plan, failure::Error> {
+        let name = object_name.to_string();
+        let raw_sql = if let CatalogItem::View(view) = self.dataflows.get(&name)? {
+            &view.raw_sql
+        } else {
+            bail!("{} is not a view", name);
+        };
+        Ok(Plan::SendRows {
+            desc: RelationDesc::empty()
+                .add_column("View", ScalarType::String)
+                .add_column("Create View", ScalarType::String),
+            rows: vec![vec![name.into(), raw_sql.to_owned().into()]],
+        })
+    }
+
+    fn handle_create_dataflow(&self, mut stmt: Statement) -> Result<Plan, failure::Error> {
+        match &mut stmt {
             Statement::CreateView {
                 name,
                 columns,
                 query,
-                materialized: _,
+                materialized,
                 with_options,
             } => {
                 if !with_options.is_empty() {
@@ -236,6 +256,7 @@ impl<'catalog> Planner<'catalog> {
                         outputs: finishing.project,
                     }
                 }
+                *materialized = false; // Normalize for `raw_sql` below.
                 let typ = desc.typ();
                 if !columns.is_empty() {
                     if columns.len() != typ.column_types.len() {
@@ -246,11 +267,12 @@ impl<'catalog> Planner<'catalog> {
                         )
                     }
                     for (i, name) in columns.iter().enumerate() {
-                        desc.set_name(i, Some(name.into()));
+                        desc.set_name(i, Some(name.value.to_owned()));
                     }
                 }
                 let view = View {
                     name: extract_sql_object_name(name)?,
+                    raw_sql: stmt.to_string(),
                     relation_expr,
                     desc,
                 };
@@ -596,6 +618,7 @@ fn object_type_matches(object_type: ObjectType, item: &CatalogItem) -> bool {
 
 fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
     match object_type {
+        ObjectType::Index => "INDEXES",
         ObjectType::Table => "TABLES",
         ObjectType::View => "VIEWS",
         ObjectType::Source => "SOURCES",

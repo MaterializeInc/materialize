@@ -11,6 +11,7 @@ use repr::Datum;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
+use timely::order::PartialOrder;
 use timely::Data;
 
 pub fn tail<G, B>(stream: &Stream<G, B>, name: &str, connector: TailSinkConnector)
@@ -27,11 +28,13 @@ where
                 while let Some(_key) = cur.get_key(&batch) {
                     while let Some(row) = cur.get_val(&batch) {
                         cur.map_times(&batch, |time, diff| {
-                            results.push(Update {
-                                row: row.clone(),
-                                timestamp: *time,
-                                diff: *diff,
-                            });
+                            if connector.since.less_than(time) {
+                                results.push(Update {
+                                    row: row.clone(),
+                                    timestamp: *time,
+                                    diff: *diff,
+                                });
+                            }
                         });
                         cur.step_val(&batch)
                     }

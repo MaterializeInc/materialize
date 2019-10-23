@@ -172,7 +172,7 @@ where
 
             Plan::EmptyQuery => SqlResponse::EmptyQuery,
 
-            Plan::SetVariable { .. } => SqlResponse::SetVariable,
+            Plan::SetVariable { name, .. } => SqlResponse::SetVariable { name },
 
             Plan::Peek {
                 mut source,
@@ -221,6 +221,7 @@ where
 
                     let dataflow = DataflowDesc::from(View {
                         name: name.clone(),
+                        raw_sql: "<none>".into(),
                         relation_expr: source,
                         desc: desc.clone(),
                     })
@@ -293,14 +294,22 @@ where
                 let name = format!("<tail_{}>", Uuid::new_v4());
                 self.active_tails.insert(conn_id, name.clone());
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+                let since = self
+                    .upper_of(source.name())
+                    .expect("name missing at coordinator")
+                    .elements()
+                    .get(0)
+                    .copied()
+                    .unwrap_or(Timestamp::max_value());
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![DataflowDesc::from(Sink {
                         name,
                         from: (source.name().to_owned(), source.desc().clone()),
-                        connector: SinkConnector::Tail(TailSinkConnector { tx }),
+                        connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                     })]),
                 );
+
                 SqlResponse::Tailing { rx }
             }
 
@@ -340,6 +349,7 @@ where
                             name: s.name.clone(),
                             typ: s.desc.typ().clone(),
                         },
+                        raw_sql: "<created by CREATE SOURCE>".to_string(),
                         desc: s.desc.clone(),
                     })
             })

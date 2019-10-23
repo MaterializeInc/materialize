@@ -163,6 +163,8 @@ fn split_line(pos: usize, line: &str) -> Result<Vec<String>, InputError> {
                 in_quotes = Some(i)
             } else {
                 in_quotes = None;
+                out.push(field);
+                field = String::new();
             }
         } else if c == '\\' && !escaping && in_quotes.is_some() {
             escaping = true;

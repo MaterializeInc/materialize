@@ -25,7 +25,7 @@ pub struct Config {
 
 pub struct State {
     seed: u32,
-    pgconn: postgres::Client,
+    pgconn: postgres::Connection,
     schema_registry_url: String,
     ccsr_client: ccsr::Client,
     kafka_addr: String,
@@ -131,7 +131,7 @@ pub fn create_state(config: &Config) -> Result<State, Error> {
             .materialized_url
             .mz_as_deref()
             .unwrap_or_else(|| "postgres://ignored@localhost:6875");
-        postgres::Client::connect(&url, postgres::NoTls).map_err(|e| Error::General {
+        postgres::Connection::connect(url, postgres::TlsMode::None).map_err(|e| Error::General {
             ctx: "opening SQL connection".into(),
             cause: Box::new(e),
             hints: vec![

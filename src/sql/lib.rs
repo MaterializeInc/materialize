@@ -148,11 +148,15 @@ pub fn handle_execute_command(
                 portal.statement_name
             )
         })?;
-    let stmt = prepared.sql().clone();
-    let planner = Planner::new(catalog);
-    let plan = planner.handle_statement(session, stmt)?;
-    apply_plan(session, &plan, catalog)?;
-    Ok(plan)
+    match prepared.sql() {
+        Some(sql) => {
+            let planner = Planner::new(catalog);
+            let plan = planner.handle_statement(session, sql.clone())?;
+            apply_plan(session, &plan, catalog)?;
+            Ok(plan)
+        }
+        None => Ok(Plan::EmptyQuery),
+    }
 }
 
 fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {

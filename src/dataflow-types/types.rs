@@ -214,6 +214,7 @@ pub struct Sink {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct View {
     pub name: String,
+    pub raw_sql: String,
     pub relation_expr: RelationExpr,
     pub desc: RelationDesc,
 }
@@ -254,6 +255,7 @@ pub struct KafkaSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
+    pub since: Timestamp,
 }
 
 #[cfg(test)]
@@ -269,6 +271,7 @@ mod tests {
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
         let dataflow = DataflowDesc::new(None).add_view(View {
             name: "report".into(),
+            raw_sql: "<none>".into(),
             relation_expr: RelationExpr::Project {
                 outputs: vec![1, 2],
                 input: Box::new(RelationExpr::Join {

@@ -14,7 +14,7 @@ path = "bin/materialized.rs"
 path = "lib.rs"
 
 [dependencies]
-backtrace = { version = "0.3.38", features = ["coresymbolication"] }
+backtrace = { version = "0.3.40", features = ["coresymbolication"] }
 comm = { path = "../comm" }
 coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
