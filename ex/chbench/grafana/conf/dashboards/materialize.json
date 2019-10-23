@@ -81,7 +81,7 @@
       },
       "yaxes": [
         {
-          "format": "ns",
+          "format": "percent",
           "label": null,
           "logBase": 1,
           "max": null,
@@ -141,17 +141,17 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(1, sum(rate(mz_client_peek_millis_bucket[30s])) by (le))",
+          "expr": "histogram_quantile(1, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "max",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(mz_client_peek_millis_bucket[30s])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "p95",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.5, sum(rate(mz_client_peek_millis_bucket[30s])) by (le))",
+          "expr": "histogram_quantile(0.5, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "median",
           "refId": "C"
         }

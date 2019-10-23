@@ -17,9 +17,8 @@ use std::thread;
 use chrono::Utc;
 use postgres::Connection;
 use prometheus::Histogram;
+use std::cmp::min;
 use std::time::Duration;
-
-static MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 fn main() {
     println!("startup {}", Utc::now());
@@ -31,7 +30,7 @@ fn measure_peek_times() -> ! {
     init_ignore_errors(&postgres_connection);
 
     thread::spawn(move || {
-        let query = "SELECT COUNT(*) FROM q01;";
+        let query = "SELECT * FROM q01;";
         let histogram = create_histogram(query);
         let mut backoff = get_baseline_backoff();
         loop {
@@ -42,33 +41,22 @@ fn measure_peek_times() -> ! {
             };
 
             if let Err(err) = query_result {
-                backoff_or_panic(
-                    &mut backoff,
-                    err.to_string(),
-                    format!(
-                        "Hit error running metrics query on multiple attempts: {}",
-                        err.to_string()
-                    ),
-                );
+                backoff_or_panic(&mut backoff, err.to_string());
                 init_ignore_errors(&postgres_connection);
             }
         }
     });
 
     let address = "http://pushgateway:9091";
-    let mut count = 0;
     loop {
-        count += 1;
-        if count % 10 == 0 {
-            if let Err(err) = prometheus::push_metrics(
-                "mz_client_peek",
-                HashMap::new(),
-                &address,
-                prometheus::gather(),
-                None,
-            ) {
-                println!("Error pushing metrics: {}", err.to_string())
-            }
+        if let Err(err) = prometheus::push_metrics(
+            "mz_client_peek",
+            HashMap::new(),
+            &address,
+            prometheus::gather(),
+            None,
+        ) {
+            println!("Error pushing metrics: {}", err.to_string())
         }
         thread::sleep(Duration::from_secs(1));
     }
@@ -79,47 +67,37 @@ fn get_baseline_backoff() -> Duration {
 }
 
 fn create_postgres_connection() -> Connection {
-    let mut backoff = Duration::from_secs(1);
+    let mut backoff = get_baseline_backoff();
     loop {
         match postgres::Connection::connect(
             "postgres://ignoreuser@materialized:6875/tpcch",
             postgres::TlsMode::None,
         ) {
             Ok(connection) => return connection,
-            Err(err) => backoff_or_panic(
-                &mut backoff,
-                err.to_string(),
-                format!(
-                    "Unable to create postgres client after multiple attempts: {}",
-                    err.to_string()
-                ),
-            ),
+            Err(err) => backoff_or_panic(&mut backoff, err.to_string()),
         }
     }
 }
 
-fn backoff_or_panic(backoff: &mut Duration, error_message: String, panic_message: String) {
-    if *backoff < MAX_BACKOFF {
-        println!("{}. Sleeping for {:#?} seconds.", error_message, *backoff);
-        thread::sleep(*backoff);
-        *backoff = Duration::from_secs(backoff.as_secs() * 2);
-    } else {
-        panic!("Exceeded MAX_BACKOFF. {}", panic_message);
-    }
+fn backoff_or_panic(backoff: &mut Duration, error_message: String) {
+    let mut max_backoff = Duration::from_secs(60);
+    let backoff = min(backoff, &mut max_backoff);
+    println!("{}. Sleeping for {:#?} seconds.\n", error_message, *backoff);
+    thread::sleep(*backoff);
+    *backoff = Duration::from_secs(backoff.as_secs() * 2);
 }
 
 fn create_histogram(query: &str) -> Histogram {
     let hist_vec = register_histogram_vec!(
-        "mz_client_peek_millis",
+        "mz_client_peek_seconds",
         "how long peeks took",
         &["query"],
         vec![
-            1.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0,
-            150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0, 600.0, 700.0, 800.0, 900.0,
-            1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3500.0, 4000.0, 4500.0, 5000.0, 6000.0, 7000.0,
-            8000.0, 9000.0, 10_000.0, 15_000.0, 20_000.0, 25_000.0, 30_000.0, 35_000.0, 40_000.0,
-            45_000.0, 50_000.0, 55_000.0, 60_000.0, 70_000.0, 80_000.0, 90_000.0, 120_000.0,
-            150_000.0, 180_000.0, 210_000.0, 240_000.0, 270_000.0, 300_000.0
+            0.001, 0.003, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,
+            0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0, 2.5,
+            3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0,
+            45.0, 50.0, 55.0, 60.0, 70.0, 80.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 270.0,
+            300.0
         ]
     )
     .expect("can create histogram");
@@ -133,7 +111,7 @@ fn init_ignore_errors(postgres_connection: &Connection) {
     ) {
         println!(
             "IGNORING CREATE SOURCES error: {}",
-            err.to_string()
+            err
         )
     }
 
@@ -153,6 +131,6 @@ fn init_ignore_errors(postgres_connection: &Connection) {
                  ol_number;",
         &[],
     ) {
-        println!("IGNORING CREATE VIEW error: {}", err.to_string())
+        println!("IGNORING CREATE VIEW error: {}", err)
     }
 }
