@@ -63,9 +63,7 @@ where
         num_timely_workers: usize,
         logging_config: Option<&LoggingConfig>,
     ) -> Self {
-        let broadcast_tx = switchboard
-            .broadcast_tx::<dataflow::BroadcastToken>()
-            .wait();
+        let broadcast_tx = switchboard.broadcast_tx(dataflow::BroadcastToken).wait();
 
         let mut coordinator = Self {
             switchboard,
