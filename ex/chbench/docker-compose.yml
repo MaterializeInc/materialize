@@ -187,7 +187,8 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./prometheus-sql-exporter/mz/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
   pushgateway:
-    image: prom/pushgateway
+    # Pinned to v0.9.1 because 0.10+ has the following bug: https://github.com/pingcap/rust-prometheus/issues/287
+    image: prom/pushgateway:v0.9.1
     ports:
       - 9091:9091
   metrics:

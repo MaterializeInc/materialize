@@ -12,15 +12,13 @@
 extern crate prometheus;
 
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use chrono::Utc;
 use postgres::Connection;
 use prometheus::Histogram;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + 'static>>;
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 fn main() {
@@ -28,33 +26,59 @@ fn main() {
     measure_peek_times();
 }
 
-fn measure_peek_times() {
+fn measure_peek_times() -> ! {
     let postgres_connection = create_postgres_connection();
     init_ignore_errors(&postgres_connection);
 
-    let (sender, receiver) = mpsc::channel();
-    let query = "SELECT COUNT(*) FROM q01;";
-    let mut backoff = Duration::from_secs(1);
-    thread::spawn(move || loop {
-        let start = Instant::now();
-        let query_result = postgres_connection.query(query, &[]);
-        let query_duration = start.elapsed().as_millis();
-        match query_result {
-            Ok(_rows) => sender.send(query_duration).unwrap(),
-            Err(err) => {
-                backoff_or_panic(
-                    &mut backoff,
-                    err.to_string(),
-                    format!(
-                        "Hit error running metrics query on multiple attempts: {}",
-                        err.to_string()
-                    ),
-                );
-                init_ignore_errors(&postgres_connection);
+    thread::spawn(move || {
+        let query = "SELECT COUNT(*) FROM q01;";
+        let histogram = create_histogram(query);
+        let mut backoff = get_baseline_backoff();
+        loop {
+            let timer = prometheus::Histogram::start_timer(&histogram);
+            match postgres_connection.query(query, &[]) {
+                Ok(_rows) => {
+                    timer.observe_duration();
+                    if backoff > Duration::from_secs(1) {
+                        backoff = get_baseline_backoff();
+                    }
+                }
+                Err(err) => {
+                    backoff_or_panic(
+                        &mut backoff,
+                        err.to_string(),
+                        format!(
+                            "Hit error running metrics query on multiple attempts: {}",
+                            err.to_string()
+                        ),
+                    );
+                    init_ignore_errors(&postgres_connection);
+                }
             }
         }
     });
-    listen_and_push_metrics(receiver, query);
+
+    let address = "http://pushgateway:9091";
+    let mut count = 0;
+    loop {
+        count += 1;
+        if count % 10 == 0 {
+            if let Err(err) = prometheus::push_metrics(
+                "mz_client_peek",
+                HashMap::new(),
+                &address,
+                prometheus::gather(),
+                None,
+            ) {
+                println!("Error pushing metrics: {}", err.to_string())
+            }
+        }
+        thread::sleep(Duration::from_secs(5));
+    }
+}
+
+fn get_baseline_backoff() -> Duration {
+    Duration::from_secs(1)
 }
 
 fn create_postgres_connection() -> Connection {
@@ -87,8 +111,7 @@ fn backoff_or_panic(backoff: &mut Duration, error_message: String, panic_message
     }
 }
 
-fn listen_and_push_metrics(receiver: Receiver<u128>, query: &str) -> ! {
-    let address = String::from("http://pushgateway:9091");
+fn create_histogram(query: &str) -> Histogram {
     let hist_vec = register_histogram_vec!(
         "mz_client_peek_millis",
         "how long peeks took",
@@ -103,34 +126,7 @@ fn listen_and_push_metrics(receiver: Receiver<u128>, query: &str) -> ! {
         ]
     )
     .expect("can create histogram");
-    let hist = hist_vec.with_label_values(&[query]);
-
-    let mut count = 0;
-    loop {
-        push_metrics(&receiver, &hist, &mut count, &address);
-    }
-}
-
-fn push_metrics(receiver: &Receiver<u128>, hist: &Histogram, count: &mut usize, address: &str) {
-    match receiver.recv() {
-        Ok(query_duration) => {
-            hist.observe(query_duration as f64);
-            *count += 1;
-            if *count % 10 == 0 {
-                if let Err(err) = prometheus::push_metrics(
-                    "mz_client_peek",
-                    HashMap::new(),
-                    &address,
-                    prometheus::gather(),
-                    None,
-                ) {
-                    // Ignore noisy errors from: https://github.com/pingcap/rust-prometheus/issues/287
-                    // todo: Replace nothing with something like: println!("Error pushing metrics: {}", err.to_string())
-                }
-            }
-        }
-        Err(err) => println!("Error receiving metric from sender: {}", err.to_string()),
-    }
+    hist_vec.with_label_values(&[query])
 }
 
 fn init_ignore_errors(postgres_connection: &Connection) {
@@ -139,7 +135,7 @@ fn init_ignore_errors(postgres_connection: &Connection) {
         &[],
     ) {
         println!(
-            "CREATE SOURCES produced the following error: {}",
+            "IGNORING CREATE SOURCES error: {}",
             err.to_string()
         )
     }
@@ -160,9 +156,6 @@ fn init_ignore_errors(postgres_connection: &Connection) {
                  ol_number;",
         &[],
     ) {
-        println!(
-            "CREATE VIEW produced the following error: {}",
-            err.to_string()
-        )
+        println!("IGNORING CREATE VIEW error: {}", err.to_string())
     }
 }
