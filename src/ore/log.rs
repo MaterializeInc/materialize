@@ -123,7 +123,7 @@ pub fn init() {
     LOG_INIT.call_once(|| {
         env_logger::Builder::from_env(env_logger::Env::new().filter_or("MZ_LOG", "info"))
             .format(|buf, record| {
-                let ts = buf.timestamp_nanos();
+                let ts = buf.timestamp_micros();
                 let level = buf.default_styled_level(record.level());
                 write!(buf, "[{} {:>5} ", ts, level)?;
                 match (record.file(), record.line()) {
