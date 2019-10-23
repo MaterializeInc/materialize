@@ -38,7 +38,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDescription, LocalInput, PeekResponse, RowSetFinishing, Timestamp,
+    compare_columns, DataflowDesc, LocalInput, PeekResponse, RowSetFinishing, Timestamp,
 };
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
@@ -61,12 +61,12 @@ impl comm::broadcast::Token for BroadcastToken {
 /// Explicit instructions for timely dataflow workers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
-    /// Binds source descriptions to names.
-    BindSources(Vec<dataflow_types::Source>),
     /// Create a sequence of dataflows.
-    CreateDataflows(Vec<DataflowDescription>),
-    /// Drop the dataflows bound to these names.
-    DropThings(Vec<String>),
+    CreateDataflows(Vec<DataflowDesc>),
+    /// Drop the views bound to these names.
+    DropViews(Vec<String>),
+    /// Drop the sinks bound to these names.
+    DropSinks(Vec<String>),
     /// Peek at a materialized view.
     Peek {
         name: String,
@@ -163,8 +163,7 @@ where
             feedback_tx: None,
             command_rx,
             materialized_logger: None,
-            dataflow_drops: HashMap::new(),
-            sources: HashMap::new(),
+            sink_tokens: HashMap::new(),
         }
         .run()
     })
@@ -197,8 +196,7 @@ where
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
-    dataflow_drops: HashMap<String, Box<dyn Any>>,
-    sources: HashMap<String, dataflow_types::Source>,
+    sink_tokens: HashMap<String, Box<dyn Any>>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -332,11 +330,6 @@ where
 
     fn handle_command(&mut self, cmd: SequencedCommand) {
         match cmd {
-            SequencedCommand::BindSources(sources) => {
-                for source in sources {
-                    self.sources.insert(source.name.to_string(), source);
-                }
-            }
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     if let Some(logger) = self.materialized_logger.as_mut() {
@@ -349,22 +342,25 @@ where
                         dataflow,
                         &mut self.traces,
                         self.inner,
-                        &mut self.dataflow_drops,
+                        &mut self.sink_tokens,
                         &mut self.local_input_mux,
                         &mut self.materialized_logger,
                     );
                 }
             }
 
-            SequencedCommand::DropThings(names) => {
+            SequencedCommand::DropViews(names) => {
                 for name in &names {
-                    self.sources.remove(name);
                     if self.traces.del_trace(name).is_some() {
                         if let Some(logger) = self.materialized_logger.as_mut() {
                             logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                         }
                     }
-                    self.dataflow_drops.remove(name);
+                }
+            }
+            SequencedCommand::DropSinks(names) => {
+                for name in &names {
+                    self.sink_tokens.remove(name);
                 }
             }
 

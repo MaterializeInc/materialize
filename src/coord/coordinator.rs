@@ -28,8 +28,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDescription, PeekResponse, PeekWhen, RowSetFinishing, Sink,
-    SinkConnector, TailSinkConnector, Timestamp, View,
+    compare_columns, DataflowDesc, PeekResponse, PeekWhen, RowSetFinishing, Sink, SinkConnector,
+    TailSinkConnector, Timestamp, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
@@ -46,6 +46,7 @@ where
     num_timely_workers: u64,
     optimizer: expr::transform::Optimizer,
     views: HashMap<String, ViewState>,
+    sources: HashMap<String, dataflow_types::Source>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
@@ -73,6 +74,7 @@ where
             num_timely_workers: u64::try_from(num_timely_workers).unwrap(),
             optimizer: Default::default(),
             views: HashMap::new(),
+            sources: HashMap::new(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
             log: logging_config.is_some(),
@@ -100,7 +102,7 @@ where
             // A TAIL is known to be active, so drop the dataflow that is
             // servicing it. No need to try to cancel PEEKs in this case,
             // because if a TAIL is active, a PEEK cannot be.
-            self.drop_dataflows(vec![name]);
+            self.drop_sinks(vec![name]);
         } else {
             // No TAIL is known to be active, so drop the PEEK that may be
             // active on this connection. This is a no-op if no PEEKs are
@@ -139,22 +141,22 @@ where
             }
 
             Plan::CreateSink(sink) => {
-                self.create_dataflows(vec![DataflowDescription::from(sink)]);
+                self.create_dataflows(vec![DataflowDesc::from(sink)]);
                 SqlResponse::CreatedSink
             }
 
             Plan::CreateView(view) => {
-                self.create_dataflows(vec![DataflowDescription::from(view)]);
+                self.create_dataflows(vec![DataflowDesc::from(view)]);
                 SqlResponse::CreatedView
             }
 
             Plan::DropSources(names) => {
-                let raw_names = names
-                    .iter()
-                    .map(|n| format!("{}-RAW", n))
-                    .collect::<Vec<_>>();
-                self.drop_dataflows(raw_names);
-                self.drop_dataflows(names);
+                for name in names.iter() {
+                    // TODO: Test if a name was installed and error if not?
+                    self.sources.remove(name);
+                }
+                // With sources mirrored as views, we should also drop the the view.
+                self.drop_views(names);
                 // Though the plan specifies a number of sources to drop, multiple
                 // sources can only be dropped via DROP SOURCE root CASCADE, so
                 // the tagline is still singular, as in "DROP SOURCE".
@@ -164,7 +166,7 @@ where
             Plan::DropViews(names) => {
                 // See note in `DropSources` about the conversion from plural to
                 // singular.
-                broadcast(&mut self.broadcast_tx, SequencedCommand::DropThings(names));
+                broadcast(&mut self.broadcast_tx, SequencedCommand::DropViews(names));
                 SqlResponse::DroppedView
             }
 
@@ -217,7 +219,7 @@ where
                     // peek completes.
                     let name = format!("<peek_{}>", Uuid::new_v4());
 
-                    let dataflow = DataflowDescription::from(View {
+                    let dataflow = DataflowDesc::from(View {
                         name: name.clone(),
                         relation_expr: source,
                         desc: desc.clone(),
@@ -237,7 +239,7 @@ where
                     );
                     broadcast(
                         &mut self.broadcast_tx,
-                        SequencedCommand::DropThings(vec![name]),
+                        SequencedCommand::DropViews(vec![name]),
                     );
                 }
 
@@ -293,7 +295,7 @@ where
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 broadcast(
                     &mut self.broadcast_tx,
-                    SequencedCommand::CreateDataflows(vec![DataflowDescription::from(Sink {
+                    SequencedCommand::CreateDataflows(vec![DataflowDesc::from(Sink {
                         name,
                         from: (source.name().to_owned(), source.desc().clone()),
                         connector: SinkConnector::Tail(TailSinkConnector { tx }),
@@ -317,32 +319,25 @@ where
         }
     }
 
+    /// Create sources as described by `sources`.
+    ///
+    /// This method installs descriptions of each source in `sources` in the
+    /// coordinator, so that they can be recovered when used by name in views.
+    /// The method also creates a view for each source which mirrors the contents,
+    /// using the same name.
     fn create_sources(&mut self, sources: Vec<dataflow_types::Source>) {
-        let raw_sources = sources
-            .iter()
-            .map(|s| {
-                let mut source = s.clone();
-                source.name = format!("{}-RAW", s.name);
-                source
-            })
-            .collect::<Vec<_>>();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::BindSources(raw_sources),
-        );
+        for source in sources.iter() {
+            self.sources.insert(source.name.to_string(), source.clone());
+        }
         let dataflows = sources
             .iter()
             .map(|s| {
-                DataflowDescription::new(None)
-                    .add_source({
-                        let mut source = s.clone();
-                        source.name = format!("{}-RAW", s.name);
-                        source
-                    })
+                DataflowDesc::new(None)
+                    // .add_source(s.clone()) // this should be added in `create_dataflows`... test!
                     .add_view(View {
                         name: s.name.to_string(),
                         relation_expr: RelationExpr::Get {
-                            name: format!("{}-RAW", s.name),
+                            name: s.name.clone(),
                             typ: s.desc.typ().clone(),
                         },
                         desc: s.desc.clone(),
@@ -404,8 +399,38 @@ where
         use_finishing(expr, finishing);
     }
 
-    pub fn create_dataflows(&mut self, mut dataflows: Vec<DataflowDescription>) {
+    pub fn create_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) {
         for dataflow in dataflows.iter_mut() {
+            // Check for sources before optimization, to provide a consistent
+            // dependency experience. Perhaps change the order if we are ok
+            // with that.
+            let mut sources = Vec::new();
+            for view in dataflow.views.iter() {
+                // Collect names used by the dataflows, to introduce sources.
+                let mut uses = Vec::new();
+                view.relation_expr.unbound_uses(&mut uses);
+                sources.extend(uses.drain(..).map(|n| n.to_string()));
+            }
+            sources.sort();
+            sources.dedup();
+            for name in sources {
+                // We must introduce a source if we fail to find a view with this name,
+                // including for the views we are just about to define. Importantly, this
+                // imagines all views are immediately available to other views, and this
+                // ignores any "order" on the creation of views. This allows a subsequent
+                // view to shadow a source, if using the same name.
+
+                if !self.views.contains_key(&name) && !dataflow.views.iter().any(|v| v.name == name)
+                {
+                    if let Some(source) = self.sources.get(&name) {
+                        dataflow.sources.push(source.clone());
+                    } else {
+                        panic!("Found name referencing neither view nor source.");
+                    }
+                }
+            }
+
+            // Now optimize the query expression.
             for view in dataflow.views.iter_mut() {
                 self.optimizer.optimize(&mut view.relation_expr);
             }
@@ -419,10 +444,17 @@ where
         }
     }
 
-    pub fn drop_dataflows(&mut self, dataflow_names: Vec<String>) {
+    pub fn drop_views(&mut self, dataflow_names: Vec<String>) {
         broadcast(
             &mut self.broadcast_tx,
-            SequencedCommand::DropThings(dataflow_names),
+            SequencedCommand::DropViews(dataflow_names),
+        )
+    }
+
+    pub fn drop_sinks(&mut self, dataflow_names: Vec<String>) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::DropSinks(dataflow_names),
         )
     }
 
@@ -592,7 +624,7 @@ where
     /// Inserts a view into the coordinator.
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
-    fn insert_views(&mut self, dataflow: &DataflowDescription) {
+    fn insert_views(&mut self, dataflow: &DataflowDesc) {
         for view in dataflow.views.iter() {
             self.remove_view(&view.name);
             let viewstate = ViewState::from(view);

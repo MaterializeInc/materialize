@@ -34,7 +34,7 @@ mod context;
 use context::{ArrangementFlavor, Context};
 
 pub fn build_dataflow<A: Allocate>(
-    dataflow: DataflowDescription,
+    dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<String, Box<dyn Any>>,
@@ -164,8 +164,6 @@ pub fn build_dataflow<A: Allocate>(
         }
 
         for sink in dataflow.sinks {
-            // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
-            // the concept of dropping a sink.
             let (_key, trace) = manager
                 .get_all_keyed(&sink.from.0)
                 .expect("View missing")

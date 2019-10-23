@@ -114,41 +114,9 @@ pub enum LocalInput {
     Watermark(u64),
 }
 
-// /// A named stream of data.
-// #[serde(rename_all = "snake_case")]
-// #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-// pub enum Dataflow {
-//     Source(Source),
-//     Sink(Sink),
-//     View(View),
-// }
-
-// impl Dataflow {
-//     pub fn name(&self) -> &str {
-//         match self {
-//             Dataflow::Source(source) => &source.name,
-//             Dataflow::View(view) => &view.name,
-//             Dataflow::Sink(sink) => &sink.name,
-//         }
-//     }
-
-//     /// Collects the names of the dataflows that this dataflow depends upon.
-//     pub fn uses(&self) -> Vec<&str> {
-//         match self {
-//             Dataflow::Source(_src) => Vec::new(),
-//             Dataflow::Sink(sink) => vec![&sink.from.0],
-//             Dataflow::View(view) => {
-//                 let mut out = Vec::new();
-//                 view.relation_expr.unbound_uses(&mut out);
-//                 out
-//             }
-//         }
-//     }
-// }
-
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DataflowDescription {
+pub struct DataflowDesc {
     /// Named sources used by the dataflow.
     pub sources: Vec<Source>,
     /// Named views produced by the dataflow.
@@ -162,7 +130,7 @@ pub struct DataflowDescription {
     pub as_of: Option<Vec<Timestamp>>,
 }
 
-impl DataflowDescription {
+impl DataflowDesc {
     pub fn new(as_of: Option<Vec<Timestamp>>) -> Self {
         Self {
             sources: Vec::new(),
@@ -201,21 +169,21 @@ impl DataflowDescription {
     }
 }
 
-impl From<Source> for DataflowDescription {
+impl From<Source> for DataflowDesc {
     fn from(s: Source) -> Self {
-        DataflowDescription::new(None).add_source(s)
+        DataflowDesc::new(None).add_source(s)
     }
 }
 
-impl From<View> for DataflowDescription {
+impl From<View> for DataflowDesc {
     fn from(v: View) -> Self {
-        DataflowDescription::new(None).add_view(v)
+        DataflowDesc::new(None).add_view(v)
     }
 }
 
-impl From<Sink> for DataflowDescription {
+impl From<Sink> for DataflowDesc {
     fn from(s: Sink) -> Self {
-        DataflowDescription::new(None).add_sink(s)
+        DataflowDesc::new(None).add_sink(s)
     }
 }
 
@@ -299,7 +267,7 @@ mod tests {
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = DataflowDescription::new(None).add_view(View {
+        let dataflow = DataflowDesc::new(None).add_view(View {
             name: "report".into(),
             relation_expr: RelationExpr::Project {
                 outputs: vec![1, 2],
@@ -329,7 +297,7 @@ mod tests {
                 .add_column("quantity", ScalarType::String),
         });
 
-        let decoded: DataflowDescription =
+        let decoded: DataflowDesc =
             serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
         assert_eq!(decoded, dataflow);
 

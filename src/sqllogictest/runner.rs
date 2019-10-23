@@ -39,7 +39,7 @@ use uuid::Uuid;
 use coord::{coordinator::Coordinator, SqlResponse};
 use dataflow;
 use dataflow_types::{
-    self, DataflowDescription, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
+    self, DataflowDesc, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
 };
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
@@ -508,7 +508,7 @@ impl State {
                 self.catalog
                     .insert(sql::store::CatalogItem::Source(source.clone()))?;
                 self.coord
-                    .create_dataflows(vec![DataflowDescription::from(source)]);
+                    .create_dataflows(vec![DataflowDesc::from(source)]);
                 {
                     self.local_input_mux
                         .read()
@@ -537,7 +537,7 @@ impl State {
                 for name in &all_names {
                     self.catalog.remove(name)
                 }
-                self.coord.drop_dataflows(all_names);
+                self.coord.drop_views(all_names);
                 rows_affected = None;
             }
             postgres::Outcome::Changed {

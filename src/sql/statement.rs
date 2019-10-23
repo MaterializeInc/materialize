@@ -578,7 +578,7 @@ fn sanitize_kafka_topic_name(topic_name: &str) -> String {
     topic_name.replace("-", "_").replace(".", "_")
 }
 
-/// Whether a SQL object type can be interpreted as matching the type of the given Dataflow.
+/// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
 /// For example, if `v` is a view, `DROP SOURCE v` should not work, since Source and View
 /// are non-matching types.
 ///
