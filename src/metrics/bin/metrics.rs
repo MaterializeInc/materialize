@@ -20,6 +20,8 @@ use prometheus::Histogram;
 use std::cmp::min;
 use std::time::Duration;
 
+static MAX_BACKOFF: Duration = Duration::from_secs(60);
+
 fn main() {
     println!("startup {}", Utc::now());
     measure_peek_times();
@@ -80,10 +82,12 @@ fn create_postgres_connection() -> Connection {
 }
 
 fn backoff_or_panic(backoff: &mut Duration, error_message: String) {
-    let mut max_backoff = Duration::from_secs(60);
-    let backoff = min(backoff, &mut max_backoff);
-    println!("{}. Sleeping for {:#?} seconds.\n", error_message, *backoff);
-    thread::sleep(*backoff);
+    let current_backoff = min(*backoff, MAX_BACKOFF);
+    println!(
+        "{}. Sleeping for {:#?} seconds.\n",
+        error_message, current_backoff
+    );
+    thread::sleep(current_backoff);
     *backoff = Duration::from_secs(backoff.as_secs() * 2);
 }
 
