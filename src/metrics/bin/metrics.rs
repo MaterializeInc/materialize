@@ -35,25 +35,22 @@ fn measure_peek_times() -> ! {
         let histogram = create_histogram(query);
         let mut backoff = get_baseline_backoff();
         loop {
-            let timer = prometheus::Histogram::start_timer(&histogram);
-            match postgres_connection.query(query, &[]) {
-                Ok(_rows) => {
-                    timer.observe_duration();
-                    if backoff > Duration::from_secs(1) {
-                        backoff = get_baseline_backoff();
-                    }
-                }
-                Err(err) => {
-                    backoff_or_panic(
-                        &mut backoff,
-                        err.to_string(),
-                        format!(
-                            "Hit error running metrics query on multiple attempts: {}",
-                            err.to_string()
-                        ),
-                    );
-                    init_ignore_errors(&postgres_connection);
-                }
+            let query_result = {
+                // Drop is observe for prometheus::Histogram
+                let _timer = prometheus::Histogram::start_timer(&histogram);
+                postgres_connection.query(query, &[]);
+            };
+
+            if let Err(err) = query_result {
+                backoff_or_panic(
+                    &mut backoff,
+                    err.to_string(),
+                    format!(
+                        "Hit error running metrics query on multiple attempts: {}",
+                        err.to_string()
+                    ),
+                );
+                init_ignore_errors(&postgres_connection);
             }
         }
     });
@@ -73,7 +70,7 @@ fn measure_peek_times() -> ! {
                 println!("Error pushing metrics: {}", err.to_string())
             }
         }
-        thread::sleep(Duration::from_secs(5));
+        thread::sleep(Duration::from_secs(1));
     }
 }
 
