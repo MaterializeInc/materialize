@@ -7,7 +7,7 @@
 
 #![deny(missing_debug_implementations)]
 
-use dataflow_types::{PeekWhen, RowSetFinishing, Sink, Source, View};
+use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
 use repr::{RelationDesc, Row, ScalarType};
 use sqlparser::dialect::AnsiDialect;
@@ -31,6 +31,7 @@ pub use query::scalar_type_from_sql;
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
+    CreateIndex(Index),
     CreateSource(Source),
     CreateSources(Vec<Source>),
     CreateSink(Sink),

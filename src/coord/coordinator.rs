@@ -157,35 +157,49 @@ where
                 ExecuteResponse::CreatedView
             }
 
+            Plan::CreateIndex(index) => {
+                self.create_dataflows(vec![DataflowDesc::from(index)]);
+                QueryExecuteResponse::CreatedIndex
+            }
+
             Plan::DropItems(names, item_type) => {
-                let mut sources_to_drop = Vec::new();
-                let mut views_to_drop = Vec::new();
-                for name in names {
-                    // TODO: Test if a name was installed and error if not?
-                    if let Some((_source, new_name)) = self.sources.remove(&name) {
-                        sources_to_drop.push(name.clone());
-                        if let Some(name) = new_name {
-                            views_to_drop.push(name);
-                        } else {
-                            panic!("Attempting to drop an uninstalled source: {}", name);
+                match item_type {
+                    ObjectType::Index => {
+                        self.drop_indexes(names);
+                    }
+                    _ => {
+                        let mut sources_to_drop = Vec::new();
+                        let mut views_to_drop = Vec::new();
+                        for name in names {
+                            // TODO: Test if a name was installed and error if not?
+                            if let Some((_source, new_name)) = self.sources.remove(&name) {
+                                sources_to_drop.push(name.clone());
+                                if let Some(name) = new_name {
+                                    views_to_drop.push(name);
+                                } else {
+                                    panic!("Attempting to drop an uninstalled source: {}", name);
+                                }
+                            }
+                            if self.views.contains_key(&name) {
+                                views_to_drop.push(name);
+                            }
                         }
-                    }
-                    if self.views.contains_key(&name) {
-                        views_to_drop.push(name);
+                        if !sources_to_drop.is_empty() {
+                            broadcast(
+                                &mut self.broadcast_tx,
+                                SequencedCommand::DropSources(sources_to_drop),
+                            )
+                        }
+                        self.drop_views(views_to_drop);
                     }
                 }
-                if sources_to_drop.is_empty() {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::DropSources(sources_to_drop),
-                    )
-                }
-                self.drop_views(views_to_drop);
+
                 match item_type {
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
                     ObjectType::Table => ExecuteResponse::DroppedTable,
-                    ObjectType::Sink | ObjectType::Index => unreachable!(),
+                    ObjectType::Index => ExecuteResponse::DroppedIndex,
+                    ObjectType::Sink => unreachable!(),
                 }
             }
 
@@ -502,6 +516,17 @@ where
                     }
                 })
             }
+            for index in dataflow.indexes.iter_mut() {
+                // Rewrite the source used.
+                if let Some((_source, new_name)) = self.sources.get(&index.on_name) {
+                    // If the source has a corresponding view, use its name instead.
+                    if let Some(new_name) = new_name {
+                        index.on_name = new_name.to_string();
+                    } else {
+                        sources.push(index.on_name.clone());
+                    }
+                }
+            }
             sources.sort();
             sources.dedup();
             for name in sources {
@@ -513,6 +538,22 @@ where
             // Now optimize the query expression.
             for view in dataflow.views.iter_mut() {
                 self.optimizer.optimize(&mut view.relation_expr);
+            }
+            for index in dataflow.indexes.iter_mut() {
+                if !index.fxns.is_empty() {
+                    let mut relation_expr = RelationExpr::Map {
+                        input: Box::new(RelationExpr::Get {
+                            name: index.on_name.clone(),
+                            typ: index.relation_type.clone(),
+                        }),
+                        scalars: index.fxns.clone(),
+                    };
+                    //optimize the `ScalarExpr` in `fxns`
+                    self.optimizer.optimize(&mut relation_expr);
+                    if let RelationExpr::Map { scalars, .. } = relation_expr {
+                        index.fxns = scalars;
+                    }
+                }
             }
         }
         broadcast(
@@ -538,6 +579,13 @@ where
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::DropSinks(dataflow_names),
+        )
+    }
+
+    pub fn drop_indexes(&mut self, dataflow_names: Vec<String>) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::DropIndexes(dataflow_names),
         )
     }
 

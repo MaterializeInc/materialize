@@ -72,8 +72,12 @@ pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error
 
 /// Response from the queue to an `Execute` command.
 pub enum ExecuteResponse {
+<<<<<<< HEAD
     /// The current session has been taken out of transaction mode by COMMIT
     Commit,
+=======
+    CreatedIndex,
+>>>>>>> Basic index creation and deletion.
     CreatedSink,
     CreatedSource,
     CreatedTable,
@@ -82,6 +86,7 @@ pub enum ExecuteResponse {
     DroppedSource,
     DroppedTable,
     DroppedView,
+    DroppedIndex,
     EmptyQuery,
     Inserted(usize),
     /// The current session has been taken out of transaction mode by ROLLBACK
@@ -101,11 +106,13 @@ pub enum ExecuteResponse {
 impl fmt::Debug for ExecuteResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            ExecuteResponse::CreatedIndex => f.write_str("ExecuteResponse::CreatedIndex"),
             ExecuteResponse::CreatedSink => f.write_str("ExecuteResponse::CreatedSink"),
             ExecuteResponse::CreatedSource => f.write_str("ExecuteResponse::CreatedSource"),
             ExecuteResponse::CreatedTable => f.write_str("ExecuteResponse::CreatedTable"),
             ExecuteResponse::CreatedView => f.write_str("ExecuteResponse::CreatedView"),
             ExecuteResponse::Deleted(n) => write!(f, "ExecuteResponse::Deleted({})", n),
+            ExecuteResponse::DroppedIndex => f.write_str("ExecuteResponse::DroppedIndex"),
             ExecuteResponse::DroppedSource => f.write_str("ExecuteResponse::DroppedSource"),
             ExecuteResponse::DroppedTable => f.write_str("ExecuteResponse::DroppedTable"),
             ExecuteResponse::DroppedView => f.write_str("ExecuteResponse::DroppedView"),
@@ -115,9 +122,13 @@ impl fmt::Debug for ExecuteResponse {
             ExecuteResponse::Inserted(n) => write!(f, "ExecuteResponse::Inserted({})", n),
             ExecuteResponse::SendRows(_) => write!(f, "ExecuteResponse::SendRows(<rx>)"),
             ExecuteResponse::SetVariable { name } => {
+<<<<<<< HEAD
                 write!(f, "ExecuteResponse::SetVariable({})", name)
             }
             ExecuteResponse::StartTransaction => f.write_str("ExecuteResponse::StartTransaction"),
+=======
+                write!(f, "ExecuteResponse::SetVariable({})", name),
+>>>>>>> Basic index creation and deletion.
             ExecuteResponse::Tailing { rx: _ } => f.write_str("ExecuteResponse::Tailing"),
             ExecuteResponse::Updated(n) => write!(f, "ExecuteResponse::Updated({})", n),
         }

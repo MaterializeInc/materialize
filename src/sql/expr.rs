@@ -523,7 +523,6 @@ impl RelationExpr {
             }
         }
     }
-
     /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
         let rows = rows.into_iter().map(|row| Row::pack(row)).collect();
@@ -769,6 +768,40 @@ impl ScalarExpr {
                 scalar_type: ScalarType::Null,
             },
         )
+    }
+
+    /// Rewrite `self` into a `dataflow_expr::ScalarExpr`.
+    /// Used by indexes, which assumes there are no subqueries in need of decorrelating
+    pub fn convert_to_index_dataflow(self) -> dataflow_expr::ScalarExpr {
+        use self::ScalarExpr::*;
+        use dataflow_expr::ScalarExpr as SS;
+
+        match self {
+            Column(ColumnRef::Inner(column)) => SS::Column(column),
+            Literal(datum, typ) => SS::Literal(datum, typ),
+            CallUnary { func, expr } => SS::CallUnary {
+                func,
+                expr: Box::new(expr.convert_to_index_dataflow()),
+            },
+            CallBinary { func, expr1, expr2 } => SS::CallBinary {
+                func,
+                expr1: Box::new(expr1.convert_to_index_dataflow()),
+                expr2: Box::new(expr2.convert_to_index_dataflow()),
+            },
+            CallVariadic { func, exprs } => SS::CallVariadic {
+                func,
+                exprs: exprs
+                    .into_iter()
+                    .map(|expr| expr.convert_to_index_dataflow())
+                    .collect(),
+            },
+            If { cond, then, els } => SS::If {
+                cond: Box::new(cond.convert_to_index_dataflow()),
+                then: Box::new(then.convert_to_index_dataflow()),
+                els: Box::new(els.convert_to_index_dataflow()),
+            },
+            _ => panic!("unexpected ScalarExpr in index plan: {:?}", self),
+        }
     }
 }
 

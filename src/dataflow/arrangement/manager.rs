@@ -10,6 +10,9 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use std::collections::{BTreeMap, HashMap};
 
 use dataflow_types::{Diff, Timestamp};
+
+use expr::RelationExpr;
+
 use repr::Row;
 
 #[allow(dead_code)]
@@ -24,12 +27,15 @@ pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 pub struct TraceManager {
     /// A map from named collections to maintained traces.
     pub traces: HashMap<String, CollectionTraces>,
+    /// A map from user-created trace names to the collection the trace belongs to
+    pub name_to_collection: HashMap<String, String>,
 }
 
 impl Default for TraceManager {
     fn default() -> Self {
         TraceManager {
             traces: HashMap::new(),
+            name_to_collection: HashMap::new(),
         }
     }
 }
@@ -63,8 +69,16 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(&self, name: &str, keys: &[usize]) -> Option<&WithDrop<KeysValsHandle>> {
-        self.traces.get(name)?.by_keys.get(keys)
+    pub fn get_by_keys(
+        &self,
+        name: &str,
+        expr: &Option<RelationExpr>,
+        columns: &[usize],
+    ) -> Option<&WithDrop<KeysValsHandle>> {
+        self.traces.get(name)?.by_keys.get(&CollectionTraceKey {
+            expr: expr.clone(),
+            columns: columns.to_vec(),
+        })
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
@@ -72,44 +86,157 @@ impl TraceManager {
     pub fn get_by_keys_mut(
         &mut self,
         name: &str,
-        keys: &[usize],
+        expr: &Option<RelationExpr>,
+        columns: &[usize],
     ) -> Option<&mut WithDrop<KeysValsHandle>> {
-        self.traces.get_mut(name)?.by_keys.get_mut(keys)
+        self.traces
+            .get_mut(name)?
+            .by_keys
+            .get_mut(&CollectionTraceKey {
+                expr: expr.clone(),
+                columns: columns.to_vec(),
+            })
     }
 
     /// Returns a copy of all by_key arrangements, should they exist.
     pub fn get_all_keyed(
         &mut self,
         name: &str,
-    ) -> Option<impl Iterator<Item = (&Vec<usize>, &mut WithDrop<KeysValsHandle>)>> {
+    ) -> Option<impl Iterator<Item = (&CollectionTraceKey, &mut WithDrop<KeysValsHandle>)>> {
         Some(self.traces.get_mut(name)?.by_keys.iter_mut())
+    }
+
+    /// get the default arrangement, which is by primary key
+    pub fn get_default(&mut self, name: &str) -> Option<&WithDrop<KeysValsHandle>> {
+        if let Some(collection) = self.traces.get_mut(name) {
+            collection.by_keys.get(&collection.primary_key)
+        } else {
+            None
+        }
     }
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
     pub fn set_by_keys(&mut self, name: String, keys: &[usize], trace: WithDrop<KeysValsHandle>) {
+        //Currently it is assumed that the first arrangement for a collection is the one
+        //keyed by the primary keys
         self.traces
             .entry(name)
-            .or_insert_with(CollectionTraces::default)
+            .or_insert_with(|| CollectionTraces::new(keys.to_vec()))
             .by_keys
-            .insert(keys.to_vec(), trace);
+            .insert(
+                CollectionTraceKey {
+                    expr: None,
+                    columns: keys.to_vec(),
+                },
+                trace,
+            );
     }
 
-    /// Removes all remnants of a named trace.
-    pub fn del_trace(&mut self, name: &str) -> Option<CollectionTraces> {
+    /// Add a user created index on a collection
+    pub fn set_named_by_keys(
+        &mut self,
+        collection_name: String,
+        trace_name: String,
+        expr: Option<RelationExpr>,
+        columns: &[usize],
+        trace: WithDrop<KeysValsHandle>,
+    ) {
+        // The collection should exist already
+        let collection_traces = self.traces.get_mut(&collection_name).unwrap();
+        let collection_trace_key = CollectionTraceKey {
+            expr,
+            columns: columns.to_vec(),
+        };
+        collection_traces
+            .keys_by_name
+            .insert(trace_name.clone(), collection_trace_key.clone());
+        collection_traces
+            .by_keys
+            .insert(collection_trace_key, trace);
+        self.name_to_collection.insert(trace_name, collection_name);
+    }
+
+    /// When a user requests to create an arrangement that already exists,
+    /// map the name to the extant arrangement and increment the count on the arrangement
+    pub fn set_alias(
+        &mut self,
+        collection_name: String,
+        trace_name: String,
+        expr: Option<RelationExpr>,
+        columns: &[usize],
+    ) {
+        let collection_traces = self.traces.get_mut(&collection_name).unwrap();
+        let collection_trace_key = CollectionTraceKey {
+            expr,
+            columns: columns.to_vec(),
+        };
+        collection_traces
+            .by_keys
+            .get_mut(&collection_trace_key)
+            .unwrap()
+            .increment_count();
+        collection_traces
+            .keys_by_name
+            .insert(trace_name.clone(), collection_trace_key);
+        self.name_to_collection.insert(trace_name, collection_name);
+    }
+
+    /// Removes all of a collection's traces
+    pub fn del_collection_traces(&mut self, name: &str) -> Option<CollectionTraces> {
+        if let Some(collection) = self.traces.get(name) {
+            for user_trace_name in collection.keys_by_name.keys() {
+                self.name_to_collection.remove(user_trace_name);
+            }
+        }
         self.traces.remove(name)
+    }
+
+    /// Removes a named trace. Since a particular trace can have multiple names,
+    /// what actually happens is that the counter on the physical trace is decremented,
+    /// and the name is removed from the manager. Return whether the named trace was found
+    pub fn del_index_trace(&mut self, name: &str) -> bool {
+        println!("found index name {}", name);
+        let result = if let Some(collection_name) = self.name_to_collection.get(name) {
+            println!("found index name {}", name);
+            let collection_trace = self.traces.get_mut(collection_name).unwrap();
+            let internal_key = collection_trace.keys_by_name.get(name).unwrap();
+            if let Some(trace) = collection_trace.by_keys.get_mut(internal_key) {
+                if trace.decrement_count() {
+                    collection_trace.by_keys.remove(internal_key);
+                }
+            } else {
+                unreachable!()
+            };
+            collection_trace.keys_by_name.remove(name);
+            true
+        } else {
+            false
+        };
+        self.name_to_collection.remove(name);
+        result
     }
 
     /// Removes all remnants of all named traces.
     pub fn del_all_traces(&mut self) {
         self.traces.clear();
+        self.name_to_collection.clear();
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CollectionTraceKey {
+    pub expr: Option<RelationExpr>,
+    pub columns: Vec<usize>,
 }
 
 /// Maintained traces for a collection.
 pub struct CollectionTraces {
+    primary_key: CollectionTraceKey,
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    by_keys: BTreeMap<Vec<usize>, WithDrop<KeysValsHandle>>,
+    by_keys: HashMap<CollectionTraceKey, WithDrop<KeysValsHandle>>,
+    /// Maps user-defined traces names to the internal keys used to find the trace
+    keys_by_name: BTreeMap<String, CollectionTraceKey>,
 }
 
 impl CollectionTraces {
@@ -136,12 +263,15 @@ impl CollectionTraces {
             handle.advance_by(frontier);
         }
     }
-}
 
-impl Default for CollectionTraces {
-    fn default() -> Self {
+    fn new(primary_key: Vec<usize>) -> Self {
         Self {
-            by_keys: BTreeMap::new(),
+            primary_key: CollectionTraceKey {
+                expr: None,
+                columns: primary_key,
+            },
+            by_keys: HashMap::new(),
+            keys_by_name: BTreeMap::new(),
         }
     }
 }
@@ -155,6 +285,7 @@ impl Default for CollectionTraces {
 pub struct WithDrop<T> {
     element: T,
     to_drop: Option<std::rc::Rc<Box<dyn std::any::Any>>>,
+    counter: usize,
 }
 
 impl<T> WithDrop<T> {
@@ -163,12 +294,22 @@ impl<T> WithDrop<T> {
         Self {
             element,
             to_drop: Some(std::rc::Rc::new(Box::new(to_drop))),
+            counter: 1,
         }
     }
 
     /// Read access to the drop token, so that others can clone it.
     pub fn to_drop(&self) -> &Option<std::rc::Rc<Box<dyn std::any::Any>>> {
         &self.to_drop
+    }
+
+    fn increment_count(&mut self) {
+        self.counter += 1;
+    }
+
+    fn decrement_count(&mut self) -> bool {
+        self.counter -= 1;
+        self.counter == 0
     }
 }
 
@@ -177,6 +318,7 @@ impl<T> From<T> for WithDrop<T> {
         Self {
             element,
             to_drop: None,
+            counter: 1,
         }
     }
 }

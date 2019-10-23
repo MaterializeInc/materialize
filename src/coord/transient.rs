@@ -164,6 +164,7 @@ fn apply_plan(
             }
         }
         Plan::CreateSink(sink) => catalog.insert(CatalogItem::Sink(sink.clone()))?,
+        Plan::CreateIndex(index) => catalog.insert(CatalogItem::Index(index.clone()))?,
         Plan::DropItems(names, _item_type) => {
             for name in names {
                 catalog.remove(name);

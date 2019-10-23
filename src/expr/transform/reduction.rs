@@ -228,6 +228,7 @@ impl FoldConstants {
                     }
                 }
             }
+            RelationExpr::ArrangeBy { .. } => { /* TODO: figure out what to do here */ }
         }
 
         // This transformation maintains the invariant that all constant nodes

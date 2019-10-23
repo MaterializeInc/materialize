@@ -128,6 +128,14 @@ pub enum RelationExpr {
         /// A source collection.
         right: Box<RelationExpr>,
     },
+    /// Technically a no-op. Used to render an index. Will be used to optimize queries
+    /// on finer grain
+    ArrangeBy {
+        /// The source collection
+        input: Box<RelationExpr>,
+        /// Columns to arrange `input` by, in order of decreasing primacy
+        keys: Vec<usize>,
+    },
 }
 
 impl RelationExpr {
@@ -275,6 +283,7 @@ impl RelationExpr {
                 )
                 // Important: do not inherit keys of either input, as not unique.
             }
+            RelationExpr::ArrangeBy { input, .. } => input.typ(),
         }
     }
 
@@ -464,6 +473,14 @@ impl RelationExpr {
         }
     }
 
+    /// Arranges the collection by the specified columns
+    pub fn arrangeby(self, keys: &[usize]) -> Self {
+        RelationExpr::ArrangeBy {
+            input: Box::new(self),
+            keys: keys.to_vec(),
+        }
+    }
+
     /// Indicates if this is a constant empty collection.
     ///
     /// A false value does not mean the collection is known to be non-empty,
@@ -541,6 +558,9 @@ impl RelationExpr {
                 f(left);
                 f(right);
             }
+            RelationExpr::ArrangeBy { input, .. } => {
+                f(input);
+            }
         }
     }
 
@@ -589,6 +609,9 @@ impl RelationExpr {
             RelationExpr::Union { left, right } => {
                 f(left);
                 f(right);
+            }
+            RelationExpr::ArrangeBy { input, .. } => {
+                f(input);
             }
         }
     }
@@ -708,16 +731,44 @@ impl RelationExpr {
                 }
             }
             RelationExpr::TopK {
-                input: _,
-                group_key: _,
-                order_key: _,
-                limit: _,
-                offset: _,
-            } => to_doc!("TopK { ", "\"Oops, TopK is not yet implemented!\"", " }").group(),
+                input,
+                group_key,
+                order_key,
+                limit,
+                offset,
+            } => {
+                let group_keys =
+                    compact_intersperse_doc(tighten_outputs(group_key), to_doc!(",", Space));
+                let group_keys = to_tightly_braced_doc("group_key: [", group_keys, "]").group();
+                let order_keys = compact_intersperse_doc(order_key, to_doc!(",", Space));
+                let order_keys = to_tightly_braced_doc("order_key: [", order_keys, "]").group();
+                let limit_doc = format!(
+                    "limit: {}",
+                    if let Some(limit_num) = limit {
+                        limit_num.to_string()
+                    } else {
+                        "None".to_string()
+                    }
+                );
+                let offset_doc = format!("offset: {}", offset);
+                to_braced_doc(
+                    "TopK {",
+                    to_doc!(
+                        group_keys, ",", Space, order_keys, ",", Space, limit_doc, ",", Space,
+                        offset_doc, ",", Space, input
+                    ),
+                    "}",
+                )
+            }
             RelationExpr::Negate { input } => to_braced_doc("Negate {", input, "}"),
             RelationExpr::Threshold { input } => to_braced_doc("Threshold {", input, "}"),
             RelationExpr::Union { left, right } => {
                 to_braced_doc("Union {", to_doc!(left, ",", Space, right), "}")
+            }
+            RelationExpr::ArrangeBy { input, keys } => {
+                let keys = compact_intersperse_doc(tighten_outputs(keys), to_doc!(",", Space));
+                let keys = to_tightly_braced_doc("columns: [", keys, "]").group();
+                to_braced_doc("ArrangeBy {", to_doc!(keys, ",", Space, input), "}")
             }
         };
 
@@ -844,6 +895,16 @@ pub struct ColumnOrder {
     pub column: usize,
     /// Whether to sort in descending order
     pub desc: bool,
+}
+
+impl<'a> From<&'a ColumnOrder> for Doc<'a, BoxDoc<'a, ()>> {
+    fn from(column_order: &'a ColumnOrder) -> Doc<'a, BoxDoc<'a, ()>> {
+        Doc::text(format!(
+            "#{} {}",
+            column_order.column.to_string(),
+            if column_order.desc { "desc" } else { "asc" }
+        ))
+    }
 }
 
 /// Manages the allocation of locally unique IDs when building a [`RelationExpr`].

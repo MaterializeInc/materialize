@@ -68,3 +68,26 @@ catalog item test2 does not exist
 
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
 catalog item s1 is a sink and cannot be depended upon
+
+# Test that dependent indexes prevent view deletion when restrict is specified
+
+> CREATE MATERIALIZED VIEW v2 AS SELECT 1 as a;
+
+> CREATE INDEX i1 ON v2(a);
+
+! DROP VIEW v2;
+cannot delete v2: still depended upon by catalog item 'i1'
+
+# Test that indexes cannot be depended upon
+
+! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
+catalog item i1 is an index and cannot be depended upon
+
+# Test cascade delete associated indexes
+> DROP VIEW v2 CASCADE;
+
+! DROP VIEW v2;
+catalog item v2 does not exist
+
+! DROP INDEX i1;
+catalog item i1 does not exist

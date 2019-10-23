@@ -178,6 +178,9 @@ impl NonNullRequirements {
                 self.action(left, columns.clone(), gets);
                 self.action(right, columns, gets);
             }
+            RelationExpr::ArrangeBy { input, .. } => {
+                self.action(input, columns, gets);
+            }
         }
     }
 }

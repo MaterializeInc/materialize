@@ -24,8 +24,8 @@ use crate::session::{Portal, Session};
 use crate::store::{Catalog, CatalogItem, RemoveMode};
 use crate::Plan;
 use dataflow_types::{
-    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink, SinkConnector,
-    Source, SourceConnector, View,
+    Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
@@ -143,12 +143,15 @@ pub fn handle_statement(
         Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
-        | Statement::CreateSources { .. } => match portal_name {
+        | Statement::CreateSources { .. }
+        | Statement::CreateIndex { .. } => match portal_name {
             Some(portal_name) => {
                 handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
             }
             None => bail!("tried to create a dataflow without a portal"),
         },
+        | Statement::CreateSources { .. }
+        | Statement::CreateIndex { .. } => handle_create_dataflow(catalog, stmt),
         Statement::Drop { .. } => handle_drop_dataflow(catalog, stmt),
         Statement::Query(query) => match portal_name {
             Some(portal_name) => handle_select(catalog, *query, session.get_portal(&portal_name)),
@@ -452,6 +455,25 @@ fn handle_create_dataflow(
             };
             Ok(Plan::CreateSink(sink))
         }
+        Statement::CreateIndex {
+            name,
+            on_name,
+            key_parts,
+        } => {
+            let (relation_type, arrange_cols, map_exprs) =
+                query::plan_index(catalog, &on_name, &key_parts)?;
+            let index = Index {
+                name: name.to_string(),
+                on_name: extract_sql_object_name(&on_name)?,
+                relation_type,
+                keys: arrange_cols,
+                fxns: map_exprs
+                    .into_iter()
+                    .map(move |x| x.convert_to_index_dataflow())
+                    .collect(),
+            };
+            Ok(Plan::CreateIndex(index))
+        }
         other => bail!("Unsupported statement: {:?}", other),
     }
 }
@@ -492,6 +514,7 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     Ok(match object_type {
         ObjectType::Source => Plan::DropItems(to_remove, ObjectType::Source),
         ObjectType::View => Plan::DropItems(to_remove, ObjectType::View),
+        ObjectType::Index => Plan::DropItems(to_remove, ObjectType::Index),
         _ => bail!("unsupported SQL statement: DROP {}", object_type),
     })
 }
@@ -503,6 +526,11 @@ fn handle_peek(
 ) -> Result<Plan, failure::Error> {
     let name = name.to_string();
     let dataflow = catalog.get(&name)?.clone();
+    match dataflow {
+        CatalogItem::Index(_) => bail!("unsupported SQL statement: PEEK index"),
+        CatalogItem::Sink(_) => bail!("unsupported SQL statement: PEEK sink"),
+        _ => {}
+    }
     let typ = dataflow.typ();
     Ok(Plan::Peek {
         source: relationexpr::RelationExpr::Get {
@@ -730,6 +758,7 @@ fn object_type_matches(object_type: ObjectType, item: &CatalogItem) -> bool {
         }
         CatalogItem::Sink { .. } => object_type == ObjectType::Sink,
         CatalogItem::View { .. } => object_type == ObjectType::View,
+        CatalogItem::Index { .. } => object_type == ObjectType::Index,
     }
 }
 
