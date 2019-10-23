@@ -54,7 +54,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "    count(*) AS count_order\n"
                     "FROM mysql_tpcch_orderline\n"
                     "WHERE ol_delivery_d > TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "GROUP BY ol_number\n",
+                    "GROUP BY ol_number\n"
+                    "ORDER BY ol_number\n",
 
                     "ol_number", std::nullopt}
             },
@@ -80,7 +81,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND i_data like '%b'\n"
                     "AND r_name like 'EUROP%'\n"
                     "AND i_id = m_i_id\n"
-                    "AND s_quantity = m_s_quantity\n",
+                    "AND s_quantity = m_s_quantity\n"
+                    "ORDER BY n_name, su_name, i_id\n",
 
                     "n_name, su_name, i_id", std::nullopt}
             },
@@ -98,9 +100,10 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND ol_d_id = o_d_id\n"
                     "AND ol_o_id = o_id\n"
                     "AND o_entry_d > TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d\n",
+                    "GROUP BY ol_o_id, ol_w_id, ol_d_id, o_entry_d\n"
+                    "ORDER BY revenue DESC, o_entry_d\n",
 
-                    "revenue desc, o_entry_d", std::nullopt}
+                    "revenue DESC, o_entry_d", std::nullopt}
             },
             {"q04",
                     {"SELECT o_ol_cnt, count(*) AS order_count\n"
@@ -115,7 +118,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "    AND o_d_id = ol_d_id\n"
                     "    AND ol_delivery_d >= o_entry_d\n"
                     ")\n"
-                    "GROUP BY o_ol_cnt\n",
+                    "GROUP BY o_ol_cnt\n"
+                    "ORDER BY ol_o_cnt\n",
 
                     "o_ol_cnt", std::nullopt}
             },
@@ -138,9 +142,10 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND n_regionkey = r_regionkey\n"
                     "AND r_name = 'EUROPE'\n"
                     "AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
-                    "GROUP BY n_name\n",
+                    "GROUP BY n_name\n"
+                    "ORDER BY revenue DESC\n",
 
-                    "revenue desc", std::nullopt}
+                    "revenue DESC", std::nullopt}
             },
             {"q06",
                     {"SELECT sum(ol_amount) AS revenue\n"
@@ -175,9 +180,11 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "    (n1.n_name = 'CAMBODIA' AND n2.n_name = 'GERMANY')\n"
                     ")\n"
                     "AND ol_delivery_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2020-01-02 00:00:00.000000'\n"
-                    "GROUP BY su_nationkey, substr(c_state, 1, 1), extract(year FROM o_entry_d)\n",
+                    "GROUP BY su_nationkey, substr(c_state, 1, 1), extract(year FROM o_entry_d)\n"
+                    "ORDER BY su_nationkey, cust_nation, l_year\n",
 
-                    "su_nationkey, cust_nation, l_year", std::nullopt}
+                    // su_nationkey was aliased to supp_nation in view definition
+                    "supp_nation, cust_nation, l_year", std::nullopt}
             },
             {"q08",
                     {"SELECT\n"
@@ -202,7 +209,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND o_entry_d BETWEEN TIMESTAMP '2007-01-02 00:00:00.000000' AND TIMESTAMP '2020-01-02 00:00:00.000000'\n"
                     "AND i_data like '%b'\n"
                     "AND i_id = ol_i_id\n"
-                    "GROUP BY extract(year FROM o_entry_d)\n",
+                    "GROUP BY extract(year FROM o_entry_d)\n"
+                    "ORDER BY l_year\n",
 
                     "l_year", std::nullopt}
             },
@@ -220,9 +228,10 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND ol_i_id = i_id\n"
                     "AND su_nationkey = n_nationkey\n"
                     "AND i_data like '%BB'\n"
-                    "GROUP BY n_name, extract(year FROM o_entry_d)\n",
+                    "GROUP BY n_name, extract(year FROM o_entry_d)\n"
+                    "ORDER BY n_name, l_year DESC\n",
 
-                    "n_name, l_year desc", std::nullopt}
+                    "n_name, l_year DESC", std::nullopt}
             },
             {"q10",
                     {"SELECT\n"
@@ -237,9 +246,10 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND o_entry_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
                     "AND o_entry_d <= ol_delivery_d\n"
                     "AND n_nationkey = c_n_nationkey\n"
-                    "GROUP BY c_id, c_last, c_city, c_phone, n_name\n",
+                    "GROUP BY c_id, c_last, c_city, c_phone, n_name\n"
+                    "ORDER BY revenue DESC\n",
 
-                    "revenue desc", std::nullopt}
+                    "revenue DESC", std::nullopt}
             },
             {"q11",
                     {"SELECT s_i_id, sum(s_order_cnt) AS ordercount\n"
@@ -254,9 +264,10 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "    WHERE s_su_suppkey = su_suppkey\n"
                     "    AND su_nationkey = n_nationkey\n"
                     "    AND n_name = 'GERMANY'\n"
-                    ")\n",
+                    ")\n"
+                    "ORDER BY ordercount DESC\n",
 
-                    "ordercount desc", std::nullopt}
+                    "ordercount DESC", std::nullopt}
             },
             {"q12",
                     {"SELECT\n"
@@ -270,7 +281,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND ol_o_id = o_id\n"
                     "AND o_entry_d <= ol_delivery_d\n"
                     "AND ol_delivery_d < TIMESTAMP '2020-01-01 00:00:00.000000'\n"
-                    "GROUP BY o_ol_cnt\n",
+                    "GROUP BY o_ol_cnt\n"
+                    "ORDER BY o_ol_cnt\n",
 
                     "o_ol_cnt", std::nullopt}
             },
@@ -285,7 +297,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "    )\n"
                     "    GROUP BY c_id\n"
                     ") AS c_orders\n"
-                    "GROUP BY c_count\n",
+                    "GROUP BY c_count\n"
+                    "ORDER BY custdist DESC, c_count DESC\n",
 
                     "custdist desc, c_count desc", std::nullopt}
             },
@@ -326,7 +339,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "        AND ol_delivery_d >= TIMESTAMP '2007-01-02 00:00:00.000000'\n"
                     "        GROUP BY s_su_suppkey\n"
                     "    ) AS revenue\n"
-                    ")\n",
+                    ")\n"
+                    "ORDER BY su_suppkey\n",
 
                     "su_suppkey", std::nullopt}
             },
@@ -342,9 +356,10 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND (\n"
                     "    s_su_suppkey NOT IN (SELECT su_suppkey FROM mysql_tpcch_supplier WHERE su_comment like '%bad%')\n"
                     ")\n"
-                    "GROUP BY i_name, substr(i_data, 1, 3), i_price\n",
+                    "GROUP BY i_name, substr(i_data, 1, 3), i_price\n"
+                    "ORDER BY supplier_cnt DESC\n",
 
-                    "supplier_cnt desc", std::nullopt}
+                    "supplier_cnt DESC", std::nullopt}
             },
             {"q17",
                     {"SELECT\n"
@@ -372,7 +387,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "AND ol_d_id = o_d_id\n"
                     "AND ol_o_id = o_id\n"
                     "GROUP BY o_id, o_w_id, o_d_id, c_id, c_last, o_entry_d, o_ol_cnt\n"
-                    "HAVING sum(ol_amount) > 200\n",
+                    "HAVING sum(ol_amount) > 200\n"
+                    "ORDER BY sum(ol_amount)\n",
 
                     "sum(ol_amount)", std::nullopt}
             },
@@ -418,6 +434,7 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     ")\n"
                     "AND su_nationkey = n_nationkey\n"
                     "AND n_name = 'GERMANY'\n"
+                    "ORDER BY su_name\n",
 
                     "su_name", std::nullopt}
             },
@@ -443,9 +460,10 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     ")\n"
                     "AND su_nationkey = n_nationkey\n"
                     "AND n_name = 'GERMANY'\n"
-                    "GROUP BY su_name\n",
+                    "GROUP BY su_name\n"
+                    "ORDER BY numwait DESC, su_name",
 
-                    "numwait desc, su_name", std::nullopt}
+                    "numwait DESC, su_name", std::nullopt}
             },
             {"q22",
                     {"SELECT\n"
@@ -465,7 +483,8 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "    FROM mysql_tpcch_order\n"
                     "    WHERE o_c_id = c_id AND o_w_id = c_w_id AND o_d_id = c_d_id\n"
                     ")\n"
-                    "GROUP BY substr(c_state, 1, 1)\n",
+                    "GROUP BY substr(c_state, 1, 1)\n"
+                    "ORDER BY substr(c_state, 1, 1)\n",
 
                     "substr(c_state, 1, 1)", std::nullopt}
             }
