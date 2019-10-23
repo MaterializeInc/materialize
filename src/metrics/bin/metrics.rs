@@ -38,7 +38,7 @@ fn measure_peek_times() -> ! {
             let query_result = {
                 // Drop is observe for prometheus::Histogram
                 let _timer = prometheus::Histogram::start_timer(&histogram);
-                postgres_connection.query(query, &[]);
+                postgres_connection.query(query, &[])
             };
 
             if let Err(err) = query_result {
