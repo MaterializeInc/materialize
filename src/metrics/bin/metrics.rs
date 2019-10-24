@@ -29,7 +29,7 @@ fn main() {
 
 fn measure_peek_times() -> ! {
     let postgres_connection = create_postgres_connection();
-    init_ignore_errors(&postgres_connection);
+    create_view_ignore_errors(&postgres_connection);
 
     thread::spawn(move || {
         let query = "SELECT * FROM q01;";
@@ -44,7 +44,7 @@ fn measure_peek_times() -> ! {
 
             if let Err(err) = query_result {
                 print_error_and_backoff(&mut backoff, err.to_string());
-                init_ignore_errors(&postgres_connection);
+                create_view_ignore_errors(&postgres_connection);
             }
         }
     });
@@ -108,17 +108,7 @@ fn create_histogram(query: &str) -> Histogram {
     hist_vec.with_label_values(&[query])
 }
 
-fn init_ignore_errors(postgres_connection: &Connection) {
-    if let Err(err) = postgres_connection.execute(
-        "CREATE SOURCES LIKE 'mysql.tpcch.%' FROM 'kafka://kafka:9092' USING SCHEMA REGISTRY 'http://schema-registry:8081';",
-        &[],
-    ) {
-        println!(
-            "IGNORING CREATE SOURCES error: {}",
-            err
-        )
-    }
-
+fn create_view_ignore_errors(postgres_connection: &Connection) {
     if let Err(err) = postgres_connection.execute(
         "CREATE VIEW q01 as SELECT
                  ol_number,
