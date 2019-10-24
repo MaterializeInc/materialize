@@ -22,7 +22,7 @@
 //!       if wrong, record the error
 
 use std::borrow::ToOwned;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -34,12 +34,10 @@ use futures::Future;
 use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
-use uuid::Uuid;
 
 use coord::{coordinator::Coordinator, SqlResponse};
 use dataflow;
-use dataflow_types::{self, LocalInput, LocalSourceConnector, Source, SourceConnector, Update};
-use ore::mpmc::Mux;
+use dataflow_types::{self, Source, SourceConnector, Update};
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
@@ -275,8 +273,7 @@ pub(crate) struct State {
     coord: Coordinator<tokio::net::UnixStream>,
     conn_id: u32,
     current_timestamp: u64,
-    local_input_uuids: HashMap<String, Uuid>,
-    local_input_mux: Mux<Uuid, LocalInput>,
+    local_inputs: HashSet<String>,
 }
 
 fn format_row(
@@ -351,7 +348,6 @@ impl State {
         let logging_config = None;
         let catalog = sql::store::Catalog::new(logging_config);
         let session = Session::default();
-        let local_input_mux = Mux::default();
         let process_id = 0;
         let (switchboard, runtime) = comm::Switchboard::local()?;
         let dataflow_workers = dataflow::serve(
@@ -360,13 +356,12 @@ impl State {
             process_id,
             switchboard.clone(),
             runtime.executor(),
-            local_input_mux.clone(),
             None, // disable logging
         )
         .unwrap();
 
         let coord = Coordinator::new(
-            switchboard,
+            switchboard.clone(),
             NUM_TIMELY_WORKERS,
             None, // disable logging
         );
@@ -380,8 +375,7 @@ impl State {
             conn_id: 1,
             _dataflow_workers: Box::new(dataflow_workers),
             current_timestamp: 1,
-            local_input_uuids: HashMap::new(),
-            local_input_mux,
+            local_inputs: HashSet::new(),
         })
     }
 
@@ -493,29 +487,18 @@ impl State {
         let rows_affected;
         match outcome {
             postgres::Outcome::Created(name, desc) => {
-                let uuid = Uuid::new_v4();
-                self.local_input_uuids.insert(name.clone(), uuid);
-                {
-                    self.local_input_mux.write().unwrap().channel(uuid).unwrap();
-                }
                 let source = Source {
-                    name,
-                    connector: SourceConnector::Local(LocalSourceConnector { uuid }),
+                    name: name.clone(),
+                    connector: SourceConnector::Local,
                     desc,
                 };
                 self.catalog
                     .insert(sql::store::CatalogItem::Source(source.clone()))?;
                 self.coord
                     .sequence_plan(sql::Plan::CreateSource(source), self.conn_id, None);
-                {
-                    self.local_input_mux
-                        .read()
-                        .unwrap()
-                        .sender(&uuid)
-                        .unwrap()
-                        .unbounded_send(LocalInput::Watermark(self.current_timestamp))
-                        .unwrap();
-                }
+                self.local_inputs.insert(name.clone());
+                self.coord
+                    .sequence_advance_time(name.clone(), self.current_timestamp);
                 rows_affected = None;
             }
             postgres::Outcome::Dropped(names) => {
@@ -526,9 +509,7 @@ impl State {
                 for name in &names {
                     // Close down the input if it exists. (The input might not
                     // exist if the DROP statement was a DROP IF NOT EXISTS.)
-                    if let Some(uuid) = self.local_input_uuids.remove(name) {
-                        self.local_input_mux.write().unwrap().close(&uuid);
-                    }
+                    let _ = self.local_inputs.remove(name);
                     self.catalog
                         .plan_remove(name, RemoveMode::Cascade, &mut all_names)?;
                 }
@@ -551,24 +532,12 @@ impl State {
                         timestamp: self.current_timestamp,
                     })
                     .collect::<Vec<_>>();
-                let updated_uuid = self
-                    .local_input_uuids
-                    .get(&table_name)
-                    .expect("Unknown table in update");
-                {
-                    let mux = self.local_input_mux.read().unwrap();
-                    for (uuid, sender) in mux.senders() {
-                        if uuid == updated_uuid {
-                            sender
-                                .unbounded_send(LocalInput::Updates(updates.clone()))
-                                .unwrap();
-                        }
-                        sender
-                            .unbounded_send(LocalInput::Watermark(self.current_timestamp + 1))
-                            .unwrap();
-                    }
-                }
+                self.coord.sequence_insert(table_name.clone(), updates);
                 self.current_timestamp += 1;
+                for name in &self.local_inputs {
+                    self.coord
+                        .sequence_advance_time(name.clone(), self.current_timestamp);
+                }
                 rows_affected = Some(affected);
             }
         }

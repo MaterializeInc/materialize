@@ -14,14 +14,13 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::rc::Rc;
 use timely::communication::Allocate;
+use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
-use uuid::Uuid;
 
 use dataflow_types::*;
 use expr::RelationExpr;
-use ore::mpmc::Mux;
 use repr::Datum;
 
 use super::sink;
@@ -29,16 +28,17 @@ use super::source;
 use crate::arrangement::manager::KeysValsSpine;
 use crate::arrangement::{manager::WithDrop, TraceManager};
 use crate::logging::materialized::{Logger, MaterializedEvent};
+use crate::server::LocalInput;
 
 mod context;
 use context::{ArrangementFlavor, Context};
 
-pub fn build_dataflow<A: Allocate>(
+pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<String, Box<dyn Any>>,
-    local_input_mux: &mut Mux<Uuid, LocalInput>,
+    local_inputs: &mut HashMap<String, LocalInput>,
     logger: &mut Option<Logger>,
 ) {
     let worker_index = worker.index();
@@ -59,8 +59,13 @@ pub fn build_dataflow<A: Allocate>(
                         let read_from_kafka = hash % worker_peers == worker_index;
                         source::kafka(region, &src.name, c, read_from_kafka)
                     }
-                    SourceConnector::Local(c) => {
-                        source::local(region, &src.name, c, worker_index == 0, local_input_mux)
+                    SourceConnector::Local => {
+                        let ((handle, capability), stream) = region.new_unordered_input();
+                        if worker_index == 0 {
+                            local_inputs
+                                .insert(src.name.clone(), LocalInput { handle, capability });
+                        }
+                        (stream, None)
                     }
                 };
 

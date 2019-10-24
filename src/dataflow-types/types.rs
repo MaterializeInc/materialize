@@ -17,7 +17,6 @@ use repr::{Datum, RelationDesc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use url::Url;
-use uuid::Uuid;
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -104,14 +103,6 @@ impl RowSetFinishing {
     pub fn is_trivial(&self) -> bool {
         (self.limit == None) && self.order_by.is_empty() && self.offset == 0
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum LocalInput {
-    /// Send a batch of updates to the input
-    Updates(Vec<Update>),
-    /// All future updates will have timestamps >= this timestamp
-    Watermark(u64),
 }
 
 /// A description of a dataflow to construct and results to surface.
@@ -221,8 +212,8 @@ pub struct View {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SourceConnector {
+    Local,
     Kafka(KafkaSourceConnector),
-    Local(LocalSourceConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -232,11 +223,6 @@ pub struct KafkaSourceConnector {
     pub raw_schema: String,
     #[serde(with = "url_serde")]
     pub schema_registry_url: Option<Url>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct LocalSourceConnector {
-    pub uuid: Uuid,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

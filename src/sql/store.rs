@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::iter::{self, FromIterator};
 
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{LocalSourceConnector, Sink, Source, SourceConnector, View};
+use dataflow_types::{Sink, Source, SourceConnector, View};
 use repr::{RelationDesc, RelationType};
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -92,9 +92,7 @@ impl Catalog {
                 Catalog::from_iter(logging_config.active_logs().iter().map(|log| {
                     CatalogItem::Source(Source {
                         name: log.name().to_string(),
-                        connector: SourceConnector::Local(LocalSourceConnector {
-                            uuid: uuid::Uuid::new_v4(),
-                        }),
+                        connector: SourceConnector::Local,
                         desc: log.schema(),
                     })
                 }))
