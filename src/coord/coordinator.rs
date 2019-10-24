@@ -19,7 +19,7 @@
 use timely::progress::frontier::Antichain;
 
 use futures::{sink, Future, Sink as FuturesSink, Stream};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use uuid::Uuid;
 
@@ -46,7 +46,8 @@ where
     num_timely_workers: u64,
     optimizer: expr::transform::Optimizer,
     views: HashMap<String, ViewState>,
-    sources: HashMap<String, dataflow_types::Source>,
+    /// Each source name maps to a source and re-written name (for auto-created views).
+    sources: HashMap<String, (dataflow_types::Source, Option<String>)>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
@@ -83,7 +84,7 @@ where
         if let Some(logging_config) = logging_config {
             for log in logging_config.active_logs().iter() {
                 // Insert with 1 second compaction latency.
-                coordinator.insert_name(log.name(), 1_000);
+                coordinator.insert_source(log.name(), 1_000);
             }
         }
 
@@ -151,12 +152,17 @@ where
             }
 
             Plan::DropSources(names) => {
-                for name in names.iter() {
+                let mut views_to_drop = Vec::new();
+                for name in names {
                     // TODO: Test if a name was installed and error if not?
-                    self.sources.remove(name);
+                    if let Some((_source, new_name)) = self.sources.remove(&name) {
+                        if let Some(name) = new_name {
+                            views_to_drop.push(name);
+                        }
+                    }
                 }
                 // With sources mirrored as views, we should also drop the the view.
-                self.drop_views(names);
+                self.drop_views(views_to_drop);
                 // Though the plan specifies a number of sources to drop, multiple
                 // sources can only be dropped via DROP SOURCE root CASCADE, so
                 // the tagline is still singular, as in "DROP SOURCE".
@@ -202,6 +208,14 @@ where
 
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
+                    // If `name` is a source, we'll need to rename it.
+                    let mut name = name.clone();
+                    if let Some((_source, rename)) = self.sources.get(&name) {
+                        if let Some(rename) = rename {
+                            name = rename.clone();
+                        }
+                    }
+
                     // Fast path. We can just look at the existing dataflow directly.
                     broadcast(
                         &mut self.broadcast_tx,
@@ -336,25 +350,36 @@ where
     /// using the same name.
     fn create_sources(&mut self, sources: Vec<dataflow_types::Source>) {
         for source in sources.iter() {
-            self.sources.insert(source.name.to_string(), source.clone());
+            // Effecting policy, we mirror all sources with a view.
+            let name = create_internal_source_name(&source.name);
+            self.sources
+                .insert(source.name.clone(), (source.clone(), Some(name)));
         }
-        let dataflows = sources
-            .iter()
-            .map(|s| {
-                DataflowDesc::new(None)
-                    // .add_source(s.clone()) // this should be added in `create_dataflows`... test!
-                    .add_view(View {
-                        name: s.name.to_string(),
-                        relation_expr: RelationExpr::Get {
-                            name: s.name.clone(),
-                            typ: s.desc.typ().clone(),
-                        },
-                        raw_sql: "<created by CREATE SOURCE>".to_string(),
-                        desc: s.desc.clone(),
-                    })
-            })
-            .collect::<Vec<_>>();
-        self.create_dataflows(dataflows);
+        let mut dataflows = Vec::new();
+        for source in sources {
+            if let Some(rename) = &self.sources.get(&source.name).unwrap().1 {
+                dataflows.push(
+                    DataflowDesc::new(None)
+                        .add_view(View {
+                            name: rename.clone(),
+                            relation_expr: RelationExpr::Get {
+                                name: source.name.clone(),
+                                typ: source.desc.typ().clone(),
+                            },
+                            raw_sql: "<created by CREATE SOURCE>".to_string(),
+                            desc: source.desc.clone(),
+                        })
+                        .add_source(source),
+                );
+            }
+        }
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(dataflows.clone()),
+        );
+        for dataflow in dataflows.iter() {
+            self.insert_views(dataflow);
+        }
     }
 
     /// Maybe use finishing instructions instead of relation expressions. This
@@ -415,29 +440,27 @@ where
             // dependency experience. Perhaps change the order if we are ok
             // with that.
             let mut sources = Vec::new();
-            for view in dataflow.views.iter() {
-                // Collect names used by the dataflows, to introduce sources.
-                let mut uses = Vec::new();
-                view.relation_expr.unbound_uses(&mut uses);
-                sources.extend(uses.drain(..).map(|n| n.to_string()));
+            for view in dataflow.views.iter_mut() {
+                // Collect names of sources used, rewrite them...
+                view.relation_expr.visit_mut(&mut |e| {
+                    if let RelationExpr::Get { name, typ: _ } = e {
+                        if let Some((_source, new_name)) = self.sources.get(name) {
+                            // If the source has a corresponding view, use its name instead.
+                            if let Some(new_name) = new_name {
+                                *name = new_name.clone();
+                            } else {
+                                sources.push(name.to_string());
+                            }
+                        }
+                    }
+                })
             }
             sources.sort();
             sources.dedup();
             for name in sources {
-                // We must introduce a source if we fail to find a view with this name,
-                // including for the views we are just about to define. Importantly, this
-                // imagines all views are immediately available to other views, and this
-                // ignores any "order" on the creation of views. This allows a subsequent
-                // view to shadow a source, if using the same name.
-
-                if !self.views.contains_key(&name) && !dataflow.views.iter().any(|v| v.name == name)
-                {
-                    if let Some(source) = self.sources.get(&name) {
-                        dataflow.sources.push(source.clone());
-                    } else {
-                        panic!("Found name referencing neither view nor source.");
-                    }
-                }
+                dataflow
+                    .sources
+                    .push(self.sources.get(&name).unwrap().0.clone());
             }
 
             // Now optimize the query expression.
@@ -516,7 +539,8 @@ where
                 match when {
                     PeekWhen::EarliestSource => {
                         for name in names {
-                            self.sources_frontier(name, &mut bound);
+                            let mut reached = HashSet::new();
+                            self.sources_frontier(name, &mut bound, &mut reached);
                         }
                     }
                     PeekWhen::Immediately => {
@@ -548,19 +572,39 @@ where
     }
 
     /// Collects frontiers from the earliest views.
-    fn sources_frontier(&self, name: &str, bound: &mut Antichain<Timestamp>) {
-        let no_inputs = self.views[name].uses.is_empty();
-        let no_sources = self.views[name]
-            .uses
-            .iter()
-            .all(|n| self.views.contains_key(n));
-        if no_sources && !no_inputs {
-            for name2 in self.views[name].uses.iter() {
-                self.sources_frontier(name2, bound);
+    ///
+    /// This method recursively traverses views and discovers other views on which
+    /// they depend, collecting the frontiers of views that depend directly on sources.
+    /// The `reached` input allows us to deduplicate views, and avoid e.g. recursion.
+    fn sources_frontier(
+        &self,
+        name: &str,
+        bound: &mut Antichain<Timestamp>,
+        reached: &mut HashSet<String>,
+    ) {
+        if let Some((_source, rename)) = self.sources.get(name) {
+            if let Some(rename) = rename {
+                self.sources_frontier(rename, bound, reached);
+            } else {
+                panic!("sources_frontier called on bare source");
             }
         } else {
-            let upper = self.upper_of(name).expect("Name missing at coordinator");
-            bound.extend(upper.elements().iter().cloned());
+            reached.insert(name.to_string());
+            if let Some(view) = self.views.get(name) {
+                if view.depends_on_source {
+                    // Views that depend on a source should propose their own frontiers,
+                    // which means we need not investigate their input frontiers (which
+                    // should be at least as far along).
+                    let upper = self.upper_of(name).expect("Name missing at coordinator");
+                    bound.extend(upper.elements().iter().cloned());
+                } else {
+                    for name in view.uses.iter() {
+                        if !reached.contains(name) {
+                            self.sources_frontier(name, bound, reached);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -635,9 +679,11 @@ where
     ///
     /// Initializes managed state and logs the insertion (and removal of any existing view).
     fn insert_views(&mut self, dataflow: &DataflowDesc) {
+        let contains_sources = !dataflow.sources.is_empty();
         for view in dataflow.views.iter() {
             self.remove_view(&view.name);
-            let viewstate = ViewState::from(view);
+            let mut viewstate = ViewState::from(view);
+            viewstate.depends_on_source = contains_sources;
             if self.log {
                 for time in viewstate.upper.elements() {
                     broadcast(
@@ -658,7 +704,7 @@ where
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    fn insert_name(&mut self, name: &str, compaction_ms: Timestamp) {
+    fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
         self.remove_view(name);
         let mut viewstate = ViewState::default();
         if self.log {
@@ -738,6 +784,11 @@ pub struct ViewState {
     /// This timestamp drives the advancement of the since frontier as a
     /// function of the upper frontier, trailing it by exactly this much.
     compaction_latency_ms: Timestamp,
+    /// True if the dataflow defining the view may depend on a source, which
+    /// leads us to include the frontier of the view in timestamp selection,
+    /// as the view cannot be expected to advance its frontier simply because
+    /// its input views advance.
+    depends_on_source: bool,
 }
 
 impl ViewState {
@@ -754,6 +805,7 @@ impl Default for ViewState {
             upper: Antichain::from_elem(0),
             since: Antichain::from_elem(0),
             compaction_latency_ms: 60_000,
+            depends_on_source: true,
         }
     }
 }
@@ -768,4 +820,9 @@ impl<'view> From<&'view View> for ViewState {
         view_state.uses = out.iter().map(|x| x.to_string()).collect();
         view_state
     }
+}
+
+/// Creates an internal name for sources that are unlikely to clash with view names.
+fn create_internal_source_name(name: &str) -> String {
+    format!("{}-VIEW", name)
 }

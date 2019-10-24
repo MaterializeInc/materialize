@@ -45,57 +45,73 @@ pub fn build_dataflow<A: Allocate>(
     let worker_peers = worker.peers();
 
     worker.dataflow::<Timestamp, _, _>(|scope| {
-        for src in dataflow.sources {
-            let (stream, capability) = match src.connector {
-                SourceConnector::Kafka(c) => {
-                    // Distribute read responsibility among workers.
-                    use differential_dataflow::hashable::Hashable;
-                    let hash = src.name.hashed() as usize;
-                    let read_from_kafka = hash % worker_peers == worker_index;
-                    source::kafka(scope, &src.name, c, read_from_kafka)
-                }
-                SourceConnector::Local(c) => {
-                    source::local(scope, &src.name, c, worker_index == 0, local_input_mux)
-                }
-            };
+        scope.clone().region(|region| {
+            let mut context = Context::<_, _, _, Timestamp>::new();
 
-            // Install arrangements indexed by any presented keys.
-            // If no presented keys, use all columns for the index.
-            let typ = src.desc.typ();
-            let mut keys = typ.keys.to_vec();
-            if keys.is_empty() {
-                keys.push((0..typ.column_types.len()).collect());
-            }
+            let mut source_tokens = Vec::new();
+            // Load declared sources into the rendering context.
+            for src in dataflow.sources {
+                let (stream, capability) = match src.connector {
+                    SourceConnector::Kafka(c) => {
+                        // Distribute read responsibility among workers.
+                        use differential_dataflow::hashable::Hashable;
+                        let hash = src.name.hashed() as usize;
+                        let read_from_kafka = hash % worker_peers == worker_index;
+                        source::kafka(region, &src.name, c, read_from_kafka)
+                    }
+                    SourceConnector::Local(c) => {
+                        source::local(region, &src.name, c, worker_index == 0, local_input_mux)
+                    }
+                };
 
-            for key in keys {
-                let key_clone = key.clone();
-                let arrangement_by_key = stream
-                    .as_collection()
-                    .map(move |x| (key_clone.iter().map(|i| x[*i].clone()).collect(), x))
-                    .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
-
-                manager.set_by_keys(
-                    src.name.to_owned(),
-                    &key[..],
-                    WithDrop::new(arrangement_by_key.trace, capability.clone()),
+                // Introduce the stream by name, as an unarranged collection.
+                context.collections.insert(
+                    RelationExpr::Get {
+                        name: src.name,
+                        typ: src.desc.typ().clone(),
+                    },
+                    stream.as_collection(),
                 );
+                source_tokens.push(capability);
+
+                // // Install arrangements indexed by any presented keys.
+                // // If no presented keys, use all columns for the index.
+                // let typ = src.desc.typ();
+                // let mut keys = typ.keys.to_vec();
+                // if keys.is_empty() {
+                //     keys.push((0..typ.column_types.len()).collect());
+                // }
+
+                // for key in keys {
+                //     let key_clone = key.clone();
+                //     let arrangement_by_key = stream
+                //         .as_collection()
+                //         .map(move |x| (key_clone.iter().map(|i| x[*i].clone()).collect(), x))
+                //         .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
+
+                //     manager.set_by_keys(
+                //         src.name.to_owned(),
+                //         &key[..],
+                //         WithDrop::new(arrangement_by_key.trace, capability.clone()),
+                //     );
+                // }
             }
-        }
 
-        for view in dataflow.views {
-            let as_of = dataflow
-                .as_of
-                .as_ref()
-                .map(|x| x.to_vec())
-                .unwrap_or_else(|| vec![0]);
+            let source_tokens = Rc::new(source_tokens);
 
-            // The scope.clone() occurs to allow import in the region.
-            // We build a region here to establish a pattern of a scope inside the dataflow,
-            // so that other similar uses (e.g. with iterative scopes) do not require weird
-            // alternate type signatures.
-            scope.clone().region(|region| {
+            for view in dataflow.views {
                 let mut tokens = Vec::new();
-                let mut context = Context::<_, _, _, Timestamp>::new();
+                let as_of = dataflow
+                    .as_of
+                    .as_ref()
+                    .map(|x| x.to_vec())
+                    .unwrap_or_else(|| vec![0]);
+
+                // The scope.clone() occurs to allow import in the region.
+                // We build a region here to establish a pattern of a scope inside the dataflow,
+                // so that other similar uses (e.g. with iterative scopes) do not require weird
+                // alternate type signatures.
+
                 view.relation_expr.visit(&mut |e| {
                     // Some `Get` expressions are for let bindings, and should not be loaded.
                     // We might want explicitly enumerate assets to import.
@@ -126,7 +142,8 @@ pub fn build_dataflow<A: Allocate>(
                     }
                 });
 
-                let tokens = Rc::new(tokens);
+                // Capture both the tokens of imported traces and those of sources.
+                let tokens = Rc::new((tokens, source_tokens.clone()));
 
                 context.ensure_rendered(&view.relation_expr, region, worker_index);
 
@@ -160,26 +177,26 @@ pub fn build_dataflow<A: Allocate>(
                         WithDrop::new(arrangement.trace, tokens.clone()),
                     );
                 }
-            });
-        }
-
-        for sink in dataflow.sinks {
-            let (_key, trace) = manager
-                .get_all_keyed(&sink.from.0)
-                .expect("View missing")
-                .next()
-                .expect("No arrangements");
-            let token = trace.to_drop().clone();
-            let (arrangement, button) =
-                trace.import_core(scope, &format!("Import({:?})", sink.from));
-
-            match sink.connector {
-                SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
-                SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
             }
 
-            dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
-        }
+            for sink in dataflow.sinks {
+                let (_key, trace) = manager
+                    .get_all_keyed(&sink.from.0)
+                    .expect("View missing")
+                    .next()
+                    .expect("No arrangements");
+                let token = trace.to_drop().clone();
+                let (arrangement, button) =
+                    trace.import_core(scope, &format!("Import({:?})", sink.from));
+
+                match sink.connector {
+                    SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
+                    SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
+                }
+
+                dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
+            }
+        });
     })
 }
 
