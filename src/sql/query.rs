@@ -40,7 +40,7 @@ use std::iter;
 use std::mem;
 use uuid::Uuid;
 
-impl Planner {
+impl<'catalog> Planner<'catalog> {
     pub fn plan_query(
         &self,
         q: &Query,

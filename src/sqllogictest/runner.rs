@@ -38,14 +38,12 @@ use uuid::Uuid;
 
 use coord::{coordinator::Coordinator, SqlResponse};
 use dataflow;
-use dataflow_types::{
-    self, Dataflow, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
-};
+use dataflow_types::{self, LocalInput, LocalSourceConnector, Source, SourceConnector, Update};
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
-use sql::{Planner, Session};
+use sql::Session;
 use sqlparser::ast::{ObjectType, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -272,7 +270,7 @@ pub(crate) struct State {
     _dataflow_workers: Box<dyn Drop>,
     _runtime: tokio::runtime::Runtime,
     postgres: Postgres,
-    planner: Planner,
+    catalog: sql::store::Catalog,
     session: Session,
     coord: Coordinator<tokio::net::UnixStream>,
     conn_id: u32,
@@ -351,7 +349,7 @@ impl State {
     pub fn start() -> Result<Self, failure::Error> {
         let postgres = Postgres::open_and_erase()?;
         let logging_config = None;
-        let planner = Planner::new(logging_config);
+        let catalog = sql::store::Catalog::new(logging_config);
         let session = Session::default();
         let local_input_mux = Mux::default();
         let process_id = 0;
@@ -376,7 +374,7 @@ impl State {
         Ok(State {
             _runtime: runtime,
             postgres,
-            planner,
+            catalog,
             session,
             coord,
             conn_id: 1,
@@ -500,13 +498,15 @@ impl State {
                 {
                     self.local_input_mux.write().unwrap().channel(uuid).unwrap();
                 }
-                let dataflow = Dataflow::Source(Source {
+                let source = Source {
                     name,
                     connector: SourceConnector::Local(LocalSourceConnector { uuid }),
                     desc,
-                });
-                self.planner.dataflows.insert(dataflow.clone())?;
-                self.coord.create_dataflows(vec![dataflow]);
+                };
+                self.catalog
+                    .insert(sql::store::CatalogItem::Source(source.clone()))?;
+                self.coord
+                    .sequence_plan(sql::Plan::CreateSource(source), self.conn_id, None);
                 {
                     self.local_input_mux
                         .read()
@@ -529,16 +529,13 @@ impl State {
                     if let Some(uuid) = self.local_input_uuids.remove(name) {
                         self.local_input_mux.write().unwrap().close(&uuid);
                     }
-                    self.planner.dataflows.plan_remove(
-                        name,
-                        RemoveMode::Cascade,
-                        &mut all_names,
-                    )?;
+                    self.catalog
+                        .plan_remove(name, RemoveMode::Cascade, &mut all_names)?;
                 }
                 for name in &all_names {
-                    self.planner.dataflows.remove(name)
+                    self.catalog.remove(name)
                 }
-                self.coord.drop_dataflows(all_names);
+                self.coord.drop_views(all_names);
                 rows_affected = None;
             }
             postgres::Outcome::Changed {
@@ -788,8 +785,7 @@ impl State {
     }
 
     pub(crate) fn plan_sql(&mut self, sql: &str) -> Result<sql::Plan, failure::Error> {
-        self.planner
-            .handle_command(&mut self.session, sql.to_string())
+        sql::handle_command(&mut self.session, sql.to_string(), &mut self.catalog)
     }
 
     pub(crate) fn run_plan(&mut self, plan: sql::Plan) -> coord::SqlResponse {

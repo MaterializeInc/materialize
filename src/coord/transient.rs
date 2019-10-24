@@ -31,12 +31,12 @@ where
         coordinator::Coordinator::new(switchboard.clone(), num_timely_workers, logging_config);
     let feedback_rx = coord.enable_feedback();
 
-    let mut planner = sql::Planner::new(logging_config);
+    let mut catalog = sql::store::Catalog::new(logging_config);
 
     // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
     // the first connection ID used is 1. As long as that remains the case, 0 is safe to use here.
     let mut session = sql::Session::default();
-    let plans = planner.handle_commands(&mut session, startup_sql)?;
+    let plans = sql::handle_commands(&mut session, startup_sql, &mut catalog)?;
     plans.into_iter().for_each(|plan| {
         coord.sequence_plan(plan, 0, None /* ts_override */);
     });
@@ -52,13 +52,18 @@ where
                 Message::Command(mut cmd) => {
                     let conn_id = cmd.conn_id;
                     let sql_result = match cmd.kind {
-                        CommandKind::Query { sql } => planner.handle_command(&mut cmd.session, sql),
+                        CommandKind::Query { sql } => {
+                            sql::handle_command(&mut cmd.session, sql, &mut catalog)
+                        }
                         CommandKind::Parse { sql, name } => {
+                            let planner = sql::Planner::new(&catalog);
                             planner.handle_parse_command(&mut cmd.session, sql, name)
                         }
-                        CommandKind::Execute { portal_name } => {
-                            planner.handle_execute_command(&mut cmd.session, &portal_name)
-                        }
+                        CommandKind::Execute { portal_name } => sql::handle_execute_command(
+                            &mut cmd.session,
+                            &portal_name,
+                            &mut catalog,
+                        ),
                         CommandKind::CancelRequest { conn_id } => {
                             coord.sequence_cancel(conn_id);
                             continue;

@@ -9,8 +9,11 @@
 //! on the interface of the dataflow crate, and not its implementation, can
 //! avoid the dependency, as the dataflow crate is very slow to compile.
 
+// Clippy doesn't understand `as_of` and complains.
+#![allow(clippy::wrong_self_convention)]
+
 use expr::{ColumnOrder, RelationExpr, ScalarExpr};
-use repr::{Datum, RelationDesc, RelationType};
+use repr::{Datum, RelationDesc};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use url::Url;
@@ -111,63 +114,84 @@ pub enum LocalInput {
     Watermark(u64),
 }
 
-/// A named stream of data.
-#[serde(rename_all = "snake_case")]
+/// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Dataflow {
-    Source(Source),
-    Sink(Sink),
-    View(View),
+pub struct DataflowDesc {
+    /// Named sources used by the dataflow.
+    pub sources: Vec<Source>,
+    /// Named views produced by the dataflow.
+    pub views: Vec<View>,
+    /// Named sinks internal to the dataflow.
+    pub sinks: Vec<Sink>,
+    /// An optional frontier to which inputs should be advanced.
+    ///
+    /// This is logically equivalent to a timely dataflow `Antichain`,
+    /// which should probably be used here instead.
+    pub as_of: Option<Vec<Timestamp>>,
 }
 
-impl Dataflow {
-    /// Reports the name of this dataflow.
-    pub fn name(&self) -> &str {
-        match self {
-            Dataflow::Source(src) => &src.name,
-            Dataflow::Sink(sink) => &sink.name,
-            Dataflow::View(view) => &view.name,
-        }
-    }
-
-    /// Reports the description of the datums produced by this dataflow.
-    pub fn desc(&self) -> &RelationDesc {
-        match self {
-            Dataflow::Source(src) => &src.desc,
-            Dataflow::Sink(_) => panic!(
-                "programming error: Dataflow.typ called on Sink variant, \
-                 but sinks don't have a type"
-            ),
-            Dataflow::View(view) => &view.desc,
-        }
-    }
-
-    /// Reports the type of the datums produced by this dataflow.
-    pub fn typ(&self) -> &RelationType {
-        match self {
-            Dataflow::Source(src) => src.desc.typ(),
-            Dataflow::Sink(_) => panic!(
-                "programming error: Dataflow.typ called on Sink variant, \
-                 but sinks don't have a type"
-            ),
-            Dataflow::View(view) => view.desc.typ(),
+impl DataflowDesc {
+    pub fn new(as_of: Option<Vec<Timestamp>>) -> Self {
+        Self {
+            sources: Vec::new(),
+            views: Vec::new(),
+            sinks: Vec::new(),
+            as_of,
         }
     }
 
     /// Collects the names of the dataflows that this dataflow depends upon.
     pub fn uses(&self) -> Vec<&str> {
         let mut out = Vec::new();
-        match self {
-            Dataflow::Source(_) => (),
-            Dataflow::Sink(sink) => out.push(sink.from.0.as_str()),
-            Dataflow::View(view) => view.relation_expr.unbound_uses(&mut out),
+        for view in self.views.iter() {
+            view.relation_expr.unbound_uses(&mut out);
         }
+        out.sort();
+        out.dedup();
         out
+    }
+
+    pub fn add_source(mut self, source: Source) -> Self {
+        self.sources.push(source);
+        self
+    }
+    pub fn add_view(mut self, view: View) -> Self {
+        self.views.push(view);
+        self
+    }
+    pub fn add_sink(mut self, sink: Sink) -> Self {
+        self.sinks.push(sink);
+        self
+    }
+    pub fn as_of(mut self, as_of: Option<Vec<Timestamp>>) -> Self {
+        self.as_of = as_of;
+        self
     }
 }
 
-/// A source materializes data. It typically represents an external source of
-/// data, like a topic from Apache Kafka.
+impl From<Source> for DataflowDesc {
+    fn from(s: Source) -> Self {
+        DataflowDesc::new(None).add_source(s)
+    }
+}
+
+impl From<View> for DataflowDesc {
+    fn from(v: View) -> Self {
+        DataflowDesc::new(None).add_view(v)
+    }
+}
+
+impl From<Sink> for DataflowDesc {
+    fn from(s: Sink) -> Self {
+        DataflowDesc::new(None).add_sink(s)
+    }
+}
+
+/// A source of updates for a relational collection.
+///
+/// A source contains enough information to instantiate a stream of changes,
+/// as well as related metadata about the columns, their types, and properties
+/// of the collection.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Source {
@@ -176,12 +200,23 @@ pub struct Source {
     pub desc: RelationDesc,
 }
 
+/// A sink for updates to a relational collection.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Sink {
     pub name: String,
     pub from: (String, RelationDesc),
     pub connector: SinkConnector,
+}
+
+/// A description of a relational collection in terms of input collections.
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct View {
+    pub name: String,
+    pub raw_sql: String,
+    pub relation_expr: RelationExpr,
+    pub desc: RelationDesc,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -223,32 +258,18 @@ pub struct TailSinkConnector {
     pub since: Timestamp,
 }
 
-/// A view transforms one dataflow into another.
-#[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct View {
-    pub name: String,
-    /// The raw SQL used to create this view.
-    pub raw_sql: String,
-    pub relation_expr: RelationExpr,
-    pub desc: RelationDesc,
-    /// Indicates if sources can be advanced to a supplied frontier.
-    /// Outputs will only be correct from this frontier onward.
-    pub as_of: Option<Vec<Timestamp>>,
-}
-
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
     use std::error::Error;
 
     use super::*;
-    use repr::{ColumnType, ScalarType};
+    use repr::{ColumnType, RelationType, ScalarType};
 
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = Dataflow::View(View {
+        let dataflow = DataflowDesc::new(None).add_view(View {
             name: "report".into(),
             raw_sql: "<none>".into(),
             relation_expr: RelationExpr::Project {
@@ -277,10 +298,10 @@ mod tests {
             desc: RelationDesc::empty()
                 .add_column("name", ScalarType::String)
                 .add_column("quantity", ScalarType::String),
-            as_of: None,
         });
 
-        let decoded: Dataflow = serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
+        let decoded: DataflowDesc =
+            serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;
         assert_eq!(decoded, dataflow);
 
         Ok(())
