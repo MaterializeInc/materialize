@@ -53,7 +53,7 @@ impl comm::broadcast::Token for BroadcastToken {
     /// Since the coordinator lives on the same process as one set of
     /// workers, we need to enable loopback so that broadcasts are
     /// transmitted intraprocess and visible to those workers.
-    fn loopback() -> bool {
+    fn loopback(&self) -> bool {
         true
     }
 }
@@ -125,7 +125,7 @@ where
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
     let command_rxs = {
-        let mut rx = switchboard.broadcast_rx::<BroadcastToken>().fanout();
+        let mut rx = switchboard.broadcast_rx(BroadcastToken).fanout();
         let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
         executor
             .spawn(

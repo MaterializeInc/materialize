@@ -54,7 +54,7 @@ fn leader<C>(switchboard: Switchboard<C>, magic_number: usize) -> Result<(), Box
 where
     C: Connection,
 {
-    let mut broadcast_tx = switchboard.broadcast_tx::<BroadcastToken>().wait();
+    let mut broadcast_tx = switchboard.broadcast_tx(BroadcastToken).wait();
     let mut send = |item| {
         broadcast_tx.send(item)?;
         broadcast_tx.flush()
@@ -86,7 +86,7 @@ fn follower<C>(switchboard: Switchboard<C>) -> Result<(), Box<dyn Error>>
 where
     C: Connection,
 {
-    let mut rx = switchboard.broadcast_rx::<BroadcastToken>().wait();
+    let mut rx = switchboard.broadcast_rx(BroadcastToken).wait();
     let mut recv = || rx.next().transpose().expect("rx error");
 
     // Step 1. Read some typed data.
