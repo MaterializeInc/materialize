@@ -7,7 +7,7 @@
 
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use dataflow_types::{Diff, Timestamp};
 use repr::Datum;
@@ -109,7 +109,7 @@ impl TraceManager {
 /// Maintained traces for a collection.
 pub struct CollectionTraces {
     /// The collection arranged by various keys, indicated by a sequence of column identifiers.
-    by_keys: HashMap<Vec<usize>, WithDrop<KeysValsHandle>>,
+    by_keys: BTreeMap<Vec<usize>, WithDrop<KeysValsHandle>>,
 }
 
 impl CollectionTraces {
@@ -141,7 +141,7 @@ impl CollectionTraces {
 impl Default for CollectionTraces {
     fn default() -> Self {
         Self {
-            by_keys: HashMap::new(),
+            by_keys: BTreeMap::new(),
         }
     }
 }
