@@ -29,7 +29,7 @@ use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     compare_columns, DataflowDesc, PeekResponse, PeekWhen, RowSetFinishing, Sink, SinkConnector,
-    TailSinkConnector, Timestamp, View,
+    TailSinkConnector, Timestamp, Update, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
@@ -113,6 +113,20 @@ where
         }
     }
 
+    pub fn sequence_insert(&mut self, name: String, updates: Vec<Update>) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::Insert { name, updates },
+        )
+    }
+
+    pub fn sequence_advance_time(&mut self, name: String, to: Timestamp) {
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::AdvanceTime { name, to },
+        )
+    }
+
     // TODO(benesch): the `ts_override` parameter exists only to support
     // sqllogictest and is kind of gross. See if we can get rid of it.
     pub fn sequence_plan(
@@ -150,10 +164,12 @@ where
             }
 
             Plan::DropItems((names, response)) => {
+                let mut sources_to_drop = Vec::new();
                 let mut views_to_drop = Vec::new();
                 for name in names {
                     // TODO: Test if a name was installed and error if not?
                     if let Some((_source, new_name)) = self.sources.remove(&name) {
+                        sources_to_drop.push(name.clone());
                         if let Some(name) = new_name {
                             views_to_drop.push(name);
                         } else {
@@ -164,6 +180,12 @@ where
                         views_to_drop.push(name);
                     }
                 }
+                if sources_to_drop.is_empty() {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::DropSources(sources_to_drop),
+                    )
+                }
                 self.drop_views(views_to_drop);
                 if response {
                     SqlResponse::DroppedSource
@@ -172,33 +194,6 @@ where
                 }
             }
 
-            // Plan::DropSources(names) => {
-            //     let mut views_to_drop = Vec::new();
-            //     for name in names {
-            //         // TODO: Test if a name was installed and error if not?
-            //         if let Some((_source, new_name)) = self.sources.remove(&name) {
-            //             if let Some(name) = new_name {
-            //                 views_to_drop.push(name);
-            //             }
-            //         } else {
-            //             panic!("Attempting to drop an uninstalled source: {}", name);
-            //         }
-
-            //     }
-            //     // With sources mirrored as views, we should also drop the the view.
-            //     self.drop_views(views_to_drop);
-            //     // Though the plan specifies a number of sources to drop, multiple
-            //     // sources can only be dropped via DROP SOURCE root CASCADE, so
-            //     // the tagline is still singular, as in "DROP SOURCE".
-            //     SqlResponse::DroppedSource
-            // }
-
-            // Plan::DropViews(names) => {
-            //     // See note in `DropSources` about the conversion from plural to
-            //     // singular.
-            //     broadcast(&mut self.broadcast_tx, SequencedCommand::DropViews(names));
-            //     SqlResponse::DroppedView
-            // }
             Plan::EmptyQuery => SqlResponse::EmptyQuery,
 
             Plan::SetVariable { name, .. } => SqlResponse::SetVariable { name },
