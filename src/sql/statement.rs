@@ -396,6 +396,7 @@ impl<'catalog> Planner<'catalog> {
                 }
             }
         }
+        // This needs to have heterogenous drops, because cascades could drop multiple types.
         let mode = RemoveMode::from_cascade(cascade);
         let mut to_remove = vec![];
         for name in &names {
@@ -404,8 +405,8 @@ impl<'catalog> Planner<'catalog> {
         to_remove.sort();
         to_remove.dedup();
         Ok(match object_type {
-            ObjectType::Source => Plan::DropSources(to_remove),
-            ObjectType::View => Plan::DropViews(to_remove),
+            ObjectType::Source => Plan::DropItems((to_remove, true)),
+            ObjectType::View => Plan::DropItems((to_remove, false)),
             _ => bail!("unsupported SQL statement: DROP {}", object_type),
         })
     }

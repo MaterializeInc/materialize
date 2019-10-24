@@ -151,31 +151,56 @@ where
                 SqlResponse::CreatedView
             }
 
-            Plan::DropSources(names) => {
+            Plan::DropItems((names, response)) => {
                 let mut views_to_drop = Vec::new();
                 for name in names {
                     // TODO: Test if a name was installed and error if not?
                     if let Some((_source, new_name)) = self.sources.remove(&name) {
                         if let Some(name) = new_name {
                             views_to_drop.push(name);
+                        } else {
+                            panic!("Attempting to drop an uninstalled source: {}", name);
                         }
                     }
+                    if self.views.contains_key(&name) {
+                        views_to_drop.push(name);
+                    }
                 }
-                // With sources mirrored as views, we should also drop the the view.
                 self.drop_views(views_to_drop);
-                // Though the plan specifies a number of sources to drop, multiple
-                // sources can only be dropped via DROP SOURCE root CASCADE, so
-                // the tagline is still singular, as in "DROP SOURCE".
-                SqlResponse::DroppedSource
+                if response {
+                    SqlResponse::DroppedSource
+                } else {
+                    SqlResponse::DroppedView
+                }
             }
 
-            Plan::DropViews(names) => {
-                // See note in `DropSources` about the conversion from plural to
-                // singular.
-                broadcast(&mut self.broadcast_tx, SequencedCommand::DropViews(names));
-                SqlResponse::DroppedView
-            }
+            // Plan::DropSources(names) => {
+            //     let mut views_to_drop = Vec::new();
+            //     for name in names {
+            //         // TODO: Test if a name was installed and error if not?
+            //         if let Some((_source, new_name)) = self.sources.remove(&name) {
+            //             if let Some(name) = new_name {
+            //                 views_to_drop.push(name);
+            //             }
+            //         } else {
+            //             panic!("Attempting to drop an uninstalled source: {}", name);
+            //         }
 
+            //     }
+            //     // With sources mirrored as views, we should also drop the the view.
+            //     self.drop_views(views_to_drop);
+            //     // Though the plan specifies a number of sources to drop, multiple
+            //     // sources can only be dropped via DROP SOURCE root CASCADE, so
+            //     // the tagline is still singular, as in "DROP SOURCE".
+            //     SqlResponse::DroppedSource
+            // }
+
+            // Plan::DropViews(names) => {
+            //     // See note in `DropSources` about the conversion from plural to
+            //     // singular.
+            //     broadcast(&mut self.broadcast_tx, SequencedCommand::DropViews(names));
+            //     SqlResponse::DroppedView
+            // }
             Plan::EmptyQuery => SqlResponse::EmptyQuery,
 
             Plan::SetVariable { name, .. } => SqlResponse::SetVariable { name },
@@ -478,6 +503,9 @@ where
     }
 
     pub fn drop_views(&mut self, dataflow_names: Vec<String>) {
+        for name in dataflow_names.iter() {
+            self.remove_view(name);
+        }
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::DropViews(dataflow_names),
@@ -544,7 +572,12 @@ where
                         }
                     }
                     PeekWhen::Immediately => {
-                        for name in names {
+                        for mut name in names {
+                            if let Some((_source, rename)) = &self.sources.get(name) {
+                                if let Some(rename) = rename {
+                                    name = &rename;
+                                }
+                            }
                             let upper = self
                                 .upper_of(name)
                                 .expect("Absent relation in view")

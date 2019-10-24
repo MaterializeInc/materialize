@@ -73,28 +73,6 @@ pub fn build_dataflow<A: Allocate>(
                     stream.as_collection(),
                 );
                 source_tokens.push(capability);
-
-                // // Install arrangements indexed by any presented keys.
-                // // If no presented keys, use all columns for the index.
-                // let typ = src.desc.typ();
-                // let mut keys = typ.keys.to_vec();
-                // if keys.is_empty() {
-                //     keys.push((0..typ.column_types.len()).collect());
-                // }
-
-                // for key in keys {
-                //     let key_clone = key.clone();
-                //     let arrangement_by_key = stream
-                //         .as_collection()
-                //         .map(move |x| (key_clone.iter().map(|i| x[*i].clone()).collect(), x))
-                //         .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
-
-                //     manager.set_by_keys(
-                //         src.name.to_owned(),
-                //         &key[..],
-                //         WithDrop::new(arrangement_by_key.trace, capability.clone()),
-                //     );
-                // }
             }
 
             let source_tokens = Rc::new(source_tokens);
@@ -164,18 +142,25 @@ pub fn build_dataflow<A: Allocate>(
                         );
                     }
                 } else {
-                    let key = (0..view.relation_expr.arity()).collect::<Vec<_>>();
-                    let key_clone = key.clone();
-                    let arrangement = context
-                        .collection(&view.relation_expr)
-                        .expect("Render failed to produce collection")
-                        .map(move |x| (key.iter().map(|k| x[*k].clone()).collect::<Vec<_>>(), x))
-                        .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
-                    manager.set_by_keys(
-                        view.name,
-                        &key_clone[..],
-                        WithDrop::new(arrangement.trace, tokens.clone()),
-                    );
+                    let mut keys = view.relation_expr.typ().keys.clone();
+                    if keys.is_empty() {
+                        keys.push((0..view.relation_expr.arity()).collect::<Vec<_>>());
+                    }
+                    for key in keys {
+                        let key_clone = key.clone();
+                        let arrangement = context
+                            .collection(&view.relation_expr)
+                            .expect("Render failed to produce collection")
+                            .map(move |x| {
+                                (key.iter().map(|k| x[*k].clone()).collect::<Vec<_>>(), x)
+                            })
+                            .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
+                        manager.set_by_keys(
+                            view.name.clone(),
+                            &key_clone[..],
+                            WithDrop::new(arrangement.trace, tokens.clone()),
+                        );
+                    }
                 }
             }
 

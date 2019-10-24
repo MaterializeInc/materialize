@@ -334,6 +334,9 @@ where
                 for dataflow in dataflows.into_iter() {
                     if let Some(logger) = self.materialized_logger.as_mut() {
                         for view in dataflow.views.iter() {
+                            if self.traces.traces.contains_key(&view.name) {
+                                panic!("View already installed: {}", view.name);
+                            }
                             logger.log(MaterializedEvent::Dataflow(view.name.to_string(), true));
                         }
                     }

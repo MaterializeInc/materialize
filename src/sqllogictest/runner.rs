@@ -38,9 +38,7 @@ use uuid::Uuid;
 
 use coord::{coordinator::Coordinator, SqlResponse};
 use dataflow;
-use dataflow_types::{
-    self, DataflowDesc, LocalInput, LocalSourceConnector, Source, SourceConnector, Update,
-};
+use dataflow_types::{self, LocalInput, LocalSourceConnector, Source, SourceConnector, Update};
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
@@ -508,7 +506,7 @@ impl State {
                 self.catalog
                     .insert(sql::store::CatalogItem::Source(source.clone()))?;
                 self.coord
-                    .create_dataflows(vec![DataflowDesc::from(source)]);
+                    .sequence_plan(sql::Plan::CreateSource(source), self.conn_id, None);
                 {
                     self.local_input_mux
                         .read()

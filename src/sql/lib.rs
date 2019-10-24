@@ -36,8 +36,10 @@ pub enum Plan {
     CreateSources(Vec<Source>),
     CreateSink(Sink),
     CreateView(View),
-    DropSources(Vec<String>),
-    DropViews(Vec<String>),
+    // DropSources(Vec<String>),
+    // DropViews(Vec<String>),
+    /// Items to drop, and true iff a source.
+    DropItems((Vec<String>, bool)),
     EmptyQuery,
     SetVariable {
         name: String,
@@ -83,7 +85,7 @@ fn apply_plan(
             Ok(())
         }
         Plan::CreateSink(sink) => catalog.insert(CatalogItem::Sink(sink.clone())),
-        Plan::DropViews(names) | Plan::DropSources(names) => {
+        Plan::DropItems((names, _is_source)) => {
             for name in names {
                 catalog.remove(name);
             }
