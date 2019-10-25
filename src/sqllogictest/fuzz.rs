@@ -5,7 +5,7 @@
 
 //! Fuzz testing via sqllogictest.
 
-use coord::SqlResponse;
+use coord::QueryExecuteResponse;
 use futures::Future;
 
 use crate::runner::State;
@@ -14,7 +14,7 @@ pub fn fuzz(sqls: &str) {
     let mut state = State::start().unwrap();
     for sql in sqls.split(';') {
         if let Ok(plan) = state.plan_sql(sql) {
-            if let SqlResponse::SendRows { desc, rx } = state.run_plan(plan) {
+            if let QueryExecuteResponse::SendRows { desc, rx } = state.run_plan(plan) {
                 for row in rx.wait().unwrap().unwrap_rows() {
                     for (typ, datum) in desc.iter_types().zip(row.into_iter()) {
                         assert!(datum.is_instance_of(*typ));

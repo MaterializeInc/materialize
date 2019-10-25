@@ -35,9 +35,10 @@ use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use coord::{coordinator::Coordinator, SqlResponse};
+use coord::{coordinator::Coordinator, QueryExecuteResponse};
 use dataflow;
 use dataflow_types::{self, Source, SourceConnector, Update};
+use ore::collections::CollectionExt;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
@@ -607,7 +608,7 @@ impl State {
 
         // send plan, read response
         let (desc, rows_rx) = match self.run_plan(plan) {
-            SqlResponse::SendRows { desc, rx } => (desc, rx),
+            QueryExecuteResponse::SendRows { desc, rx } => (desc, rx),
             other => {
                 return Ok(Outcome::PlanFailure {
                     error: failure::format_err!(
@@ -754,10 +755,16 @@ impl State {
     }
 
     pub(crate) fn plan_sql(&mut self, sql: &str) -> Result<sql::Plan, failure::Error> {
-        sql::handle_command(&mut self.session, sql.to_string(), &mut self.catalog)
+        let stmts = sql::parse(sql.into())?;
+        if stmts.len() != 1 {
+            bail!("expected exactly one statement, but got {}", stmts.len());
+        }
+        let plan = sql::plan(&self.catalog, &self.session, stmts.into_element())?;
+        coord::transient::apply_plan(&mut self.catalog, &mut self.session, &plan)?;
+        Ok(plan)
     }
 
-    pub(crate) fn run_plan(&mut self, plan: sql::Plan) -> coord::SqlResponse {
+    pub(crate) fn run_plan(&mut self, plan: sql::Plan) -> QueryExecuteResponse {
         let ts = Some(self.current_timestamp - 1);
         self.coord.sequence_plan(plan, self.conn_id, ts)
     }

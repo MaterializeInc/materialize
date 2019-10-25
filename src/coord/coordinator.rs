@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use uuid::Uuid;
 
-use crate::SqlResponse;
+use crate::QueryExecuteResponse;
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -134,12 +134,12 @@ where
         plan: Plan,
         conn_id: u32,
         ts_override: Option<Timestamp>,
-    ) -> SqlResponse {
+    ) -> QueryExecuteResponse {
         match plan {
             Plan::CreateSource(source) => {
                 let sources = vec![source];
                 self.create_sources(sources);
-                SqlResponse::CreatedSource
+                QueryExecuteResponse::CreatedSource
             }
 
             Plan::CreateSources(sources) => {
@@ -155,12 +155,12 @@ where
 
             Plan::CreateSink(sink) => {
                 self.create_dataflows(vec![DataflowDesc::from(sink)]);
-                SqlResponse::CreatedSink
+                QueryExecuteResponse::CreatedSink
             }
 
             Plan::CreateView(view) => {
                 self.create_dataflows(vec![DataflowDesc::from(view)]);
-                SqlResponse::CreatedView
+                QueryExecuteResponse::CreatedView
             }
 
             Plan::DropItems((names, response)) => {
@@ -188,15 +188,15 @@ where
                 }
                 self.drop_views(views_to_drop);
                 if response {
-                    SqlResponse::DroppedSource
+                    QueryExecuteResponse::DroppedSource
                 } else {
-                    SqlResponse::DroppedView
+                    QueryExecuteResponse::DroppedView
                 }
             }
 
-            Plan::EmptyQuery => SqlResponse::EmptyQuery,
+            Plan::EmptyQuery => QueryExecuteResponse::EmptyQuery,
 
-            Plan::SetVariable { name, .. } => SqlResponse::SetVariable { name },
+            Plan::SetVariable { name, .. } => QueryExecuteResponse::SetVariable { name },
 
             Plan::Peek {
                 mut source,
@@ -319,7 +319,7 @@ where
                     .from_err()
                     .boxed();
 
-                SqlResponse::SendRows { desc, rx: rows_rx }
+                QueryExecuteResponse::SendRows { desc, rx: rows_rx }
             }
 
             Plan::Tail(source) => {
@@ -342,7 +342,7 @@ where
                     })]),
                 );
 
-                SqlResponse::Tailing { rx }
+                QueryExecuteResponse::Tailing { rx }
             }
 
             Plan::SendRows { desc, rows } => send_immediate_rows(desc, rows),
@@ -355,8 +355,6 @@ where
                 let rows = vec![vec![Datum::from(relation_expr.pretty())]];
                 send_immediate_rows(desc, rows)
             }
-
-            Plan::Parsed => SqlResponse::Parsed,
         }
     }
 
@@ -781,13 +779,13 @@ fn broadcast(
     tx.flush().unwrap();
 }
 
-/// Constructs a [`SqlResponse`] that that will send some rows to the client
+/// Constructs a [`QueryExecuteResponse`] that that will send some rows to the client
 /// immediately, as opposed to asking the dataflow layer to send along the rows
 /// after some computation.
-fn send_immediate_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> SqlResponse {
+fn send_immediate_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> QueryExecuteResponse {
     let (tx, rx) = futures::sync::oneshot::channel();
     tx.send(PeekResponse::Rows(rows)).unwrap();
-    SqlResponse::SendRows {
+    QueryExecuteResponse::SendRows {
         desc,
         rx: Box::new(rx.from_err()),
     }
