@@ -112,14 +112,17 @@ automatically started upon login, but we leave it to you to sort that out.
 
 ## Prepping Confluent
 
-Like we mentioned above, you need to have a few Confluent services running to get Materialize to work. To prep what you need (for the [demo], at least), run the following:
+Like we mentioned above, you need to have a few Confluent services running to
+get Materialize to work. To prep what you need (for the [demo], at least), run
+the following:
 
 ```shell
 confluent local start kafka     # Also starts zookeeper
 confluent local start schema-registry
 ```
 
-You can also use the included `confluent` CLI command to start and stop individual services. For example:
+You can also use the included `confluent` CLI command to start and stop
+individual services. For example:
 
 ```shell
 confluent local status        # View what services are currently running.
@@ -130,10 +133,34 @@ confluent local log kafka     # View Kafka log file.
 Beware that the CLI is fairly buggy, especially around service management.
 Putting your computer to sleep often causes the service status to get out of
 sync. In other words, trust the output of `confluent local log` and `ps ... |
-grep` over the output of `confluent local status`. Still, it's reliable enough 
+grep` over the output of `confluent local status`. Still, it's reliable enough
 to be more convenient than managing each service manually.
 
 [demo](demo.md)
+
+## Symbiosis mode
+
+For the convenience of developers, Materialize has a semi-secret "symbiosis"
+mode that turns Materialize into a full HTAP system, rather than an OLAP system
+that must sit atop a OLTP system via a CDC pipeline. In other words, where
+you would normally need to plug MySQL into Debezium into Kafka into Materialize,
+and run all the Confluent services that that entails, you can instead run:
+
+    $ materialized --symbiosis postgres://localhost:5432
+
+When symbiosis mode is active, all DDL statements and all writes will be routed
+to the specified PostgreSQL server. `CREATE TABLE`, for example, will create
+both a table in PostgreSQL and a source in Materialize that mirrors that table.
+`INSERT`, `UPDATE`, and `DELETE` statements that target that table will be
+reflected in Materialize for the next `SELECT` statement.
+
+Symbiosis mode is not suitable for production use, as its implementation is
+very inefficient. It is, however, excellent for manually taking Materialize
+for a spin without the hassle of setting up various Kafka topics and Avro
+schemas. It also powers our sqllogictest runner.
+
+See the [symbiosis crate documentation](https://mtrlz.dev/api/symbiosis) for
+more details.
 
 ## Testing
 

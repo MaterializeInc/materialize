@@ -494,6 +494,7 @@ dependencies = [
  "repr",
  "smallvec",
  "sql",
+ "symbiosis",
  "timely",
  "tokio",
  "tokio-threadpool",
@@ -2885,11 +2886,8 @@ dependencies = [
  "md5 0.6.1",
  "ordered-float",
  "ore",
- "pg_interval",
- "postgres",
  "regex",
  "repr",
- "rust_decimal",
  "serde_json",
  "sql",
  "sqlparser",
@@ -2897,7 +2895,6 @@ dependencies = [
  "tokio",
  "uuid",
  "walkdir",
- "whoami",
 ]
 
 [[package]]
@@ -2999,6 +2996,23 @@ name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
+
+[[package]]
+name = "symbiosis"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dataflow-types",
+ "failure",
+ "ore",
+ "pg_interval",
+ "postgres",
+ "repr",
+ "rust_decimal",
+ "sql",
+ "sqlparser",
+ "whoami",
+]
 
 [[package]]
 name = "syn"

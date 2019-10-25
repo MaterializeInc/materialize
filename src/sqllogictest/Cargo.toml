@@ -26,11 +26,8 @@ lazy_static = "1"
 md5 = "*"
 ordered-float = "*"
 ore = { path = "../ore" }
-postgres = { version = "0.15", features = ["with-chrono"] }
-pg_interval = "0.3"
 regex = "1"
 repr = { path = "../repr" }
-rust_decimal = "1.0"
 serde_json = "1"
 sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
@@ -38,4 +35,3 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features =
 tokio = "0.1"
 uuid = "*"
 walkdir = "2"
-whoami = "0.6.0"
