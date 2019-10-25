@@ -16,7 +16,7 @@ use super::util::source;
 use super::SharedCapability;
 use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
 use interchange::avro;
-use repr::Datum;
+use repr::Row;
 
 use lazy_static::lazy_static;
 use prometheus::{IntCounter, IntCounterVec};
@@ -49,10 +49,7 @@ pub fn kafka<G>(
     name: &str,
     connector: KafkaSourceConnector,
     read_kafka: bool,
-) -> (
-    Stream<G, (Vec<Datum>, Timestamp, Diff)>,
-    Option<SharedCapability>,
-)
+) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SharedCapability>)
 where
     G: Scope<Timestamp = Timestamp>,
 {

@@ -224,23 +224,33 @@ impl Planner {
         variable: Ident,
     ) -> Result<Plan, failure::Error> {
         if variable.value == unicase::Ascii::new("ALL") {
-            Ok(Plan::SendRows {
-                desc: RelationDesc::empty()
+            let vals = session
+                .vars()
+                .iter()
+                .map(|v| (v.name(), v.value(), v.description()))
+                .collect::<Vec<_>>();
+            Ok(Plan::send_rows(
+                RelationDesc::empty()
                     .add_column("name", ScalarType::String)
                     .add_column("setting", ScalarType::String)
                     .add_column("description", ScalarType::String),
-                rows: session
-                    .vars()
-                    .iter()
-                    .map(|v| vec![v.name().into(), v.value().into(), v.description().into()])
+                vals.iter()
+                    .map(|(name, value, description)| {
+                        vec![
+                            Datum::from(&**name),
+                            Datum::from(&**value),
+                            Datum::from(&**description),
+                        ]
+                    })
                     .collect(),
-            })
+            ))
         } else {
             let variable = session.get(&variable.value)?;
-            Ok(Plan::SendRows {
-                desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
-                rows: vec![vec![variable.value().into()]],
-            })
+            let value = variable.value();
+            Ok(Plan::send_rows(
+                RelationDesc::empty().add_column(variable.name(), ScalarType::String),
+                vec![vec![Datum::from(&*value)]],
+            ))
         }
     }
 
@@ -255,14 +265,14 @@ impl Planner {
             .dataflows
             .iter()
             .filter(|(_k, v)| object_type_matches(object_type, &v))
-            .map(|(k, _v)| vec![Datum::from(k.to_owned())])
+            .map(|(k, _v)| vec![Datum::from(k)])
             .collect();
         rows.sort_unstable();
-        Ok(Plan::SendRows {
-            desc: RelationDesc::empty()
+        Ok(Plan::send_rows(
+            RelationDesc::empty()
                 .add_column(object_type_as_plural_str(object_type), ScalarType::String),
             rows,
-        })
+        ))
     }
 
     /// Create an immediate result that describes all the columns for the given table
@@ -288,21 +298,30 @@ impl Planner {
             .get_desc(&table_name.to_string())?
             .iter()
             .map(|(name, typ)| {
-                vec![
-                    name.mz_as_deref().unwrap_or("?").into(),
-                    if typ.nullable { "YES" } else { "NO" }.into(),
-                    typ.scalar_type.to_string().into(),
-                ]
+                (
+                    name.mz_as_deref().unwrap_or("?").to_owned(),
+                    if typ.nullable { "YES" } else { "NO" },
+                    typ.scalar_type.to_string(),
+                )
             })
             .collect();
 
-        Ok(Plan::SendRows {
-            desc: RelationDesc::empty()
+        Ok(Plan::send_rows(
+            RelationDesc::empty()
                 .add_column("Field", ScalarType::String)
                 .add_column("Nullable", ScalarType::String)
                 .add_column("Type", ScalarType::String),
-            rows: column_descriptions,
-        })
+            column_descriptions
+                .iter()
+                .map(|(field, nullable, typ)| {
+                    vec![
+                        Datum::from(&**field),
+                        Datum::from(&**nullable),
+                        Datum::from(&**typ),
+                    ]
+                })
+                .collect(),
+        ))
     }
 
     fn handle_show_create_view(&self, object_name: ObjectName) -> Result<Plan, failure::Error> {
@@ -312,12 +331,12 @@ impl Planner {
         } else {
             bail!("{} is not a view", name);
         };
-        Ok(Plan::SendRows {
-            desc: RelationDesc::empty()
+        Ok(Plan::send_rows(
+            RelationDesc::empty()
                 .add_column("View", ScalarType::String)
                 .add_column("Create View", ScalarType::String),
-            rows: vec![vec![name.into(), raw_sql.to_owned().into()]],
-        })
+            vec![vec![Datum::from(&*name), Datum::from(&**raw_sql)]],
+        ))
     }
 
     fn handle_create_dataflow(&self, mut stmt: Statement) -> Result<Plan, failure::Error> {
@@ -546,10 +565,11 @@ impl Planner {
         // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
         // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
         if stage == Stage::Dataflow {
-            Ok(Plan::SendRows {
-                desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),
-                rows: vec![vec![Datum::from(relation_expr.pretty())]],
-            })
+            let pretty = relation_expr.pretty();
+            Ok(Plan::send_rows(
+                RelationDesc::empty().add_column("Dataflow", ScalarType::String),
+                vec![vec![Datum::from(&*pretty)]],
+            ))
         } else {
             Ok(Plan::ExplainPlan {
                 desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),

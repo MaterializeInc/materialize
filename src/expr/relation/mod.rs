@@ -4,7 +4,6 @@
 // distributed without the express permission of Materialize, Inc.
 
 #![deny(missing_docs)]
-
 // Clippy is wrong.
 #![allow(clippy::op_ref, clippy::len_zero)]
 
@@ -18,8 +17,9 @@ use crate::ScalarExpr;
 use failure::ResultExt;
 use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnType, Datum, RelationType, Row};
 use serde::{Deserialize, Serialize};
+use std::iter::FromIterator;
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -31,7 +31,7 @@ pub enum RelationExpr {
     /// Always return the same value
     Constant {
         /// Rows of the constant collection and their multiplicities.
-        rows: Vec<(Vec<Datum>, isize)>,
+        rows: Vec<(Row, isize)>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -269,7 +269,7 @@ impl RelationExpr {
     /// Constructs a constant collection from specific rows and schema, where
     /// each row can have an arbitrary multiplicity.
     pub fn constant_diff(rows: Vec<(Vec<Datum>, isize)>, typ: RelationType) -> Self {
-        for (row, _diff) in rows.iter() {
+        for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
                     datum.is_instance_of(*column_typ),
@@ -279,6 +279,10 @@ impl RelationExpr {
                 );
             }
         }
+        let rows = rows
+            .into_iter()
+            .map(|(row, diff)| (Row::from_iter(row), diff))
+            .collect();
         RelationExpr::Constant { rows, typ }
     }
 
@@ -429,61 +433,6 @@ impl RelationExpr {
         RelationExpr::Union {
             left: Box::new(self),
             right: Box::new(other),
-        }
-    }
-
-    /// A helper method to finish a left outer join.
-    ///
-    /// This method should be called as `left.join(right).left_outer(left)' in order
-    /// to effect a left outer join. It most likely should not be called in any other
-    /// context without further investigation.
-    pub fn left_outer(self, left: Self) -> Self {
-        let both = self;
-        let both_arity = both.arity();
-        let left_arity = left.arity();
-        assert!(both_arity >= left_arity);
-
-        RelationExpr::Join {
-            inputs: vec![
-                left.union(both.project((0..left_arity).collect()).distinct().negate()),
-                RelationExpr::Constant {
-                    rows: vec![(vec![Datum::Null; both_arity - left_arity], 1)],
-                    typ: RelationType::new(vec![
-                        ColumnType::new(ScalarType::Null).nullable(true);
-                        both_arity - left_arity
-                    ]),
-                },
-            ],
-            variables: vec![],
-        }
-    }
-
-    /// A helper method to finish a right outer join.
-    ///
-    /// This method should be called as `left.join(right).right_outer(right)' in order
-    /// to effect a right outer join. It most likely should not be called in any other
-    /// context without further investigation.
-    pub fn right_outer(self, right: Self) -> Self {
-        let both = self;
-        let both_arity = both.arity();
-        let right_arity = right.arity();
-        assert!(both_arity >= right_arity);
-
-        RelationExpr::Join {
-            inputs: vec![
-                RelationExpr::Constant {
-                    rows: vec![(vec![Datum::Null; both_arity - right_arity], 1)],
-                    typ: RelationType::new(vec![
-                        ColumnType::new(ScalarType::Null).nullable(true);
-                        both_arity - right_arity
-                    ]),
-                },
-                right.union(
-                    both.distinct_by(((both_arity - right_arity)..both_arity).collect())
-                        .negate(),
-                ),
-            ],
-            variables: vec![],
         }
     }
 
@@ -649,7 +598,7 @@ impl RelationExpr {
     /// sole inputs are nameless.
     pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
         let doc = match self {
-            RelationExpr::Constant { rows, typ: _ } => {
+            RelationExpr::Constant { rows, .. } => {
                 let rows = Doc::intersperse(
                     rows.iter().map(|(row, diff)| {
                         let row = Doc::intersperse(row, to_doc!(",", Space));
@@ -829,7 +778,7 @@ impl RelationExpr {
                     // potential predicate pushdown and elision in the
                     // optimizer.
                     .product(RelationExpr::constant(
-                        vec![default.iter().map(|(datum, _)| datum.clone()).collect()],
+                        vec![default.iter().map(|(datum, _)| *datum).collect()],
                         RelationType::new(default.iter().map(|(_, typ)| *typ).collect()),
                     )))
             })
@@ -844,7 +793,7 @@ impl RelationExpr {
         self,
         id_gen: &mut IdGen,
         keys_and_values: RelationExpr,
-        default: Vec<(Datum, ColumnType)>,
+        default: Vec<(Datum<'static>, ColumnType)>,
     ) -> RelationExpr {
         keys_and_values
             .let_in(id_gen, |id_gen, get_keys_and_values| {
@@ -921,9 +870,23 @@ impl<'a> From<&'a AggregateExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use repr::ScalarType;
 
-    fn constant(rows: Vec<Vec<Datum>>) -> RelationExpr {
-        RelationExpr::constant(rows, RelationType::new(Vec::new()))
+    fn constant(rows: Vec<Vec<i64>>) -> RelationExpr {
+        let rows = rows
+            .into_iter()
+            .map(|row| row.into_iter().map(|i| Datum::Int64(i)).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let types = if rows.is_empty() {
+            RelationType::new(Vec::new())
+        } else {
+            RelationType::new(
+                (0..rows[0].len())
+                    .map(|_| ColumnType::new(ScalarType::Int64))
+                    .collect(),
+            )
+        };
+        RelationExpr::constant(rows, types)
     }
 
     fn base() -> RelationExpr {
@@ -942,15 +905,12 @@ mod tests {
         );
 
         assert_eq!(
-            constant(vec![vec![Datum::from(1)]])
-                .to_doc()
-                .pretty(72)
-                .to_string(),
+            constant(vec![vec![1]]).to_doc().pretty(72).to_string(),
             "Constant [[1]]"
         );
 
         assert_eq!(
-            constant(vec![vec![Datum::from(1)], vec![Datum::from(2)]])
+            constant(vec![vec![1], vec![2]])
                 .to_doc()
                 .pretty(72)
                 .to_string(),
@@ -958,32 +918,23 @@ mod tests {
         );
 
         assert_eq!(
-            constant(vec![vec![Datum::from(1), Datum::from(2)]])
-                .to_doc()
-                .pretty(72)
-                .to_string(),
+            constant(vec![vec![1, 2]]).to_doc().pretty(72).to_string(),
             "Constant [[1, 2]]"
         );
 
         assert_eq!(
-            constant(vec![
-                vec![Datum::from(1), Datum::from(2)],
-                vec![Datum::from(1), Datum::from(2)]
-            ])
-            .to_doc()
-            .pretty(72)
-            .to_string(),
+            constant(vec![vec![1, 2], vec![1, 2]])
+                .to_doc()
+                .pretty(72)
+                .to_string(),
             "Constant [[1, 2], [1, 2]]"
         );
 
         assert_eq!(
-            constant(vec![
-                vec![Datum::from(1), Datum::from(2)],
-                vec![Datum::from(1), Datum::from(2)]
-            ])
-            .to_doc()
-            .pretty(16)
-            .to_string(),
+            constant(vec![vec![1, 2], vec![1, 2]])
+                .to_doc()
+                .pretty(16)
+                .to_string(),
             "Constant [
   [1, 2],
   [1, 2]
@@ -993,9 +944,9 @@ mod tests {
 
     #[test]
     fn test_pretty_let() {
-        let c1 = constant(vec![vec![Datum::from(13)]]);
-        let c2 = constant(vec![vec![Datum::from(42)]]);
-        let c3 = constant(vec![vec![Datum::from(665)]]);
+        let c1 = constant(vec![vec![13]]);
+        let c2 = constant(vec![vec![42]]);
+        let c3 = constant(vec![vec![665]]);
         let binding = RelationExpr::Let {
             name: String::from("id-2"),
             value: Box::new(RelationExpr::Let {

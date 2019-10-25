@@ -50,11 +50,11 @@ impl ReduceElision {
                         AggregateFunc::Count => {
                             let column_type = a.typ(&input_type);
                             a.expr.clone().call_unary(UnaryFunc::IsNull).if_then_else(
-                                ScalarExpr::Literal(
+                                ScalarExpr::literal(
                                     Datum::Int64(0),
                                     column_type.clone().nullable(false),
                                 ),
-                                ScalarExpr::Literal(
+                                ScalarExpr::literal(
                                     Datum::Int64(1),
                                     column_type.clone().nullable(false),
                                 ),
@@ -62,7 +62,7 @@ impl ReduceElision {
                         }
                         // CountAll is one no matter what the input.
                         AggregateFunc::CountAll => {
-                            ScalarExpr::Literal(Datum::Int64(1), a.typ(&input_type).nullable(false))
+                            ScalarExpr::literal(Datum::Int64(1), a.typ(&input_type).nullable(false))
                         }
                         // All other variants should return the argument to the aggregation.
                         _ => a.expr.clone(),

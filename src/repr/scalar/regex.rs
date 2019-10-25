@@ -23,12 +23,6 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Regex(#[serde(with = "serde_regex")] pub regex::Regex);
 
-impl Regex {
-    pub fn is_match(&self, s: &str) -> bool {
-        self.0.is_match(s)
-    }
-}
-
 impl PartialEq<Regex> for Regex {
     fn eq(&self, other: &Regex) -> bool {
         self.0.as_str() == other.0.as_str()
@@ -52,5 +46,12 @@ impl Ord for Regex {
 impl Hash for Regex {
     fn hash<H: Hasher>(&self, hasher: &mut H) {
         self.0.as_str().hash(hasher)
+    }
+}
+
+impl std::ops::Deref for Regex {
+    type Target = regex::Regex;
+    fn deref(&self) -> &regex::Regex {
+        &self.0
     }
 }

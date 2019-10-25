@@ -24,14 +24,10 @@ pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 type Diff = isize;
 
 // Local type definition to avoid the horror in signatures.
-type Arrangement<S, V> =
-    Arranged<S, TraceValHandle<Vec<V>, Vec<V>, <S as ScopeParent>::Timestamp, Diff>>;
+type Arrangement<S, V> = Arranged<S, TraceValHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
 type ArrangementImport<S, V, T> = Arranged<
     S,
-    TraceEnter<
-        TraceFrontier<TraceValHandle<Vec<V>, Vec<V>, T, Diff>>,
-        <S as ScopeParent>::Timestamp,
-    >,
+    TraceEnter<TraceFrontier<TraceValHandle<V, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
 
 /// Dataflow-local collections and arrangements.
@@ -51,7 +47,7 @@ where
     S::Timestamp: Lattice + Refines<T>,
 {
     /// Dataflow local collections.
-    pub collections: HashMap<P, Collection<S, Vec<V>, Diff>>,
+    pub collections: HashMap<P, Collection<S, V, Diff>>,
     /// Dataflow local arrangements.
     pub local: HashMap<P, HashMap<Vec<usize>, Arrangement<S, V>>>,
     /// Imported arrangements.
@@ -90,7 +86,7 @@ where
     ///
     /// If insufficient data assets exist to create the collection the method
     /// will return `None`.
-    pub fn collection(&self, relation_expr: &P) -> Option<Collection<S, Vec<V>, Diff>> {
+    pub fn collection(&self, relation_expr: &P) -> Option<Collection<S, V, Diff>> {
         if let Some(collection) = self.collections.get(relation_expr) {
             Some(collection.clone())
         } else if let Some(local) = self.local.get(relation_expr) {

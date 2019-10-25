@@ -20,7 +20,7 @@ use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
 use ore::mpmc::Mux;
-use repr::Datum;
+use repr::{Datum, DatumsBuffer, Row};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
@@ -488,21 +488,22 @@ where
         mem::replace(&mut self.pending_peeks, pending_peeks);
     }
 
-    fn collect_finished_data(
-        peek: &PendingPeek,
-        trace: &mut WithDrop<KeysValsHandle>,
-    ) -> Vec<Vec<Datum>> {
+    fn collect_finished_data(peek: &PendingPeek, trace: &mut WithDrop<KeysValsHandle>) -> Vec<Row> {
         let (mut cur, storage) = trace.cursor();
         let mut results = Vec::new();
+        let mut buffer = DatumsBuffer::new();
+        let mut left_buffer = DatumsBuffer::new();
+        let mut right_buffer = DatumsBuffer::new();
         while let Some(_key) = cur.get_key(&storage) {
-            while let Some(record) = cur.get_val(&storage) {
-                // Before (expensively) determining how many copies of a record
-                // we have, let's eliminate records that we don't care about.
+            while let Some(row) = cur.get_val(&storage) {
+                let datums = row.as_datums(&mut buffer);
+                // Before (expensively) determining how many copies of a row
+                // we have, let's eliminate rows that we don't care about.
                 if peek
                     .finishing
                     .filter
                     .iter()
-                    .all(|predicate| predicate.eval(record) == Datum::True)
+                    .all(|predicate| predicate.eval(&datums) == Datum::True)
                 {
                     let mut copies = 0;
                     cur.map_times(&storage, |time, diff| {
@@ -515,12 +516,12 @@ where
                         copies >= 0,
                         "Negative multiplicity: {} for {:?} in view {}",
                         copies,
-                        record,
+                        row.as_vec(),
                         peek.name
                     );
 
                     for _ in 0..copies {
-                        results.push(record.clone());
+                        results.push(row.clone());
                     }
                 }
                 cur.step_val(&storage);
@@ -532,7 +533,11 @@ where
             let offset_plus_limit = limit + peek.finishing.offset;
             if results.len() > offset_plus_limit {
                 pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
-                    compare_columns(&peek.finishing.order_by, left, right)
+                    compare_columns(
+                        &peek.finishing.order_by,
+                        &left.as_datums(&mut left_buffer),
+                        &right.as_datums(&mut right_buffer),
+                    )
                 });
                 results.truncate(offset_plus_limit);
             }

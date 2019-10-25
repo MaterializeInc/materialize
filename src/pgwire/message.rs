@@ -13,7 +13,7 @@ use lazy_static::lazy_static;
 
 use super::types::PgType;
 use repr::decimal::Decimal;
-use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -356,9 +356,8 @@ impl FieldValue {
                 let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
                 Some(FieldValue::Numeric(d.with_scale(scale)))
             }
-            Datum::Bytes(b) => Some(FieldValue::Bytea(b)),
-            Datum::String(s) => Some(FieldValue::Text(s)),
-            Datum::Regex(_) => panic!("Datum::Regex cannot be converted into a FieldValue"),
+            Datum::Bytes(b) => Some(FieldValue::Bytea(b.to_owned())),
+            Datum::String(s) => Some(FieldValue::Text(s.to_owned())),
         }
     }
 
@@ -490,8 +489,8 @@ impl FieldValue {
     }
 }
 
-pub fn field_values_from_row(row: Vec<Datum>, typ: &RelationType) -> Vec<Option<FieldValue>> {
-    row.into_iter()
+pub fn field_values_from_row(row: Row, typ: &RelationType) -> Vec<Option<FieldValue>> {
+    row.iter()
         .zip(typ.column_types.iter())
         .map(|(col, typ)| FieldValue::from_datum(col, *typ))
         .collect()

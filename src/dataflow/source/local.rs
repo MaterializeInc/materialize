@@ -9,7 +9,7 @@ use super::util::source;
 use super::SharedCapability;
 use dataflow_types::{Diff, LocalInput, LocalSourceConnector, Timestamp};
 use ore::mpmc::Mux;
-use repr::Datum;
+use repr::Row;
 use uuid::Uuid;
 
 pub fn local<G>(
@@ -18,10 +18,7 @@ pub fn local<G>(
     connector: LocalSourceConnector,
     read_input: bool,
     local_input_mux: &mut Mux<Uuid, LocalInput>,
-) -> (
-    Stream<G, (Vec<Datum>, Timestamp, Diff)>,
-    Option<SharedCapability>,
-)
+) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SharedCapability>)
 where
     G: Scope<Timestamp = Timestamp>,
 {

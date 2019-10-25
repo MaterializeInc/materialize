@@ -36,8 +36,8 @@ impl JoinElision {
             let is_vacuous = inputs
                 .iter()
                 .map(|expression| {
-                    if let RelationExpr::Constant { rows, .. } = &expression {
-                        rows.len() == 1 && rows[0].0.len() == 0 && rows[0].1 == 1
+                    if let RelationExpr::Constant { rows, typ } = &expression {
+                        rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1
                     } else {
                         false
                     }

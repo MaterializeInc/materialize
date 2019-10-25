@@ -5,7 +5,6 @@
 
 pub mod decimal;
 pub mod regex;
-
 use chrono::{NaiveDate, NaiveDateTime};
 use failure::format_err;
 use ordered_float::OrderedFloat;
@@ -16,7 +15,6 @@ use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
 use self::decimal::Significand;
-use self::regex::Regex;
 use crate::ColumnType;
 
 /// A literal value.
@@ -24,8 +22,8 @@ use crate::ColumnType;
 /// Note that datums may be scalar, like [`Datum::Int32`], or composite, like
 /// [`Datum::Tuple`], but they are always constant.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
-pub enum Datum {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+pub enum Datum<'a> {
     /// An unknown value.
     Null,
     /// The `false` boolean value.
@@ -52,14 +50,12 @@ pub enum Datum {
     /// to 38 digits of precision.
     Decimal(Significand),
     /// A sequence of untyped bytes.
-    Bytes(Vec<u8>),
+    Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
-    String(String),
-    /// A compiled regular expression.
-    Regex(Box<Regex>),
+    String(&'a str),
 }
 
-impl Datum {
+impl<'a> Datum<'a> {
     pub fn is_null(&self) -> bool {
         match self {
             Datum::Null => true,
@@ -70,7 +66,7 @@ impl Datum {
     /// Create a Datum representing a Date
     ///
     /// Errors if the the combination of year/month/day is invalid
-    pub fn from_ymd(year: i32, month: u8, day: u8) -> Result<Datum, failure::Error> {
+    pub fn from_ymd(year: i32, month: u8, day: u8) -> Result<Datum<'static>, failure::Error> {
         let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
             .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?;
         Ok(Datum::Date(d))
@@ -87,7 +83,7 @@ impl Datum {
         minute: u8,
         second: u8,
         nano: u32,
-    ) -> Result<Datum, failure::Error> {
+    ) -> Result<Datum<'static>, failure::Error> {
         let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
             .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?
             .and_hms_nano_opt(hour.into(), minute.into(), second.into(), nano)
@@ -184,24 +180,10 @@ impl Datum {
         }
     }
 
-    pub fn unwrap_str(&self) -> &str {
+    pub fn unwrap_str(&self) -> &'a str {
         match self {
             Datum::String(s) => s,
             _ => panic!("Datum::unwrap_string called on {:?}", self),
-        }
-    }
-
-    pub fn unwrap_string(self) -> String {
-        match self {
-            Datum::String(s) => s,
-            _ => panic!("Datum::unwrap_string called on {:?}", self),
-        }
-    }
-
-    pub fn unwrap_regex(self) -> Regex {
-        match self {
-            Datum::Regex(r) => *r,
-            _ => panic!("Datum::unwrap_regex calloed on {:?}", self),
         }
     }
 
@@ -233,14 +215,12 @@ impl Datum {
             (Datum::Bytes(_), _) => false,
             (Datum::String(_), ScalarType::String) => true,
             (Datum::String(_), _) => false,
-            (Datum::Regex(_), ScalarType::Regex) => true,
-            (Datum::Regex(_), _) => false,
         }
     }
 }
 
-impl From<bool> for Datum {
-    fn from(b: bool) -> Datum {
+impl From<bool> for Datum<'static> {
+    fn from(b: bool) -> Datum<'static> {
         if b {
             Datum::True
         } else {
@@ -249,56 +229,56 @@ impl From<bool> for Datum {
     }
 }
 
-impl From<i32> for Datum {
-    fn from(i: i32) -> Datum {
+impl From<i32> for Datum<'static> {
+    fn from(i: i32) -> Datum<'static> {
         Datum::Int32(i)
     }
 }
 
-impl From<i64> for Datum {
-    fn from(i: i64) -> Datum {
+impl From<i64> for Datum<'static> {
+    fn from(i: i64) -> Datum<'static> {
         Datum::Int64(i)
     }
 }
 
-impl From<OrderedFloat<f32>> for Datum {
-    fn from(f: OrderedFloat<f32>) -> Datum {
+impl From<OrderedFloat<f32>> for Datum<'static> {
+    fn from(f: OrderedFloat<f32>) -> Datum<'static> {
         Datum::Float32(f)
     }
 }
 
-impl From<OrderedFloat<f64>> for Datum {
-    fn from(f: OrderedFloat<f64>) -> Datum {
+impl From<OrderedFloat<f64>> for Datum<'static> {
+    fn from(f: OrderedFloat<f64>) -> Datum<'static> {
         Datum::Float64(f)
     }
 }
 
-impl From<f32> for Datum {
-    fn from(f: f32) -> Datum {
+impl From<f32> for Datum<'static> {
+    fn from(f: f32) -> Datum<'static> {
         Datum::Float32(OrderedFloat(f))
     }
 }
 
-impl From<f64> for Datum {
-    fn from(f: f64) -> Datum {
+impl From<f64> for Datum<'static> {
+    fn from(f: f64) -> Datum<'static> {
         Datum::Float64(OrderedFloat(f))
     }
 }
 
-impl From<i128> for Datum {
-    fn from(d: i128) -> Datum {
+impl From<i128> for Datum<'static> {
+    fn from(d: i128) -> Datum<'static> {
         Datum::Decimal(Significand::new(d))
     }
 }
 
-impl From<Significand> for Datum {
-    fn from(d: Significand) -> Datum {
+impl From<Significand> for Datum<'static> {
+    fn from(d: Significand) -> Datum<'static> {
         Datum::Decimal(d)
     }
 }
 
-impl From<chrono::Duration> for Datum {
-    fn from(duration: chrono::Duration) -> Datum {
+impl From<chrono::Duration> for Datum<'static> {
+    fn from(duration: chrono::Duration) -> Datum<'static> {
         let n_secs = duration.num_seconds();
         Datum::Interval(Interval::Duration {
             is_positive: n_secs >= 0,
@@ -310,41 +290,29 @@ impl From<chrono::Duration> for Datum {
     }
 }
 
-impl From<SqlInterval> for Datum {
-    fn from(other: SqlInterval) -> Datum {
+impl From<SqlInterval> for Datum<'static> {
+    fn from(other: SqlInterval) -> Datum<'static> {
         Datum::Interval(other.into())
     }
 }
 
-impl From<String> for Datum {
-    fn from(s: String) -> Datum {
+impl<'a> From<&'a str> for Datum<'a> {
+    fn from(s: &'a str) -> Datum<'a> {
         Datum::String(s)
     }
 }
 
-impl From<&str> for Datum {
-    fn from(s: &str) -> Datum {
-        Datum::String(s.to_owned())
-    }
-}
-
-impl From<::regex::Regex> for Datum {
-    fn from(r: ::regex::Regex) -> Datum {
-        Datum::Regex(Box::new(Regex(r)))
-    }
-}
-
-impl From<Vec<u8>> for Datum {
-    fn from(b: Vec<u8>) -> Datum {
+impl<'a> From<&'a [u8]> for Datum<'a> {
+    fn from(b: &'a [u8]) -> Datum<'a> {
         Datum::Bytes(b)
     }
 }
 
-impl<T> From<Option<T>> for Datum
+impl<'a, T> From<Option<T>> for Datum<'a>
 where
-    Datum: From<T>,
+    Datum<'a>: From<T>,
 {
-    fn from(o: Option<T>) -> Datum {
+    fn from(o: Option<T>) -> Datum<'a> {
         if let Some(d) = o {
             d.into()
         } else {
@@ -353,7 +321,7 @@ where
     }
 }
 
-impl fmt::Display for Datum {
+impl fmt::Display for Datum<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Datum::Null => f.write_str("null"),
@@ -385,16 +353,12 @@ impl fmt::Display for Datum {
                 }
                 f.write_str("\"")
             }
-            Datum::Regex(b) => {
-                let Regex(rex) = b.as_ref();
-                write!(f, "/{}/", rex)
-            }
         }
     }
 }
 
-impl<'a> From<&'a Datum> for Doc<'a, BoxDoc<'a, ()>> {
-    fn from(datum: &'a Datum) -> Doc<'a, BoxDoc<'a, ()>> {
+impl<'a> From<Datum<'a>> for Doc<'static, BoxDoc<'static, ()>> {
+    fn from(datum: Datum<'a>) -> Doc<'static, BoxDoc<'static, ()>> {
         Doc::text(datum.to_string())
     }
 }
@@ -432,7 +396,6 @@ pub enum ScalarType {
     Interval,
     Bytes,
     String,
-    Regex,
 }
 
 impl ScalarType {
@@ -464,8 +427,7 @@ impl PartialEq for ScalarType {
             | (Timestamp, Timestamp)
             | (Interval, Interval)
             | (Bytes, Bytes)
-            | (String, String)
-            | (Regex, Regex) => true,
+            | (String, String) => true,
 
             (Null, _)
             | (Bool, _)
@@ -479,8 +441,7 @@ impl PartialEq for ScalarType {
             | (Timestamp, _)
             | (Interval, _)
             | (Bytes, _)
-            | (String, _)
-            | (Regex, _) => false,
+            | (String, _) => false,
         }
     }
 }
@@ -507,7 +468,6 @@ impl Hash for ScalarType {
             Interval => state.write_u8(10),
             Bytes => state.write_u8(11),
             String => state.write_u8(12),
-            Regex => state.write_u8(13),
         }
     }
 }
@@ -534,7 +494,6 @@ impl fmt::Display for ScalarType {
             Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),
-            Regex => f.write_str("regex"),
         }
     }
 }

@@ -43,7 +43,7 @@ use dataflow_types::{
 };
 use ore::mpmc::Mux;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum};
+use repr::{ColumnType, Datum, Row};
 use sql::store::RemoveMode;
 use sql::{Planner, Session};
 use sqlparser::ast::{ObjectType, Statement};
@@ -83,7 +83,7 @@ pub enum Outcome<'a> {
     },
     OutputFailure {
         expected_output: &'a Output,
-        actual_raw_output: Vec<Vec<Datum>>,
+        actual_raw_output: Vec<Row>,
         actual_output: Output,
     },
     Bail {
@@ -282,14 +282,14 @@ pub(crate) struct State {
 }
 
 fn format_row(
-    row: &[Datum],
+    row: &Row,
     col_types: &[ColumnType],
     slt_types: &[Type],
     mode: Mode,
     sort: &Sort,
 ) -> Vec<String> {
-    let row =
-        izip!(slt_types, col_types, row).map(|(slt_typ, col_typ, datum)| match (slt_typ, datum) {
+    let row = izip!(slt_types, col_types, row.iter()).map(|(slt_typ, col_typ, datum)| {
+        match (slt_typ, datum) {
             // the documented formatting rules in https://www.sqlite.org/sqllogictest/doc/trunk/about.wiki
             (_, Datum::Null) => "NULL".to_owned(),
             (Type::Integer, Datum::Int64(i)) => format!("{}", i),
@@ -310,7 +310,7 @@ fn format_row(
                 if string.is_empty() {
                     "(empty)".to_owned()
                 } else {
-                    string.to_owned()
+                    (*string).to_owned()
                 }
             }
             (Type::Bool, Datum::False) => "false".to_owned(),
@@ -333,7 +333,8 @@ fn format_row(
             (Type::Text, Datum::Timestamp(d)) => d.to_string(),
             (Type::Text, Datum::Interval(iv)) => iv.to_string(),
             other => panic!("Don't know how to format {:?}", other),
-        });
+        }
+    });
     if mode == Mode::Cockroach && sort.yes() {
         row.flat_map(|s| {
             crate::parser::split_cols(&s, slt_types.len())
@@ -688,7 +689,7 @@ impl State {
 
         // check that output matches inferred types
         for row in &raw_output {
-            if row.len() != inferred_types.len() {
+            if row.as_vec().len() != inferred_types.len() {
                 return Ok(Outcome::InferenceFailure {
                     expected_types,
                     inferred_types: inferred_types.to_vec(),
@@ -735,7 +736,7 @@ impl State {
         // format output
         let mut formatted_rows = raw_output
             .iter()
-            .map(|row| format_row(row, inferred_types, &**expected_types, *mode, sort))
+            .map(|row| format_row(&row, inferred_types, &**expected_types, *mode, sort))
             .collect::<Vec<_>>();
 
         // sort formatted output

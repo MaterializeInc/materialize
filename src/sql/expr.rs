@@ -7,6 +7,7 @@ use expr as dataflow_expr;
 use ore::collections::CollectionExt;
 use repr::*;
 use std::collections::{HashMap, HashSet};
+use std::iter::FromIterator;
 use std::mem;
 
 // these happen to be unchanged at the moment, but there might be additions later
@@ -17,7 +18,7 @@ pub use dataflow_expr::{AggregateFunc, BinaryFunc, ColumnOrder, UnaryFunc, Varia
 /// Just like dataflow_expr::RelationExpr, except where otherwise noted below
 pub enum RelationExpr {
     Constant {
-        rows: Vec<Vec<Datum>>,
+        rows: Vec<Row>,
         typ: RelationType,
     },
     Get {
@@ -88,7 +89,7 @@ pub enum RelationExpr {
 pub enum ScalarExpr {
     /// Unlike dataflow::ScalarExpr, we can nest RelationExprs via eg Exists. This means that a variable could refer to a column of the current input, or to a column of an outer relation. We use ColumnRef to denote the difference.
     Column(ColumnRef),
-    Literal(Datum, ColumnType),
+    Literal(Row, ColumnType),
     CallUnary {
         func: UnaryFunc,
         expr: Box<ScalarExpr>,
@@ -120,22 +121,6 @@ pub enum ScalarExpr {
     ///   (see https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/).
     Select(Box<RelationExpr>),
 }
-
-pub const LITERAL_TRUE: ScalarExpr = ScalarExpr::Literal(
-    Datum::True,
-    ColumnType {
-        nullable: false,
-        scalar_type: ScalarType::Bool,
-    },
-);
-
-pub const LITERAL_NULL: ScalarExpr = ScalarExpr::Literal(
-    Datum::Null,
-    ColumnType {
-        nullable: true,
-        scalar_type: ScalarType::Null,
-    },
-);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnRef {
@@ -262,7 +247,10 @@ impl RelationExpr {
             );
         }
         match self {
-            Constant { rows, typ } => Ok(get_outer.product(SR::constant(rows, typ))),
+            Constant { rows, typ } => Ok(get_outer.product(SR::Constant {
+                rows: rows.into_iter().map(|row| (row, 1)).collect(),
+                typ,
+            })),
             Get { name, typ } => Ok(get_outer.product(SR::Get { name, typ })),
             Project { input, outputs } => {
                 let input = input.applied_to(id_gen, get_outer.clone())?;
@@ -486,6 +474,12 @@ impl RelationExpr {
             }
         }
     }
+
+    /// Constructs a constant collection from specific rows and schema.
+    pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
+        let rows = rows.into_iter().map(|row| Row::from_iter(row)).collect();
+        RelationExpr::Constant { rows, typ }
+    }
 }
 
 impl ScalarExpr {
@@ -512,7 +506,7 @@ impl ScalarExpr {
                 assert!(column < outer_arity);
                 SS::Column(column)
             }
-            Literal(datum, typ) => SS::Literal(datum, typ),
+            Literal(row, typ) => SS::Literal(row, typ),
             CallUnary { func, expr } => SS::CallUnary {
                 func,
                 expr: Box::new(expr.applied_to(id_gen, outer_arity, relation)?),
@@ -665,7 +659,7 @@ impl ScalarExpr {
             }
             expr => {
                 if contains_subquery(expr) {
-                    out.push(mem::replace(expr, LITERAL_TRUE))
+                    out.push(mem::replace(expr, ScalarExpr::literal_true()))
                 }
             }
         }
@@ -698,6 +692,31 @@ impl ScalarExpr {
                 expr.visit_columns(f);
             }
         }
+    }
+
+    pub fn literal(datum: Datum, column_type: ColumnType) -> ScalarExpr {
+        let row = Row::from_iter(&[datum]);
+        ScalarExpr::Literal(row, column_type)
+    }
+
+    pub fn literal_true() -> ScalarExpr {
+        ScalarExpr::literal(
+            Datum::True,
+            ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::Bool,
+            },
+        )
+    }
+
+    pub fn literal_null() -> ScalarExpr {
+        ScalarExpr::literal(
+            Datum::Null,
+            ColumnType {
+                nullable: true,
+                scalar_type: ScalarType::Null,
+            },
+        )
     }
 }
 
@@ -907,7 +926,7 @@ impl RelationExpr {
         RelationExpr::Join {
             left: Box::new(self),
             right: Box::new(right),
-            on: ScalarExpr::Literal(Datum::True, ColumnType::new(ScalarType::Bool)),
+            on: ScalarExpr::literal_true(),
             kind: JoinKind::Inner,
         }
     }

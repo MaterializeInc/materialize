@@ -9,10 +9,10 @@
 
 use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Sink, Source, View};
 use failure::bail;
-
-use repr::{Datum, RelationDesc};
+use repr::{Datum, RelationDesc, Row};
 pub use session::Session;
 use sqlparser::ast::ObjectName;
+use std::iter::FromIterator;
 
 use store::DataflowStore;
 
@@ -51,12 +51,19 @@ pub enum Plan {
     Tail(Dataflow),
     SendRows {
         desc: RelationDesc,
-        rows: Vec<Vec<Datum>>,
+        rows: Vec<Row>,
     },
     ExplainPlan {
         desc: RelationDesc,
         relation_expr: ::expr::RelationExpr,
     },
+}
+
+impl Plan {
+    pub fn send_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> Plan {
+        let rows = rows.into_iter().map(|row| Row::from_iter(row)).collect();
+        Plan::SendRows { desc, rows }
+    }
 }
 
 fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {

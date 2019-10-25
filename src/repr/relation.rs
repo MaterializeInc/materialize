@@ -13,7 +13,7 @@ use crate::ScalarType;
 /// The type of a [`Datum`].
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
-/// Int32 or String) with additional attributes, likeits nullability.
+/// Int32 or String) with additional attributes, like its nullability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub struct ColumnType {
     /// Whether this datum can be null.

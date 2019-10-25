@@ -124,6 +124,12 @@ disabled_lints=(
     # `..`, while sometimes convenient, can cause match sites that need to be
     # updated for the new field to be overlooked.
     clippy::unneeded_field_pattern
+
+    # Upsteam description: https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes
+    #
+    # Lifetime elision sometimes gives surprising results, and especially in unsafe code it's useful to
+    # spell out lifetimes explicitly to be sure
+    clippy::needless-lifetimes
 )
 
 extra_lints=(

@@ -12,6 +12,7 @@ use differential_dataflow::AsCollection;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::iter::FromIterator;
 use std::rc::Rc;
 use timely::communication::Allocate;
 use timely::dataflow::Scope;
@@ -22,7 +23,7 @@ use uuid::Uuid;
 use dataflow_types::*;
 use expr::RelationExpr;
 use ore::mpmc::Mux;
-use repr::Datum;
+use repr::{Datum, DatumsBuffer, Row};
 
 use super::sink;
 use super::source;
@@ -46,6 +47,8 @@ pub fn build_dataflow<A: Allocate>(
 
     worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
         Dataflow::Source(src) => {
+            let typ = src.desc.typ();
+
             let (stream, capability) = match src.connector {
                 SourceConnector::Kafka(c) => {
                     // Distribute read responsibility among workers.
@@ -61,7 +64,6 @@ pub fn build_dataflow<A: Allocate>(
 
             // Install arrangements indexed by any presented keys.
             // If no presented keys, use all columns for the index.
-            let typ = src.desc.typ();
             let mut keys = typ.keys.to_vec();
             if keys.is_empty() {
                 keys.push((0..typ.column_types.len()).collect());
@@ -69,9 +71,15 @@ pub fn build_dataflow<A: Allocate>(
 
             for key in keys {
                 let key_clone = key.clone();
+                let mut buffer = DatumsBuffer::new();
                 let arrangement_by_key = stream
                     .as_collection()
-                    .map(move |x| (key_clone.iter().map(|i| x[*i].clone()).collect(), x))
+                    .map(move |row| {
+                        let datums = row.as_datums(&mut buffer);
+                        let key_row = Row::from_iter(key_clone.iter().map(|i| datums[*i]));
+                        drop(datums);
+                        (key_row, row)
+                    })
                     .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
 
                 manager.set_by_keys(
@@ -165,12 +173,19 @@ pub fn build_dataflow<A: Allocate>(
                         );
                     }
                 } else {
-                    let key = (0..view.relation_expr.arity()).collect::<Vec<_>>();
+                    let typ = view.relation_expr.typ();
+                    let key = (0..typ.column_types.len()).collect::<Vec<_>>();
                     let key_clone = key.clone();
+                    let mut buffer = DatumsBuffer::new();
                     let arrangement = context
                         .collection(&view.relation_expr)
                         .expect("Render failed to produce collection")
-                        .map(move |x| (key.iter().map(|k| x[*k].clone()).collect::<Vec<_>>(), x))
+                        .map(move |row| {
+                            let datums = row.as_datums(&mut buffer);
+                            let key_row = Row::from_iter(key.iter().map(|i| datums[*i]));
+                            drop(datums);
+                            (key_row, row)
+                        })
                         .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
                     manager.set_by_keys(
                         view.name,
@@ -183,7 +198,7 @@ pub fn build_dataflow<A: Allocate>(
     })
 }
 
-impl<G, T> Context<G, RelationExpr, Datum, T>
+impl<G, T> Context<G, RelationExpr, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -253,10 +268,11 @@ where
                 RelationExpr::Project { input, outputs } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let outputs = outputs.clone();
-                    let collection = self
-                        .collection(input)
-                        .unwrap()
-                        .map(move |tuple| outputs.iter().map(|i| tuple[*i].clone()).collect());
+                    let mut buffer = DatumsBuffer::new();
+                    let collection = self.collection(input).unwrap().map(move |row| {
+                        let datums = row.as_datums(&mut buffer);
+                        Row::from_iter(outputs.iter().map(|i| datums[*i]))
+                    });
 
                     self.collections.insert(relation_expr.clone(), collection);
                 }
@@ -264,12 +280,14 @@ where
                 RelationExpr::Map { input, scalars } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let scalars = scalars.clone();
-                    let collection = self.collection(input).unwrap().map(move |mut tuple| {
-                        for s in scalars.iter() {
-                            let to_push = s.eval(&tuple[..]);
-                            tuple.push(to_push);
+                    let mut buffer = DatumsBuffer::new();
+                    let collection = self.collection(input).unwrap().map(move |input_row| {
+                        let mut datums = input_row.as_datums(&mut buffer);
+                        for scalar in &scalars {
+                            let datum = scalar.eval(&datums);
+                            datums.push(datum);
                         }
-                        tuple
+                        Row::from_iter(&*datums)
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -278,12 +296,16 @@ where
                 RelationExpr::Filter { input, predicates } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let predicates = predicates.clone();
-                    let collection = self.collection(input).unwrap().filter(move |x| {
-                        predicates.iter().all(|predicate| match predicate.eval(x) {
-                            Datum::True => true,
-                            Datum::False | Datum::Null => false,
-                            _ => unreachable!(),
-                        })
+                    let mut buffer = DatumsBuffer::new();
+                    let collection = self.collection(input).unwrap().filter(move |input_row| {
+                        let datums = input_row.as_datums(&mut buffer);
+                        predicates
+                            .iter()
+                            .all(|predicate| match predicate.eval(&datums) {
+                                Datum::True => true,
+                                Datum::False | Datum::Null => false,
+                                _ => unreachable!(),
+                            })
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -384,15 +406,13 @@ where
                         }
                     }
 
+                    let mut buffer = DatumsBuffer::new();
                     let old_keyed = joined
-                        .map(move |tuple| {
-                            (
-                                old_keys
-                                    .iter()
-                                    .map(|i| tuple[*i].clone())
-                                    .collect::<Vec<_>>(),
-                                tuple,
-                            )
+                        .map(move |row| {
+                            let datums = row.as_datums(&mut buffer);
+                            let key_row = Row::from_iter(old_keys.iter().map(|i| datums[*i]));
+                            drop(datums);
+                            (key_row, row)
                         })
                         .arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage: {}", index));
 
@@ -400,15 +420,13 @@ where
                     if self.arrangement(&input, &new_keys[..]).is_none() {
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
+                        let mut buffer = DatumsBuffer::new();
                         let new_keyed = built
-                            .map(move |tuple| {
-                                (
-                                    new_keys2
-                                        .iter()
-                                        .map(|i| tuple[*i].clone())
-                                        .collect::<Vec<_>>(),
-                                    tuple,
-                                )
+                            .map(move |row| {
+                                let datums = row.as_datums(&mut buffer);
+                                let key_row = Row::from_iter(new_keys2.iter().map(|i| datums[*i]));
+                                drop(datums);
+                                (key_row, row)
                             })
                             .arrange_named::<OrdValSpine<_, _, _, _>>(&format!(
                                 "JoinIndex: {}",
@@ -419,20 +437,19 @@ where
 
                     joined = match self.arrangement(&input, &new_keys[..]) {
                         Some(ArrangementFlavor::Local(local)) => {
-                            old_keyed.join_core(&local, |_keys, old, new| {
-                                Some(old.iter().chain(new).cloned().collect::<Vec<_>>())
+                            old_keyed.join_core(&local, move |_keys, old, new| {
+                                Some(Row::from_iter(old.iter().chain(new.iter())))
                             })
                         }
                         Some(ArrangementFlavor::Trace(trace)) => {
-                            old_keyed.join_core(&trace, |_keys, old, new| {
-                                Some(old.iter().chain(new).cloned().collect::<Vec<_>>())
+                            old_keyed.join_core(&trace, move |_keys, old, new| {
+                                Some(Row::from_iter(old.iter().chain(new.iter())))
                             })
                         }
                         None => {
                             panic!("Arrangement alarmingly absent!");
                         }
                     };
-
                     columns.extend((0..arities[index]).map(|c| (index, c)));
                 }
 
@@ -495,75 +512,79 @@ where
             // Our first action is to take our input from a collection of `tuple`
             // to one structured as `((keys, vals), time, aggs)`
             let group_key = group_key.clone();
+
             let exploded = input
-                .map(move |tuple| {
-                    let keys = group_key
-                        .iter()
-                        .map(|i| tuple[*i].clone())
-                        .collect::<Vec<_>>();
+                .map({
+                    let group_key = group_key.clone();
+                    let mut buffer = DatumsBuffer::new();
+                    move |row| {
+                        let datums = row.as_datums(&mut buffer);
 
-                    let mut vals = Vec::new();
-                    let mut aggs = vec![1i128];
+                        let keys = Row::from_iter(group_key.iter().map(|i| datums[*i]));
 
-                    for (index, aggregate) in aggregates_clone.iter().enumerate() {
-                        // Presently, we can accumulate in the difference field only
-                        // if the aggregation has a known type and does not require
-                        // us to accumulate only distinct elements.
-                        //
-                        // To enable the optimization where distinctness is required,
-                        // consider restructuring the plan to pre-distinct the right
-                        // data and then use a non-distinctness-requiring aggregation.
+                        let mut vals = Row::new();
+                        let mut aggs = vec![1i128];
 
-                        let eval = aggregate.expr.eval(&tuple[..]);
+                        for (index, aggregate) in aggregates_clone.iter().enumerate() {
+                            // Presently, we can accumulate in the difference field only
+                            // if the aggregation has a known type and does not require
+                            // us to accumulate only distinct elements.
+                            //
+                            // To enable the optimization where distinctness is required,
+                            // consider restructuring the plan to pre-distinct the right
+                            // data and then use a non-distinctness-requiring aggregation.
 
-                        // Non-Abelian values cannot be accumulated, and just need to
-                        // be passed along.
-                        if !abelian2[index] {
-                            vals.push(eval);
-                        } else {
-                            // We can promote the content of `eval` into the difference,
-                            // but we need to retain the NULL-ness somewhere so that we
-                            // can distinguish zero accumulations from those that are
-                            // entirely NULLs.
+                            let eval = aggregate.expr.eval(&datums);
 
-                            // We have already retained the count in the first coordinate,
-                            // and would only want to record the unit value here, anyhow.
-                            match aggregate.func {
-                                AggregateFunc::CountAll => {
-                                    // Nothing beyond the accumulated count is needed.
-                                }
-                                AggregateFunc::Count => {
-                                    // Count needs to distinguish nulls from zero.
-                                    aggs.push(if eval.is_null() { 0 } else { 1 });
-                                }
-                                _ => {
-                                    // Other accumulations need to disentangle the accumulable
-                                    // value from its NULL-ness, which is not quite as easily
-                                    // accumulated.
-                                    let (value, non_null) = match eval {
-                                        Datum::Int32(i) => (i128::from(i), 1),
-                                        Datum::Int64(i) => (i128::from(i), 1),
-                                        Datum::Float32(f) => {
-                                            ((f64::from(*f) * float_scale) as i128, 1)
-                                        }
-                                        Datum::Float64(f) => ((*f * float_scale) as i128, 1),
-                                        Datum::Decimal(d) => (d.as_i128(), 1),
-                                        Datum::Null => (0, 0),
-                                        x => panic!("Accumulating non-integer data: {:?}", x),
-                                    };
-                                    aggs.push(value);
-                                    aggs.push(non_null);
+                            // Non-Abelian values cannot be accumulated, and just need to
+                            // be passed along.
+                            if !abelian2[index] {
+                                vals.push(eval);
+                            } else {
+                                // We can promote the content of `eval` into the difference,
+                                // but we need to retain the NULL-ness somewhere so that we
+                                // can distinguish zero accumulations from those that are
+                                // entirely NULLs.
+
+                                // We have already retained the count in the first coordinate,
+                                // and would only want to record the unit value here, anyhow.
+                                match aggregate.func {
+                                    AggregateFunc::CountAll => {
+                                        // Nothing beyond the accumulated count is needed.
+                                    }
+                                    AggregateFunc::Count => {
+                                        // Count needs to distinguish nulls from zero.
+                                        aggs.push(if eval.is_null() { 0 } else { 1 });
+                                    }
+                                    _ => {
+                                        // Other accumulations need to disentangle the accumulable
+                                        // value from its NULL-ness, which is not quite as easily
+                                        // accumulated.
+                                        let (value, non_null) = match eval {
+                                            Datum::Int32(i) => (i128::from(i), 1),
+                                            Datum::Int64(i) => (i128::from(i), 1),
+                                            Datum::Float32(f) => {
+                                                ((f64::from(*f) * float_scale) as i128, 1)
+                                            }
+                                            Datum::Float64(f) => ((*f * float_scale) as i128, 1),
+                                            Datum::Decimal(d) => (d.as_i128(), 1),
+                                            Datum::Null => (0, 0),
+                                            x => panic!("Accumulating non-integer data: {:?}", x),
+                                        };
+                                        aggs.push(value);
+                                        aggs.push(non_null);
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    // A DiffVector holds multiple monoidal accumulations.
-                    (
-                        keys,
-                        vals,
-                        differential_dataflow::difference::DiffVector::new(aggs),
-                    )
+                        // A DiffVector holds multiple monoidal accumulations.
+                        (
+                            keys,
+                            vals,
+                            differential_dataflow::difference::DiffVector::new(aggs),
+                        )
+                    }
                 })
                 .inner
                 .map(|(data, time, diff)| (data, time, diff as i128))
@@ -577,7 +598,7 @@ where
             let arrangement =
                 exploded
                     .arrange_named::<OrdValSpine<
-                        Vec<Datum>,
+                        Row,
                         _,
                         _,
                         differential_dataflow::difference::DiffVector<i128>,
@@ -594,8 +615,8 @@ where
                             }
 
                             // Our output will be [keys; aggregates].
-                            let mut result = Vec::with_capacity(key.len() + aggregates.len());
-                            result.extend(key.iter().cloned());
+                            let mut result = Row::new();
+                            result.extend(key.iter());
 
                             let mut abelian_pos = 1; // <- advance past the count
                             let mut non_abelian_pos = 0;
@@ -677,7 +698,7 @@ where
                                             .flat_map(|(v, w)| {
                                                 if w[0] > 0 {
                                                     // <-- really should be true
-                                                    Some(v[non_abelian_pos].clone())
+                                                    Some(v.iter().nth(non_abelian_pos).unwrap())
                                                 } else {
                                                     None
                                                 }
@@ -687,7 +708,7 @@ where
                                     } else {
                                         let iter = source.iter().flat_map(|(v, w)| {
                                             // let eval = agg.expr.eval(v);
-                                            std::iter::repeat(v[non_abelian_pos].clone())
+                                            std::iter::repeat(v.iter().nth(non_abelian_pos).unwrap())
                                                 .take(std::cmp::max(w[0], 0) as usize)
                                         });
                                         result.push((agg.func.func())(iter));
@@ -724,25 +745,29 @@ where
             let limit = *limit;
             let offset = *offset;
             let arrangement = input
-                .map(move |tuple| {
-                    (
-                        group_clone
-                            .iter()
-                            .map(|i| tuple[*i].clone())
-                            .collect::<Vec<_>>(),
-                        tuple,
-                    )
+                .map({
+                    let mut buffer = DatumsBuffer::new();
+                    move |row| {
+                        let datums = row.as_datums(&mut buffer);
+                        let group_row = Row::from_iter(group_clone.iter().map(|i| datums[*i]));
+                        drop(datums);
+                        (group_row, row)
+                    }
                 })
-                .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-                    "TopK",
+                .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("TopK", {
+                    let mut left_buffer = DatumsBuffer::new();
+                    let mut right_buffer = DatumsBuffer::new();
                     move |_key, source, target| {
                         target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
                         if !order_clone.is_empty() {
                             //todo: use arrangements or otherwise make the sort more performant?
-                            let sort_by =
-                                |left: &(Vec<Datum>, isize), right: &(Vec<Datum>, isize)| {
-                                    compare_columns(&order_clone, &(left.0), &(right.0))
-                                };
+                            let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
+                                compare_columns(
+                                    &order_clone,
+                                    &*left.0.as_datums(&mut left_buffer),
+                                    &*right.0.as_datums(&mut right_buffer),
+                                )
+                            };
                             target.sort_by(sort_by);
                         }
 
@@ -778,8 +803,8 @@ where
                             }
                         }
                         target.drain(..skip_cursor);
-                    },
-                );
+                    }
+                });
 
             let index = (0..group_key.len()).collect::<Vec<_>>();
             self.set_local(relation_expr, &index[..], arrangement.clone());
@@ -802,12 +827,13 @@ where
                 self.ensure_rendered(input, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
+                let mut buffer = DatumsBuffer::new();
                 let keyed = built
-                    .map(move |tuple| {
-                        (
-                            keys2.iter().map(|i| tuple[*i].clone()).collect::<Vec<_>>(),
-                            tuple,
-                        )
+                    .map(move |row| {
+                        let datums = row.as_datums(&mut buffer);
+                        let key_row = Row::from_iter(keys2.iter().map(|i| datums[*i]));
+                        drop(datums);
+                        (key_row, row)
                     })
                     .arrange_by_key();
                 self.set_local(&input, &keys[..], keyed);

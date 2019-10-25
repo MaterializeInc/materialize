@@ -29,7 +29,7 @@ use crate::secrets::SecretManager;
 use coord::{self, SqlResponse};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::{Recv, StreamExt};
-use repr::{Datum, RelationDesc};
+use repr::{RelationDesc, Row};
 use sql::Session;
 
 use prometheus::IntCounterVec;
@@ -917,10 +917,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     }
 }
 
-fn send_rows<A, R>(
+#[allow(clippy::too_many_arguments)]
+fn send_rows<A>(
     conn: A,
     session: Session,
-    rows: R,
+    rows: Vec<Row>,
     row_desc: RelationDesc,
     field_formats: Option<Vec<FieldFormat>>,
     currently_extended: bool,
@@ -928,8 +929,6 @@ fn send_rows<A, R>(
 ) -> SendCommandComplete<A>
 where
     A: Conn + 'static,
-    R: IntoIterator<Item = Vec<Datum>>,
-    <R as IntoIterator>::IntoIter: 'static + Send,
 {
     trace!("cid={} send rows extended={}", conn_id, currently_extended);
     let formats = FieldFormatIter::new(field_formats.map(Arc::new));
@@ -995,7 +994,7 @@ where
                 session,
                 kind: ErrorKind::Fatal,
             }
-            .into()
+            .into();
         }
     };
     match stmt.desc() {
