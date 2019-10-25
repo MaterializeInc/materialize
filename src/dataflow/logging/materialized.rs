@@ -231,19 +231,32 @@ pub fn construct<A: Allocate>(
                             for (peek, worker, is_install, time_ns) in vec.drain(..) {
                                 let key = (worker, peek.conn_id);
                                 if is_install {
-                                    assert!(!map.contains_key(&key));
+                                    if map.contains_key(&key) {
+                                        error!(
+                                            "peek already registered: \
+                                             worker={}, connection_id: {}",
+                                            worker, peek.conn_id,
+                                        );
+                                    }
                                     map.insert(key, time_ns);
                                 } else {
-                                    assert!(map.contains_key(&key));
-                                    let start = map.remove(&key).expect("start event absent");
-                                    let elapsed_ns = time_ns - start;
-                                    let time_ms = (time_ns / 1_000_000) as Timestamp;
-                                    let time_ms = ((time_ms / granularity_ms) + 1) * granularity_ms;
-                                    session.give((
-                                        (key.0, elapsed_ns.next_power_of_two()),
-                                        time_ms,
-                                        1isize,
-                                    ));
+                                    if let Some(start) = map.remove(&key) {
+                                        let elapsed_ns = time_ns - start;
+                                        let time_ms = (time_ns / 1_000_000) as Timestamp;
+                                        let time_ms =
+                                            ((time_ms / granularity_ms) + 1) * granularity_ms;
+                                        session.give((
+                                            (key.0, elapsed_ns.next_power_of_two()),
+                                            time_ms,
+                                            1isize,
+                                        ));
+                                    } else {
+                                        error!(
+                                            "peek not yet registered: \
+                                             worker={}, connection_id: {}",
+                                            worker, peek.conn_id,
+                                        );
+                                    }
                                 }
                             }
                         });
