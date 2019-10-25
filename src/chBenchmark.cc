@@ -135,8 +135,26 @@ static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *p
     promHist.set_value(std::move(hists));
 }
 
-static void createSourcesThread(mz::Config config, std::promise<std::vector<Histogram>> promHist,
-        int peekConns, const std::atomic<RunState> *pRunState) {
+static void flushThread(useconds_t sleepTime, const std::atomic<RunState> *pRunState) {
+    const auto& runState = *pRunState;
+    while (runState != RunState::run) {
+        usleep(sleepTime);
+    }
+    while (runState == RunState::run) {
+        usleep(sleepTime);
+        int result = system("flush-tables");
+        if (result == -1) {
+            fprintf(stderr, "Failed to execute flush-tables command: %s\n", strerror(errno));
+        } else if (result != 0) {
+            fprintf(stderr, "flush-tables exited with failure status %d\n", result);
+        } else {
+            printf("flush-tables finished with successful status.");
+        }
+    }
+}
+static void materializeThread(mz::Config config, std::promise<std::vector<Histogram>> promHist,
+                              int peekConns, const std::atomic<RunState> *pRunState,
+                              std::optional<useconds_t> flushSleepTime) {
     const auto& connUrl = config.materializedUrl;
     auto& expected = config.expectedSources;
     const auto& kafkaUrl = config.kafkaUrl;
@@ -159,6 +177,9 @@ static void createSourcesThread(mz::Config config, std::promise<std::vector<Hist
     for (const auto& vp: config.hQueries) {
         std::cout << "Creating query " << vp.first << std::endl;
         mz::createMaterializedView(c, vp.first, vp.second.query);
+    }
+    if (flushSleepTime) {
+        std::thread(flushThread, flushSleepTime.value(), pRunState).detach();
     }
     if (peekConns) {
         std::vector<Histogram> hists;
@@ -342,6 +363,7 @@ static int run(int argc, char* argv[]) {
         {"peek-conns", required_argument, nullptr, 'P'},
         {"peek-min-delay", required_argument, nullptr, 'k'},
         {"peek-max-delay", required_argument, nullptr, 'K'},
+        {"flush-every", required_argument, nullptr, 'F'},
         {nullptr, 0, nullptr, 0}};
 
     int c;
@@ -361,6 +383,7 @@ static int run(int argc, char* argv[]) {
     const char* logFile = nullptr;
     bool createSources = false;
     std::vector<std::string> mzViews;
+    double flushSleepTime = 0;
     while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:l:", longOpts,
                             nullptr)) != -1) {
         switch (c) {
@@ -412,6 +435,9 @@ static int run(int argc, char* argv[]) {
         case 'K':
             peekMaxDelay = parseDouble("maximum delay between peeks (s)", optarg);
             break;
+        case 'F':
+            flushSleepTime = parseDouble("Interval to run flush-tables hack (s)", optarg);
+            break;
         default:
             return 1;
         }
@@ -422,8 +448,9 @@ static int run(int argc, char* argv[]) {
     if (minDelay < 0.0 || maxDelay < 0.0 || minDelay > maxDelay
         || minDelay * 1'000'000 > UINT_MAX || maxDelay * 1'000'000 > UINT_MAX
         || peekMinDelay < 0.0 || peekMaxDelay < 0.0 || peekMinDelay > peekMaxDelay
-        || peekMinDelay * 1'000'000 > UINT_MAX || peekMaxDelay * 1'000'000 > UINT_MAX)
-        errx(1, "Invalid between-query delay bounds specified");
+        || peekMinDelay * 1'000'000 > UINT_MAX || peekMaxDelay * 1'000'000 > UINT_MAX
+        || flushSleepTime < 0.0 || flushSleepTime * 1'000'000 > UINT_MAX)
+        errx(1, "Invalid time bounds specified");
     if (!dsn)
         errx(1, "data source name (DSN) must be specified");
     if (analyticThreads < 0)
@@ -548,12 +575,13 @@ static int run(int argc, char* argv[]) {
             }
         }
         // TODO - kick off peeks
-        std::thread(createSourcesThread,
-                mzCfg,
-                std::move(promHist),
-                peekConns,
-                &runState
-                ).detach();
+        std::thread(materializeThread,
+                    mzCfg,
+                    std::move(promHist),
+                    peekConns,
+                    &runState,
+                    (flushSleepTime == 0) ? std::nullopt : std::optional<useconds_t>(flushSleepTime * 1'000'000)
+        ).detach();
     }
 
     Log::l2() << Log::tm() << "Wait for threads to initialize:\n";
