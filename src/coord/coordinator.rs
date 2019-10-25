@@ -323,11 +323,18 @@ where
             }
 
             Plan::Tail(source) => {
+                let mut source_name = source.name().to_string();
+                if let Some((_source, rename)) = self.sources.get(&source_name) {
+                    if let Some(rename) = rename {
+                        source_name = rename.clone();
+                    }
+                }
+
                 let name = format!("<tail_{}>", Uuid::new_v4());
                 self.active_tails.insert(conn_id, name.clone());
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 let since = self
-                    .upper_of(source.name())
+                    .upper_of(&source_name)
                     .expect("name missing at coordinator")
                     .elements()
                     .get(0)
@@ -337,7 +344,7 @@ where
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![DataflowDesc::from(Sink {
                         name,
-                        from: (source.name().to_owned(), source.desc().clone()),
+                        from: (source_name, source.desc().clone()),
                         connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                     })]),
                 );
