@@ -9,67 +9,50 @@
 use crate::RelationExpr;
 use std::collections::{HashMap, HashSet};
 
-/// Drive non-null requirements to `RelationExpr::Constant` collections.
+/// Drive demand from the root through operators.
 ///
-/// This analysis derives NonNull requirements on the arguments to predicates.
-/// These requirements exist because most functions with Null arguments are
-/// themselves Null, and a predicate that evaluates to Null will not pass.
-///
-/// These requirements are not here introduced as constraints, but rather flow
-/// to sources of data and restrict any constant collections to those rows that
-/// satisfy the constraint. The main consequence is when Null values are added
-/// in support of outer-joins and subqueries, we can occasionally remove that
-/// branch when we observe that Null values would be subjected to predicates.
-///
-/// This analysis relies on a careful understanding of `ScalarExpr` and the
-/// semantics of various functions, *some of which may be non-Null even with
-/// Null arguments*.
+/// This transformation primarily informs the `Join` operator, which can
+/// simplify its intermediate state with
 #[derive(Debug)]
-pub struct NonNullRequirements;
+pub struct Demand;
 
-impl crate::transform::Transform for NonNullRequirements {
+impl crate::transform::Transform for Demand {
     fn transform(&self, relation: &mut RelationExpr) {
         self.transform(relation)
     }
 }
 
-impl NonNullRequirements {
+impl Demand {
     pub fn transform(&self, relation: &mut RelationExpr) {
         self.action(relation, HashSet::new(), &mut HashMap::new());
     }
-    /// Columns that must be non-null.
+    /// Columns be produced.
     pub fn action(
         &self,
         relation: &mut RelationExpr,
         mut columns: HashSet<usize>,
-        gets: &mut HashMap<String, Vec<HashSet<usize>>>,
+        gets: &mut HashMap<String, HashSet<usize>>,
     ) {
         match relation {
-            RelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
-                let datums = row.unpack();
-                columns.iter().all(|c| datums[*c] != repr::Datum::Null)
-            }),
+            RelationExpr::Constant { rows, .. } => {
+                // Nothing clever to do with constants, that I can think of.
+            }
             RelationExpr::Get { name, .. } => {
                 gets.entry(name.to_string())
-                    .or_insert(Vec::new())
-                    .push(columns.clone());
+                    .or_insert(HashSet::new())
+                    .extend(columns);
             }
             RelationExpr::Let { name, value, body } => {
-                // Let harvests any non-null requirements from its body,
-                // and acts on the intersection of the requirements for
-                // each corresponding Get, pushing them at its value.
-                let prior = gets.insert(name.to_string(), Vec::new());
+                // Let harvests any requirements of get from its body,
+                // and pushes the union of the requirements at its value.
+                let prior = gets.insert(name.to_string(), HashSet::new());
                 self.action(body, columns, gets);
                 let mut needs = gets.remove(name).unwrap();
                 if let Some(prior) = prior {
                     gets.insert(name.to_string(), prior);
                 }
-                if let Some(mut need) = needs.pop() {
-                    while let Some(x) = needs.pop() {
-                        need.retain(|col| x.contains(col))
-                    }
-                    self.action(value, need, gets);
-                }
+
+                self.action(value, need, gets);
             }
             RelationExpr::Project { input, outputs } => {
                 self.action(
@@ -85,19 +68,26 @@ impl NonNullRequirements {
                     if column < arity {
                         new_columns.insert(column);
                     } else {
-                        scalars[column - arity].non_null_requirements(&mut new_columns);
+                        for column in scalars[column - arity].support() {
+                            new_columns.insert(column);
+                        }
                     }
                 }
                 self.action(input, new_columns, gets);
             }
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
-                    predicate.non_null_requirements(&mut columns);
-                    // TODO: Not(IsNull) should add a constraint!
+                    for column in predicate.support() {
+                        new_columns.insert(column);
+                    }
                 }
                 self.action(input, columns, gets);
             }
-            RelationExpr::Join { inputs, variables, .. } => {
+            RelationExpr::Join { inputs, variables, projection } => {
+
+                // Record column demands as an optional projection.
+                *projection = Some(columns.iter().cloned().collect());
+
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types
                     .iter()
@@ -117,27 +107,21 @@ impl NonNullRequirements {
                     .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
                     .collect::<Vec<_>>();
 
+                // We certainly need each required column from its input.
                 let mut new_columns = vec![HashSet::new(); inputs.len()];
                 for column in columns {
                     let input = input_relation[column];
                     new_columns[input].insert(column - prior_arities[input]);
                 }
 
-                // `variable` smears constraints around.
-                // Also, any non-nullable columns impose constraints on their equivalence class.
+                // We also need any columns that participate in constraints.
                 for variable in variables {
-                    let exists_constraint =
-                        variable.iter().any(|(r, c)| new_columns[*r].contains(c));
-                    let nonnull_columns = variable
-                        .iter()
-                        .any(|(r, c)| !input_types[*r].column_types[*c].nullable);
-                    if exists_constraint || nonnull_columns {
-                        for (r, c) in variable {
-                            new_columns[*r].insert(*c);
-                        }
+                    for (rel, col) in variable {
+                        new_columns[*rel].insert(*col);
                     }
                 }
 
+                // Recursively indicate the requirements.
                 for (input, columns) in inputs.iter_mut().zip(new_columns) {
                     self.action(input, columns, gets);
                 }
@@ -154,11 +138,8 @@ impl NonNullRequirements {
                     if column < group_key.len() {
                         new_columns.insert(group_key[column]);
                     }
-                    if column == group_key.len()
-                        && aggregates.len() == 1
-                        && aggregates[0].func != crate::AggregateFunc::CountAll
-                    {
-                        aggregates[0].expr.non_null_requirements(&mut new_columns);
+                    for aggregate in aggregates {
+                        new_columns.extend(aggregate.expr.support());
                     }
                 }
                 self.action(input, new_columns, gets);

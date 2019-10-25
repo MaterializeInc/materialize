@@ -82,6 +82,12 @@ pub enum RelationExpr {
         /// Each element of the sequence is a set of pairs, where the values described by each pair must
         /// be equal to all other values in the same set.
         variables: Vec<Vec<(usize, usize)>>,
+        /// This optional field is a hint for which columns are actually used
+        /// by operators that use this collection. Although the join does not
+        /// have permission to change the schema, it can introduce dummy values
+        /// at the end of its computation, avoiding the maintenance of values
+        /// not present in this list (when it is non-None).
+        projection: Option<Vec<usize>>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {
@@ -172,7 +178,9 @@ impl RelationExpr {
                 typ
             }
             RelationExpr::Filter { input, .. } => input.typ(),
-            RelationExpr::Join { inputs, variables } => {
+            RelationExpr::Join {
+                inputs, variables, ..
+            } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
                 // Iterating and cloning types inside the flat_map() avoids allocating Vec<>,
@@ -334,6 +342,7 @@ impl RelationExpr {
         RelationExpr::Join {
             inputs: vec![self, right],
             variables: vec![],
+            projection: None,
         }
     }
 
@@ -383,7 +392,11 @@ impl RelationExpr {
     /// let result = joined.project(vec![0, 1, 3]);
     /// ```
     pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
-        RelationExpr::Join { inputs, variables }
+        RelationExpr::Join {
+            inputs,
+            variables,
+            projection: None,
+        }
     }
 
     /// Perform a key-wise reduction / aggregation.
@@ -455,6 +468,64 @@ impl RelationExpr {
         }
     }
 
+<<<<<<< HEAD
+=======
+    /// A helper method to finish a left outer join.
+    ///
+    /// This method should be called as `left.join(right).left_outer(left)' in order
+    /// to effect a left outer join. It most likely should not be called in any other
+    /// context without further investigation.
+    pub fn left_outer(self, left: Self) -> Self {
+        let both = self;
+        let both_arity = both.arity();
+        let left_arity = left.arity();
+        assert!(both_arity >= left_arity);
+
+        RelationExpr::join(
+            vec![
+                left.union(both.project((0..left_arity).collect()).distinct().negate()),
+                RelationExpr::Constant {
+                    rows: vec![(vec![Datum::Null; both_arity - left_arity], 1)],
+                    typ: RelationType::new(vec![
+                        ColumnType::new(ScalarType::Null).nullable(true);
+                        both_arity - left_arity
+                    ]),
+                },
+            ],
+            vec![],
+        )
+    }
+
+    /// A helper method to finish a right outer join.
+    ///
+    /// This method should be called as `left.join(right).right_outer(right)' in order
+    /// to effect a right outer join. It most likely should not be called in any other
+    /// context without further investigation.
+    pub fn right_outer(self, right: Self) -> Self {
+        let both = self;
+        let both_arity = both.arity();
+        let right_arity = right.arity();
+        assert!(both_arity >= right_arity);
+
+        RelationExpr::join(
+            vec![
+                RelationExpr::Constant {
+                    rows: vec![(vec![Datum::Null; both_arity - right_arity], 1)],
+                    typ: RelationType::new(vec![
+                        ColumnType::new(ScalarType::Null).nullable(true);
+                        both_arity - right_arity
+                    ]),
+                },
+                right.union(
+                    both.distinct_by(((both_arity - right_arity)..both_arity).collect())
+                        .negate(),
+                ),
+            ],
+            vec![],
+        )
+    }
+
+>>>>>>> initial commit
     /// Indicates if this is a constant empty collection.
     ///
     /// A false value does not mean the collection is known to be non-empty,
@@ -655,7 +726,7 @@ impl RelationExpr {
                 let predicates = to_tightly_braced_doc("predicates: [", predicates, "]").group();
                 to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
             }
-            RelationExpr::Join { inputs, variables } => {
+            RelationExpr::Join { inputs, variables, .. } => {
                 fn pair_to_doc(p: &(usize, usize)) -> Doc<BoxDoc<()>, ()> {
                     to_doc!("(", p.0.to_string(), ", ", p.1.to_string(), ")")
                 }

@@ -88,7 +88,7 @@ impl SimplifyFilterPredicates {
         if let RelationExpr::Filter { input, predicates } = relation {
             if let RelationExpr::Join {
                 inputs,
-                variables: _,
+                ..
             } = &mut **input
             {
                 let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
