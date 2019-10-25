@@ -3,6 +3,9 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+// clippy is wrong
+#![allow(clippy::collapsible_if)]
+
 use std::time::Duration;
 
 use log::error;
