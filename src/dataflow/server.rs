@@ -416,6 +416,7 @@ where
             }
 
             SequencedCommand::CancelPeek { conn_id } => {
+                let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|(peek, _trace)| {
                     if peek.conn_id == conn_id {
                         peek.tx
@@ -425,6 +426,18 @@ where
                             .send(PeekResponse::Canceled)
                             .wait()
                             .unwrap();
+
+                        if let Some(logger) = logger {
+                            logger.log(MaterializedEvent::Peek(
+                                crate::logging::materialized::Peek::new(
+                                    &peek.name,
+                                    peek.timestamp,
+                                    peek.conn_id,
+                                ),
+                                false,
+                            ));
+                        }
+
                         false // don't retain
                     } else {
                         true // retain
