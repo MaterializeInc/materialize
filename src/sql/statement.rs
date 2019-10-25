@@ -49,7 +49,7 @@ impl<'catalog> Planner<'catalog> {
         session: &mut Session,
         sql: String,
         name: String,
-    ) -> Result<Plan, failure::Error> {
+    ) -> Result<(), failure::Error> {
         let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
         match stmts.len() {
             0 => session.set_prepared_statement(name, PreparedStatement::empty()),
@@ -69,8 +69,7 @@ impl<'catalog> Planner<'catalog> {
             }
             n => bail!("expected one statement but got {}: {:?}", n, sql),
         }
-
-        Ok(Plan::Parsed)
+        Ok(())
     }
 
     /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands

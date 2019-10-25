@@ -45,7 +45,6 @@ pub enum Plan {
         name: String,
         value: String,
     },
-    Parsed,
     Peek {
         source: ::expr::RelationExpr,
         desc: RelationDesc,

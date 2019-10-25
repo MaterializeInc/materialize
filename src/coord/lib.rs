@@ -25,40 +25,27 @@ use std::fmt;
 pub mod coordinator;
 pub mod transient;
 
-/// An incoming client request.
-pub struct Command {
-    /// The kind of request.
-    pub kind: CommandKind,
-    /// The ID of the connection making the request.
-    pub conn_id: u32,
-    /// The connection's session.
-    pub session: sql::Session,
-    /// A transmitter over which the response to the request should be sent.
-    pub tx: futures::sync::oneshot::Sender<Response>,
-}
-
-impl fmt::Debug for Command {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Command")
-            .field("kind", &self.kind)
-            .field("conn_id", &self.conn_id)
-            .field("session", &self.session)
-            .field("tx", &"<>")
-            .finish()
-    }
-}
-
 /// The kinds of requests the client can make of the coordinator.
 #[derive(Debug)]
-pub enum CommandKind {
+pub enum Command {
     /// Parse and execute the specified SQL.
-    Query { sql: String },
+    Query {
+        sql: String,
+        session: Session,
+        conn_id: u32,
+        tx: futures::sync::oneshot::Sender<Response<QueryExecuteResponse>>,
+    },
 
     /// Parse the specified SQL into a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
     /// under the specified name.
-    Parse { name: String, sql: String },
+    Parse {
+        name: String,
+        sql: String,
+        session: Session,
+        tx: futures::sync::oneshot::Sender<Response<()>>,
+    },
 
     /// Bind a prepared statement to a portal, filling in any placeholders
     /// in the prepared statement.
@@ -73,22 +60,30 @@ pub enum CommandKind {
     // }
 
     /// Execute a bound portal.
-    Execute { portal_name: String },
+    Execute {
+        portal_name: String,
+        session: Session,
+        conn_id: u32,
+        tx: futures::sync::oneshot::Sender<Response<QueryExecuteResponse>>,
+    },
 
     /// Cancel the query currently running on another connection.
     CancelRequest { conn_id: u32 },
+
+    /// Shut down the coordinator thread.
+    Shutdown,
 }
 
-/// Responses from the queue to SQL commands.
-pub struct Response {
-    pub sql_result: Result<SqlResponse, failure::Error>,
+#[derive(Debug)]
+pub struct Response<T> {
+    pub result: Result<T, failure::Error>,
     pub session: Session,
 }
 
 pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error> + Send>;
 
-/// The SQL portition of [`Response`].
-pub enum SqlResponse {
+/// Response from the queue to a `Query` or `Execute` command.
+pub enum QueryExecuteResponse {
     CreatedSink,
     CreatedSource,
     CreatedView,
@@ -99,8 +94,6 @@ pub enum SqlResponse {
         desc: RelationDesc,
         rx: RowsFuture,
     },
-    /// We have successfully parsed the query and stashed it in the [`Session`]
-    Parsed,
     SetVariable {
         name: String,
     },
@@ -109,19 +102,26 @@ pub enum SqlResponse {
     },
 }
 
-impl fmt::Debug for SqlResponse {
+impl fmt::Debug for QueryExecuteResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SqlResponse::CreatedSink => f.write_str("SqlResponse::CreatedSink"),
-            SqlResponse::CreatedSource => f.write_str("SqlResponse::CreatedSource"),
-            SqlResponse::CreatedView => f.write_str("SqlResponse::CreatedView"),
-            SqlResponse::DroppedSource => f.write_str("SqlResponse::DroppedSource"),
-            SqlResponse::DroppedView => f.write_str("SqlResponse::DroppedView"),
-            SqlResponse::EmptyQuery => f.write_str("SqlResponse::EmptyQuery"),
-            SqlResponse::Parsed => write!(f, "SqlResponse::Parsed"),
-            SqlResponse::SendRows { desc, rx: _ } => write!(f, "SqlResponse::SendRows({:?})", desc),
-            SqlResponse::SetVariable { name } => write!(f, "SqlResponse::SetVariable({})", name),
-            SqlResponse::Tailing { rx: _ } => f.write_str("SqlResponse::Tailing"),
+            QueryExecuteResponse::CreatedSink => f.write_str("QueryExecuteResponse::CreatedSink"),
+            QueryExecuteResponse::CreatedSource => {
+                f.write_str("QueryExecuteResponse::CreatedSource")
+            }
+            QueryExecuteResponse::CreatedView => f.write_str("QueryExecuteResponse::CreatedView"),
+            QueryExecuteResponse::DroppedSource => {
+                f.write_str("QueryExecuteResponse::DroppedSource")
+            }
+            QueryExecuteResponse::DroppedView => f.write_str("QueryExecuteResponse::DroppedView"),
+            QueryExecuteResponse::EmptyQuery => f.write_str("QueryExecuteResponse::EmptyQuery"),
+            QueryExecuteResponse::SendRows { desc, rx: _ } => {
+                write!(f, "QueryExecuteResponse::SendRows({:?})", desc)
+            }
+            QueryExecuteResponse::SetVariable { name } => {
+                write!(f, "QueryExecuteResponse::SetVariable({})", name)
+            }
+            QueryExecuteResponse::Tailing { rx: _ } => f.write_str("QueryExecuteResponse::Tailing"),
         }
     }
 }
