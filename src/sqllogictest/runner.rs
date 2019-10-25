@@ -38,6 +38,7 @@ use regex::Regex;
 use coord::{coordinator::Coordinator, QueryExecuteResponse};
 use dataflow;
 use dataflow_types::{self, Source, SourceConnector, Update};
+use ore::collections::CollectionExt;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum};
 use sql::store::RemoveMode;
@@ -754,7 +755,13 @@ impl State {
     }
 
     pub(crate) fn plan_sql(&mut self, sql: &str) -> Result<sql::Plan, failure::Error> {
-        sql::handle_command(&mut self.session, sql.to_string(), &mut self.catalog)
+        let stmts = sql::parse(sql.into())?;
+        if stmts.len() != 1 {
+            bail!("expected exactly one statement, but got {}", stmts.len());
+        }
+        let plan = sql::plan(&self.catalog, &self.session, stmts.into_element())?;
+        coord::transient::apply_plan(&mut self.catalog, &mut self.session, &plan)?;
+        Ok(plan)
     }
 
     pub(crate) fn run_plan(&mut self, plan: sql::Plan) -> QueryExecuteResponse {

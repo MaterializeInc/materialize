@@ -18,11 +18,11 @@ use sqlparser::ast::{
 use url::Url;
 
 use crate::expr::like::build_like_regex_from_string;
+use crate::query;
 use crate::scope::Scope;
 use crate::session::Session;
 use crate::store::{Catalog, CatalogItem, RemoveMode};
-use crate::query;
-use crate::{extract_sql_object_name, Plan};
+use crate::Plan;
 use dataflow_types::{
     KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink, SinkConnector,
     Source, SourceConnector, View,
@@ -592,4 +592,11 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
         ObjectType::Source => "SOURCES",
         ObjectType::Sink => "SINKS",
     }
+}
+
+pub(crate) fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
+    if n.0.len() != 1 {
+        bail!("qualified names are not yet supported: {}", n.to_string())
+    }
+    Ok(n.to_string())
 }

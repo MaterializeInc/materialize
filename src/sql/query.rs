@@ -19,9 +19,9 @@ use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
     ScalarExpr, UnaryFunc, VariadicFunc, LITERAL_NULL, LITERAL_TRUE,
 };
-use super::store::Catalog;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
-use super::extract_sql_object_name;
+use super::statement::extract_sql_object_name;
+use super::store::Catalog;
 use dataflow_types::RowSetFinishing;
 use failure::{bail, ensure, format_err, ResultExt};
 use ore::iter::{FallibleIteratorExt, IteratorExt};
@@ -210,8 +210,7 @@ fn plan_set_expr(
                     // i.e., the record counts for differential data flow definitely remain non-negative.
                     let left_clone = left_expr.clone();
                     if *all {
-                        left_expr
-                            .union(left_clone.union(right_expr.negate()).threshold().negate())
+                        left_expr.union(left_clone.union(right_expr.negate()).threshold().negate())
                     } else {
                         left_expr
                             .union(left_clone.union(right_expr.negate()).threshold().negate())
@@ -307,7 +306,8 @@ fn plan_view_select(
         .map(|twj| plan_table_with_joins(catalog, twj, outer_scope, outer_relation_type))
         .fallible()
         .fold1(|(left, left_scope), (right, right_scope)| {
-            plan_join_operator(catalog,
+            plan_join_operator(
+                catalog,
                 &JoinOperator::CrossJoin,
                 left,
                 left_scope,
@@ -374,15 +374,15 @@ fn plan_view_select(
                 .find(|existing_expr| **existing_expr == expr)
                 .is_none()
             {
-                let mut scope_item =
-                    if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr {
-                        // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
-                        // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
-                        select_all_mapping.insert(*old_column, new_column);
-                        ctx.scope.items[*old_column].clone()
-                    } else {
-                        ScopeItem::from_column_name(None)
-                    };
+                let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(old_column)) = &expr
+                {
+                    // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
+                    // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
+                    select_all_mapping.insert(*old_column, new_column);
+                    ctx.scope.items[*old_column].clone()
+                } else {
+                    ScopeItem::from_column_name(None)
+                };
                 scope_item.expr = Some(group_expr.clone());
 
                 group_key.push(from_scope.len() + group_exprs.len());
@@ -497,7 +497,8 @@ fn plan_table_with_joins<'a>(
         plan_table_factor(catalog, &table_with_joins.relation, outer_scope)?;
     for join in &table_with_joins.joins {
         let (right, right_scope) = plan_table_factor(catalog, &join.relation, outer_scope)?;
-        let (new_left, new_left_scope) = plan_join_operator(catalog,
+        let (new_left, new_left_scope) = plan_join_operator(
+            catalog,
             &join.join_operator,
             left,
             left_scope,
@@ -555,8 +556,12 @@ fn plan_table_factor<'a>(
             if *lateral {
                 bail!("LATERAL derived tables are not yet supported");
             }
-            let (expr, scope) =
-                plan_subquery(catalog, &subquery, &Scope::empty(None), &RelationType::empty())?;
+            let (expr, scope) = plan_subquery(
+                catalog,
+                &subquery,
+                &Scope::empty(None),
+                &RelationType::empty(),
+            )?;
             let alias = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
@@ -565,13 +570,15 @@ fn plan_table_factor<'a>(
             } else {
                 None
             };
-            let scope =
-                Scope::from_source(alias, scope.column_names(), Some(outer_scope.clone()));
+            let scope = Scope::from_source(alias, scope.column_names(), Some(outer_scope.clone()));
             Ok((expr, scope))
         }
-        TableFactor::NestedJoin(table_with_joins) => {
-            plan_table_with_joins(catalog, table_with_joins, outer_scope, &RelationType::empty())
-        }
+        TableFactor::NestedJoin(table_with_joins) => plan_table_with_joins(
+            catalog,
+            table_with_joins,
+            outer_scope,
+            &RelationType::empty(),
+        ),
     }
 }
 
@@ -661,7 +668,8 @@ fn plan_join_operator(
     outer_relation_type: &RelationType,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     match operator {
-        JoinOperator::Inner(constraint) => plan_join_constraint(catalog,
+        JoinOperator::Inner(constraint) => plan_join_constraint(
+            catalog,
             &constraint,
             left,
             left_scope,
@@ -670,7 +678,8 @@ fn plan_join_operator(
             outer_relation_type,
             JoinKind::Inner,
         ),
-        JoinOperator::LeftOuter(constraint) => plan_join_constraint(catalog,
+        JoinOperator::LeftOuter(constraint) => plan_join_constraint(
+            catalog,
             &constraint,
             left,
             left_scope,
@@ -679,7 +688,8 @@ fn plan_join_operator(
             outer_relation_type,
             JoinKind::LeftOuter,
         ),
-        JoinOperator::RightOuter(constraint) => plan_join_constraint(catalog,
+        JoinOperator::RightOuter(constraint) => plan_join_constraint(
+            catalog,
             &constraint,
             left,
             left_scope,
@@ -688,7 +698,8 @@ fn plan_join_operator(
             outer_relation_type,
             JoinKind::RightOuter,
         ),
-        JoinOperator::FullOuter(constraint) => plan_join_constraint(catalog,
+        JoinOperator::FullOuter(constraint) => plan_join_constraint(
+            catalog,
             &constraint,
             left,
             left_scope,
@@ -748,8 +759,7 @@ fn plan_join_constraint<'a>(
                 //
                 // Note that this is a MySQL-ism; PostgreSQL does not do
                 // this sort of equivalence detection for ON constraints.
-                let right_names =
-                    std::mem::replace(&mut product_scope.items[r].names, Vec::new());
+                let right_names = std::mem::replace(&mut product_scope.items[r].names, Vec::new());
                 product_scope.items[l].names.extend(right_names);
             }
             let joined = RelationExpr::Join {
@@ -760,7 +770,8 @@ fn plan_join_constraint<'a>(
             };
             (joined, product_scope)
         }
-        JoinConstraint::Using(column_names) => plan_using_constraint(catalog,
+        JoinConstraint::Using(column_names) => plan_using_constraint(
+            catalog,
             &column_names
                 .iter()
                 .map(|ident| ident.value.to_owned())
@@ -785,7 +796,8 @@ fn plan_join_constraint<'a>(
                     }
                 }
             }
-            plan_using_constraint(catalog,
+            plan_using_constraint(
+                catalog,
                 &column_names,
                 left,
                 left_scope,
@@ -878,7 +890,11 @@ fn plan_using_constraint(
     Ok((both, both_scope))
 }
 
-fn plan_expr<'a>(catalog: &Catalog, ctx: &ExprContext, e: &'a Expr) -> Result<ScalarExpr, failure::Error> {
+fn plan_expr<'a>(
+    catalog: &Catalog,
+    ctx: &ExprContext,
+    e: &'a Expr,
+) -> Result<ScalarExpr, failure::Error> {
     if let Some((i, _)) = ctx.scope.resolve_expr(e) {
         // surprise - we already calculated this expr before
         Ok(ScalarExpr::Column(i))
@@ -1060,7 +1076,8 @@ fn plan_any_or_all<'a>(
         inner_relation_type: &right.typ(&typ),
         allow_aggregates: false,
     };
-    let op_expr = plan_binary_op(catalog,
+    let op_expr = plan_binary_op(
+        catalog,
         &any_ctx,
         op,
         left,
@@ -1170,8 +1187,7 @@ fn plan_function<'a>(
                 }
                 let expr = plan_expr(catalog, ctx, &sql_func.args[0])?;
                 let typ = ctx.column_type(&expr);
-                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null
-                {
+                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
                     bail!("ascii does not accept arguments of type {:?}", typ);
                 }
                 let expr = ScalarExpr::CallUnary {
@@ -1201,7 +1217,8 @@ fn plan_function<'a>(
                 if sql_func.args.len() != 2 {
                     bail!("mod requires exactly two arguments");
                 }
-                plan_binary_op(catalog,
+                plan_binary_op(
+                    catalog,
                     ctx,
                     &BinaryOperator::Modulus,
                     &sql_func.args[0],
@@ -1248,9 +1265,7 @@ fn plan_function<'a>(
                 let mut exprs = Vec::new();
                 let expr1 = plan_expr(catalog, ctx, &sql_func.args[0])?;
                 let typ1 = ctx.column_type(&expr1);
-                if typ1.scalar_type != ScalarType::String
-                    && typ1.scalar_type != ScalarType::Null
-                {
+                if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Null {
                     bail!("substring first argument has non-string type {:?}", typ1);
                 }
                 exprs.push(expr1);
@@ -1431,9 +1446,7 @@ fn plan_arithmetic_op<'a>(
         _ => false,
     };
     let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
-        (Date, Interval) | (Timestamp, Interval) | (Interval, Date) | (Interval, Timestamp) => {
-            true
-        }
+        (Date, Interval) | (Timestamp, Interval) | (Interval, Date) | (Interval, Timestamp) => true,
         _ => false,
     };
     if both_decimals {
