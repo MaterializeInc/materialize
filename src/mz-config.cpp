@@ -378,7 +378,7 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     std::nullopt, std::nullopt}
             },
             {"q18",
-                    {"SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount)\n"
+                    {"SELECT c_last, c_id, o_id, o_entry_d, o_ol_cnt, sum(ol_amount) ol_amount_sum\n"
                     "FROM mysql_tpcch_customer, mysql_tpcch_order, mysql_tpcch_orderline\n"
                     "WHERE c_id = o_c_id\n"
                     "AND c_w_id = o_w_id\n"
@@ -390,7 +390,7 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "HAVING sum(ol_amount) > 200\n"
                     "ORDER BY sum(ol_amount)\n",
 
-                    "sum(ol_amount)", std::nullopt}
+                    "ol_amount_sum", std::nullopt}
             },
             {"q19",
                     {"SELECT sum(ol_amount) AS revenue\n"
@@ -486,7 +486,7 @@ const std::unordered_map<std::string, mz::ViewDefinition> &mz::allHQueries() {
                     "GROUP BY substr(c_state, 1, 1)\n"
                     "ORDER BY substr(c_state, 1, 1)\n",
 
-                    "substr(c_state, 1, 1)", std::nullopt}
+                    "country", std::nullopt}
             }
     };
     return singleton;
