@@ -40,6 +40,7 @@ mz::createAllSources(pqxx::connection &c, std::string from, std::string registry
 
 void mz::createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query) {
     pqxx::nontransaction w(c);
+    w.exec0("DROP VIEW IF EXISTS " + name);
     w.exec0("CREATE VIEW " + name + " AS " + query);
 }
 
