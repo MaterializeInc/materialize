@@ -92,8 +92,7 @@ where
                     mut session,
                     tx,
                 }) => {
-                    let planner = sql::Planner::new(&catalog);
-                    let result = planner.handle_parse_command(&mut session, sql, name);
+                    let result = sql::handle_parse_command(&catalog, &mut session, sql, name);
                     let _ = tx.send(Response { result, session });
                 }
 

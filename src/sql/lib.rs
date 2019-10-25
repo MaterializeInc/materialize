@@ -11,8 +11,9 @@ use dataflow_types::{PeekWhen, RowSetFinishing, Sink, Source, View};
 use failure::bail;
 
 use ore::collections::CollectionExt;
-use repr::{Datum, RelationDesc};
+use repr::{Datum, RelationDesc, ScalarType};
 pub use session::Session;
+use session::PreparedStatement;
 use sqlparser::ast::ObjectName;
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
@@ -104,8 +105,7 @@ pub fn handle_commands(
     let statements = SqlParser::parse_sql(&AnsiDialect {}, sql)?;
     let mut results = Vec::new();
     for statement in statements {
-        let planner = Planner::new(catalog);
-        let plan = planner.handle_statement(session, statement)?;
+        let plan = statement::handle_statement(catalog, session, statement)?;
         apply_plan(session, &plan, catalog)?;
         results.push(plan);
     }
@@ -123,8 +123,7 @@ pub fn handle_command(
     match stmts.len() {
         0 => Ok(Plan::EmptyQuery),
         1 => {
-            let planner = Planner::new(catalog);
-            let plan = planner.handle_statement(session, stmts.into_element())?;
+            let plan = statement::handle_statement(catalog, session, stmts.into_element())?;
             apply_plan(session, &plan, catalog)?;
             Ok(plan)
         }
@@ -151,8 +150,7 @@ pub fn handle_execute_command(
         })?;
     match prepared.sql() {
         Some(sql) => {
-            let planner = Planner::new(catalog);
-            let plan = planner.handle_statement(session, sql.clone())?;
+            let plan = statement::handle_statement(catalog, session, sql.clone())?;
             apply_plan(session, &plan, catalog)?;
             Ok(plan)
         }
@@ -160,15 +158,41 @@ pub fn handle_execute_command(
     }
 }
 
+/// Parses the specified SQL into a prepared statement.
+///
+/// The prepared statement is saved in the connection's [`sql::Session`]
+/// under the specified name.
+pub fn handle_parse_command(
+    catalog: &Catalog,
+    session: &mut Session,
+    sql: String,
+    name: String,
+) -> Result<(), failure::Error> {
+    let stmts = SqlParser::parse_sql(&AnsiDialect {}, sql.clone())?;
+    match stmts.len() {
+        0 => session.set_prepared_statement(name, PreparedStatement::empty()),
+        1 => {
+            let stmt = stmts.into_element();
+            let plan = statement::handle_statement(catalog, session, stmt.clone())?;
+            let desc = match plan {
+                Plan::Peek { desc, .. } => Some(desc),
+                Plan::SendRows { desc, .. } => Some(desc),
+                Plan::ExplainPlan { desc, .. } => Some(desc),
+                Plan::CreateSources { .. } => {
+                    Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+                }
+                _ => None,
+            };
+            session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
+        }
+        n => bail!("expected one statement but got {}: {:?}", n, sql),
+    }
+    Ok(())
+}
+
 fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
     if n.0.len() != 1 {
         bail!("qualified names are not yet supported: {}", n.to_string())
     }
     Ok(n.to_string())
-}
-
-/// Used to create plans.
-#[derive(Debug)]
-pub struct Planner<'catalog> {
-    pub dataflows: &'catalog Catalog,
 }
