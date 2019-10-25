@@ -7,6 +7,8 @@ version: '3.7'
 services:
   materialized:
     image: materialize/materialized:latest
+    ports:
+     - 6875:6875
     init: true
     command: -w1
   mysql:
