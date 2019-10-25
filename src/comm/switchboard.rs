@@ -230,32 +230,30 @@ where
         &self.0.executor
     }
 
-    /// Allocates a transmitter for the broadcast channel identified by the
-    /// token `T`.
-    pub fn broadcast_tx<T>(&self) -> broadcast::Sender<T::Item>
+    /// Allocates a transmitter for the broadcast channel identified by `token`.
+    pub fn broadcast_tx<T>(&self, token: T) -> broadcast::Sender<T::Item>
     where
         T: broadcast::Token + 'static,
     {
-        let uuid = broadcast::token_uuid::<T>();
-        if T::loopback() {
+        let uuid = token.uuid();
+        if token.loopback() {
             broadcast::Sender::new::<C, _>(uuid, self.0.nodes.iter())
         } else {
             broadcast::Sender::new::<C, _>(uuid, self.peers())
         }
     }
 
-    /// Allocates a receiver for the broadcast channel identified by the token
-    /// `T`.
+    /// Allocates a receiver for the broadcast channel identified by `token`.
     ///
     /// # Panics
     ///
     /// Panics if this switchboard has already allocated a broadcast receiver
-    /// for `T`.
-    pub fn broadcast_rx<T>(&self) -> broadcast::Receiver<T::Item>
+    /// for `token`.
+    pub fn broadcast_rx<T>(&self, token: T) -> broadcast::Receiver<T::Item>
     where
         T: broadcast::Token + 'static,
     {
-        let uuid = broadcast::token_uuid::<T>();
+        let uuid = token.uuid();
         broadcast::Receiver::new(self.new_rx(uuid), self.clone())
     }
 

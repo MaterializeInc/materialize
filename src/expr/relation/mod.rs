@@ -227,7 +227,27 @@ impl RelationExpr {
                 for agg in aggregates {
                     column_types.push(agg.typ(&input_typ));
                 }
-                RelationType::new(column_types).add_keys((0..group_key.len()).collect())
+                let mut result = RelationType::new(column_types);
+                // The group key should form a key, but we might already have
+                // keys that are subsets of the group key, and should retain
+                // those instead, if so.
+                let mut keys = Vec::new();
+                for key in input_typ.keys.iter() {
+                    if key.iter().all(|k| group_key.contains(k)) {
+                        keys.push(
+                            key.iter()
+                                .map(|i| group_key.iter().position(|k| k == i).unwrap())
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                if keys.is_empty() {
+                    keys.push((0..group_key.len()).collect());
+                }
+                for key in keys {
+                    result = result.add_keys(key);
+                }
+                result
             }
             RelationExpr::TopK { input, .. } => input.typ(),
             RelationExpr::Negate { input } => input.typ(),

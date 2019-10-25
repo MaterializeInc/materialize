@@ -7,14 +7,15 @@
 
 #![deny(missing_debug_implementations)]
 
-use dataflow_types::{Dataflow, PeekWhen, RowSetFinishing, Sink, Source, View};
-use failure::bail;
-use repr::{Datum, RelationDesc, Row};
-pub use session::Session;
-use sqlparser::ast::ObjectName;
-use std::iter::FromIterator;
+use dataflow_types::{PeekWhen, RowSetFinishing, Sink, Source, View};
 
-use store::DataflowStore;
+use repr::{RelationDesc, Row};
+use sqlparser::dialect::AnsiDialect;
+use sqlparser::parser::Parser as SqlParser;
+use store::{Catalog, CatalogItem};
+
+pub use session::{PreparedStatement, Session};
+pub use sqlparser::ast::Statement;
 
 mod expr;
 mod query;
@@ -34,21 +35,22 @@ pub enum Plan {
     CreateSources(Vec<Source>),
     CreateSink(Sink),
     CreateView(View),
-    DropSources(Vec<String>),
-    DropViews(Vec<String>),
+    // DropSources(Vec<String>),
+    // DropViews(Vec<String>),
+    /// Items to drop, and true iff a source.
+    DropItems((Vec<String>, bool)),
     EmptyQuery,
     SetVariable {
         name: String,
         value: String,
     },
-    Parsed,
     Peek {
         source: ::expr::RelationExpr,
         desc: RelationDesc,
         when: PeekWhen,
         finishing: RowSetFinishing,
     },
-    Tail(Dataflow),
+    Tail(CatalogItem),
     SendRows {
         desc: RelationDesc,
         rows: Vec<Row>,
@@ -59,22 +61,12 @@ pub enum Plan {
     },
 }
 
-impl Plan {
-    pub fn send_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> Plan {
-        let rows = rows.into_iter().map(|row| Row::from_iter(row)).collect();
-        Plan::SendRows { desc, rows }
-    }
+/// Parses a raw SQL string into a [`Statement`].
+pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
+    Ok(SqlParser::parse_sql(&AnsiDialect {}, sql)?)
 }
 
-fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
-    if n.0.len() != 1 {
-        bail!("qualified names are not yet supported: {}", n.to_string())
-    }
-    Ok(n.to_string())
-}
-
-/// Holds all previously planned dataflows, and is the owner of many methods for creating `Plan`s.
-#[derive(Debug)]
-pub struct Planner {
-    pub dataflows: DataflowStore,
+/// Produces a [`Plan`] from a [`Statement`].
+pub fn plan(catalog: &Catalog, session: &Session, stmt: Statement) -> Result<Plan, failure::Error> {
+    statement::handle_statement(catalog, session, stmt)
 }

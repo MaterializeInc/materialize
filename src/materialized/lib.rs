@@ -25,7 +25,6 @@ use tokio::prelude::*;
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
 use ore::future::FutureExt;
-use ore::mpmc::Mux;
 use ore::netio;
 use ore::netio::{SniffedStream, SniffingStream};
 use ore::tokio::net::TcpStreamExt;
@@ -180,14 +179,12 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
 
     // Construct timely dataflow instance.
-    let local_input_mux = Mux::default();
     let _dd_workers = dataflow::serve(
         dataflow_conns,
         config.threads,
         config.process,
         switchboard.clone(),
         runtime.executor(),
-        local_input_mux.clone(),
         logging_config.clone(),
     )
     .map_err(|s| format_err!("{}", s))?;

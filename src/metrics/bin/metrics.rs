@@ -12,16 +12,15 @@
 extern crate prometheus;
 
 use std::collections::HashMap;
-use std::fmt::Write;
-use std::process::Command;
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use chrono::Utc;
+use postgres::Connection;
 use prometheus::Histogram;
-use regex::Regex;
+use std::cmp::min;
+use std::time::Duration;
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + 'static>>;
+static MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 fn main() {
     println!("startup {}", Utc::now());
@@ -29,94 +28,88 @@ fn main() {
 }
 
 fn measure_peek_times() -> ! {
-    init();
-    let (sender, receiver) = mpsc::channel();
-    let query = "q01";
-    let command = format!("peek {};", query); // TODO@jldlaughlin: parameterize the SQL command?
+    let postgres_connection = create_postgres_connection();
+    create_view_ignore_errors(&postgres_connection);
+
     thread::spawn(move || {
+        let query = "SELECT * FROM q01;";
+        let histogram = create_histogram(query);
+        let mut backoff = get_baseline_backoff();
         loop {
-            // TODO@jldlaughlin: use rust postgres package instead, look at sql logic test
-            let output = run(&command);
-            match output {
-                Ok(output) => sender.send(output).unwrap(),
-                Err(error) => {
-                    println!("Hit error running PEEK: {:#?}", error);
-                    init();
-                }
+            let query_result = {
+                // Drop is observe for prometheus::Histogram
+                let _timer = prometheus::Histogram::start_timer(&histogram);
+                postgres_connection.query(query, &[])
+            };
+
+            if let Err(err) = query_result {
+                print_error_and_backoff(&mut backoff, err.to_string());
+                create_view_ignore_errors(&postgres_connection);
             }
         }
     });
 
-    listen_and_push_metrics(receiver, query);
+    let address = "http://pushgateway:9091";
+    loop {
+        if let Err(err) = prometheus::push_metrics(
+            "mz_client_peek",
+            HashMap::new(),
+            &address,
+            prometheus::gather(),
+            None,
+        ) {
+            println!("Error pushing metrics: {}", err.to_string())
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
-fn listen_and_push_metrics(receiver: Receiver<std::process::Output>, query: &str) -> ! {
-    let re = Regex::new(r"Time: (\d*).(\d*) ms").unwrap();
-    let address = String::from("http://pushgateway:9091");
+fn get_baseline_backoff() -> Duration {
+    Duration::from_secs(1)
+}
+
+fn create_postgres_connection() -> Connection {
+    let mut backoff = get_baseline_backoff();
+    loop {
+        match postgres::Connection::connect(
+            "postgres://ignoreuser@materialized:6875/tpcch",
+            postgres::TlsMode::None,
+        ) {
+            Ok(connection) => return connection,
+            Err(err) => print_error_and_backoff(&mut backoff, err.to_string()),
+        }
+    }
+}
+
+fn print_error_and_backoff(backoff: &mut Duration, error_message: String) {
+    let current_backoff = min(*backoff, MAX_BACKOFF);
+    println!(
+        "{}. Sleeping for {:#?} seconds.\n",
+        error_message, current_backoff
+    );
+    thread::sleep(current_backoff);
+    *backoff = Duration::from_secs(backoff.as_secs() * 2);
+}
+
+fn create_histogram(query: &str) -> Histogram {
     let hist_vec = register_histogram_vec!(
-        "mz_client_peek_millis",
+        "mz_client_peek_seconds",
         "how long peeks took",
         &["query"],
         vec![
-            1.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0,
-            150.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0, 600.0, 700.0, 800.0, 900.0,
-            1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 3500.0, 4000.0, 4500.0, 5000.0, 6000.0, 7000.0,
-            8000.0, 9000.0, 10_000.0, 15_000.0, 20_000.0, 25_000.0, 30_000.0, 35_000.0, 40_000.0,
-            45_000.0, 50_000.0, 55_000.0, 60_000.0, 70_000.0, 80_000.0, 90_000.0, 120_000.0,
-            150_000.0, 180_000.0, 210_000.0, 240_000.0, 270_000.0, 300_000.0
+            0.001, 0.003, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,
+            0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0, 2.5,
+            3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0,
+            45.0, 50.0, 55.0, 60.0, 70.0, 80.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 270.0,
+            300.0
         ]
     )
     .expect("can create histogram");
-    let hist = hist_vec.with_label_values(&[query]);
-
-    let mut count = 0;
-    loop {
-        let mut buf = String::new();
-        if let Err(e) = push_metrics(&mut buf, &re, &receiver, &hist, &mut count, &address) {
-            println!("error pushing metrics: {}", e);
-        }
-    }
+    hist_vec.with_label_values(&[query])
 }
 
-fn push_metrics(
-    buf: &mut String,
-    re: &Regex,
-    receiver: &Receiver<std::process::Output>,
-    hist: &Histogram,
-    count: &mut usize,
-    address: &str,
-) -> Result<()> {
-    let psql_output = receiver.recv()?;
-    match re.captures(std::str::from_utf8(&psql_output.stdout)?) {
-        Some(matched) => {
-            buf.clear();
-            write!(buf, "{}.{}", &matched[1], &matched[2])?;
-            let val: f64 = buf.parse()?;
-            hist.observe(val);
-            *count += 1;
-            if *count % 10 == 0 {
-                prometheus::push_metrics(
-                    "mz_client_peek",
-                    HashMap::new(),
-                    &address,
-                    prometheus::gather(),
-                    None,
-                )
-                .map_err(|err| format!("Hit error trying to send to pushgateway: {:#?}", err))?;
-            }
-        }
-        None => println!("No timing information from psql!"),
-    }
-    Ok(())
-}
-
-fn init() {
-    run_ignore_errors(
-        "CREATE SOURCES LIKE 'mysql.tpcch.%'
-         FROM 'kafka://kafka:9092'
-         USING SCHEMA REGISTRY 'http://schema-registry:8081';",
-    );
-    run_ignore_errors(
+fn create_view_ignore_errors(postgres_connection: &Connection) {
+    if let Err(err) = postgres_connection.execute(
         "CREATE VIEW q01 as SELECT
                  ol_number,
                  sum(ol_quantity) as sum_qty,
@@ -130,34 +123,8 @@ fn init() {
                  ol_delivery_d > date '1998-12-01'
          GROUP BY
                  ol_number;",
-    );
-}
-
-fn run_ignore_errors(cmd: &str) {
-    match run(cmd) {
-        Ok(out) => println!(
-            "mz> {}\n\
-             out| {}\n\
-             err| {}",
-            cmd,
-            String::from_utf8(out.stdout).unwrap(),
-            String::from_utf8(out.stderr).unwrap()
-        ),
-        Err(e) => println!("ERROR mz> {}\n| {}", cmd, e),
+        &[],
+    ) {
+        println!("IGNORING CREATE VIEW error: {}", err)
     }
-}
-
-fn run(cmd: &str) -> Result<std::process::Output> {
-    Ok(Command::new("psql")
-        .arg("-q")
-        .arg("-h")
-        .arg("materialized")
-        .arg("-p")
-        .arg("6875")
-        .arg("sslmode=disable")
-        .arg("-c")
-        .arg("\\timing")
-        .arg("-c")
-        .arg(cmd)
-        .output()?)
 }

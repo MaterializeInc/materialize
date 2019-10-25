@@ -24,6 +24,8 @@ main() {
     case "$arg" in
         up) bring_up ;;
         down) shut_down ;;
+        nuke) nuke_docker ;;
+        load-test) load_test;;
         restart)
             if [[ $# -ne 1 ]]; then
                 usage
@@ -71,6 +73,23 @@ restart() {
         shut_down
         bring_up
     fi
+}
+
+# Forcibly remove Docker state. Use when there are inexplicable Docker issues.
+nuke_docker() {
+    runv docker system prune -af
+    runv docker volume prune -f
+}
+
+# Long-running load test
+load_test() {
+    runv docker-compose run chbench gen --warehouses=1
+    runv docker-compose run chbench run \
+        --mz-sources --mz-views=q01,q03,q06 \
+        --dsn=mysql --gen-dir=/var/lib/mysql-files \
+        --peek-conns=5 \
+        --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
+        --min-delay=.5 --max-delay=1 -l /dev/stdout
 }
 
 main "$@"

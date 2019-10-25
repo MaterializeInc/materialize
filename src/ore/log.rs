@@ -123,9 +123,9 @@ pub fn init() {
     LOG_INIT.call_once(|| {
         env_logger::Builder::from_env(env_logger::Env::new().filter_or("MZ_LOG", "info"))
             .format(|buf, record| {
-                let ts = buf.timestamp_nanos();
+                let ts = buf.timestamp_micros();
                 let level = buf.default_styled_level(record.level());
-                write!(buf, "[{} {} ", ts, level)?;
+                write!(buf, "[{} {:>5} ", ts, level)?;
                 match (record.file(), record.line()) {
                     (Some(file), Some(line)) => {
                         let search = "/.cargo/";
@@ -134,7 +134,9 @@ pub fn init() {
                             None => file,
                         }
                         .trim_start_matches("registry/src/")
-                        .trim_start_matches("git/checkouts/");
+                        .trim_start_matches("git/checkouts/")
+                        .trim_start_matches("src/")
+                        .trim_end_matches(".rs");
                         write!(buf, "{}:{}", file, line)?;
                     }
                     _ => write!(buf, "(unknown)")?,

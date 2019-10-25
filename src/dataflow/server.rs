@@ -12,6 +12,7 @@ use timely::communication::allocator::generic::GenericBuilder;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
+use timely::dataflow::operators::unordered_input::{ActivateCapability, UnorderedHandle};
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 
@@ -19,7 +20,6 @@ use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
-use ore::mpmc::Mux;
 use repr::{Datum, DatumsBuffer, Row};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::mem;
 use std::net::TcpStream;
 use std::sync::Mutex;
-use uuid::Uuid;
 
 use super::render;
 use crate::arrangement::{
@@ -38,7 +37,7 @@ use crate::logging;
 use crate::logging::materialized::MaterializedEvent;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, Dataflow, LocalInput, PeekResponse, RowSetFinishing, Timestamp,
+    compare_columns, DataflowDesc, Diff, PeekResponse, RowSetFinishing, Timestamp, Update,
 };
 
 /// A [`comm::broadcast::Token`] that permits broadcasting commands to the
@@ -53,7 +52,7 @@ impl comm::broadcast::Token for BroadcastToken {
     /// Since the coordinator lives on the same process as one set of
     /// workers, we need to enable loopback so that broadcasts are
     /// transmitted intraprocess and visible to those workers.
-    fn loopback() -> bool {
+    fn loopback(&self) -> bool {
         true
     }
 }
@@ -62,9 +61,13 @@ impl comm::broadcast::Token for BroadcastToken {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.
-    CreateDataflows(Vec<Dataflow>),
-    /// Drop the dataflows bound to these names.
-    DropDataflows(Vec<String>),
+    CreateDataflows(Vec<DataflowDesc>),
+    /// Drop the sources bound to these names.
+    DropSources(Vec<String>),
+    /// Drop the views bound to these names.
+    DropViews(Vec<String>),
+    /// Drop the sinks bound to these names.
+    DropSinks(Vec<String>),
     /// Peek at a materialized view.
     Peek {
         name: String,
@@ -75,6 +78,10 @@ pub enum SequencedCommand {
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
+    /// Insert `updates` into the local input named `name`.
+    Insert { name: String, updates: Vec<Update> },
+    /// Advance the timestamp for the local input named `name`.
+    AdvanceTime { name: String, to: Timestamp },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
@@ -112,7 +119,6 @@ pub fn serve<C>(
     process: usize,
     switchboard: comm::Switchboard<C>,
     mut executor: impl tokio::executor::Executor + Clone + Send + Sync + 'static,
-    local_input_mux: Mux<Uuid, LocalInput>,
     logging_config: Option<dataflow_types::logging::LoggingConfig>,
 ) -> Result<WorkerGuards<()>, String>
 where
@@ -125,7 +131,7 @@ where
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
     let command_rxs = {
-        let mut rx = switchboard.broadcast_rx::<BroadcastToken>().fanout();
+        let mut rx = switchboard.broadcast_rx(BroadcastToken).fanout();
         let command_rxs = Mutex::new((0..threads).map(|_| Some(rx.attach())).collect::<Vec<_>>());
         executor
             .spawn(
@@ -154,14 +160,14 @@ where
 
         Worker {
             inner: timely_worker,
-            local_input_mux: local_input_mux.clone(),
             pending_peeks: Vec::new(),
             traces: TraceManager::default(),
             logging_config: logging_config.clone(),
             feedback_tx: None,
             command_rx,
             materialized_logger: None,
-            dataflow_drops: HashMap::new(),
+            sink_tokens: HashMap::new(),
+            local_inputs: HashMap::new(),
         }
         .run()
     })
@@ -187,14 +193,14 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    local_input_mux: Mux<Uuid, LocalInput>,
     pending_peeks: Vec<(PendingPeek, WithDrop<KeysValsHandle>)>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
-    dataflow_drops: HashMap<String, Box<dyn Any>>,
+    sink_tokens: HashMap<String, Box<dyn Any>>,
+    local_inputs: HashMap<String, LocalInput>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -331,29 +337,44 @@ where
             SequencedCommand::CreateDataflows(dataflows) => {
                 for dataflow in dataflows.into_iter() {
                     if let Some(logger) = self.materialized_logger.as_mut() {
-                        logger.log(MaterializedEvent::Dataflow(
-                            dataflow.name().to_string(),
-                            true,
-                        ));
+                        for view in dataflow.views.iter() {
+                            if self.traces.traces.contains_key(&view.name) {
+                                panic!("View already installed: {}", view.name);
+                            }
+                            logger.log(MaterializedEvent::Dataflow(view.name.to_string(), true));
+                        }
                     }
+
                     render::build_dataflow(
                         dataflow,
                         &mut self.traces,
                         self.inner,
-                        &mut self.dataflow_drops,
-                        &mut self.local_input_mux,
+                        &mut self.sink_tokens,
+                        &mut self.local_inputs,
                         &mut self.materialized_logger,
                     );
                 }
             }
 
-            SequencedCommand::DropDataflows(dataflows) => {
-                for name in &dataflows {
-                    if let Some(logger) = self.materialized_logger.as_mut() {
-                        logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
+            SequencedCommand::DropSources(names) => {
+                for name in names {
+                    self.local_inputs.remove(&name);
+                }
+            }
+
+            SequencedCommand::DropViews(names) => {
+                for name in &names {
+                    if self.traces.del_trace(name).is_some() {
+                        if let Some(logger) = self.materialized_logger.as_mut() {
+                            logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
+                        }
                     }
-                    self.traces.del_trace(name);
-                    self.dataflow_drops.remove(name);
+                }
+            }
+
+            SequencedCommand::DropSinks(names) => {
+                for name in &names {
+                    self.sink_tokens.remove(name);
                 }
             }
 
@@ -395,6 +416,7 @@ where
             }
 
             SequencedCommand::CancelPeek { conn_id } => {
+                let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|(peek, _trace)| {
                     if peek.conn_id == conn_id {
                         peek.tx
@@ -404,11 +426,39 @@ where
                             .send(PeekResponse::Canceled)
                             .wait()
                             .unwrap();
+
+                        if let Some(logger) = logger {
+                            logger.log(MaterializedEvent::Peek(
+                                crate::logging::materialized::Peek::new(
+                                    &peek.name,
+                                    peek.timestamp,
+                                    peek.conn_id,
+                                ),
+                                false,
+                            ));
+                        }
+
                         false // don't retain
                     } else {
                         true // retain
                     }
                 })
+            }
+
+            SequencedCommand::Insert { name, updates } => {
+                if let Some(input) = self.local_inputs.get_mut(&name) {
+                    let mut session = input.handle.session(input.capability.clone());
+                    for update in updates {
+                        assert!(update.timestamp >= *input.capability.time());
+                        session.give((update.row, update.timestamp, update.diff));
+                    }
+                }
+            }
+
+            SequencedCommand::AdvanceTime { name, to } => {
+                if let Some(input) = self.local_inputs.get_mut(&name) {
+                    input.capability.downgrade(&to);
+                }
             }
 
             SequencedCommand::AllowCompaction(list) => {
@@ -464,7 +514,7 @@ where
                 return true; // retain
             }
 
-            let rows = Worker::<A>::collect_finished_data(peek, &mut trace);
+            let rows = Self::collect_finished_data(peek, &mut trace);
 
             peek.tx
                 .connect()
@@ -545,4 +595,9 @@ where
 
         results
     }
+}
+
+pub(crate) struct LocalInput {
+    pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
+    pub capability: ActivateCapability<Timestamp>,
 }

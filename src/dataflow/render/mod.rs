@@ -15,14 +15,13 @@ use std::collections::HashSet;
 use std::iter::FromIterator;
 use std::rc::Rc;
 use timely::communication::Allocate;
+use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
-use uuid::Uuid;
 
 use dataflow_types::*;
 use expr::RelationExpr;
-use ore::mpmc::Mux;
 use repr::{Datum, DatumsBuffer, Row};
 
 use super::sink;
@@ -30,98 +29,73 @@ use super::source;
 use crate::arrangement::manager::KeysValsSpine;
 use crate::arrangement::{manager::WithDrop, TraceManager};
 use crate::logging::materialized::{Logger, MaterializedEvent};
+use crate::server::LocalInput;
 
 mod context;
 use context::{ArrangementFlavor, Context};
 
-pub fn build_dataflow<A: Allocate>(
-    dataflow: Dataflow,
+pub(crate) fn build_dataflow<A: Allocate>(
+    dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<String, Box<dyn Any>>,
-    local_input_mux: &mut Mux<Uuid, LocalInput>,
+    local_inputs: &mut HashMap<String, LocalInput>,
     logger: &mut Option<Logger>,
 ) {
     let worker_index = worker.index();
     let worker_peers = worker.peers();
 
-    worker.dataflow::<Timestamp, _, _>(|scope| match dataflow {
-        Dataflow::Source(src) => {
-            let typ = src.desc.typ();
+    worker.dataflow::<Timestamp, _, _>(|scope| {
+        scope.clone().region(|region| {
+            let mut context = Context::<_, _, _, Timestamp>::new();
 
-            let (stream, capability) = match src.connector {
-                SourceConnector::Kafka(c) => {
-                    // Distribute read responsibility among workers.
-                    use differential_dataflow::hashable::Hashable;
-                    let hash = src.name.hashed() as usize;
-                    let read_from_kafka = hash % worker_peers == worker_index;
-                    source::kafka(scope, &src.name, c, read_from_kafka)
-                }
-                SourceConnector::Local(c) => {
-                    source::local(scope, &src.name, c, worker_index == 0, local_input_mux)
-                }
-            };
+            let mut source_tokens = Vec::new();
+            // Load declared sources into the rendering context.
+            for src in dataflow.sources {
+                let (stream, capability) = match src.connector {
+                    SourceConnector::Kafka(c) => {
+                        // Distribute read responsibility among workers.
+                        use differential_dataflow::hashable::Hashable;
+                        let hash = src.name.hashed() as usize;
+                        let read_from_kafka = hash % worker_peers == worker_index;
+                        source::kafka(region, &src.name, c, read_from_kafka)
+                    }
+                    SourceConnector::Local => {
+                        let ((handle, capability), stream) = region.new_unordered_input();
+                        if worker_index == 0 {
+                            local_inputs
+                                .insert(src.name.clone(), LocalInput { handle, capability });
+                        }
+                        (stream, None)
+                    }
+                };
 
-            // Install arrangements indexed by any presented keys.
-            // If no presented keys, use all columns for the index.
-            let mut keys = typ.keys.to_vec();
-            if keys.is_empty() {
-                keys.push((0..typ.column_types.len()).collect());
-            }
-
-            for key in keys {
-                let key_clone = key.clone();
-                let mut buffer = DatumsBuffer::new();
-                let arrangement_by_key = stream
-                    .as_collection()
-                    .map(move |row| {
-                        let datums = row.as_datums(&mut buffer);
-                        let key_row = Row::from_iter(key_clone.iter().map(|i| datums[*i]));
-                        drop(datums);
-                        (key_row, row)
-                    })
-                    .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", src.name));
-
-                manager.set_by_keys(
-                    src.name.to_owned(),
-                    &key[..],
-                    WithDrop::new(arrangement_by_key.trace, capability.clone()),
+                // Introduce the stream by name, as an unarranged collection.
+                context.collections.insert(
+                    RelationExpr::Get {
+                        name: src.name,
+                        typ: src.desc.typ().clone(),
+                    },
+                    stream.as_collection(),
                 );
-            }
-        }
-        Dataflow::Sink(sink) => {
-            // TODO: Both _token and _button are unused, which is wrong. But we do not yet have
-            // the concept of dropping a sink.
-            let (_key, trace) = manager
-                .get_all_keyed(&sink.from.0)
-                .expect("View missing")
-                .next()
-                .expect("No arrangements");
-            let token = trace.to_drop().clone();
-            let (arrangement, button) =
-                trace.import_core(scope, &format!("Import({:?})", sink.from));
-
-            match sink.connector {
-                SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
-                SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
+                source_tokens.push(capability);
             }
 
-            dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
-        }
-        Dataflow::View(view) => {
-            let as_of = view
-                .as_of
-                .as_ref()
-                .map(|x| x.to_vec())
-                .unwrap_or_else(|| vec![0]);
+            let source_tokens = Rc::new(source_tokens);
 
-            // The scope.clone() occurs to allow import in the region.
-            // We build a region here to establish a pattern of a scope inside the dataflow,
-            // so that other similar uses (e.g. with iterative scopes) do not require weird
-            // alternate type signatures.
-            scope.clone().region(|region| {
+            for view in dataflow.views {
                 let mut tokens = Vec::new();
-                let mut context = Context::<_, _, _, Timestamp>::new();
+                let as_of = dataflow
+                    .as_of
+                    .as_ref()
+                    .map(|x| x.to_vec())
+                    .unwrap_or_else(|| vec![0]);
+
+                // The scope.clone() occurs to allow import in the region.
+                // We build a region here to establish a pattern of a scope inside the dataflow,
+                // so that other similar uses (e.g. with iterative scopes) do not require weird
+                // alternate type signatures.
+
                 view.relation_expr.visit(&mut |e| {
                     // Some `Get` expressions are for let bindings, and should not be loaded.
                     // We might want explicitly enumerate assets to import.
@@ -152,7 +126,8 @@ pub fn build_dataflow<A: Allocate>(
                     }
                 });
 
-                let tokens = Rc::new(tokens);
+                // Capture both the tokens of imported traces and those of sources.
+                let tokens = Rc::new((tokens, source_tokens.clone()));
 
                 context.ensure_rendered(&view.relation_expr, region, worker_index);
 
@@ -173,28 +148,50 @@ pub fn build_dataflow<A: Allocate>(
                         );
                     }
                 } else {
-                    let typ = view.relation_expr.typ();
-                    let key = (0..typ.column_types.len()).collect::<Vec<_>>();
-                    let key_clone = key.clone();
-                    let mut buffer = DatumsBuffer::new();
-                    let arrangement = context
-                        .collection(&view.relation_expr)
-                        .expect("Render failed to produce collection")
-                        .map(move |row| {
-                            let datums = row.as_datums(&mut buffer);
-                            let key_row = Row::from_iter(key.iter().map(|i| datums[*i]));
-                            drop(datums);
-                            (key_row, row)
-                        })
-                        .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
-                    manager.set_by_keys(
-                        view.name,
-                        &key_clone[..],
-                        WithDrop::new(arrangement.trace, tokens.clone()),
-                    );
+                    let mut keys = view.relation_expr.typ().keys.clone();
+                    if keys.is_empty() {
+                        keys.push((0..view.relation_expr.arity()).collect::<Vec<_>>());
+                    }
+                    for key in keys {
+                        let key_clone = key.clone();
+                        let mut buffer = DatumsBuffer::new();
+                        let arrangement = context
+                            .collection(&view.relation_expr)
+                            .expect("Render failed to produce collection")
+                            .map(move |row| {
+                                let datums = row.as_datums(&mut buffer);
+                                let key_row = Row::from_iter(key.iter().map(|k| datums[*k]));
+                                drop(datums);
+                                (key_row, row)
+                            })
+                            .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
+                        manager.set_by_keys(
+                            view.name.clone(),
+                            &key_clone[..],
+                            WithDrop::new(arrangement.trace, tokens.clone()),
+                        );
+                    }
                 }
-            });
-        }
+            }
+
+            for sink in dataflow.sinks {
+                let (_key, trace) = manager
+                    .get_all_keyed(&sink.from.0)
+                    .expect("View missing")
+                    .next()
+                    .expect("No arrangements");
+                let token = trace.to_drop().clone();
+                let (arrangement, button) =
+                    trace.import_core(scope, &format!("Import({:?})", sink.from));
+
+                match sink.connector {
+                    SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
+                    SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
+                }
+
+                dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
+            }
+        });
     })
 }
 

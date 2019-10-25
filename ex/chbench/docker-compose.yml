@@ -7,6 +7,8 @@ version: '3.7'
 services:
   materialized:
     image: materialize/materialized:latest
+    ports:
+     - 6875:6875
     init: true
     command: -w1
   mysql:
@@ -91,6 +93,7 @@ services:
       CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   chbench:
+    init: true
     build: chbench
     depends_on: [mysql]
     volumes:
@@ -187,7 +190,8 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./prometheus-sql-exporter/mz/setup-metric-tables.sh:/prometheus/setup-metric-tables.sh
   pushgateway:
-    image: prom/pushgateway
+    # Pinned to v0.9.1 because 0.10+ has the following bug: https://github.com/pingcap/rust-prometheus/issues/287
+    image: prom/pushgateway:v0.9.1
     ports:
       - 9091:9091
   metrics:

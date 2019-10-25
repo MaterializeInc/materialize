@@ -24,6 +24,7 @@ pub mod reduction;
 pub mod simplify;
 pub mod split_predicates;
 
+/// Types capable of transforming relation expressions.
 pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
     ///
@@ -62,9 +63,9 @@ pub struct Optimizer {
     transforms: Vec<Box<dyn crate::transform::Transform + Send>>,
 }
 
-impl Optimizer {
+impl Transform for Optimizer {
     /// Optimizes the supplied relation expression.
-    pub fn optimize(&mut self, relation: &mut RelationExpr) {
+    fn transform(&self, relation: &mut RelationExpr) {
         for transform in self.transforms.iter() {
             transform.transform(relation);
         }
@@ -124,6 +125,30 @@ impl Default for Optimizer {
             Box::new(crate::transform::fusion::project::Project),
             Box::new(crate::transform::binding::Normalize),
             Box::new(crate::transform::constant_join::ConstantJoin),
+        ];
+        Self { transforms }
+    }
+}
+
+impl Optimizer {
+    /// Optimizes the supplied relation expression.
+    pub fn optimize(&mut self, relation: &mut RelationExpr) {
+        self.transform(relation);
+    }
+    /// Simple fusion and elision transformations to render the query readable.
+    pub fn pre_optimization() -> Self {
+        let transforms: Vec<Box<dyn crate::transform::Transform + Send>> = vec![
+            Box::new(crate::transform::join_elision::JoinElision),
+            Box::new(crate::transform::inline_let::InlineLet),
+            Box::new(crate::transform::reduction::FoldConstants),
+            Box::new(crate::transform::split_predicates::SplitPredicates),
+            Box::new(crate::transform::fusion::filter::Filter),
+            Box::new(crate::transform::fusion::map::Map),
+            Box::new(crate::transform::projection_extraction::ProjectionExtraction),
+            Box::new(crate::transform::fusion::project::Project),
+            Box::new(crate::transform::fusion::join::Join),
+            Box::new(crate::transform::join_elision::JoinElision),
+            Box::new(crate::transform::empty_map::EmptyMap),
         ];
         Self { transforms }
     }

@@ -939,6 +939,7 @@ impl RelationExpr {
         }
     }
 
+    #[allow(dead_code)]
     pub fn top_k(
         self,
         group_key: Vec<usize>,

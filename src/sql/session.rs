@@ -446,7 +446,7 @@ impl Var for SessionVar<i32> {
     }
 }
 
-/// A prepared statement
+/// A prepared statement.
 #[derive(Debug)]
 pub struct PreparedStatement {
     sql: Option<sqlparser::ast::Statement>,
@@ -454,24 +454,22 @@ pub struct PreparedStatement {
 }
 
 impl PreparedStatement {
-    pub fn new(sql: sqlparser::ast::Statement, desc: Option<RelationDesc>) -> PreparedStatement {
-        PreparedStatement {
-            sql: Some(sql),
-            desc,
-        }
+    /// Constructs a new `PreparedStatement`.
+    pub fn new(
+        sql: Option<sqlparser::ast::Statement>,
+        desc: Option<RelationDesc>,
+    ) -> PreparedStatement {
+        PreparedStatement { sql, desc }
     }
 
-    pub(crate) fn empty() -> PreparedStatement {
-        PreparedStatement {
-            sql: None,
-            desc: None,
-        }
-    }
-
+    /// Returns the raw SQL string associated with this prepared statement,
+    /// if the prepared statement was not the empty query.
     pub fn sql(&self) -> Option<&sqlparser::ast::Statement> {
         self.sql.as_ref()
     }
 
+    /// Returns the type of the rows that will be returned by this prepared
+    /// statement, if this prepared statement will return rows at all.
     pub fn desc(&self) -> Option<&RelationDesc> {
         self.desc.as_ref()
     }
