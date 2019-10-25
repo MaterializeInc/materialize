@@ -91,6 +91,7 @@ services:
       CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
   chbench:
+    init: true
     build: chbench
     depends_on: [mysql]
     volumes:
