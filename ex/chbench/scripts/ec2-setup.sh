@@ -60,7 +60,7 @@ if [[ -z $existing_swap ]]; then
 fi
 
 mkdir -p /etc/docker
-cp ~/dotfiles/materialize/docker/daemon.json /etc/docker/
+cp daemon.json /etc/docker/
 
 # Mount EBS volume as Docker data directory
 
