@@ -872,7 +872,7 @@ fn plan_using_constraint(
         right: Box::new(right),
         on: join_exprs
             .into_iter()
-            .fold(ScalarExpr::literal_null(), |expr1, expr2| {
+            .fold(ScalarExpr::literal_true(), |expr1, expr2| {
                 ScalarExpr::CallBinary {
                     func: BinaryFunc::And,
                     expr1: Box::new(expr1),
