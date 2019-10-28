@@ -8,25 +8,13 @@ checksum = "56e72913c99b1f927aa7bd59a41518fdd9995f63ffc8760f211609e0241c4fb2"
 
 [[package]]
 name = "abomonation_derive"
-version = "0.3.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0bb1889db0b87cd8ef839c56b5283e28c8db68cac904b400a6170c9af1e673c"
+checksum = "e50e2a046af56a864c62d97b7153fda72c596e646be1b0c7963736821f6e1efa"
 dependencies = [
- "quote 0.3.15",
- "syn 0.11.11",
- "synstructure 0.6.1",
-]
-
-[[package]]
-name = "abomonation_derive"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0847ef820f2699bfaa7ceef120588946823806112974fb7a46eca946180049f7"
-dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.12",
- "syn 0.15.44",
- "synstructure 0.10.2",
+ "proc-macro2 1.0.1",
+ "quote 1.0.2",
+ "synstructure",
 ]
 
 [[package]]
@@ -808,10 +796,10 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#25f7b2ae71ac3c14583e46b1a030681565b3b0c5"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#6ee4a587c0373d2784758164a62cd17106eb2216"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.3.0",
+ "abomonation_derive",
  "fnv",
  "serde",
  "serde_derive",
@@ -949,7 +937,7 @@ dependencies = [
  "proc-macro2 1.0.1",
  "quote 1.0.2",
  "syn 1.0.3",
- "synstructure 0.12.1",
+ "synstructure",
 ]
 
 [[package]]
@@ -2195,12 +2183,6 @@ checksum = "9274b940887ce9addde99c4eee6b5c44cc494b182b97e73dc8ffdcb3397fd3f0"
 
 [[package]]
 name = "quote"
-version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a6e920b65c65f10b2ae65c831a81a073a89edd28c7cce89475bff467ab4167a"
-
-[[package]]
-name = "quote"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9949cfe66888ffe1d53e6ec9d9f3b70714083854be20fd5e271b232a017401e8"
@@ -3016,17 +2998,6 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3b891b9015c88c576343b9b3e41c2c11a51c219ef067b264bd9c8aa9b441dad"
-dependencies = [
- "quote 0.3.15",
- "synom",
- "unicode-xid 0.0.4",
-]
-
-[[package]]
-name = "syn"
 version = "0.13.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14f9bf6292f3a61d2c716723fdb789a41bbe104168e6f496dc6497e531ea1b9b"
@@ -3056,37 +3027,6 @@ dependencies = [
  "proc-macro2 1.0.1",
  "quote 1.0.2",
  "unicode-xid 0.2.0",
-]
-
-[[package]]
-name = "synom"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a393066ed9010ebaed60b9eafa373d4b1baac186dd7e008555b0f702b51945b6"
-dependencies = [
- "unicode-xid 0.0.4",
-]
-
-[[package]]
-name = "synstructure"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a761d12e6d8dcb4dcf952a7a89b475e3a9d69e4a69307e01a470977642914bd"
-dependencies = [
- "quote 0.3.15",
- "syn 0.11.11",
-]
-
-[[package]]
-name = "synstructure"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02353edf96d6e4dc81aea2d8490a7e9db177bf8acb0e951c24940bf866cb313f"
-dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.12",
- "syn 0.15.44",
- "unicode-xid 0.1.0",
 ]
 
 [[package]]
@@ -3191,10 +3131,10 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.3.0",
+ "abomonation_derive",
  "serde",
  "serde_derive",
  "timely_bytes",
@@ -3205,15 +3145,15 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 
 [[package]]
 name = "timely_communication"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.4.0",
+ "abomonation_derive",
  "bincode",
  "getopts",
  "serde",
@@ -3225,7 +3165,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 
 [[package]]
 name = "timely_sort"
@@ -3552,12 +3492,6 @@ name = "unicode-width"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "882386231c45df4700b275c7ff55b6f3698780a650026380e72dabe76fa46526"
-
-[[package]]
-name = "unicode-xid"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c1f860d7d29cf02cb2f3f359fd35991af3d30bac52c57d265a3c461074cb4dc"
 
 [[package]]
 name = "unicode-xid"
