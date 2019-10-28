@@ -13,11 +13,6 @@ use std::borrow::Borrow;
 use std::iter::FromIterator;
 use std::mem::{size_of, transmute};
 
-const SIZE_OF_DATE: usize = 4;
-const SIZE_OF_TIMESTAMP: usize = 12;
-const SIZE_OF_INTERVAL: usize = 24;
-const SIZE_OF_SIGNIFICAND: usize = 16;
-
 /// A compact representation for `Datum`s.
 ///
 /// `Datum` is easy to work with but very space inefficent. A `Datum::Int32(42)` is laid out in memory like this:
@@ -178,22 +173,24 @@ impl Row {
             Datum::Date(d) => {
                 self.data.push(Tag::Date as u8);
                 self.data
-                    .extend(&unsafe { transmute::<NaiveDate, [u8; SIZE_OF_DATE]>(d) });
+                    .extend(&unsafe { transmute::<NaiveDate, [u8; size_of::<NaiveDate>()]>(d) });
             }
             Datum::Timestamp(t) => {
                 self.data.push(Tag::Timestamp as u8);
-                self.data
-                    .extend(&unsafe { transmute::<NaiveDateTime, [u8; SIZE_OF_TIMESTAMP]>(t) });
+                self.data.extend(&unsafe {
+                    transmute::<NaiveDateTime, [u8; size_of::<NaiveDateTime>()]>(t)
+                });
             }
             Datum::Interval(i) => {
                 self.data.push(Tag::Interval as u8);
                 self.data
-                    .extend(&unsafe { transmute::<Interval, [u8; SIZE_OF_INTERVAL]>(i) });
+                    .extend(&unsafe { transmute::<Interval, [u8; size_of::<Interval>()]>(i) });
             }
             Datum::Decimal(s) => {
                 self.data.push(Tag::Decimal as u8);
-                self.data
-                    .extend(&unsafe { transmute::<Significand, [u8; SIZE_OF_SIGNIFICAND]>(s) });
+                self.data.extend(&unsafe {
+                    transmute::<Significand, [u8; size_of::<Significand>()]>(s)
+                });
             }
             Datum::Bytes(bytes) => {
                 self.data.push(Tag::Bytes as u8);
@@ -390,11 +387,6 @@ mod tests {
     #[test]
     fn test_assumptions() {
         assert_eq!(size_of::<Tag>(), 1);
-        assert_eq!(size_of::<Datum>(), 32);
-        assert_eq!(size_of::<NaiveDate>(), SIZE_OF_DATE);
-        assert_eq!(size_of::<NaiveDateTime>(), SIZE_OF_TIMESTAMP);
-        assert_eq!(size_of::<Interval>(), SIZE_OF_INTERVAL);
-        assert_eq!(size_of::<Significand>(), SIZE_OF_SIGNIFICAND);
         #[cfg(target_endian = "big")]
         {
             // if you want to run this on a big-endian cpu, we'll need big-endian versions of the serialization code
