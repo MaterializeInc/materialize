@@ -1274,9 +1274,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b8467d9c1cebe26feb08c640139247fac215782d35371ade9a2136ed6085358"
+checksum = "87fa75c9dea7b07be3138c49abbb83fd4bea199b5cdc76f9804458edc5da0d6e"
 dependencies = [
  "either",
 ]
@@ -2847,7 +2847,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
- "byteorder 0.5.3",
+ "byteorder 1.3.2",
  "chrono",
  "comm",
  "coord",
