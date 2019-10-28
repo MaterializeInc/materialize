@@ -7,9 +7,10 @@
 
 use dataflow::{WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
+use dataflow_types::{Source, SourceConnector};
 use failure::bail;
 use futures::sync::mpsc::UnboundedReceiver;
-use futures::Stream;
+use futures::{stream, Stream};
 use ore::collections::CollectionExt;
 use repr::{RelationDesc, ScalarType};
 use sql::store::{Catalog, CatalogItem};
@@ -17,17 +18,20 @@ use sql::PreparedStatement;
 use sql::{Plan, Session};
 use std::thread;
 use std::thread::JoinHandle;
+use symbiosis::Postgres;
 
 use super::{coordinator::Coordinator, Command, QueryExecuteResponse, Response};
 
 enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
+    Shutdown,
 }
 
 pub fn serve<C>(
     switchboard: comm::Switchboard<C>,
     num_timely_workers: usize,
+    symbiosis_url: Option<&str>,
     logging_config: Option<&LoggingConfig>,
     startup_sql: String,
     cmd_rx: UnboundedReceiver<Command>,
@@ -35,10 +39,20 @@ pub fn serve<C>(
 where
     C: comm::Connection,
 {
-    let mut coord = Coordinator::new(switchboard.clone(), num_timely_workers, logging_config);
-    let feedback_rx = coord.enable_feedback();
+    let mut coord = Coordinator::new(
+        switchboard.clone(),
+        num_timely_workers,
+        logging_config,
+        symbiosis_url.is_some(),
+    );
 
     let mut catalog = sql::store::Catalog::new(logging_config);
+
+    let mut postgres = if let Some(symbiosis_url) = symbiosis_url {
+        Some(symbiosis::Postgres::open_and_erase(symbiosis_url)?)
+    } else {
+        None
+    };
 
     {
         // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
@@ -47,25 +61,45 @@ where
         let conn_id = 0;
         let mut session = sql::Session::default();
         for stmt in sql::parse(startup_sql)? {
-            handle_statement(&mut coord, &mut catalog, &mut session, stmt, conn_id)?;
+            handle_statement(
+                &mut coord,
+                postgres.as_mut(),
+                &mut catalog,
+                &mut session,
+                stmt,
+                conn_id,
+            )?;
         }
     }
 
+    let feedback_rx = coord.enable_feedback();
+    // NOTE: returning an error from this point on (i.e., after calling
+    // `coord.enable_feedback()`) will be fatal, as dropping `feedback_rx` will
+    // cause the worker threads to panic.
     let messages = cmd_rx
         .map(Message::Command)
         .map_err(|()| unreachable!())
+        .chain(stream::once(Ok(Message::Shutdown)))
         .select(feedback_rx.map(Message::Worker));
 
     Ok(thread::spawn(move || {
-        for msg in messages.wait() {
-            match msg.unwrap() {
+        let mut messages = messages.wait();
+        for msg in messages.by_ref() {
+            match msg.expect("coordinator message receiver failed") {
                 Message::Command(Command::Query {
                     sql,
                     mut session,
                     conn_id,
                     tx,
                 }) => {
-                    let result = handle_query(&mut coord, &mut catalog, &mut session, sql, conn_id);
+                    let result = handle_query(
+                        &mut coord,
+                        postgres.as_mut(),
+                        &mut catalog,
+                        &mut session,
+                        sql,
+                        conn_id,
+                    );
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -77,6 +111,7 @@ where
                 }) => {
                     let result = handle_execute(
                         &mut coord,
+                        postgres.as_mut(),
                         &mut catalog,
                         &mut session,
                         portal_name,
@@ -91,7 +126,7 @@ where
                     mut session,
                     tx,
                 }) => {
-                    let result = handle_parse(&catalog, &mut session, name, sql);
+                    let result = handle_parse(postgres.as_mut(), &catalog, &mut session, name, sql);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -99,7 +134,10 @@ where
                     coord.sequence_cancel(conn_id);
                 }
 
-                Message::Command(Command::Shutdown) => break,
+                Message::Shutdown => {
+                    coord.shutdown();
+                    break;
+                }
 
                 Message::Worker(WorkerFeedbackWithMeta {
                     worker_id,
@@ -116,18 +154,30 @@ where
                 }
             }
         }
+
+        // Cleanly drain any pending messages from the worker before shutting
+        // down.
+        for msg in messages {
+            match msg.expect("coordinator message receiver failed") {
+                Message::Command(_) | Message::Shutdown => unreachable!(),
+                Message::Worker(_) => (),
+            }
+        }
     }))
 }
 
-// TODO(benesch): temporarily public until SLT stops depending on this
-// crate's internal API.
-pub fn apply_plan(
+fn apply_plan(
     catalog: &mut Catalog,
     session: &mut Session,
     plan: &Plan,
 ) -> Result<(), failure::Error> {
     match plan {
         Plan::CreateView(view) => catalog.insert(CatalogItem::View(view.clone()))?,
+        Plan::CreateTable { name, desc } => catalog.insert(CatalogItem::Source(Source {
+            name: name.clone(),
+            connector: SourceConnector::Local,
+            desc: desc.clone(),
+        }))?,
         Plan::CreateSource(source) => catalog.insert(CatalogItem::Source(source.clone()))?,
         Plan::CreateSources(sources) => {
             for source in sources {
@@ -135,7 +185,7 @@ pub fn apply_plan(
             }
         }
         Plan::CreateSink(sink) => catalog.insert(CatalogItem::Sink(sink.clone()))?,
-        Plan::DropItems((names, _is_source)) => {
+        Plan::DropItems(names, _item_type) => {
             for name in names {
                 catalog.remove(name);
             }
@@ -148,6 +198,7 @@ pub fn apply_plan(
 
 fn handle_statement<C>(
     coord: &mut Coordinator<C>,
+    mut postgres: Option<&mut Postgres>,
     catalog: &mut Catalog,
     session: &mut Session,
     stmt: sql::Statement,
@@ -156,16 +207,25 @@ fn handle_statement<C>(
 where
     C: comm::Connection,
 {
-    sql::plan(catalog, session, stmt)
+    sql::plan(catalog, session, stmt.clone())
+        .or_else(|err| {
+            // Executing the query failed. If we're running in symbiosis with
+            // Postgres, see if Postgres can handle it.
+            match postgres {
+                Some(ref mut postgres) if postgres.can_handle(&stmt) => postgres.execute(&stmt),
+                _ => Err(err),
+            }
+        })
         .and_then(|plan| {
             apply_plan(catalog, session, &plan)?;
             Ok(plan)
         })
-        .map(|plan| coord.sequence_plan(plan, conn_id, None /* ts_override */))
+        .map(|plan| coord.sequence_plan(plan, conn_id))
 }
 
 fn handle_query<C>(
     coord: &mut Coordinator<C>,
+    postgres: Option<&mut Postgres>,
     catalog: &mut Catalog,
     session: &mut Session,
     sql: String,
@@ -177,13 +237,21 @@ where
     let stmts = sql::parse(sql)?;
     match stmts.len() {
         0 => Ok(QueryExecuteResponse::EmptyQuery),
-        1 => handle_statement(coord, catalog, session, stmts.into_element(), conn_id),
+        1 => handle_statement(
+            coord,
+            postgres,
+            catalog,
+            session,
+            stmts.into_element(),
+            conn_id,
+        ),
         n => bail!("expected no more than one query, got {}", n),
     }
 }
 
 fn handle_execute<C>(
     coord: &mut Coordinator<C>,
+    postgres: Option<&mut Postgres>,
     catalog: &mut Catalog,
     session: &mut Session,
     portal_name: String,
@@ -207,13 +275,14 @@ where
     match prepared.sql() {
         Some(stmt) => {
             let stmt = stmt.clone();
-            handle_statement(coord, catalog, session, stmt, conn_id)
+            handle_statement(coord, postgres, catalog, session, stmt, conn_id)
         }
         None => Ok(QueryExecuteResponse::EmptyQuery),
     }
 }
 
 fn handle_parse(
+    postgres: Option<&mut Postgres>,
     catalog: &Catalog,
     session: &mut Session,
     name: String,
@@ -224,14 +293,24 @@ fn handle_parse(
         0 => (None, None),
         1 => {
             let stmt = stmts.into_element();
-            let desc = match sql::plan(catalog, session, stmt.clone())? {
-                Plan::Peek { desc, .. }
-                | Plan::SendRows { desc, .. }
-                | Plan::ExplainPlan { desc, .. } => Some(desc),
-                Plan::CreateSources { .. } => {
-                    Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
-                }
-                _ => None,
+            let desc = match sql::plan(catalog, session, stmt.clone()) {
+                Ok(plan) => match plan {
+                    Plan::Peek { desc, .. }
+                    | Plan::SendRows { desc, .. }
+                    | Plan::ExplainPlan { desc, .. } => Some(desc),
+                    Plan::CreateSources { .. } => {
+                        Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
+                    }
+                    _ => None,
+                },
+                // Planning the query failed. If we're running in symbiosis with
+                // Postgres, see if Postgres can handle it. Note that Postgres
+                // only handles commands that do not return rows, so the
+                // `RelationDesc` is always `None`.
+                Err(err) => match postgres {
+                    Some(ref postgres) if postgres.can_handle(&stmt) => None,
+                    _ => return Err(err),
+                },
             };
             (Some(stmt), desc)
         }

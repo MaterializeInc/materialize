@@ -27,6 +27,7 @@ use dataflow_types::logging::LoggingConfig;
 use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::{SniffedStream, SniffingStream};
+use ore::option::OptionExt;
 use ore::tokio::net::TcpStreamExt;
 
 mod http;
@@ -39,6 +40,7 @@ pub struct Config {
     pub process: usize,
     pub addresses: Vec<String>,
     pub sql: String,
+    pub symbiosis_url: Option<String>,
     pub gather_metrics: bool,
 }
 
@@ -178,27 +180,28 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
 
     let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
 
-    // Construct timely dataflow instance.
-    let _dd_workers = dataflow::serve(
-        dataflow_conns,
-        config.threads,
-        config.process,
-        switchboard.clone(),
-        runtime.executor(),
-        logging_config.clone(),
-    )
-    .map_err(|s| format_err!("{}", s))?;
-
     // Initialize command queue and sql planner, but only on the primary.
     if is_primary {
         coord::transient::serve(
-            switchboard,
+            switchboard.clone(),
             num_timely_workers,
+            config.symbiosis_url.mz_as_deref(),
             logging_config.as_ref(),
             config.sql,
             cmdq_rx,
         )?;
     }
+
+    // Construct timely dataflow instance.
+    let _dd_workers = dataflow::serve(
+        dataflow_conns,
+        config.threads,
+        config.process,
+        switchboard,
+        runtime.executor(),
+        logging_config.clone(),
+    )
+    .map_err(|s| format_err!("{}", s))?;
 
     runtime
         .shutdown_on_idle()

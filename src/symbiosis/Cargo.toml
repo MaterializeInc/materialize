@@ -1,0 +1,22 @@
+[package]
+name = "symbiosis"
+description = "Built-in OLTP support via symbiosis."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+dataflow-types = { path = "../dataflow-types" }
+failure = "0.1.6"
+ore = { path = "../ore" }
+postgres = { version = "0.15", features = ["with-chrono"] }
+pg_interval = "0.3"
+repr = { path = "../repr" }
+rust_decimal = "1.0"
+sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
+sql = { path = "../sql" }
+whoami = "0.6"

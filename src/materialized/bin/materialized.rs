@@ -78,8 +78,9 @@ fn run() -> Result<(), failure::Error> {
         "s",
         "startup",
         "file with SQL queries to execute at startup",
-        "STARTUP",
+        "FILE",
     );
+    opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
     let popts = opts.parse(&args[1..])?;
@@ -130,6 +131,7 @@ fn run() -> Result<(), failure::Error> {
         process,
         addresses,
         sql,
+        symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
     })
 }

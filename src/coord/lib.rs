@@ -69,9 +69,6 @@ pub enum Command {
 
     /// Cancel the query currently running on another connection.
     CancelRequest { conn_id: u32 },
-
-    /// Shut down the coordinator thread.
-    Shutdown,
 }
 
 #[derive(Debug)]
@@ -86,10 +83,14 @@ pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error
 pub enum QueryExecuteResponse {
     CreatedSink,
     CreatedSource,
+    CreatedTable,
     CreatedView,
+    Deleted(usize),
     DroppedSource,
+    DroppedTable,
     DroppedView,
     EmptyQuery,
+    Inserted(usize),
     SendRows {
         desc: RelationDesc,
         rx: RowsFuture,
@@ -100,6 +101,7 @@ pub enum QueryExecuteResponse {
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
+    Updated(usize),
 }
 
 impl fmt::Debug for QueryExecuteResponse {
@@ -109,12 +111,16 @@ impl fmt::Debug for QueryExecuteResponse {
             QueryExecuteResponse::CreatedSource => {
                 f.write_str("QueryExecuteResponse::CreatedSource")
             }
+            QueryExecuteResponse::CreatedTable => f.write_str("QueryExecuteResponse::CreatedTable"),
             QueryExecuteResponse::CreatedView => f.write_str("QueryExecuteResponse::CreatedView"),
+            QueryExecuteResponse::Deleted(n) => write!(f, "QueryExecuteResponse::Deleted({})", n),
             QueryExecuteResponse::DroppedSource => {
                 f.write_str("QueryExecuteResponse::DroppedSource")
             }
+            QueryExecuteResponse::DroppedTable => f.write_str("QueryExecuteResponse::DroppedTable"),
             QueryExecuteResponse::DroppedView => f.write_str("QueryExecuteResponse::DroppedView"),
             QueryExecuteResponse::EmptyQuery => f.write_str("QueryExecuteResponse::EmptyQuery"),
+            QueryExecuteResponse::Inserted(n) => write!(f, "QueryExecuteResponse::Inserted({})", n),
             QueryExecuteResponse::SendRows { desc, rx: _ } => {
                 write!(f, "QueryExecuteResponse::SendRows({:?})", desc)
             }
@@ -122,6 +128,7 @@ impl fmt::Debug for QueryExecuteResponse {
                 write!(f, "QueryExecuteResponse::SetVariable({})", name)
             }
             QueryExecuteResponse::Tailing { rx: _ } => f.write_str("QueryExecuteResponse::Tailing"),
+            QueryExecuteResponse::Updated(n) => write!(f, "QueryExecuteResponse::Updated({})", n),
         }
     }
 }
