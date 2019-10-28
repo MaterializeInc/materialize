@@ -38,4 +38,4 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features =
 tokio = "0.1"
 uuid = "*"
 walkdir = "2"
-whoami = "0.5.3"
+whoami = "0.6.0"
