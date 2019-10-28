@@ -19,14 +19,13 @@ dependencies = [
 
 [[package]]
 name = "abomonation_derive"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0847ef820f2699bfaa7ceef120588946823806112974fb7a46eca946180049f7"
+checksum = "e50e2a046af56a864c62d97b7153fda72c596e646be1b0c7963736821f6e1efa"
 dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.12",
- "syn 0.15.44",
- "synstructure 0.10.2",
+ "proc-macro2 1.0.1",
+ "quote 1.0.2",
+ "synstructure 0.12.1",
 ]
 
 [[package]]
@@ -2871,7 +2870,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
- "byteorder 1.3.2",
+ "byteorder 0.5.3",
  "chrono",
  "comm",
  "coord",
@@ -3065,18 +3064,6 @@ dependencies = [
 
 [[package]]
 name = "synstructure"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02353edf96d6e4dc81aea2d8490a7e9db177bf8acb0e951c24940bf866cb313f"
-dependencies = [
- "proc-macro2 0.4.30",
- "quote 0.6.12",
- "syn 0.15.44",
- "unicode-xid 0.1.0",
-]
-
-[[package]]
-name = "synstructure"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f085a5855930c0441ca1288cf044ea4aecf4f43a91668abdb870b4ba546a203"
@@ -3177,10 +3164,10 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.3.0",
+ "abomonation_derive 0.5.0",
  "serde",
  "serde_derive",
  "timely_bytes",
@@ -3191,15 +3178,15 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 
 [[package]]
 name = "timely_communication"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.4.0",
+ "abomonation_derive 0.5.0",
  "bincode",
  "getopts",
  "serde",
@@ -3211,7 +3198,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#714fc0ef09bbf224972083df72d967f8ccbc0cba"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 
 [[package]]
 name = "timely_sort"
