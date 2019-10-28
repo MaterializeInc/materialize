@@ -19,6 +19,16 @@ SELECT a FROM dateish
 2000-01-01
 2019-12-31
 
+query T
+SELECT MAX(a) FROM dateish
+----
+2019-12-31
+
+query T
+SELECT MIN(a) FROM dateish
+----
+2000-01-01
+
 statement ok
 CREATE TABLE timestampish (
     b TIMESTAMP
