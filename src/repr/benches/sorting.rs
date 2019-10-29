@@ -42,23 +42,25 @@ fn bench_sort_row_buffer(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     )
 }
 
-fn bench_sort_row_custom(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+fn bench_sort_row_unpacked(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+    let arity = rows[0].len();
     let rows = rows
         .into_iter()
         .map(|row| Row::from_iter(row))
         .collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
-        |mut rows| {
-            rows.sort_by(move |a, b| {
-                for (a, b) in a.iter().zip(b.iter()) {
-                    match a.cmp(&b) {
-                        Ordering::Equal => (),
-                        non_eq => return non_eq,
-                    }
-                }
-                return Ordering::Equal;
-            })
+        |rows| {
+            let mut unpacked = vec![];
+            for row in &rows {
+                unpacked.extend(row);
+            }
+            let mut slices = unpacked.chunks(arity).collect::<Vec<_>>();
+            slices.sort();
+            slices
+                .into_iter()
+                .map(|slice| Row::from_iter(slice))
+                .collect::<Vec<_>>();
         },
     )
 }
@@ -97,8 +99,8 @@ pub fn bench_sort(c: &mut Criterion) {
     c.bench_function("sort_row_buffer_ints", |b| {
         bench_sort_row_buffer(int_rows.clone(), b)
     });
-    c.bench_function("sort_row_custom_ints", |b| {
-        bench_sort_row_custom(int_rows.clone(), b)
+    c.bench_function("sort_row_unpacked_ints", |b| {
+        bench_sort_row_unpacked(int_rows.clone(), b)
     });
 
     c.bench_function("sort_datums_bytes", |b| {
@@ -110,8 +112,8 @@ pub fn bench_sort(c: &mut Criterion) {
     c.bench_function("sort_row_buffer_bytes", |b| {
         bench_sort_row_buffer(byte_rows.clone(), b)
     });
-    c.bench_function("sort_row_custom_bytes", |b| {
-        bench_sort_row_custom(byte_rows.clone(), b)
+    c.bench_function("sort_row_unpacked_bytes", |b| {
+        bench_sort_row_unpacked(byte_rows.clone(), b)
     });
 }
 
