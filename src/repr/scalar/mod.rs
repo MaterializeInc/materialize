@@ -340,6 +340,18 @@ impl From<Vec<u8>> for Datum {
     }
 }
 
+impl From<NaiveDate> for Datum {
+    fn from(d: NaiveDate) -> Datum {
+        Datum::Date(d)
+    }
+}
+
+impl From<NaiveDateTime> for Datum {
+    fn from(dt: NaiveDateTime) -> Datum {
+        Datum::Timestamp(dt)
+    }
+}
+
 impl<T> From<Option<T>> for Datum
 where
     Datum: From<T>,
