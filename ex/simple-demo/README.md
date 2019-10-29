@@ -22,7 +22,7 @@ are:
 Our load generator (`simple-loadgen`) populates MySQL with 3 tables: `region`,
 `user`, and `purchase`.
 
-![simple demo schema](../../doc/img/simple_demo_schema.png)
+![simple demo schema](schema.png)
 
 The database gets seeded with regions, users in those regions, and the purchases
 those users make. After seeding, users continue making purchases (~10/second for
@@ -31,7 +31,7 @@ those users make. After seeding, users continue making purchases (~10/second for
 As these writes occur, Debezium/Kafka stream the changes out of MySQL.
 Materialize subscribes to this change feed and maintains our materialized views
 with the incoming data––materialized views typically being some report whose
-information we're regularly interested in viewing. 
+information we're regularly interested in viewing.
 
 For example, if we wanted real time statistics of total sales by region,
 Materialize could maintain that report as a materialized view. And, in fact,
@@ -81,9 +81,9 @@ available to Docker Engine.
    Materialize.
 
     ```sql
-    CREATE SOURCES 
-    LIKE 'mysql.simple.%' 
-    FROM 'kafka://kafka:9092' 
+    CREATE SOURCES
+    LIKE 'mysql.simple.%'
+    FROM 'kafka://kafka:9092'
     USING SCHEMA REGISTRY 'http://schema-registry:8081';
     ```
 
@@ -110,7 +110,7 @@ available to Docker Engine.
     ```sql
     CREATE VIEW purchase_sum_by_region
     AS
-        SELECT  sum(purchase.amount) AS region_sum, 
+        SELECT  sum(purchase.amount) AS region_sum,
                 region.id AS region_id
         FROM mysql_simple_purchase AS purchase
         INNER JOIN mysql_simple_user AS user
@@ -175,7 +175,7 @@ steps.
 
     ```sql
     USE simple;
-    SELECT  sum(purchase.amount) AS region_sum, 
+    SELECT  sum(purchase.amount) AS region_sum,
             region.id AS region_id
     FROM purchase
     INNER JOIN user

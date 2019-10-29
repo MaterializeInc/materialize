@@ -74,13 +74,13 @@ the outside world by interfacing with:
   creating views, and querying data.
 - **Kafka** to ingest data, i.e. writes.
 
-![Materialize deployment diagram](img/architecture_deployment.png)
+![Materialize deployment diagram](assets/architecture/deployment.png)
 
-_Above: Materialize deployed with multiple Kafka feeds._ 
+_Above: Materialize deployed with multiple Kafka feeds._
 
 _Below: Materialize's internal structure in the above deployment._
 
-![Materialize internal diagram](img/architecture_internals.png)
+![Materialize internal diagram](assets/architecture/internals.png)
 
 ### SQL Shell: Interacting with Clients
 
@@ -146,7 +146,7 @@ already-up-to-date view. No substantive processing necessary.
 **Reading Data vs. Creating Views**
 
 As a quick summary: the difference between simply reading data and creating a
-view is in terms of how long the generated dataflow persists. 
+view is in terms of how long the generated dataflow persists.
 
 - In the case of performing an ad hoc `SELECT`, the dataflow only sticks around
   long enough to generate an answer once before being terminated.

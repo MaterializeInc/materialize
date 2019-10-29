@@ -29,7 +29,7 @@ running.
 So, to get the core services running we just run `mtrlz-start`:
 
 ```console
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-start
 ... snip confluent noise ...
 ... snip cargo noise ...
@@ -45,7 +45,7 @@ To get data into materialized we run the `mtrlz-produce` function, which allows
 us to interactively put JSON blobs into materialize, according to a schema.
 
 ```console
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-produce quotes '{
     "type": "record",
     "name": "envelope",
@@ -84,7 +84,7 @@ Now we are ready to interact with materialize!
 Open another terminal session and start the materialize shell:
 
 ```sql
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA REGISTRY 'http://localhost:8081';
 > SHOW COLUMNS FROM quotes;
@@ -101,7 +101,7 @@ Though this doesn't really demonstrate the capabilities of Materialize––it's
 For your avro producer session do:
 
 ```console
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-produce aggdata '{
     "type": "record",
     "name": "envelope",
@@ -140,7 +140,7 @@ Now you won't have a prompt, just enter this manually:
 Then, in another session, open the materialize shell:
 
 ```sql
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
@@ -150,7 +150,7 @@ $ mtrlz-shell
 ## Join demo
 
 ```console
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-produce src1 '{
     "type": "record",
     "name": "envelope",
@@ -188,7 +188,7 @@ Now you won't have a prompt, just enter this manually:
 Open another terminal and start another producer:
 
 ```console
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-produce src2 '{
     "type": "record",
     "name": "envelope",
@@ -234,7 +234,7 @@ Go back to the `src1` terminal and flush the data:
 Then, in another session, open the materialize shell:
 
 ```sql
-$ source doc/demo-utils.sh
+$ source doc/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA REGISTRY 'http://localhost:8081';
