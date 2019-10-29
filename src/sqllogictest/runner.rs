@@ -36,10 +36,10 @@ use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use coord::QueryExecuteResponse;
+use coord::ExecuteResponse;
 use dataflow;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum, Row};
+use repr::{ColumnType, Datum, RelationDesc, Row};
 use sql::{Session, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -412,12 +412,12 @@ impl State {
         }
 
         match self.run_sql(sql) {
-            Ok(resp) => match expected_rows_affected {
+            Ok((_desc, resp)) => match expected_rows_affected {
                 None => Ok(Outcome::Success),
                 Some(expected) => match resp {
-                    QueryExecuteResponse::Inserted(actual)
-                    | QueryExecuteResponse::Updated(actual)
-                    | QueryExecuteResponse::Deleted(actual) => {
+                    ExecuteResponse::Inserted(actual)
+                    | ExecuteResponse::Updated(actual)
+                    | ExecuteResponse::Deleted(actual) => {
                         if expected != actual {
                             Ok(Outcome::WrongNumberOfRowsInserted {
                                 expected_count: expected,
@@ -473,7 +473,10 @@ impl State {
 
         // send plan, read response
         let (desc, rows_rx) = match self.run_sql(sql) {
-            Ok(QueryExecuteResponse::SendRows { desc, rx }) => (desc, rx),
+            Ok((desc, ExecuteResponse::SendRows(rx))) => (
+                desc.expect("RelationDesc missing for query that returns rows"),
+                rx,
+            ),
             Ok(other) => {
                 return Ok(Outcome::PlanFailure {
                     error: failure::format_err!(
@@ -633,7 +636,10 @@ impl State {
         Ok(Outcome::Success)
     }
 
-    pub(crate) fn run_sql(&mut self, sql: &str) -> Result<QueryExecuteResponse, failure::Error> {
+    pub(crate) fn run_sql(
+        &mut self,
+        sql: &str,
+    ) -> Result<(Option<RelationDesc>, ExecuteResponse), failure::Error> {
         let statement_name = String::from("");
         let portal_name = String::from("");
 
@@ -649,10 +655,17 @@ impl State {
                 })
                 .expect("futures channel should not fail");
             let resp = rx.wait().expect("futures channel should not fail");
+            resp.result?;
             mem::replace(&mut self.session, resp.session);
         }
 
         // Bind.
+        let desc = self
+            .session
+            .get_prepared_statement(&statement_name)
+            .expect("unnamed prepared statement missing")
+            .desc()
+            .cloned();
         self.session
             .set_portal(portal_name.clone(), statement_name, vec![])?;
 
@@ -669,7 +682,7 @@ impl State {
                 .expect("futures channel should not fail");
             let resp = rx.wait().expect("futures channel should not fail");
             mem::replace(&mut self.session, resp.session);
-            resp.result
+            Ok((desc, resp.result?))
         }
     }
 

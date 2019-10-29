@@ -12,7 +12,6 @@ use failure::bail;
 use futures::sync::mpsc::UnboundedReceiver;
 use futures::{stream, Stream};
 use ore::collections::CollectionExt;
-use repr::{RelationDesc, ScalarType};
 use sql::store::{Catalog, CatalogItem};
 use sql::PreparedStatement;
 use sql::{Plan, Session};
@@ -20,7 +19,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use symbiosis::Postgres;
 
-use super::{coordinator::Coordinator, Command, QueryExecuteResponse, Response};
+use super::{coordinator::Coordinator, Command, ExecuteResponse, Response};
 
 enum Message {
     Command(Command),
@@ -186,7 +185,7 @@ fn handle_statement<C>(
     session: &mut Session,
     stmt: sql::Statement,
     conn_id: u32,
-) -> Result<QueryExecuteResponse, failure::Error>
+) -> Result<ExecuteResponse, failure::Error>
 where
     C: comm::Connection,
 {
@@ -213,7 +212,7 @@ fn handle_execute<C>(
     session: &mut Session,
     portal_name: String,
     conn_id: u32,
-) -> Result<QueryExecuteResponse, failure::Error>
+) -> Result<ExecuteResponse, failure::Error>
 where
     C: comm::Connection,
 {
@@ -234,7 +233,7 @@ where
             let stmt = stmt.clone();
             handle_statement(coord, postgres, catalog, session, stmt, conn_id)
         }
-        None => Ok(QueryExecuteResponse::EmptyQuery),
+        None => Ok(ExecuteResponse::EmptyQuery),
     }
 }
 
@@ -250,17 +249,9 @@ fn handle_parse(
         0 => (None, None),
         1 => {
             let stmt = stmts.into_element();
-            let desc = match sql::plan(catalog, session, stmt.clone()) {
-                Ok(plan) => match plan {
-                    Plan::Peek { desc, .. }
-                    | Plan::SendRows { desc, .. }
-                    | Plan::ExplainPlan { desc, .. } => Some(desc),
-                    Plan::CreateSources { .. } => {
-                        Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
-                    }
-                    _ => None,
-                },
-                // Planning the query failed. If we're running in symbiosis with
+            let desc = match sql::describe(catalog, stmt.clone()) {
+                Ok(desc) => desc,
+                // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
                 // only handles commands that do not return rows, so the
                 // `RelationDesc` is always `None`.
