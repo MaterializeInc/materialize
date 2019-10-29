@@ -173,7 +173,7 @@ pub fn construct<A: Allocate>(
                 ((name, worker), time_ms, if is_create { 1 } else { -1 })
             })
             .as_collection()
-            .map(move |(name, worker)| {
+            .map(|(name, worker)| {
                 Row::from_iter(&[Datum::String(&*name), Datum::Int64(worker as i64)])
             });
 
@@ -185,7 +185,7 @@ pub fn construct<A: Allocate>(
                 ((dataflow, source, worker), time_ms, diff)
             })
             .as_collection()
-            .map(move |(dataflow, source, worker)| {
+            .map(|(dataflow, source, worker)| {
                 Row::from_iter(&[
                     Datum::String(&*dataflow),
                     Datum::String(&*source),
@@ -201,7 +201,7 @@ pub fn construct<A: Allocate>(
                 ((name, worker), time_ms, if is_install { 1 } else { -1 })
             })
             .as_collection()
-            .map(move |(peek, worker)| {
+            .map(|(peek, worker)| {
                 Row::from_iter(&[
                     Datum::String(&*format!("{}", peek.conn_id)),
                     Datum::Int64(worker as i64),
@@ -218,7 +218,7 @@ pub fn construct<A: Allocate>(
                 ((name, logical), time_ms, delta)
             })
             .as_collection()
-            .map(move |(name, logical)| {
+            .map(|(name, logical)| {
                 Row::from_iter(&[Datum::String(&*name), Datum::Int64(logical as i64)])
             });
 
@@ -273,7 +273,7 @@ pub fn construct<A: Allocate>(
             )
             .as_collection()
             .count()
-            .map(move |((worker, pow), count)| {
+            .map(|((worker, pow), count)| {
                 Row::from_iter(&[
                     Datum::Int64(worker as i64),
                     Datum::Int64(pow as i64),

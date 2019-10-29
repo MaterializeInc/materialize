@@ -72,7 +72,7 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .count()
-            .map(move |((op, worker), count)| {
+            .map(|((op, worker), count)| {
                 Row::from_iter(&[
                     Datum::Int64(op as i64),
                     Datum::Int64(worker as i64),
@@ -93,7 +93,7 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .count()
-            .map(move |((op, worker), count)| {
+            .map(|((op, worker), count)| {
                 Row::from_iter(&[
                     Datum::Int64(op as i64),
                     Datum::Int64(worker as i64),

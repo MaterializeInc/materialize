@@ -267,15 +267,13 @@ pub fn construct<A: Allocate>(
             .map(|(op, t, d)| (op, t, d as isize))
             .as_collection()
             .count()
-            .map(move |(op, cnt)| {
-                Row::from_iter(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
-            });
+            .map(|(op, cnt)| Row::from_iter(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)]));
 
         let histogram = duration
             .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
             .as_collection()
             .count()
-            .map(move |((op, pow), cnt)| {
+            .map(|((op, pow), cnt)| {
                 Row::from_iter(&[
                     Datum::Int64(op as i64),
                     Datum::Int64(pow as i64),
