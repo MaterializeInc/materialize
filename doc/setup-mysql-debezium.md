@@ -1,8 +1,11 @@
-# MySQL Setup w/ Debezium
+# MySQL setup w/ Debezium
 
-To deploy Materialize using MySQL as its upstream database, you'll need to configure it with Debezium.
+To deploy Materialize using MySQL as its upstream database, you'll need to
+configure it with Debezium.
 
-[Debezium] itself provides change data capature (CDC) to legacy databases like MySQL and Postgres. Ultimately, CDC lets MySQL publish to Kafka, which in turn can be consumed by Materialize.
+[Debezium] itself provides change data capature (CDC) to legacy databases like
+MySQL and Postgres. Ultimately, CDC lets MySQL publish to Kafka, which in turn
+can be consumed by Materialize.
 
 ## Setup
 
@@ -10,7 +13,8 @@ To deploy Materialize using MySQL as its upstream database, you'll need to confi
 
 #### Mac/Homebrew
 
-Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s `debezium.sh`.
+Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s
+`debezium.sh`.
 
 ### Manual
 
@@ -20,7 +24,8 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s `debe
     brew install mysql
     ```
 
-1. Adjust the MySQL configuration file to use UTC by adding the following line to 'my.cnf`:
+1. Adjust the MySQL configuration file to use UTC by adding the following line
+   to 'my.cnf`:
 
     ```shell
     default-time-zone = '+00:00'
@@ -31,10 +36,10 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s `debe
 1. Restart MySQL that it can pick up the time zone change.
 
     ```shell
-    brew serices restart mysql  
+    brew services restart mysql
     ```
 
-1. Create a `tpch` database. 
+1. Create a `tpch` database.
 
     ```shell
     mysql -uroot
@@ -53,7 +58,11 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s `debe
     GRANT ALL PRIVILEGES ON tpch.* TO 'debezium'@'%';
     ```
 
-    The `IDENTIFIED WITH mysql_native_password ...` clause sets the password for the account to Debezium using the old MySQL password protocol, which is all that Debezium supports. This is only necessary on MySQL 8.x+ (I think); if you get an error about `mysql_native_password` not being a thing, try just dropping the `WITH mysql_native_password` bit from the query.
+    The `IDENTIFIED WITH mysql_native_password ...` clause sets the password for
+    the account to Debezium using the old MySQL password protocol, which is all
+    that Debezium supports. This is only necessary on MySQL 8.x+ (I think); if
+    you get an error about `mysql_native_password` not being a thing, try just
+    dropping the `WITH mysql_native_password` bit from the query.
 
 1. Load TPC-H with `benesch`'s fork of [`tpch-gen`](https://github.com/benesch/tpch-dbgen)'s data.
 
@@ -77,7 +86,12 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s `debe
     mysql -uroot --local-infile < ddl.sql
     ```
 
-1. Download the [latest stable Debezium MySQL connector](https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/0.9.5.Final/debezium-connector-mysql-0.9.5.Final-plugin.tar.gz) and place the `debezium-connector-mysql` directory in `/usr/local/share/java`. If this directory doesn't exist, put the contents of the `tar` into the `share/java` directory under your Confluent install directory.
+1. Download the [latest stable Debezium MySQL
+   connector](https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/0.9.5.Final/debezium-connector-mysql-0.9.5.Final-plugin.tar.gz)
+   and place the `debezium-connector-mysql` directory in
+   `/usr/local/share/java`. If this directory doesn't exist, put the contents of
+   the `tar` into the `share/java` directory under your Confluent install
+   directory.
 
     ```shell
     curl -O https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/0.9.5.Final/debezium-connector-mysql-0.9.5.Final-plugin.tar.gz
@@ -88,9 +102,12 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s `debe
 
 ## Loading TPCH
 
-To test that your local MySQL/Debezium actually works with Materialize, we'll have Materialize ingest the TPCH `lineitem` table.
+To test that your local MySQL/Debezium actually works with Materialize, we'll
+have Materialize ingest the TPCH `lineitem` table.
 
-**!NOTE!** If you run into problems, check out the **Troubleshooting** section at the bottom. If you don't see a solution to your problem there, throw the answer in their once you solve it.
+**!NOTE!** If you run into problems, check out the **Troubleshooting** section
+at the bottom. If you don't see a solution to your problem there, throw the
+answer in their once you solve it.
 
 1. Start/restart Kafka Connect.
 
@@ -119,7 +136,9 @@ To test that your local MySQL/Debezium actually works with Materialize, we'll ha
     }'
     ```
 
-    If you get an error that the Debezium MySQL connector doesn't exist, check out the `Failed to find any class that implements Connector and which name matches io.debezium.connector.mysql.MySqlConnector` section below.
+    If you get an error that the Debezium MySQL connector doesn't exist, check
+    out the `Failed to find any class that implements Connector and which name
+    matches io.debezium.connector.mysql.MySqlConnector` section below.
 
 1. Watch the Connect log file and look for messages from Debezium.
 
@@ -127,14 +146,15 @@ To test that your local MySQL/Debezium actually works with Materialize, we'll ha
     confluent local log connect
     ```
 
-1.  In a new shell (#2), read the actual data out of Kafka once Debezium finishes its first snapshot.
+1.  In a new shell (#2), read the actual data out of Kafka once Debezium
+    finishes its first snapshot.
 
     ```shell
     kafka-avro-console-consumer --from-beginning --bootstrap-server localhost:9092 --topic tpch.tpch.customer
     ```
 
 1. In a new shell (#3), launch a `materialized` server.
-    
+
     If you have a good build...
 
     ```shell
@@ -150,7 +170,7 @@ To test that your local MySQL/Debezium actually works with Materialize, we'll ha
 1. In a new shell (#4), connect to `materialized` and create a source to import the `lineitems` table.
 
     ```shell
-    cd <path/to/materialized> 
+    cd <path/to/materialized>
     source doc/demo-utils.sh
     mtrlz-shell
     ```
@@ -163,33 +183,42 @@ To test that your local MySQL/Debezium actually works with Materialize, we'll ha
     -- ...
     ```
 
-    Once `PEEK count` returns `6001215`, all of the rows from `lineitem` have been imported.
-    
-    Naturally, if this works at all, it indicates that Debezium is dutifully getting data out of MySQL. You could, at this point, tear down the setup that is loading `lineitem` into Materialize.
+    Once `PEEK count` returns `6001215`, all of the rows from `lineitem` have
+    been imported.
+
+    Naturally, if this works at all, it indicates that Debezium is dutifully
+    getting data out of MySQL. You could, at this point, tear down the setup
+    that is loading `lineitem` into Materialize.
 
 ## Troubleshooting
 
 ### `Failed to find any class that implements Connector and which name matches io.debezium.connector.mysql.MySqlConnector`
 
-If you encounter this error, the `confluent-platform` set of tools that you installed cannot find the `debezium-connector-mysql` directory.
+If you encounter this error, the `confluent-platform` set of tools that you
+installed cannot find the `debezium-connector-mysql` directory.
 
-To start investigating this, find out where `confluent-platform` is looking for files to include using...
+To start investigating this, find out where `confluent-platform` is looking for
+files to include using...
 
 ```
 confluent local log connect
 ```
 
-There's a chance it'll be `~/Downloads/` or some other such nonsense. 
-    
-To fix this particular version of this issue, remove any reference to the `confluent` or `confluent-platform` binary in the offending location (e.g. `tar` files), and then restart Kafka Connect.
+There's a chance it'll be `~/Downloads/` or some other such nonsense.
+
+To fix this particular version of this issue, remove any reference to the
+`confluent` or `confluent-platform` binary in the offending location (e.g. `tar`
+files), and then restart Kafka Connect.
 
 ```shell
 confluent local stop connect && confluent local start connect
 ```
 
-### Missing Rows
+### Missing rows
 
-If `PEEK count` stops growing at a value less than `6001215`, try writing explicit watermarks to indicate that a topic is finished. For example, to add a watermark to lineitems:
+If `PEEK count` stops growing at a value less than `6001215`, try writing
+explicit watermarks to indicate that a topic is finished. For example, to add a
+watermark to lineitems:
 
     ```shell
     kafka-avro-console-producer --broker-list localhost:9092 --topic tpch.tpch.lineitem --property value.schema="$(curl localhost:8081/subjects/tpch.tpch.lineitem-value/versions/1 | jq -r .schema | jq)" <<<'{"before":null,"after":null,"source":{"version":{"string":"0.9.5.Final"},"connector":{"string":"mysql"},"name":"tpch","server_id":0,"ts_sec":0,"gtid":null,"file":"binlog.000004","pos":951896181,"row":0,"snapshot":{"boolean":true},"thread":null,"db":{"string":"tpch"},"table":{"string":"lineitem"},"query":null},"op":"c","ts_ms":{"long":1560886948093}}'

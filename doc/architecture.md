@@ -74,15 +74,15 @@ the outside world by interfacing with:
   creating views, and querying data.
 - **Kafka** to ingest data, i.e. writes.
 
-![Materialize deployment diagram](img/architecture_deployment.png)
+![Materialize deployment diagram](assets/architecture/deployment.png)
 
-_Above: Materialize deployed with multiple Kafka feeds._ 
+_Above: Materialize deployed with multiple Kafka feeds._
 
 _Below: Materialize's internal structure in the above deployment._
 
-![Materialize internal diagram](img/architecture_internals.png)
+![Materialize internal diagram](assets/architecture/internals.png)
 
-### SQL Shell: Interacting with Clients
+### SQL shell: interacting with clients
 
 Right now, Materialize provides its interactive interface through `psql` running
 locally on a client machine; this uses the PostgreSQL wire protocol (`pgwire`)
@@ -100,14 +100,14 @@ classes of statements in Materialize:
 - **Reading data** from sources
 - **Creating views** to maintain the output of some query
 
-#### Creating Sources
+#### Creating sources
 
 When Materialize receives a `CREATE SOURCES...` statement, it attempts to
 connect to a Kafka stream, which it plumbs into its local instance of
 Differential. You can find more information about how that works in the
 **Kafka** section below.
 
-#### Reading Data
+#### Reading data
 
 Like any SQL API, you read data from Materialize using `SELECT` statements. When
 the `sql` thread parses some arbitrary `SELECT` statement, it generates a
@@ -121,10 +121,10 @@ results are passed back to the client, and the dataflow is terminated.
 
 Unfortunately, if the user passes the same query to Materialize again, it must
 repeat the entire process––creating a new dataflow, waiting for its execution,
-etc. The inefficiency of this is actually Materialize's _raison d'être_, and leads
-us to the thing you actually want to do with the software: creating views.
+etc. The inefficiency of this is actually Materialize's _raison d'être_, and
+leads us to the thing you actually want to do with the software: creating views.
 
-#### Creating Views
+#### Creating views
 
 If you know that you are routinely interested in knowing the answer to a
 specific query (_how many widgets were sold in Oklahoma today?_), you can do
@@ -146,7 +146,7 @@ already-up-to-date view. No substantive processing necessary.
 **Reading Data vs. Creating Views**
 
 As a quick summary: the difference between simply reading data and creating a
-view is in terms of how long the generated dataflow persists. 
+view is in terms of how long the generated dataflow persists.
 
 - In the case of performing an ad hoc `SELECT`, the dataflow only sticks around
   long enough to generate an answer once before being terminated.
@@ -161,7 +161,7 @@ The only "wrinkle" in the above explanation is when you perform reads on views:
 no dataflow gets created, and Materialize instead serves the result from an
 existing dataflow.'
 
-### Kafka: Ingesting Data
+### Kafka: ingesting data
 
 Materialize subscribes to Kafka topics and monitors the stream for data it
 should ingest; this is how writes happen in Materialize.
