@@ -211,7 +211,7 @@ pub enum StateMachine<A: Conn + 'static> {
         row_desc: RelationDesc,
         rows_rx: coord::RowsFuture,
         field_formats: Option<Vec<FieldFormat>>,
-        currently_extended: bool,
+        extended: bool,
     },
 
     #[state_machine_future(transitions(
@@ -252,7 +252,7 @@ pub enum StateMachine<A: Conn + 'static> {
     SendCommandComplete {
         send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
         session: Session,
-        currently_extended: bool,
+        extended: bool,
         /// Labels for prometheus. These provide the `kind` label value in [`RESPONSES_SENT_COUNTER`]
         label: &'static str,
     },
@@ -551,7 +551,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                     .send(BackendMessage::CommandComplete { tag: $cmd.into() })
                             ),
                             session,
-                            currently_extended: state.extended,
+                            extended: state.extended,
                             label: $label
                         })
                     };
@@ -585,7 +585,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     QueryExecuteResponse::EmptyQuery => transition!(SendCommandComplete {
                         send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
                         session,
-                        currently_extended: state.extended,
+                        extended: state.extended,
                         label: "empty",
                     }),
                     QueryExecuteResponse::Inserted(n) => {
@@ -607,7 +607,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                 row_desc: desc,
                                 rows_rx: rx,
                                 field_formats: state.field_formats,
-                                currently_extended: true
+                                extended: true
                             })
                         } else {
                             transition!(SendRowDescription {
@@ -711,7 +711,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             row_desc: state.row_desc,
             rows_rx: state.rows_rx,
             field_formats: None,
-            currently_extended: false
+            extended: false
         })
     }
 
@@ -765,7 +765,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             }
             PeekResponse::Rows(rows) => {
                 let state = state.take();
-                let extended = state.currently_extended;
+                let extended = state.extended;
                 trace!(
                     "cid={} wait for rows: count={} extended={}",
                     cx.conn_id,
@@ -778,7 +778,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     rows,
                     state.row_desc,
                     state.field_formats.clone(),
-                    state.currently_extended,
+                    state.extended,
                     cx.conn_id,
                 ));
             }
@@ -804,7 +804,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        let extended = state.currently_extended;
+        let extended = state.extended;
         trace!(
             "cid={} send command complete extended={}",
             cx.conn_id,
@@ -942,7 +942,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         transition!(SendCommandComplete {
             send: Box::new(conn.send(BackendMessage::CommandComplete { tag: "SET".into() })),
             session: state.session,
-            currently_extended: state.extended,
+            extended: state.extended,
             label: "set",
         })
     }
@@ -980,13 +980,13 @@ fn send_rows<A>(
     rows: Vec<Row>,
     row_desc: RelationDesc,
     field_formats: Option<Vec<FieldFormat>>,
-    currently_extended: bool,
+    extended: bool,
     conn_id: u32,
 ) -> SendCommandComplete<A>
 where
     A: Conn + 'static,
 {
-    trace!("cid={} send rows extended={}", conn_id, currently_extended);
+    trace!("cid={} send rows extended={}", conn_id, extended);
     let formats = FieldFormatIter::new(field_formats.map(Arc::new));
 
     let rows = rows
@@ -1004,7 +1004,7 @@ where
     SendCommandComplete {
         send: Box::new(stream::iter_ok(rows).forward(conn).map(|(_, conn)| conn)),
         session,
-        currently_extended,
+        extended,
         label: "select",
     }
 }
