@@ -33,5 +33,5 @@ sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.1"
-uuid = "*"
+uuid = "0.8"
 walkdir = "2"
