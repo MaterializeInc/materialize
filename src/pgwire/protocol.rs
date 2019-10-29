@@ -139,7 +139,7 @@ pub enum StateMachine<A: Conn + 'static> {
         SendReadyForQuery,
         SendParameterDescription,
         SendDescribeResponse,
-        HandleBind,
+        SendBindComplete,
         HandleParse,
         Error,
         Done
@@ -171,15 +171,6 @@ pub enum StateMachine<A: Conn + 'static> {
     // Extended query flow.
     #[state_machine_future(transitions(RecvQuery, Error))]
     SendParseComplete { send: SinkSend<A>, session: Session },
-
-    #[state_machine_future(transitions(SendBindComplete, SendError, Error, Done))]
-    HandleBind {
-        send: SinkSend<A>,
-        session: Session,
-        portal_name: String,
-        statement_name: String,
-        return_field_formats: Vec<FieldFormat>,
-    },
 
     #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
     SendBindComplete { send: SinkSend<A>, session: Session },
@@ -481,13 +472,21 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 portal_name,
                 statement_name,
                 return_field_formats,
-            } => transition!(HandleBind {
-                send: conn.send(BackendMessage::BindComplete),
-                session: state.session,
-                portal_name,
-                statement_name,
-                return_field_formats,
-            }),
+            } => {
+                let mut session = state.session;
+                let fmts = return_field_formats.iter().map(bool::from).collect();
+                trace!(
+                    "cid={} handle bind statement={:?} portal={:?}",
+                    cx.conn_id,
+                    statement_name,
+                    portal_name,
+                );
+                session.set_portal(portal_name, statement_name, fmts)?;
+                transition!(SendBindComplete {
+                    send: conn.send(BackendMessage::BindComplete),
+                    session,
+                });
+            }
             FrontendMessage::Execute { portal_name } => {
                 let (tx, rx) = futures::sync::oneshot::channel();
                 let field_formats = state
@@ -872,27 +871,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         trace!("cid={} transition to recv extended", cx.conn_id);
         transition!(RecvQuery {
             recv: conn.recv(),
-            session: state.session,
-        })
-    }
-
-    fn poll_handle_bind<'s, 'c>(
-        state: &'s mut RentToOwn<'s, HandleBind<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterHandleBind<A>, failure::Error> {
-        let mut state = state.take();
-        let (sn, pn) = (state.statement_name, state.portal_name);
-        let fmts = state.return_field_formats.iter().map(bool::from).collect();
-        trace!(
-            "cid={} handle bind statement={:?} portal={:?}",
-            cx.conn_id,
-            sn,
-            pn
-        );
-        state.session.set_portal(pn, sn, fmts)?;
-
-        transition!(SendBindComplete {
-            send: state.send,
             session: state.session,
         })
     }
