@@ -91,7 +91,7 @@ pub struct RowIter<'a> {
 ///
 /// let mut buffer = DatumsBuffer::new();
 /// for row in rows {
-///     let datums = buffer.from_iter(row);
+///     let datums = buffer.from_iter(&row);
 ///     assert_eq!(datums[0], datums[2]);
 /// }
 /// ```
