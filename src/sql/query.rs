@@ -904,13 +904,24 @@ fn plan_expr<'a>(
                 let (i, _) = ctx.scope.resolve_column(&name.value)?;
                 Ok(ScalarExpr::Column(i))
             }
-            Expr::CompoundIdentifier(names) if names.len() == 2 => {
-                let (i, _) = ctx
-                    .scope
-                    .resolve_table_column(&names[0].value, &names[1].value)?;
-                Ok(ScalarExpr::Column(i))
+            Expr::CompoundIdentifier(names) => {
+                if names.len() == 2 {
+                    let (i, _) = ctx
+                        .scope
+                        .resolve_table_column(&names[0].value, &names[1].value)?;
+                    Ok(ScalarExpr::Column(i))
+                } else {
+                    bail!(
+                        "compound identifier {} with more than two identifiers is not supported",
+                        e
+                    );
+                }
             }
             Expr::Value(val) => plan_literal(catalog, val),
+            Expr::Wildcard { .. } | Expr::QualifiedWildcard(_) => {
+                bail!("wildcard in invalid position")
+            }
+            Expr::Parameter(_) => bail!("query parameters are not yet supported"),
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
             Expr::IsNull(expr) => plan_is_null_expr(catalog, ctx, expr, false),
             Expr::IsNotNull(expr) => plan_is_null_expr(catalog, ctx, expr, true),
@@ -1023,10 +1034,7 @@ fn plan_expr<'a>(
                 };
                 Ok(expr.call_unary(func))
             }
-            _ => bail!(
-                "complicated expressions are not yet supported: {}",
-                e.to_string()
-            ),
+            Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
         }
     }
 }
