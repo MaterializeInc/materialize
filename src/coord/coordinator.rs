@@ -29,12 +29,12 @@ use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
     compare_columns, DataflowDesc, PeekResponse, PeekWhen, RowSetFinishing, Sink, SinkConnector,
-    TailSinkConnector, Timestamp, Update, View,
+    Source, SourceConnector, TailSinkConnector, Timestamp, Update, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
 use repr::{Datum, DatumsBuffer, RelationDesc, Row, ScalarType};
-use sql::Plan;
+use sql::{MutationKind, ObjectType, Plan};
 use std::iter::FromIterator;
 
 /// Glues the external world to the Timely workers.
@@ -54,7 +54,9 @@ where
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
     active_tails: HashMap<u32, String>,
+    local_input_time: Timestamp,
     log: bool,
+    symbiosis: bool,
 }
 
 impl<C> Coordinator<C>
@@ -65,6 +67,7 @@ where
         switchboard: comm::Switchboard<C>,
         num_timely_workers: usize,
         logging_config: Option<&LoggingConfig>,
+        symbiosis: bool,
     ) -> Self {
         let broadcast_tx = switchboard.broadcast_tx(dataflow::BroadcastToken).wait();
 
@@ -77,7 +80,9 @@ where
             sources: HashMap::new(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
+            local_input_time: 1,
             log: logging_config.is_some(),
+            symbiosis,
         };
 
         if let Some(logging_config) = logging_config {
@@ -114,29 +119,17 @@ where
         }
     }
 
-    pub fn sequence_insert(&mut self, name: String, updates: Vec<Update>) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::Insert { name, updates },
-        )
-    }
-
-    pub fn sequence_advance_time(&mut self, name: String, to: Timestamp) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::AdvanceTime { name, to },
-        )
-    }
-
-    // TODO(benesch): the `ts_override` parameter exists only to support
-    // sqllogictest and is kind of gross. See if we can get rid of it.
-    pub fn sequence_plan(
-        &mut self,
-        plan: Plan,
-        conn_id: u32,
-        ts_override: Option<Timestamp>,
-    ) -> QueryExecuteResponse {
+    pub fn sequence_plan(&mut self, plan: Plan, conn_id: u32) -> QueryExecuteResponse {
         match plan {
+            Plan::CreateTable { name, desc } => {
+                self.create_sources(vec![Source {
+                    name,
+                    connector: SourceConnector::Local,
+                    desc,
+                }]);
+                QueryExecuteResponse::CreatedTable
+            }
+
             Plan::CreateSource(source) => {
                 let sources = vec![source];
                 self.create_sources(sources);
@@ -164,7 +157,7 @@ where
                 QueryExecuteResponse::CreatedView
             }
 
-            Plan::DropItems((names, response)) => {
+            Plan::DropItems(names, item_type) => {
                 let mut sources_to_drop = Vec::new();
                 let mut views_to_drop = Vec::new();
                 for name in names {
@@ -188,10 +181,11 @@ where
                     )
                 }
                 self.drop_views(views_to_drop);
-                if response {
-                    QueryExecuteResponse::DroppedSource
-                } else {
-                    QueryExecuteResponse::DroppedView
+                match item_type {
+                    ObjectType::Source => QueryExecuteResponse::DroppedSource,
+                    ObjectType::View => QueryExecuteResponse::DroppedView,
+                    ObjectType::Table => QueryExecuteResponse::DroppedTable,
+                    ObjectType::Sink | ObjectType::Index => unreachable!(),
                 }
             }
 
@@ -218,12 +212,11 @@ where
                 // Choose a timestamp for all workers to use in the peek.
                 // We minimize over all participating views, to ensure that the query will not
                 // need to block on the arrival of further input data.
-                let timestamp =
-                    ts_override.unwrap_or_else(|| self.determine_timestamp(&source, when));
+                let timestamp = self.determine_timestamp(&source, when);
 
                 // For straight-forward dataflow pipelines, use finishing instructions instead of
                 // dataflow operators.
-                Coordinator::<C>::maybe_use_finishing(&mut source, &mut finishing);
+                Self::maybe_use_finishing(&mut source, &mut finishing);
 
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
@@ -375,6 +368,53 @@ where
                 let rows = vec![Row::from_iter(vec![Datum::from(&*pretty)])];
                 send_immediate_rows(desc, rows)
             }
+
+            Plan::SendDiffs {
+                name,
+                updates,
+                affected_rows,
+                kind,
+            } => {
+                let updates = updates
+                    .into_iter()
+                    .map(|(row, diff)| Update {
+                        row,
+                        diff,
+                        timestamp: self.local_input_time,
+                    })
+                    .collect();
+
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::Insert { name, updates },
+                );
+
+                self.local_input_time += 1;
+
+                let local_inputs = self
+                    .sources
+                    .iter()
+                    .filter_map(|(name, (src, _view))| match src.connector {
+                        SourceConnector::Local => Some(name.as_str()),
+                        _ => None,
+                    });
+
+                for name in local_inputs {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AdvanceTime {
+                            name: name.into(),
+                            to: self.local_input_time,
+                        },
+                    );
+                }
+
+                match kind {
+                    MutationKind::Delete => QueryExecuteResponse::Deleted(affected_rows),
+                    MutationKind::Insert => QueryExecuteResponse::Inserted(affected_rows),
+                    MutationKind::Update => QueryExecuteResponse::Updated(affected_rows),
+                }
+            }
         }
     }
 
@@ -392,7 +432,7 @@ where
                 .insert(source.name.clone(), (source.clone(), Some(name)));
         }
         let mut dataflows = Vec::new();
-        for source in sources {
+        for source in sources.iter() {
             if let Some(rename) = &self.sources.get(&source.name).unwrap().1 {
                 dataflows.push(
                     DataflowDesc::new(None)
@@ -405,7 +445,7 @@ where
                             raw_sql: "<created by CREATE SOURCE>".to_string(),
                             desc: source.desc.clone(),
                         })
-                        .add_source(source),
+                        .add_source(source.clone()),
                 );
             }
         }
@@ -415,6 +455,17 @@ where
         );
         for dataflow in dataflows.iter() {
             self.insert_views(dataflow);
+        }
+        for source in sources {
+            if let SourceConnector::Local = source.connector {
+                broadcast(
+                    &mut self.broadcast_tx,
+                    SequencedCommand::AdvanceTime {
+                        name: source.name,
+                        to: self.local_input_time,
+                    },
+                );
+            }
         }
     }
 
@@ -531,7 +582,7 @@ where
     }
 
     pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {
-        let (tx, rx) = self.switchboard.mpsc();
+        let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
         broadcast(&mut self.broadcast_tx, SequencedCommand::EnableFeedback(tx));
         rx
     }
@@ -559,6 +610,12 @@ where
 
     /// A policy for determining the timestamp for a peek.
     fn determine_timestamp(&mut self, source: &RelationExpr, when: PeekWhen) -> Timestamp {
+        if self.symbiosis {
+            // In symbiosis mode, we enforce serializability by forcing all
+            // PEEKs to peek at the latest input time.
+            return self.local_input_time - 1;
+        }
+
         match when {
             // Explicitly requested timestamps should be respected.
             PeekWhen::AtTimestamp(timestamp) => timestamp,

@@ -374,8 +374,8 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     to_remove.sort();
     to_remove.dedup();
     Ok(match object_type {
-        ObjectType::Source => Plan::DropItems((to_remove, true)),
-        ObjectType::View => Plan::DropItems((to_remove, false)),
+        ObjectType::Source => Plan::DropItems(to_remove, ObjectType::Source),
+        ObjectType::View => Plan::DropItems(to_remove, ObjectType::View),
         _ => bail!("unsupported SQL statement: DROP {}", object_type),
     })
 }

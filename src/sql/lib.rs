@@ -15,7 +15,7 @@ use sqlparser::parser::Parser as SqlParser;
 use store::{Catalog, CatalogItem};
 
 pub use session::{PreparedStatement, Session};
-pub use sqlparser::ast::Statement;
+pub use sqlparser::ast::{ObjectType, Statement};
 
 mod expr;
 mod query;
@@ -34,11 +34,12 @@ pub enum Plan {
     CreateSource(Source),
     CreateSources(Vec<Source>),
     CreateSink(Sink),
+    CreateTable {
+        name: String,
+        desc: RelationDesc,
+    },
     CreateView(View),
-    // DropSources(Vec<String>),
-    // DropViews(Vec<String>),
-    /// Items to drop, and true iff a source.
-    DropItems((Vec<String>, bool)),
+    DropItems(Vec<String>, ObjectType),
     EmptyQuery,
     SetVariable {
         name: String,
@@ -59,6 +60,19 @@ pub enum Plan {
         desc: RelationDesc,
         relation_expr: ::expr::RelationExpr,
     },
+    SendDiffs {
+        name: String,
+        updates: Vec<(Row, isize)>,
+        affected_rows: usize,
+        kind: MutationKind,
+    },
+}
+
+#[derive(Debug)]
+pub enum MutationKind {
+    Insert,
+    Update,
+    Delete,
 }
 
 /// Parses a raw SQL string into a [`Statement`].

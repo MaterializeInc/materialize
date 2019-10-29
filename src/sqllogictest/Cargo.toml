@@ -21,21 +21,17 @@ dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.6"
 futures = "0.1"
 getopts = "0.2"
-itertools = "0.8.0"
+itertools = "0.8.1"
 lazy_static = "1"
 md5 = "*"
 ordered-float = "*"
 ore = { path = "../ore" }
-postgres = { version = "0.15", features = ["with-chrono"] }
-pg_interval = "0.3"
 regex = "1"
 repr = { path = "../repr" }
-rust_decimal = "1.0"
 serde_json = "1"
 sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.1"
-uuid = "*"
+uuid = "0.8"
 walkdir = "2"
-whoami = "0.5.3"

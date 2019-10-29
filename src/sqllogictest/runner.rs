@@ -22,12 +22,13 @@
 //!       if wrong, record the error
 
 use std::borrow::ToOwned;
-use std::collections::HashSet;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::mem;
 use std::ops;
 use std::path::Path;
+use std::thread::JoinHandle;
 
 use failure::{bail, ResultExt};
 use futures::Future;
@@ -35,20 +36,15 @@ use itertools::izip;
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use coord::{coordinator::Coordinator, QueryExecuteResponse};
+use coord::QueryExecuteResponse;
 use dataflow;
-use dataflow_types::{self, Source, SourceConnector, Update};
-use ore::collections::CollectionExt;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum, Row};
-use sql::store::RemoveMode;
-use sql::Session;
-use sqlparser::ast::{ObjectType, Statement};
+use sql::{Session, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
-use crate::postgres::{self, Postgres};
 use crate::util;
 
 #[derive(Debug)]
@@ -261,20 +257,12 @@ fn write_err(kind: &str, error: &impl failure::AsFail, f: &mut fmt::Formatter) -
 const NUM_TIMELY_WORKERS: usize = 3;
 
 pub(crate) struct State {
-    // Hold a reference to the dataflow workers threads to avoid dropping them
-    // too early. Order is important here! They must appear before the runtime,
-    // so that the runtime is *dropped* after the workers. We rely on the
-    // runtime to send the shutdown signal to the workers; if the runtime goes
-    // away first, the workers won't ever get the shutdown signal.
-    _dataflow_workers: Box<dyn Drop>,
-    _runtime: tokio::runtime::Runtime,
-    postgres: Postgres,
-    catalog: sql::store::Catalog,
+    dataflow_workers: Box<dyn Drop>,
+    runtime: tokio::runtime::Runtime,
+    coord_thread: JoinHandle<()>,
+    cmd_tx: futures::sync::mpsc::UnboundedSender<coord::Command>,
     session: Session,
-    coord: Coordinator<tokio::net::UnixStream>,
     conn_id: u32,
-    current_timestamp: u64,
-    local_inputs: HashSet<String>,
 }
 
 fn format_row(
@@ -346,38 +334,40 @@ fn format_row(
 
 impl State {
     pub fn start() -> Result<Self, failure::Error> {
-        let postgres = Postgres::open_and_erase()?;
         let logging_config = None;
-        let catalog = sql::store::Catalog::new(logging_config);
-        let session = Session::default();
         let process_id = 0;
+        let symbiosis_url = Some("postgres://");
+        let startup_sql = "";
+
         let (switchboard, runtime) = comm::Switchboard::local()?;
+
+        let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
+        let coord_thread = coord::transient::serve(
+            switchboard.clone(),
+            NUM_TIMELY_WORKERS,
+            symbiosis_url,
+            logging_config.as_ref(),
+            startup_sql.into(),
+            cmd_rx,
+        )?;
+
         let dataflow_workers = dataflow::serve(
             vec![None],
             NUM_TIMELY_WORKERS,
             process_id,
             switchboard.clone(),
             runtime.executor(),
-            None, // disable logging
+            logging_config.clone(),
         )
         .unwrap();
 
-        let coord = Coordinator::new(
-            switchboard.clone(),
-            NUM_TIMELY_WORKERS,
-            None, // disable logging
-        );
-
         Ok(State {
-            _runtime: runtime,
-            postgres,
-            catalog,
-            session,
-            coord,
+            runtime,
+            dataflow_workers: Box::new(dataflow_workers),
+            coord_thread,
+            cmd_tx,
+            session: Session::default(),
             conn_id: 1,
-            _dataflow_workers: Box::new(dataflow_workers),
-            current_timestamp: 1,
-            local_inputs: HashSet::new(),
         })
     }
 
@@ -421,139 +411,32 @@ impl State {
             return Ok(Outcome::Success);
         }
 
-        // parse statement
-        let statements = match SqlParser::parse_sql(&AnsiDialect {}, sql.to_string()) {
-            Ok(statements) => statements,
-            Err(error) => return Ok(Outcome::ParseFailure { error }),
-        };
-        let statement = match &*statements {
-            [] => bail!("Got zero statements?"),
-            [statement] => statement,
-            _ => bail!("Got multiple statements: {:?}", statements),
-        };
+        match self.run_sql(sql) {
+            Ok(resp) => match expected_rows_affected {
+                None => Ok(Outcome::Success),
+                Some(expected) => match resp {
+                    QueryExecuteResponse::Inserted(actual)
+                    | QueryExecuteResponse::Updated(actual)
+                    | QueryExecuteResponse::Deleted(actual) => {
+                        if expected != actual {
+                            Ok(Outcome::WrongNumberOfRowsInserted {
+                                expected_count: expected,
+                                actual_count: actual,
+                            })
+                        } else {
+                            Ok(Outcome::Success)
+                        }
+                    }
 
-        match statement {
-            // run through postgres and send diffs to materialize
-            Statement::CreateTable { .. }
-            | Statement::Drop {
-                object_type: ObjectType::Table,
-                ..
-            }
-            | Statement::Delete { .. }
-            | Statement::Insert { .. }
-            | Statement::Update { .. }
-            | Statement::SetVariable { .. } => {
-                self.run_statement_postgres(sql, statement, expected_rows_affected)
-            }
-
-            // run through materialize directly
-            Statement::Query { .. }
-            | Statement::CreateView { .. }
-            | Statement::CreateSource { .. }
-            | Statement::CreateSink { .. }
-            | Statement::Drop { .. } => match self.plan_sql(sql) {
-                Ok(plan) => {
-                    let _ = self.run_plan(plan);
-                    Ok(Outcome::Success)
-                }
-                Err(error) => Ok(Outcome::PlanFailure { error }),
+                    _ => Ok(Outcome::PlanFailure {
+                        error: failure::format_err!(
+                            "Query did not insert any rows, expected {}",
+                            expected,
+                        ),
+                    }),
+                },
             },
-
-            _ => bail!("Unsupported statement: {:?}", statement),
-        }
-    }
-
-    fn run_statement_postgres<'a>(
-        &mut self,
-        sql: &'a str,
-        statement: &Statement,
-        expected_rows_affected: Option<usize>,
-    ) -> Result<Outcome<'a>, failure::Error> {
-        let outcome = match self
-            .postgres
-            .run_statement(&sql, statement)
-            .context("Unsupported by postgres")
-        {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                return Ok(Outcome::Unsupported {
-                    error: error.into(),
-                });
-            }
-        };
-        if let Statement::SetVariable { .. } = statement {
-            // `SetVariable` statements don't generate any diffs, so we can
-            // skip the rest.
-            return Ok(Outcome::Success);
-        }
-        let rows_affected;
-        match outcome {
-            postgres::Outcome::Created(name, desc) => {
-                let source = Source {
-                    name: name.clone(),
-                    connector: SourceConnector::Local,
-                    desc,
-                };
-                self.catalog
-                    .insert(sql::store::CatalogItem::Source(source.clone()))?;
-                self.coord
-                    .sequence_plan(sql::Plan::CreateSource(source), self.conn_id, None);
-                self.local_inputs.insert(name.clone());
-                self.coord
-                    .sequence_advance_time(name.clone(), self.current_timestamp);
-                rows_affected = None;
-            }
-            postgres::Outcome::Dropped(names) => {
-                let mut all_names = vec![];
-                // The only reason we would use RemoveMode::Restrict is to test
-                // expected errors, and we currently set should_run=false
-                // whenever errors are expected.
-                for name in &names {
-                    // Close down the input if it exists. (The input might not
-                    // exist if the DROP statement was a DROP IF NOT EXISTS.)
-                    let _ = self.local_inputs.remove(name);
-                    self.catalog
-                        .plan_remove(name, RemoveMode::Cascade, &mut all_names)?;
-                }
-                for name in &all_names {
-                    self.catalog.remove(name)
-                }
-                self.coord.drop_views(all_names);
-                rows_affected = None;
-            }
-            postgres::Outcome::Changed {
-                table_name,
-                updates,
-                affected,
-            } => {
-                let updates = updates
-                    .into_iter()
-                    .map(|(row, diff)| Update {
-                        row,
-                        diff,
-                        timestamp: self.current_timestamp,
-                    })
-                    .collect::<Vec<_>>();
-                self.coord.sequence_insert(table_name.clone(), updates);
-                self.current_timestamp += 1;
-                for name in &self.local_inputs {
-                    self.coord
-                        .sequence_advance_time(name.clone(), self.current_timestamp);
-                }
-                rows_affected = Some(affected);
-            }
-        }
-        match (rows_affected, expected_rows_affected) {
-            (None, Some(expected)) => Ok(Outcome::PlanFailure {
-                error: failure::format_err!("Query did not insert any rows, expected {}", expected,),
-            }),
-            (Some(actual), Some(expected)) if actual != expected => {
-                Ok(Outcome::WrongNumberOfRowsInserted {
-                    expected_count: expected,
-                    actual_count: actual,
-                })
-            }
-            _ => Ok(Outcome::Success),
+            Err(error) => Ok(Outcome::PlanFailure { error }),
         }
     }
 
@@ -588,9 +471,17 @@ impl State {
             }
         }
 
-        // get plan
-        let plan = match self.plan_sql(sql) {
-            Ok(plan) => plan,
+        // send plan, read response
+        let (desc, rows_rx) = match self.run_sql(sql) {
+            Ok(QueryExecuteResponse::SendRows { desc, rx }) => (desc, rx),
+            Ok(other) => {
+                return Ok(Outcome::PlanFailure {
+                    error: failure::format_err!(
+                        "Query did not result in SendRows, instead got {:?}",
+                        other
+                    ),
+                });
+            }
             Err(error) => {
                 // TODO(jamii) check error messages, once ours stabilize
                 if output.is_err() {
@@ -604,19 +495,6 @@ impl State {
                         return Ok(Outcome::PlanFailure { error });
                     }
                 }
-            }
-        };
-
-        // send plan, read response
-        let (desc, rows_rx) = match self.run_plan(plan) {
-            QueryExecuteResponse::SendRows { desc, rx } => (desc, rx),
-            other => {
-                return Ok(Outcome::PlanFailure {
-                    error: failure::format_err!(
-                        "Query did not result in SendRows, instead got {:?}",
-                        other
-                    ),
-                });
             }
         };
 
@@ -755,25 +633,26 @@ impl State {
         Ok(Outcome::Success)
     }
 
-    pub(crate) fn plan_sql(&mut self, sql: &str) -> Result<sql::Plan, failure::Error> {
-        let stmts = sql::parse(sql.into())?;
-        if stmts.len() != 1 {
-            bail!("expected exactly one statement, but got {}", stmts.len());
-        }
-        let plan = sql::plan(&self.catalog, &self.session, stmts.into_element())?;
-        coord::transient::apply_plan(&mut self.catalog, &mut self.session, &plan)?;
-        Ok(plan)
+    pub(crate) fn run_sql(&mut self, sql: &str) -> Result<QueryExecuteResponse, failure::Error> {
+        let (tx, rx) = futures::sync::oneshot::channel();
+        self.cmd_tx
+            .unbounded_send(coord::Command::Query {
+                sql: sql.into(),
+                session: mem::replace(&mut self.session, Session::default()),
+                conn_id: self.conn_id,
+                tx,
+            })
+            .expect("futures channel should not fail");
+        let resp = rx.wait().expect("futures channel should not fail");
+        mem::replace(&mut self.session, resp.session);
+        resp.result
     }
 
-    pub(crate) fn run_plan(&mut self, plan: sql::Plan) -> QueryExecuteResponse {
-        let ts = Some(self.current_timestamp - 1);
-        self.coord.sequence_plan(plan, self.conn_id, ts)
-    }
-}
-
-impl Drop for State {
-    fn drop(&mut self) {
-        self.coord.shutdown();
+    fn shutdown(self) {
+        drop(self.cmd_tx);
+        drop(self.dataflow_workers);
+        self.coord_thread.join().unwrap();
+        drop(self.runtime);
     }
 }
 
@@ -826,6 +705,7 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             break;
         }
     }
+    state.shutdown();
     outcomes
 }
 

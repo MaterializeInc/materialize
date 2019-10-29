@@ -8,8 +8,8 @@
 pkgs.stdenv.mkDerivation rec {
   name = "confluent";
   src = fetchTarball {
-    url = http://packages.confluent.io/archive/5.2/confluent-5.2.1-2.12.tar.gz;
-    sha256 = "1y8b24wdl98wdpqq2m0p7wcgj4pij6xqfz7c7hfqcl80r03n3ihv";
+    url = http://packages.confluent.io/archive/5.3/confluent-5.3.1-2.12.tar.gz;
+    sha256 = "1ij5x1qw486rbih7xh2c01s60c3zblj6ad1isf5y99sh47jcq76c";
   };
   buildInputs = with pkgs; [
     which curl

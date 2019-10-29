@@ -7,6 +7,7 @@
 
 use futures::stream::FuturesOrdered;
 use futures::{future, Future, Stream};
+use log::error;
 use ore::future::StreamExt;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -90,7 +91,7 @@ impl Switchboard<UnixStream> {
                 .incoming()
                 .map_err(|err| panic!("local switchboard: accept: {}", err))
                 .for_each(move |conn| switchboard.handle_connection(conn))
-                .map_err(|err| panic!("local switchboard: handle connection: {}", err))
+                .map_err(|err| error!("local switchboard: handle connection: {}", err))
         });
         Ok((switchboard, runtime))
     }

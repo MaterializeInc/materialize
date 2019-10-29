@@ -1,6 +1,6 @@
 [package]
-name = "sql"
-description = "SQL–dataflow translation."
+name = "symbiosis"
+description = "Built-in OLTP support via symbiosis."
 version = "0.1.0"
 edition = "2018"
 publish = false
@@ -9,17 +9,14 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
-ccsr = { path = "../ccsr" }
+chrono = { version = "0.4", features = ["serde"] }
 dataflow-types = { path = "../dataflow-types" }
-expr = { path = "../expr" }
 failure = "0.1.6"
-interchange = { path = "../interchange" }
 ore = { path = "../ore" }
+postgres = { version = "0.15", features = ["with-chrono"] }
+pg_interval = "0.3"
 repr = { path = "../repr" }
+rust_decimal = "1.0"
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
-unicase = "2.5.1"
-url = "1.7.2"
-uuid = { version = "0.8", features = ["serde", "v4"] }
-
-[dev-dependencies]
-pretty_assertions = "0.6.1"
+sql = { path = "../sql" }
+whoami = "0.6"

@@ -148,6 +148,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "base-x"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b20b618342cf9891c292c4f5ac2cde7287cc5c87e87e9c769d617793607dec1"
+
+[[package]]
 name = "base64"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -254,6 +260,12 @@ name = "build_const"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39092a32794787acd8525ee150305ff051b0aa6cc2abaf193924f5ab05425f39"
+
+[[package]]
+name = "bumpalo"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad807f2fc2bf185eeb98ff3a901bd46dc5ad58163d0fa4577ba0d25674d71708"
 
 [[package]]
 name = "byte-tools"
@@ -413,7 +425,7 @@ dependencies = [
  "serde",
  "tokio",
  "tokio-serde-bincode",
- "uuid",
+ "uuid 0.8.1",
 ]
 
 [[package]]
@@ -481,11 +493,12 @@ dependencies = [
  "repr",
  "smallvec",
  "sql",
+ "symbiosis",
  "timely",
  "tokio",
  "tokio-threadpool",
  "url",
- "uuid",
+ "uuid 0.8.1",
 ]
 
 [[package]]
@@ -735,7 +748,7 @@ dependencies = [
  "tokio",
  "url",
  "url_serde",
- "uuid",
+ "uuid 0.8.1",
 ]
 
 [[package]]
@@ -758,7 +771,7 @@ dependencies = [
  "serde_json",
  "url",
  "url_serde",
- "uuid",
+ "uuid 0.8.1",
 ]
 
 [[package]]
@@ -794,7 +807,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#6ee4a587c0373d2784758164a62cd17106eb2216"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#5c7b83a83f0af89d66ef54f4856b608231bf204b"
 dependencies = [
  "abomonation",
  "abomonation_derive 0.5.0",
@@ -822,6 +835,12 @@ checksum = "05f47366984d3ad862010e22c7ce81a7dbcaebbdfb37241a620f8b6596ee135c"
 dependencies = [
  "generic-array 0.12.0",
 ]
+
+[[package]]
+name = "discard"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "212d0f5754cb6769937f4501cc0e67f4f4483c8d2c3e1e922ee9edbe4ab4c7c0"
 
 [[package]]
 name = "dtoa"
@@ -907,7 +926,7 @@ dependencies = [
  "regex-syntax",
  "repr",
  "serde",
- "uuid",
+ "uuid 0.8.1",
 ]
 
 [[package]]
@@ -1273,9 +1292,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b8467d9c1cebe26feb08c640139247fac215782d35371ade9a2136ed6085358"
+checksum = "87fa75c9dea7b07be3138c49abbb83fd4bea199b5cdc76f9804458edc5da0d6e"
 dependencies = [
  "either",
 ]
@@ -2433,7 +2452,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.21.0"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#880a8c8132515512efe21c099ba721cf724f1f73"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#f297b2d39a546d238c258fa78a2ec3f62e54a95d"
 dependencies = [
  "futures",
  "libc",
@@ -2447,7 +2466,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "1.2.1"
-source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#880a8c8132515512efe21c099ba721cf724f1f73"
+source = "git+ssh://git@github.com/MaterializeInc/rust-rdkafka.git#f297b2d39a546d238c258fa78a2ec3f62e54a95d"
 dependencies = [
  "bindgen",
  "cmake",
@@ -2563,7 +2582,7 @@ dependencies = [
  "tokio-threadpool",
  "tokio-timer",
  "url",
- "uuid",
+ "uuid 0.7.4",
  "winreg",
 ]
 
@@ -2705,9 +2724,9 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
 name = "serde"
-version = "1.0.101"
+version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9796c9b7ba2ffe7a9ce53c2287dfc48080f4b2b362fcc245a259b3a7201119dd"
+checksum = "0c4b39bd9b0b087684013a792c59e3e07a46a01d2322518d8a1104641a0b1be0"
 dependencies = [
  "serde_derive",
 ]
@@ -2756,6 +2775,12 @@ dependencies = [
  "serde",
  "url",
 ]
+
+[[package]]
+name = "sha1"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2579985fda508104f7587689507983eadd6a6e84dd35d6d115361f530916fa0d"
 
 [[package]]
 name = "sha2"
@@ -2807,9 +2832,9 @@ checksum = "1cc9c640a4adbfbcc11ffb95efe5aa7af7309e002adab54b185507dbf2377b99"
 
 [[package]]
 name = "smallvec"
-version = "0.6.10"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
+checksum = "cefaa50e76a6f10b86f36e640eb1739eafbd4084865067778463913e43a77ff3"
 
 [[package]]
 name = "socket2"
@@ -2844,7 +2869,7 @@ dependencies = [
  "sqlparser",
  "unicase",
  "url",
- "uuid",
+ "uuid 0.8.1",
 ]
 
 [[package]]
@@ -2865,25 +2890,21 @@ dependencies = [
  "md5 0.6.1",
  "ordered-float",
  "ore",
- "pg_interval",
- "postgres",
  "regex",
  "repr",
- "rust_decimal",
  "serde_json",
  "sql",
  "sqlparser",
  "timely",
  "tokio",
- "uuid",
+ "uuid 0.8.1",
  "walkdir",
- "whoami",
 ]
 
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#a5b547aef127ae8a35f1796d6c7aa0eb67e01b5c"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#5f22011af9a53592cd207dd063faf75ebb63ad52"
 dependencies = [
  "log 0.4.8",
 ]
@@ -2903,6 +2924,57 @@ dependencies = [
  "futures",
  "rent_to_own",
 ]
+
+[[package]]
+name = "stdweb"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d022496b16281348b52d0e30ae99e01a73d737b2f45d38fed4edf79f9325a1d5"
+dependencies = [
+ "discard",
+ "rustc_version 0.2.3",
+ "serde",
+ "serde_json",
+ "stdweb-derive",
+ "stdweb-internal-macros",
+ "stdweb-internal-runtime",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "stdweb-derive"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c87a60a40fccc84bef0652345bbbbbe20a605bf5d0ce81719fc476f5c03b50ef"
+dependencies = [
+ "proc-macro2 1.0.1",
+ "quote 1.0.2",
+ "serde",
+ "serde_derive",
+ "syn 1.0.3",
+]
+
+[[package]]
+name = "stdweb-internal-macros"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58fa5ff6ad0d98d1ffa8cb115892b6e69d67799f6763e162a1c9db421dc22e11"
+dependencies = [
+ "base-x",
+ "proc-macro2 1.0.1",
+ "quote 1.0.2",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "sha1",
+ "syn 1.0.3",
+]
+
+[[package]]
+name = "stdweb-internal-runtime"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "213701ba3370744dcd1a12960caa4843b3d68b4d1c0a5d575e0d65b2ee9d16c0"
 
 [[package]]
 name = "string"
@@ -2928,6 +3000,23 @@ name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
+
+[[package]]
+name = "symbiosis"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dataflow-types",
+ "failure",
+ "ore",
+ "pg_interval",
+ "postgres",
+ "repr",
+ "rust_decimal",
+ "sql",
+ "sqlparser",
+ "whoami",
+]
 
 [[package]]
 name = "syn"
@@ -3501,8 +3590,16 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbc611eb48397705a6b0f6e917da23ae517e4d127123d2cf7674206627d32a"
 dependencies = [
- "byteorder 1.3.2",
  "rand 0.6.5",
+]
+
+[[package]]
+name = "uuid"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fde2f6a4bea1d6e007c4ad38c6839fa71cbb63b6dbf5b595aa38dc9b1093c11"
+dependencies = [
+ "rand 0.7.2",
  "serde",
 ]
 
@@ -3547,6 +3644,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen"
+version = "0.2.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "637353fd57864c20f1968dc21680fe03985ca3a7ef6a5ce027777513bdecc282"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen-macro",
+]
+
+[[package]]
+name = "wasm-bindgen-backend"
+version = "0.2.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c85481ca7d1aad8cf40e0140830b2197ce89184a80e54e307b55fd64d78ed63e"
+dependencies = [
+ "bumpalo",
+ "lazy_static",
+ "log 0.4.8",
+ "proc-macro2 1.0.1",
+ "quote 1.0.2",
+ "syn 1.0.3",
+ "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-macro"
+version = "0.2.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f627667b5f4f8bd923c93107b96907c60e7e8eb2636802499fce468c87e3689"
+dependencies = [
+ "quote 1.0.2",
+ "wasm-bindgen-macro-support",
+]
+
+[[package]]
+name = "wasm-bindgen-macro-support"
+version = "0.2.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a48f5147b0c049bc306d5b9e53c891056a1fd8c4e7311fffbce233e4f200d45e"
+dependencies = [
+ "proc-macro2 1.0.1",
+ "quote 1.0.2",
+ "syn 1.0.3",
+ "wasm-bindgen-backend",
+ "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-shared"
+version = "0.2.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e272b0d31b78cdcaf5ad440d28276546d99b059a953e5afb387aefce66c3c5a"
+
+[[package]]
 name = "which"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3557,9 +3708,12 @@ dependencies = [
 
 [[package]]
 name = "whoami"
-version = "0.5.3"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7154f3f4488071a38189dfd63633df444e7be43b731cc12c41505308fc4972f3"
+checksum = "c47b0df2e31b0f1a0e4fda3adf4f6f36bbb8655cdd0b6313afbdd7a6f809fcab"
+dependencies = [
+ "stdweb",
+]
 
 [[package]]
 name = "winapi"

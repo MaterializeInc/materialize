@@ -543,7 +543,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let state = state.take();
 
                 macro_rules! command_complete {
-                    ($cmd:tt, $label:tt) => {
+                    ($cmd:expr, $label:tt) => {
                         transition!(SendCommandComplete {
                             send: Box::new(
                                 state
@@ -564,11 +564,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     QueryExecuteResponse::CreatedSink => {
                         command_complete!("CREATE SINK", "create_sink")
                     }
+                    QueryExecuteResponse::CreatedTable => {
+                        command_complete!("CREATE TABLE", "create_sink")
+                    }
                     QueryExecuteResponse::CreatedView => {
                         command_complete!("CREATE VIEW", "create_view")
                     }
+                    QueryExecuteResponse::Deleted(n) => {
+                        command_complete!(format!("DELETE {}", n), "delete");
+                    }
                     QueryExecuteResponse::DroppedSource => {
                         command_complete!("DROP SOURCE", "drop_source")
+                    }
+                    QueryExecuteResponse::DroppedTable => {
+                        command_complete!("DROP TABLE", "drop_table")
                     }
                     QueryExecuteResponse::DroppedView => {
                         command_complete!("DROP VIEW", "drop_view")
@@ -579,6 +588,16 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         currently_extended: state.extended,
                         label: "empty",
                     }),
+                    QueryExecuteResponse::Inserted(n) => {
+                        // "On successful completion, an INSERT command returns a
+                        // command tag of the form `INSERT <oid> <count>`."
+                        //     -- https://www.postgresql.org/docs/11/sql-insert.html
+                        //
+                        // OIDs are a PostgreSQL-specific historical quirk, but we
+                        // can return a 0 OID to indicate that the table does not
+                        // have OIDs.
+                        command_complete!(format!("INSERT 0 {}", n), "insert");
+                    }
                     QueryExecuteResponse::SendRows { desc, rx } => {
                         if state.extended {
                             trace!("cid={} handle extended: send rows", cx.conn_id);
@@ -620,6 +639,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         session,
                         rx,
                     }),
+                    QueryExecuteResponse::Updated(n) => {
+                        command_complete!(format!("UPDATE {}", n), "update");
+                    }
                 }
             }
             Ok(Async::Ready(coord::Response {
