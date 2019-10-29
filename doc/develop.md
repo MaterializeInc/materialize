@@ -7,11 +7,8 @@ version.
 
 As far as external components go, Materialize has hard dependencies on [Apache
 ZooKeeper] and [Apache Kafka]. It also has an optional dependency on the
-[Confluent Schema Registry]. Conveniently, [Confluent Platform] bundles these
-three components into a single download. Not so conveniently, it bundles many
-other components as well. Strangely, their webpages do not mention ZooKeeper at
-all, even though version 5.3.0 most definitely does include the corresponding
-binaries.
+[Confluent Schema Registry]. Conveniently, the [Confluent Platform] bundles these
+three components into a single download.
 
 Due to some change in the scope of the Confluent Platform project, you also need
 to install the [Confluent CLI] independently.

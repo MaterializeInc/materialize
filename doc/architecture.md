@@ -82,7 +82,7 @@ _Below: Materialize's internal structure in the above deployment._
 
 ![Materialize internal diagram](assets/architecture/internals.png)
 
-### SQL Shell: Interacting with Clients
+### SQL shell: interacting with clients
 
 Right now, Materialize provides its interactive interface through `psql` running
 locally on a client machine; this uses the PostgreSQL wire protocol (`pgwire`)
@@ -100,14 +100,14 @@ classes of statements in Materialize:
 - **Reading data** from sources
 - **Creating views** to maintain the output of some query
 
-#### Creating Sources
+#### Creating sources
 
 When Materialize receives a `CREATE SOURCES...` statement, it attempts to
 connect to a Kafka stream, which it plumbs into its local instance of
 Differential. You can find more information about how that works in the
 **Kafka** section below.
 
-#### Reading Data
+#### Reading data
 
 Like any SQL API, you read data from Materialize using `SELECT` statements. When
 the `sql` thread parses some arbitrary `SELECT` statement, it generates a
@@ -124,7 +124,7 @@ repeat the entire process––creating a new dataflow, waiting for its executio
 etc. The inefficiency of this is actually Materialize's _raison d'être_, and
 leads us to the thing you actually want to do with the software: creating views.
 
-#### Creating Views
+#### Creating views
 
 If you know that you are routinely interested in knowing the answer to a
 specific query (_how many widgets were sold in Oklahoma today?_), you can do
@@ -161,7 +161,7 @@ The only "wrinkle" in the above explanation is when you perform reads on views:
 no dataflow gets created, and Materialize instead serves the result from an
 existing dataflow.'
 
-### Kafka: Ingesting Data
+### Kafka: ingesting data
 
 Materialize subscribes to Kafka topics and monitors the stream for data it
 should ingest; this is how writes happen in Materialize.

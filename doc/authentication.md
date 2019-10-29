@@ -1,11 +1,11 @@
-# GitHub Authentication
+# GitHub authentication
 
 Reconciling security and convenience is genuinely difficult. Fortunately, GitHub
 gives us plenty of options. Most importantly, if you are a member of the
 MaterializeInc organization, you already have [two-factor authentication on
 GitHub] enabled. Otherwise, you couldn't have joined the GitHub organization.
 
-## The Limits of SSH
+## The limits of SSH
 
 Our [default setup](https://github.com/MaterializeInc/mtrlz-setup) relies on SSH
 and a newly created key registered with GitHub. This works for most settings,
@@ -14,7 +14,7 @@ prominently in GitHub's web interface and also used by [GitHub
 Desktop](https://desktop.github.com). Since we have two-factor authentication
 enabled, we cannot just enter user name and password on the command line either.
 
-## The Joys of the Personal Access Token
+## The joys of the personal access token
 
 On macOS, you can use a [personal access token] to make the user experience
 comparably seamless:

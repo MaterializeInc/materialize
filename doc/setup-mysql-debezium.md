@@ -1,4 +1,4 @@
-# MySQL Setup w/ Debezium
+# MySQL setup w/ Debezium
 
 To deploy Materialize using MySQL as its upstream database, you'll need to
 configure it with Debezium.
@@ -214,7 +214,7 @@ files), and then restart Kafka Connect.
 confluent local stop connect && confluent local start connect
 ```
 
-### Missing Rows
+### Missing rows
 
 If `PEEK count` stops growing at a value less than `6001215`, try writing
 explicit watermarks to indicate that a topic is finished. For example, to add a
