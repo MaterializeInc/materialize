@@ -6,16 +6,17 @@
 let
 
 pkgs = import (builtins.fetchTarball {
-  name = "nixos-unstable";
-  url = https://github.com/nixos/nixpkgs/archive/1fc591f9a5bd1b016b5d66dfab29560073955a14.tar.gz;
-  sha256 = "1ij5x1qw486rbih7xh2c01s60c3zblj6ad1isf5y99sh47jcq76c";
+  name = "nixos-19.09";
+  url = https://releases.nixos.org/nixos/19.09/nixos-19.09.976.c75de8bc12c/nixexprs.tar.xz;
+  sha256 = "0jdi8ihkhhkglx3amkrkkrm4ac60xk2a1bs4mwkffz72lrrg16p0";
 }) {};
 
-confluent = pkgs.callPackage ./confluent.nix { pkgs = pkgs; };
+demo_utils = pkgs.makeSetupHook { } ./doc/demo-utils.sh;
 
 in pkgs.stdenv.mkDerivation rec {
   name = "materialize";
   buildInputs = with pkgs; [
+    demo_utils
     openssl
     zlib.static
     clang
@@ -25,7 +26,7 @@ in pkgs.stdenv.mkDerivation rec {
     rustup
     lsof # for mtrlz-shell
     curl # for testing
-    confluent
+    confluent-platform
     shellcheck
     ] ++
     (if stdenv.isDarwin then [
@@ -35,7 +36,7 @@ in pkgs.stdenv.mkDerivation rec {
   shellHook = ''
     export LIBCLANG_PATH=${pkgs.llvmPackages.clang-unwrapped.lib}/lib
     export PATH=$(pwd)/bin/:$PATH
-    source doc/demo-utils.sh
+    source ${demo_utils}/nix-support/setup-hook
     ulimit -m $((8*1024*1024))
     ulimit -v $((8*1024*1024))
    '';
