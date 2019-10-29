@@ -27,7 +27,22 @@ fn bench_sort_row_raw(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
 }
 
-fn bench_sort_row(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+fn bench_sort_row_buffer(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+    let rows = rows
+        .into_iter()
+        .map(|row| Row::from_iter(row))
+        .collect::<Vec<_>>();
+    b.iter_with_setup(
+        || rows.clone(),
+        |mut rows| {
+            let mut buffer_a = DatumsBuffer::new();
+            let mut buffer_b = DatumsBuffer::new();
+            rows.sort_by(move |a, b| buffer_a.from_iter(a).cmp(&buffer_b.from_iter(b)));
+        },
+    )
+}
+
+fn bench_sort_row_custom(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     let rows = rows
         .into_iter()
         .map(|row| Row::from_iter(row))
@@ -76,17 +91,27 @@ pub fn bench_sort(c: &mut Criterion) {
     c.bench_function("sort_datums_ints", |b| {
         bench_sort_datums(int_rows.clone(), b)
     });
-    c.bench_function("sort_row_ints", |b| bench_sort_row(int_rows.clone(), b));
     c.bench_function("sort_row_raw_ints", |b| {
         bench_sort_row_raw(int_rows.clone(), b)
+    });
+    c.bench_function("sort_row_buffer_ints", |b| {
+        bench_sort_row_buffer(int_rows.clone(), b)
+    });
+    c.bench_function("sort_row_custom_ints", |b| {
+        bench_sort_row_custom(int_rows.clone(), b)
     });
 
     c.bench_function("sort_datums_bytes", |b| {
         bench_sort_datums(byte_rows.clone(), b)
     });
-    c.bench_function("sort_row_bytes", |b| bench_sort_row(byte_rows.clone(), b));
     c.bench_function("sort_row_raw_bytes", |b| {
         bench_sort_row_raw(byte_rows.clone(), b)
+    });
+    c.bench_function("sort_row_buffer_bytes", |b| {
+        bench_sort_row_buffer(byte_rows.clone(), b)
+    });
+    c.bench_function("sort_row_custom_bytes", |b| {
+        bench_sort_row_custom(byte_rows.clone(), b)
     });
 }
 
