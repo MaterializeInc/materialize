@@ -15,7 +15,7 @@ repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
 url = "1.7.2"
 url_serde = "0.2.0"
-uuid = { version = "0.7.4", features = ["serde", "v4"] }
+uuid = { version = "0.8", features = ["serde", "v4"] }
 
 [dev-dependencies]
 pretty_assertions = "0.6.1"
