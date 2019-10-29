@@ -121,8 +121,8 @@ results are passed back to the client, and the dataflow is terminated.
 
 Unfortunately, if the user passes the same query to Materialize again, it must
 repeat the entire process––creating a new dataflow, waiting for its execution,
-etc. The inefficiency of this is actually Materialize's _raison d'être_, and leads
-us to the thing you actually want to do with the software: creating views.
+etc. The inefficiency of this is actually Materialize's _raison d'être_, and
+leads us to the thing you actually want to do with the software: creating views.
 
 #### Creating Views
 

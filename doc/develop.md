@@ -2,16 +2,19 @@
 
 This guide details what you'll need to contribute to Materialize.
 
-Materialize is written in [Rust] and should compile on any recent stable version.
+Materialize is written in [Rust] and should compile on any recent stable
+version.
 
 As far as external components go, Materialize has hard dependencies on [Apache
-ZooKeeper] and [Apache Kafka]. It also has an optional dependency on the [Confluent
-Schema Registry]. Conveniently, [Confluent Platform] bundles these three components
-into a single download. Not so conveniently, it bundles many other components as
-well. Strangely, their webpages do not mention ZooKeeper at all, even though version
-5.3.0 most definitely does include the corresponding binaries.
+ZooKeeper] and [Apache Kafka]. It also has an optional dependency on the
+[Confluent Schema Registry]. Conveniently, [Confluent Platform] bundles these
+three components into a single download. Not so conveniently, it bundles many
+other components as well. Strangely, their webpages do not mention ZooKeeper at
+all, even though version 5.3.0 most definitely does include the corresponding
+binaries.
 
-Due to some change in the scope of the Confluent Platform project, you also need to install the [Confluent CLI] independently.
+Due to some change in the scope of the Confluent Platform project, you also need
+to install the [Confluent CLI] independently.
 
 [Rust]: https://www.rust-lang.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
@@ -30,7 +33,8 @@ Install Rust via [rustup]:
 curl https://sh.rustup.rs -sSf | sh
 ```
 
-Rustup will automatically select the correct toolchain version specified in [materialize/rust-toolchain](/rust-toolchain).
+Rustup will automatically select the correct toolchain version specified in
+[materialize/rust-toolchain](/rust-toolchain).
 
 [rustup]: https://www.rust-lang.org/tools/install
 
@@ -66,8 +70,8 @@ cd materialize
 nix-shell
 ```
 
-This will start a new shell with all the necessary dependencies available and pinned to the correct version.
-Reach out to @jamii for more information.
+This will start a new shell with all the necessary dependencies available and
+pinned to the correct version. Reach out to @jamii for more information.
 
 [Homebrew]: https://brew.sh
 [confluent-install]: https://docs.confluent.io/current/installation/installing_cp/index.html
@@ -81,7 +85,8 @@ As of Sep 23, 2019 you can run:
 curl -L https://cnfl.io/cli | sh -s -- -b /usr/local/bin
 ```
 
-However, if this ever stops working, check out these great docs on the [Confluent CLI].
+However, if this ever stops working, check out these great docs on the
+[Confluent CLI].
 
 ## Building Materialize
 

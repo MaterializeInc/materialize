@@ -94,7 +94,10 @@ $ mtrlz-shell
 > PEEK business_insights;
 ```
 
-Though this doesn't really demonstrate the capabilities of Materialize––it's just a toy example––`PEEK` is much faster than the corresponding `SELECT`. However, it is worth noting one can query data in Materialize with arbitrary `SELECT`s; you aren't limited to _only_ creating materialized views.
+Though this doesn't really demonstrate the capabilities of Materialize––it's
+just a toy example––`PEEK` is much faster than the corresponding `SELECT`.
+However, it is worth noting one can query data in Materialize with arbitrary
+`SELECT`s; you aren't limited to _only_ creating materialized views.
 
 ## Aggregate demo
 
