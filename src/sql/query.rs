@@ -26,7 +26,7 @@ use dataflow_types::RowSetFinishing;
 use failure::{bail, ensure, format_err, ResultExt};
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::{ColumnType, Datum, RelationType, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, ScalarType};
 use sqlparser::ast::visit::{self, Visit};
 use sqlparser::ast::{
     BinaryOperator, DataType, DateTimeField, Expr, Function, Ident, JoinConstraint, JoinOperator,
@@ -40,6 +40,33 @@ use std::fmt;
 use std::iter;
 use std::mem;
 use uuid::Uuid;
+
+/// Plans a top-level query, returning the `RelationExpr` describing the query
+/// plan, the `RelationDesc` describing the shape of the result set, and as well
+/// a `RowSetFinishing` describing post-processing that must occur before
+/// results are sent to the client.
+///
+/// Note that the returned `RelationDesc` describes the expression after
+/// applying the returned `RowSetFinishing`.
+pub fn plan_root_query(
+    catalog: &Catalog,
+    mut query: Query,
+) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+    crate::transform::transform(&mut query);
+    let outer_scope = Scope::empty(None);
+    let outer_relation_type = RelationType::empty();
+    let (expr, scope, finishing) = plan_query(catalog, &query, &outer_scope, &outer_relation_type)?;
+    let typ = expr.typ(&outer_relation_type);
+    let typ = RelationType::new(
+        finishing
+            .project
+            .iter()
+            .map(|i| typ.column_types[*i])
+            .collect(),
+    );
+    let desc = RelationDesc::new(typ, scope.column_names());
+    Ok((expr, desc, finishing))
+}
 
 pub fn plan_query(
     catalog: &Catalog,

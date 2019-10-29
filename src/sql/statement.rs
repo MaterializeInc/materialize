@@ -19,7 +19,6 @@ use url::Url;
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query;
-use crate::scope::Scope;
 use crate::session::Session;
 use crate::store::{Catalog, CatalogItem, RemoveMode};
 use crate::Plan;
@@ -30,7 +29,7 @@ use dataflow_types::{
 use expr::{ColumnOrder, RelationExpr};
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{Datum, RelationDesc, RelationType, Row, ScalarType};
+use repr::{Datum, RelationDesc, Row, ScalarType};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -94,7 +93,7 @@ pub fn describe_statement(
             // somewhere, so we don't have to reanalyze the whole query when
             // `handle_statement` is called. This will require a complicated
             // dance when bind parameters are implemented, so punting for now.
-            let (_relation_expr, desc, _finishing) = plan_toplevel_query(catalog, *query)?;
+            let (_relation_expr, desc, _finishing) = query::plan_root_query(catalog, *query)?;
             Some(desc)
         }
 
@@ -260,8 +259,7 @@ fn handle_create_dataflow(catalog: &Catalog, mut stmt: Statement) -> Result<Plan
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            let (mut relation_expr, mut desc, finishing) =
-                plan_toplevel_query(catalog, *query.clone())?;
+            let (mut relation_expr, mut desc, finishing) = handle_query(catalog, *query.clone())?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
                 relation_expr = RelationExpr::Project {
@@ -464,7 +462,7 @@ fn handle_peek(
 }
 
 pub fn handle_select(catalog: &Catalog, query: Query) -> Result<Plan, failure::Error> {
-    let (relation_expr, _, finishing) = plan_toplevel_query(catalog, query)?;
+    let (relation_expr, _, finishing) = handle_query(catalog, query)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
@@ -477,7 +475,7 @@ pub fn handle_explain(
     stage: Stage,
     query: Query,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) = plan_toplevel_query(catalog, query)?;
+    let (relation_expr, _desc, _finishing) = handle_query(catalog, query)?;
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
@@ -489,30 +487,14 @@ pub fn handle_explain(
     }
 }
 
-/// Plans and decorrelates a query once we've planned all nested RelationExprs.
-/// Decorrelation converts a sql::RelationExpr (which can include correlations)
-/// to an expr::RelationExpr (which cannot include correlations).
-///
-/// Note that the returned `RelationDesc` describes the expression after
-/// applying the returned `RowSetFinishing`.
-fn plan_toplevel_query(
+/// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
+/// an `::expr::RelationExpr`, which cannot include correlated expressions.
+fn handle_query(
     catalog: &Catalog,
-    mut query: Query,
+    query: Query,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-    crate::transform::transform(&mut query);
-    let (expr, scope, finishing) =
-        query::plan_query(catalog, &query, &Scope::empty(None), &RelationType::empty())?;
-    let expr = expr.decorrelate()?;
-    let typ = expr.typ();
-    let typ = RelationType::new(
-        finishing
-            .project
-            .iter()
-            .map(|i| typ.column_types[*i])
-            .collect(),
-    );
-    let desc = RelationDesc::new(typ, scope.column_names());
-    Ok((expr, desc, finishing))
+    let (expr, desc, finishing) = query::plan_root_query(catalog, query)?;
+    Ok((expr.decorrelate()?, desc, finishing))
 }
 
 fn build_source(
