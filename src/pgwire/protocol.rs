@@ -162,10 +162,11 @@ pub enum StateMachine<A: Conn + 'static> {
         extended: bool,
     },
 
-    #[state_machine_future(transitions(SendParseComplete, SendError))]
+    #[state_machine_future(transitions(SendParseComplete, HandleQuery, SendError))]
     HandleParse {
         conn: A,
         rx: futures::sync::oneshot::Receiver<coord::Response<()>>,
+        extended: bool,
     },
 
     // Extended query flow.
@@ -418,16 +419,15 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Query { sql } => {
                 debug!("query sql: {}", sql);
                 let (tx, rx) = futures::sync::oneshot::channel();
-                cx.cmdq_tx.unbounded_send(coord::Command::Query {
+                cx.cmdq_tx.unbounded_send(coord::Command::Parse {
+                    name: "".into(),
                     sql,
                     session: state.session,
-                    conn_id: cx.conn_id,
                     tx,
                 })?;
-                transition!(HandleQuery {
+                transition!(HandleParse {
                     conn,
                     rx,
-                    field_formats: None,
                     extended: false,
                 })
             }
@@ -440,7 +440,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     session: state.session,
                     tx,
                 })?;
-                transition!(HandleParse { conn, rx })
+                transition!(HandleParse {
+                    conn,
+                    rx,
+                    extended: true
+                })
             }
             FrontendMessage::CloseStatement { name } => {
                 let mut session = state.session;
@@ -829,18 +833,40 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_handle_parse<'s, 'c>(
         state: &'s mut RentToOwn<'s, HandleParse<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
+        cx: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleParse<A>, failure::Error> {
         match try_ready!(state.rx.poll()) {
             coord::Response {
                 result: Ok(()),
-                session,
+                mut session,
             } => {
                 let state = state.take();
-                transition!(SendParseComplete {
-                    send: state.conn.send(BackendMessage::ParseComplete),
-                    session,
-                })
+                if state.extended {
+                    transition!(SendParseComplete {
+                        send: state.conn.send(BackendMessage::ParseComplete),
+                        session,
+                    })
+                } else {
+                    let portal_name = String::from("");
+                    let statement_name = String::from("");
+                    let params = vec![];
+                    session
+                        .set_portal(portal_name.clone(), statement_name, params)
+                        .expect("unnamed statement to be present during simple query flow");
+                    let (tx, rx) = futures::sync::oneshot::channel();
+                    cx.cmdq_tx.unbounded_send(coord::Command::Execute {
+                        portal_name,
+                        session,
+                        conn_id: cx.conn_id,
+                        tx,
+                    })?;
+                    transition!(HandleQuery {
+                        conn: state.conn,
+                        rx,
+                        field_formats: None,
+                        extended: false,
+                    })
+                }
             }
             coord::Response {
                 result: Err(err),

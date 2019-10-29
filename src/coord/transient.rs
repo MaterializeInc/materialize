@@ -86,23 +86,6 @@ where
         let mut messages = messages.wait();
         for msg in messages.by_ref() {
             match msg.expect("coordinator message receiver failed") {
-                Message::Command(Command::Query {
-                    sql,
-                    mut session,
-                    conn_id,
-                    tx,
-                }) => {
-                    let result = handle_query(
-                        &mut coord,
-                        postgres.as_mut(),
-                        &mut catalog,
-                        &mut session,
-                        sql,
-                        conn_id,
-                    );
-                    let _ = tx.send(Response { result, session });
-                }
-
                 Message::Command(Command::Execute {
                     portal_name,
                     mut session,
@@ -221,32 +204,6 @@ where
             Ok(plan)
         })
         .map(|plan| coord.sequence_plan(plan, conn_id))
-}
-
-fn handle_query<C>(
-    coord: &mut Coordinator<C>,
-    postgres: Option<&mut Postgres>,
-    catalog: &mut Catalog,
-    session: &mut Session,
-    sql: String,
-    conn_id: u32,
-) -> Result<QueryExecuteResponse, failure::Error>
-where
-    C: comm::Connection,
-{
-    let stmts = sql::parse(sql)?;
-    match stmts.len() {
-        0 => Ok(QueryExecuteResponse::EmptyQuery),
-        1 => handle_statement(
-            coord,
-            postgres,
-            catalog,
-            session,
-            stmts.into_element(),
-            conn_id,
-        ),
-        n => bail!("expected no more than one query, got {}", n),
-    }
 }
 
 fn handle_execute<C>(

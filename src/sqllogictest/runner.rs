@@ -634,18 +634,43 @@ impl State {
     }
 
     pub(crate) fn run_sql(&mut self, sql: &str) -> Result<QueryExecuteResponse, failure::Error> {
-        let (tx, rx) = futures::sync::oneshot::channel();
-        self.cmd_tx
-            .unbounded_send(coord::Command::Query {
-                sql: sql.into(),
-                session: mem::replace(&mut self.session, Session::default()),
-                conn_id: self.conn_id,
-                tx,
-            })
-            .expect("futures channel should not fail");
-        let resp = rx.wait().expect("futures channel should not fail");
-        mem::replace(&mut self.session, resp.session);
-        resp.result
+        let statement_name = String::from("");
+        let portal_name = String::from("");
+
+        // Parse.
+        {
+            let (tx, rx) = futures::sync::oneshot::channel();
+            self.cmd_tx
+                .unbounded_send(coord::Command::Parse {
+                    name: statement_name.clone(),
+                    sql: sql.into(),
+                    session: mem::replace(&mut self.session, Session::default()),
+                    tx,
+                })
+                .expect("futures channel should not fail");
+            let resp = rx.wait().expect("futures channel should not fail");
+            mem::replace(&mut self.session, resp.session);
+        }
+
+        // Bind.
+        self.session
+            .set_portal(portal_name.clone(), statement_name, vec![])?;
+
+        // Execute.
+        {
+            let (tx, rx) = futures::sync::oneshot::channel();
+            self.cmd_tx
+                .unbounded_send(coord::Command::Execute {
+                    portal_name,
+                    session: mem::replace(&mut self.session, Session::default()),
+                    conn_id: self.conn_id,
+                    tx,
+                })
+                .expect("futures channel should not fail");
+            let resp = rx.wait().expect("futures channel should not fail");
+            mem::replace(&mut self.session, resp.session);
+            resp.result
+        }
     }
 
     fn shutdown(self) {

@@ -25,17 +25,9 @@ use std::fmt;
 pub mod coordinator;
 pub mod transient;
 
-/// The kinds of requests the client can make of the coordinator.
+/// The requests the client can make of the coordinator.
 #[derive(Debug)]
 pub enum Command {
-    /// Parse and execute the specified SQL.
-    Query {
-        sql: String,
-        session: Session,
-        conn_id: u32,
-        tx: futures::sync::oneshot::Sender<Response<QueryExecuteResponse>>,
-    },
-
     /// Parse the specified SQL into a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
