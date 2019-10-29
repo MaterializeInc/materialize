@@ -346,6 +346,12 @@ impl From<NaiveDate> for Datum {
     }
 }
 
+impl From<NaiveDateTime> for Datum {
+    fn from(dt: NaiveDateTime) -> Datum {
+        Datum::Timestamp(dt)
+    }
+}
+
 impl<T> From<Option<T>> for Datum
 where
     Datum: From<T>,

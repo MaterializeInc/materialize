@@ -48,6 +48,15 @@ SELECT b FROM timestampish
 1997-02-03 11:12:59.900
 2020-01-01 01:02:03.789
 
+query T
+SELECT MAX(b) FROM timestampish
+----
+2020-01-01 01:02:03.789
+
+query T
+SELECT MIN(b) FROM timestampish
+----
+1969-06-01 10:10:10.410
 
 query T
 SELECT INTERVAL '1' MONTH
