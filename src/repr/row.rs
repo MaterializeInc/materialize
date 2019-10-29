@@ -409,7 +409,7 @@ mod tests {
             let row = Row::from_iter(datums.clone());
             let mut buffer = DatumsBuffer::new();
             let datums2 = row.iter().collect::<Vec<_>>();
-            let datums3 = buffer.from_iter(row);
+            let datums3 = buffer.from_iter(&row);
             assert_eq!(datums, datums2);
             assert_eq!(&datums, &*datums3);
         }
