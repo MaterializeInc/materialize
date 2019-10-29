@@ -2810,9 +2810,9 @@ checksum = "1cc9c640a4adbfbcc11ffb95efe5aa7af7309e002adab54b185507dbf2377b99"
 
 [[package]]
 name = "smallvec"
-version = "0.6.10"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab606a9c5e214920bb66c458cd7be8ef094f813f20fe77a54cc7dbfff220d4b7"
+checksum = "cefaa50e76a6f10b86f36e640eb1739eafbd4084865067778463913e43a77ff3"
 
 [[package]]
 name = "socket2"
@@ -2882,7 +2882,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#e323b1aa1f3c375b2493c1d532dc5f0a78d20eb5"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#5f22011af9a53592cd207dd063faf75ebb63ad52"
 dependencies = [
  "log 0.4.8",
 ]
