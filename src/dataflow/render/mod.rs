@@ -282,6 +282,9 @@ where
                         let mut datums = buffer.from_iter(&input_row);
                         for scalar in &scalars {
                             let datum = scalar.eval(&datums);
+                            // Scalar is allowed to see the outputs of previous scalars.
+                            // To avoid repeatedly unpacking input_row, we just push the outputs into datums so later scalars can see them.
+                            // Note that this doesn't mutate input_row.
                             datums.push(datum);
                         }
                         Row::from_iter(&*datums)
