@@ -308,6 +308,18 @@ impl<'a> From<&'a [u8]> for Datum<'a> {
     }
 }
 
+impl<'a> From<NaiveDate> for Datum<'a> {
+    fn from(d: NaiveDate) -> Datum<'a> {
+        Datum::Date(d)
+    }
+}
+
+impl<'a> From<NaiveDateTime> for Datum<'a> {
+    fn from(dt: NaiveDateTime) -> Datum<'a> {
+        Datum::Timestamp(dt)
+    }
+}
+
 impl<'a, T> From<Option<T>> for Datum<'a>
 where
     Datum<'a>: From<T>,
