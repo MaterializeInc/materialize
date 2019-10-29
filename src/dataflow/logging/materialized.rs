@@ -313,7 +313,7 @@ pub fn construct<A: Allocate>(
                 let mut buffer = DatumsBuffer::new();
                 let trace = collection
                     .map(move |row| {
-                        let datums = row.as_datums(&mut buffer);
+                        let datums = buffer.from_iter(&row);
                         let key_row = Row::from_iter(key.iter().map(|k| datums[*k]));
                         drop(datums);
                         (key_row, row)

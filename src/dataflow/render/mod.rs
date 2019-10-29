@@ -159,7 +159,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             .collection(&view.relation_expr)
                             .expect("Render failed to produce collection")
                             .map(move |row| {
-                                let datums = row.as_datums(&mut buffer);
+                                let datums = buffer.from_iter(&row);
                                 let key_row = Row::from_iter(key.iter().map(|k| datums[*k]));
                                 drop(datums);
                                 (key_row, row)
@@ -267,7 +267,7 @@ where
                     let outputs = outputs.clone();
                     let mut buffer = DatumsBuffer::new();
                     let collection = self.collection(input).unwrap().map(move |row| {
-                        let datums = row.as_datums(&mut buffer);
+                        let datums = buffer.from_iter(&row);
                         Row::from_iter(outputs.iter().map(|i| datums[*i]))
                     });
 
@@ -279,7 +279,7 @@ where
                     let scalars = scalars.clone();
                     let mut buffer = DatumsBuffer::new();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
-                        let mut datums = input_row.as_datums(&mut buffer);
+                        let mut datums = buffer.from_iter(&input_row);
                         for scalar in &scalars {
                             let datum = scalar.eval(&datums);
                             datums.push(datum);
@@ -295,7 +295,7 @@ where
                     let predicates = predicates.clone();
                     let mut buffer = DatumsBuffer::new();
                     let collection = self.collection(input).unwrap().filter(move |input_row| {
-                        let datums = input_row.as_datums(&mut buffer);
+                        let datums = buffer.from_iter(input_row);
                         predicates
                             .iter()
                             .all(|predicate| match predicate.eval(&datums) {
@@ -406,7 +406,7 @@ where
                     let mut buffer = DatumsBuffer::new();
                     let old_keyed = joined
                         .map(move |row| {
-                            let datums = row.as_datums(&mut buffer);
+                            let datums = buffer.from_iter(&row);
                             let key_row = Row::from_iter(old_keys.iter().map(|i| datums[*i]));
                             drop(datums);
                             (key_row, row)
@@ -420,7 +420,7 @@ where
                         let mut buffer = DatumsBuffer::new();
                         let new_keyed = built
                             .map(move |row| {
-                                let datums = row.as_datums(&mut buffer);
+                                let datums = buffer.from_iter(&row);
                                 let key_row = Row::from_iter(new_keys2.iter().map(|i| datums[*i]));
                                 drop(datums);
                                 (key_row, row)
@@ -515,7 +515,7 @@ where
                     let group_key = group_key.clone();
                     let mut buffer = DatumsBuffer::new();
                     move |row| {
-                        let datums = row.as_datums(&mut buffer);
+                        let datums = buffer.from_iter(&row);
 
                         let keys = Row::from_iter(group_key.iter().map(|i| datums[*i]));
 
@@ -745,7 +745,7 @@ where
                 .map({
                     let mut buffer = DatumsBuffer::new();
                     move |row| {
-                        let datums = row.as_datums(&mut buffer);
+                        let datums = buffer.from_iter(&row);
                         let group_row = Row::from_iter(group_clone.iter().map(|i| datums[*i]));
                         drop(datums);
                         (group_row, row)
@@ -761,8 +761,8 @@ where
                             let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
                                 compare_columns(
                                     &order_clone,
-                                    &*left.0.as_datums(&mut left_buffer),
-                                    &*right.0.as_datums(&mut right_buffer),
+                                    &*left_buffer.from_iter(&left.0),
+                                    &*right_buffer.from_iter(&right.0),
                                 )
                             };
                             target.sort_by(sort_by);
@@ -827,7 +827,7 @@ where
                 let mut buffer = DatumsBuffer::new();
                 let keyed = built
                     .map(move |row| {
-                        let datums = row.as_datums(&mut buffer);
+                        let datums = buffer.from_iter(&row);
                         let key_row = Row::from_iter(keys2.iter().map(|i| datums[*i]));
                         drop(datums);
                         (key_row, row)

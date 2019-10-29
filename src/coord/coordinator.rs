@@ -288,8 +288,8 @@ where
                             let mut sort_by = |left: &Row, right: &Row| {
                                 compare_columns(
                                     &finishing.order_by,
-                                    &left.as_datums(&mut left_buffer),
-                                    &right.as_datums(&mut right_buffer),
+                                    &left_buffer.from_iter(left),
+                                    &right_buffer.from_iter(right),
                                 )
                             };
                             let offset = finishing.offset;
@@ -310,7 +310,7 @@ where
                                 rows.sort_by(&mut sort_by);
                                 let mut buffer = DatumsBuffer::new();
                                 for row in rows {
-                                    let datums = row.as_datums(&mut buffer);
+                                    let datums = buffer.from_iter(&*row);
                                     let new_row = Row::from_iter(
                                         finishing.project.iter().map(|i| datums[*i]),
                                     );

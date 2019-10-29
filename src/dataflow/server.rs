@@ -546,7 +546,7 @@ where
         let mut right_buffer = DatumsBuffer::new();
         while let Some(_key) = cur.get_key(&storage) {
             while let Some(row) = cur.get_val(&storage) {
-                let datums = row.as_datums(&mut buffer);
+                let datums = buffer.from_iter(row);
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
                 if peek
@@ -585,8 +585,8 @@ where
                 pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
                     compare_columns(
                         &peek.finishing.order_by,
-                        &left.as_datums(&mut left_buffer),
-                        &right.as_datums(&mut right_buffer),
+                        &left_buffer.from_iter(left),
+                        &right_buffer.from_iter(right),
                     )
                 });
                 results.truncate(offset_plus_limit);

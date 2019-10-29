@@ -91,7 +91,7 @@ pub struct RowIter<'a> {
 ///
 /// let mut buffer = DatumsBuffer::new();
 /// for row in rows {
-///     let datums = row.as_datums(&mut buffer);
+///     let datums = buffer.from_iter(row);
 ///     assert_eq!(datums[0], datums[2]);
 /// }
 /// ```
@@ -328,12 +328,10 @@ impl DatumsBuffer {
     pub fn new() -> Self {
         DatumsBuffer { datums: vec![] }
     }
-}
 
-impl Row {
-    /// Unpack this `Row` into a reusable `DatumsBuffer` for efficent random access
-    pub fn as_datums<'a>(&'a self, buffer: &'a mut DatumsBuffer) -> Datums<'a> {
-        let inner = &mut buffer.datums;
+    /// Borrow the buffer.
+    pub fn empty<'a>(&'a mut self) -> Datums<'a> {
+        let inner = &mut self.datums;
         let datums = Datums {
             datums: unsafe {
                 // this is safe because:
@@ -343,7 +341,18 @@ impl Row {
                 transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
             },
         };
-        datums.datums.extend(self.iter());
+        datums
+    }
+
+    /// Borrow the buffer and fill it with `Datum`s copied from `iter`
+    #[allow(clippy::wrong_self_convention)] // this function is deliberately mimicking Vec::from_iter, but with a custom allocator
+    pub fn from_iter<'a, I, D>(&'a mut self, iter: I) -> Datums<'a>
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        let mut datums = self.empty();
+        datums.extend(iter.into_iter().map(|d| *(d.borrow())));
         datums
     }
 }
@@ -400,7 +409,7 @@ mod tests {
             let row = Row::from_iter(datums.clone());
             let mut buffer = DatumsBuffer::new();
             let datums2 = row.iter().collect::<Vec<_>>();
-            let datums3 = row.as_datums(&mut buffer);
+            let datums3 = buffer.from_iter(row);
             assert_eq!(datums, datums2);
             assert_eq!(&datums, &*datums3);
         }
