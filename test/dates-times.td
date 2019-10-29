@@ -54,3 +54,21 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 > PEEK data
 2019-08-27 "2019-08-27 00:17:09.000877"
 1970-01-01 "1970-01-01 00:01:05"
+
+> select INTERVAL '1' SECOND
+"0:00:01"
+
+> select INTERVAL '2' MINUTE
+"0:02:00"
+
+> select INTERVAL '3' HOUR
+"3:00:00"
+
+> select INTERVAL '1' DAY
+"24:00:00"
+
+> select INTERVAL '6' MONTH
+"0-6"
+
+> select INTERVAL '10' YEAR
+"10-0"
