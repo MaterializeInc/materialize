@@ -33,8 +33,9 @@ use dataflow_types::{
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
-use repr::{Datum, RelationDesc, ScalarType};
+use repr::{Datum, DatumsBuffer, RelationDesc, Row, ScalarType};
 use sql::{MutationKind, ObjectType, Plan};
+use std::iter::FromIterator;
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<C>
@@ -141,7 +142,7 @@ where
                     RelationDesc::empty().add_column("Topic", ScalarType::String),
                     sources
                         .iter()
-                        .map(|s| vec![Datum::from(s.name.to_owned())])
+                        .map(|s| Row::from_iter(&[Datum::String(&s.name)]))
                         .collect(),
                 )
             }
@@ -282,8 +283,14 @@ where
                     })
                     .map(move |mut resp| {
                         if let PeekResponse::Rows(rows) = &mut resp {
-                            let sort_by = |left: &Vec<Datum>, right: &Vec<Datum>| {
-                                compare_columns(&finishing.order_by, left, right)
+                            let mut left_buffer = DatumsBuffer::new();
+                            let mut right_buffer = DatumsBuffer::new();
+                            let mut sort_by = |left: &Row, right: &Row| {
+                                compare_columns(
+                                    &finishing.order_by,
+                                    &left_buffer.from_iter(left),
+                                    &right_buffer.from_iter(right),
+                                )
                             };
                             let offset = finishing.offset;
                             if offset > rows.len() {
@@ -292,18 +299,23 @@ where
                                 if let Some(limit) = finishing.limit {
                                     let offset_plus_limit = offset + limit;
                                     if rows.len() > offset_plus_limit {
-                                        pdqselect::select_by(rows, offset_plus_limit, sort_by);
+                                        pdqselect::select_by(rows, offset_plus_limit, &mut sort_by);
                                         rows.truncate(offset_plus_limit);
                                     }
                                 }
                                 if offset > 0 {
-                                    pdqselect::select_by(rows, offset, sort_by);
+                                    pdqselect::select_by(rows, offset, &mut sort_by);
                                     rows.drain(..offset);
                                 }
-                                rows.sort_by(sort_by);
+                                rows.sort_by(&mut sort_by);
+                                let mut buffer = DatumsBuffer::new();
                                 for row in rows {
-                                    *row =
-                                        finishing.project.iter().map(|i| row[*i].clone()).collect();
+                                    let datums = buffer.from_iter(&*row);
+                                    let new_row = Row::from_iter(
+                                        finishing.project.iter().map(|i| datums[*i]),
+                                    );
+                                    drop(datums);
+                                    *row = new_row;
                                 }
                             }
                         }
@@ -352,7 +364,8 @@ where
                 mut relation_expr,
             } => {
                 self.optimizer.optimize(&mut relation_expr);
-                let rows = vec![vec![Datum::from(relation_expr.pretty())]];
+                let pretty = relation_expr.pretty();
+                let rows = vec![Row::from_iter(vec![Datum::from(&*pretty)])];
                 send_immediate_rows(desc, rows)
             }
 
@@ -846,7 +859,7 @@ fn broadcast(
 /// Constructs a [`QueryExecuteResponse`] that that will send some rows to the client
 /// immediately, as opposed to asking the dataflow layer to send along the rows
 /// after some computation.
-fn send_immediate_rows(desc: RelationDesc, rows: Vec<Vec<Datum>>) -> QueryExecuteResponse {
+fn send_immediate_rows(desc: RelationDesc, rows: Vec<Row>) -> QueryExecuteResponse {
     let (tx, rx) = futures::sync::oneshot::channel();
     tx.send(PeekResponse::Rows(rows)).unwrap();
     QueryExecuteResponse::SendRows {

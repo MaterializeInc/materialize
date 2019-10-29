@@ -13,7 +13,7 @@
 #![allow(clippy::wrong_self_convention)]
 
 use expr::{ColumnOrder, RelationExpr, ScalarExpr};
-use repr::{Datum, RelationDesc};
+use repr::{Datum, RelationDesc, Row};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use url::Url;
@@ -40,12 +40,12 @@ pub enum PeekWhen {
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PeekResponse {
-    Rows(Vec<Vec<Datum>>),
+    Rows(Vec<Row>),
     Canceled,
 }
 
 impl PeekResponse {
-    pub fn unwrap_rows(self) -> Vec<Vec<Datum>> {
+    pub fn unwrap_rows(self) -> Vec<Row> {
         match self {
             PeekResponse::Rows(rows) => rows,
             PeekResponse::Canceled => {
@@ -58,14 +58,14 @@ impl PeekResponse {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
 pub struct Update {
-    pub row: Vec<Datum>,
+    pub row: Row,
     pub timestamp: u64,
     pub diff: isize,
 }
 
 pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -> Ordering {
     for order in order {
-        let (lval, rval) = (&left[order.column], &right[order.column]);
+        let (lval, rval) = (left[order.column], right[order.column]);
         let cmp = if order.desc {
             rval.cmp(&lval)
         } else {
@@ -85,7 +85,7 @@ pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -
 /// keywords), whereas much of the rest of SQL is defined in terms of unordered
 /// multisets. But as it turns out, the same idea can be used to optimize
 /// trivial peeks.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RowSetFinishing {
     /// Include only rows matching all predicates.
     pub filter: Vec<ScalarExpr>,

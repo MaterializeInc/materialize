@@ -16,7 +16,7 @@ use url::Url;
 
 use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
-use repr::{ColumnType, Datum, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -306,8 +306,8 @@ fn first_mismatched_schema_types<'a>(
 
 #[derive(Debug)]
 pub struct DiffPair {
-    pub before: Option<Vec<Datum>>,
-    pub after: Option<Vec<Datum>>,
+    pub before: Option<Row>,
+    pub after: Option<Row>,
 }
 
 /// Manages decoding of Avro-encoded bytes.
@@ -406,23 +406,23 @@ impl Decoder {
             None => (&self.reader_schema, None),
         };
 
-        fn value_to_datum(v: Value) -> Result<Datum, failure::Error> {
+        fn value_to_datum(v: &Value) -> Result<Datum<'_>, failure::Error> {
             match v {
                 Value::Null => Ok(Datum::Null),
                 Value::Boolean(true) => Ok(Datum::True),
                 Value::Boolean(false) => Ok(Datum::False),
-                Value::Int(i) => Ok(Datum::Int32(i)),
-                Value::Long(i) => Ok(Datum::Int64(i)),
-                Value::Float(f) => Ok(Datum::Float32(f.into())),
-                Value::Double(f) => Ok(Datum::Float64(f.into())),
-                Value::Date(d) => Ok(Datum::Date(d)),
-                Value::Timestamp(d) => Ok(Datum::Timestamp(d)),
+                Value::Int(i) => Ok(Datum::Int32(*i)),
+                Value::Long(i) => Ok(Datum::Int64(*i)),
+                Value::Float(f) => Ok(Datum::Float32((*f).into())),
+                Value::Double(f) => Ok(Datum::Float64((*f).into())),
+                Value::Date(d) => Ok(Datum::Date(*d)),
+                Value::Timestamp(d) => Ok(Datum::Timestamp(*d)),
                 Value::Decimal { unscaled, .. } => Ok(Datum::Decimal(
                     Significand::from_twos_complement_be(&unscaled)?,
                 )),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
                 Value::String(s) => Ok(Datum::String(s)),
-                Value::Union(v) => value_to_datum(*v),
+                Value::Union(v) => value_to_datum(v),
                 other @ Value::Fixed(..)
                 | other @ Value::Enum(..)
                 | other @ Value::Array(_)
@@ -431,16 +431,16 @@ impl Decoder {
             }
         };
 
-        fn extract_row(v: Value) -> Result<Option<Vec<Datum>>, failure::Error> {
+        fn extract_row(v: Value) -> Result<Option<Row>, failure::Error> {
             let v = match v {
                 Value::Union(v) => *v,
                 _ => bail!("unsupported avro value: {:?}", v),
             };
             match v {
                 Value::Record(fields) => {
-                    let mut row = Vec::with_capacity(fields.len());
+                    let mut row = Row::new();
                     for (_, col) in fields {
-                        row.push(value_to_datum(col)?);
+                        row.push(value_to_datum(&col)?);
                     }
                     Ok(Some(row))
                 }

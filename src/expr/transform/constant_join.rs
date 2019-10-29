@@ -41,14 +41,13 @@ impl ConstantJoin {
                                 .iter()
                                 .all(|v| v.iter().all(|(r, _)| *r != inputs_len - 1))
                         {
-                            let values = rows
-                                .pop()
-                                .unwrap()
-                                .0
-                                .into_iter()
+                            let row = rows.pop().unwrap().0;
+                            let values = row
+                                .iter()
                                 .zip(typ.column_types)
-                                .map(|(d, t)| ScalarExpr::Literal(d, t));
-                            map_arguments.extend(values.rev());
+                                .map(|(d, t)| ScalarExpr::literal(d, t))
+                                .collect::<Vec<_>>();
+                            map_arguments.extend(values.into_iter().rev());
                         } else {
                             inputs.push(RelationExpr::Constant { rows, typ });
                             done = true;

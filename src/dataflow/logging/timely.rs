@@ -10,8 +10,9 @@ use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
-use repr::Datum;
+use repr::{Datum, DatumsBuffer, Row};
 use std::collections::HashMap;
+use std::iter::FromIterator;
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -49,7 +50,6 @@ pub fn construct<A: Allocate>(
         let (mut addresses_out, addresses) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
-
         demux.build(move |_capability| {
             // These two maps track operator and channel information
             // so that they can be deleted when we observe the drop
@@ -80,23 +80,23 @@ pub fn construct<A: Allocate>(
                                 operates_data.insert((event.id, worker), event.clone());
 
                                 operates_session.give((
-                                    vec![
+                                    Row::from_iter(&[
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
-                                        Datum::String(event.name.clone()),
-                                    ],
+                                        Datum::String(&*event.name),
+                                    ]),
                                     time_ms,
                                     1,
                                 ));
 
                                 for (addr_slot, addr_value) in event.addr.iter().enumerate() {
                                     addresses_session.give((
-                                        vec![
+                                        Row::from_iter(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
                                             Datum::Int64(addr_slot as i64),
                                             Datum::Int64(*addr_value as i64),
-                                        ],
+                                        ]),
                                         time_ms,
                                         1,
                                     ));
@@ -112,14 +112,14 @@ pub fn construct<A: Allocate>(
 
                                 // Present channel description.
                                 channels_session.give((
-                                    vec![
+                                    Row::from_iter(&[
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
                                         Datum::Int64(event.source.0 as i64),
                                         Datum::Int64(event.source.1 as i64),
                                         Datum::Int64(event.target.0 as i64),
                                         Datum::Int64(event.target.1 as i64),
-                                    ],
+                                    ]),
                                     time_ms,
                                     1,
                                 ));
@@ -127,12 +127,12 @@ pub fn construct<A: Allocate>(
                                 // Enumerate the address of the scope containing the channel.
                                 for (addr_slot, addr_value) in event.scope_addr.iter().enumerate() {
                                     addresses_session.give((
-                                        vec![
+                                        Row::from_iter(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
                                             Datum::Int64(addr_slot as i64),
                                             Datum::Int64(*addr_value as i64),
-                                        ],
+                                        ]),
                                         time_ms,
                                         1,
                                     ));
@@ -144,23 +144,23 @@ pub fn construct<A: Allocate>(
                                 // operator announcement.
                                 if let Some(event) = operates_data.remove(&(event.id, worker)) {
                                     operates_session.give((
-                                        vec![
+                                        Row::from_iter(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
-                                            Datum::String(event.name.clone()),
-                                        ],
+                                            Datum::String(&*event.name),
+                                        ]),
                                         time_ms,
                                         -1,
                                     ));
 
                                     for (addr_slot, addr_value) in event.addr.iter().enumerate() {
                                         addresses_session.give((
-                                            vec![
+                                            Row::from_iter(&[
                                                 Datum::Int64(event.id as i64),
                                                 Datum::Int64(worker as i64),
                                                 Datum::Int64(addr_slot as i64),
                                                 Datum::Int64(*addr_value as i64),
-                                            ],
+                                            ]),
                                             time_ms,
                                             -1,
                                         ));
@@ -175,14 +175,14 @@ pub fn construct<A: Allocate>(
                                             for event in events {
                                                 // Retract channel description.
                                                 channels_session.give((
-                                                    vec![
+                                                    Row::from_iter(&[
                                                         Datum::Int64(event.id as i64),
                                                         Datum::Int64(worker as i64),
                                                         Datum::Int64(event.source.0 as i64),
                                                         Datum::Int64(event.source.1 as i64),
                                                         Datum::Int64(event.target.0 as i64),
                                                         Datum::Int64(event.target.1 as i64),
-                                                    ],
+                                                    ]),
                                                     time_ms,
                                                     -1,
                                                 ));
@@ -192,12 +192,12 @@ pub fn construct<A: Allocate>(
                                                     event.scope_addr.iter().enumerate()
                                                 {
                                                     addresses_session.give((
-                                                        vec![
+                                                        Row::from_iter(&[
                                                             Datum::Int64(event.id as i64),
                                                             Datum::Int64(worker as i64),
                                                             Datum::Int64(addr_slot as i64),
                                                             Datum::Int64(*addr_value as i64),
-                                                        ],
+                                                        ]),
                                                         time_ms,
                                                         -1,
                                                     ));
@@ -267,18 +267,18 @@ pub fn construct<A: Allocate>(
             .map(|(op, t, d)| (op, t, d as isize))
             .as_collection()
             .count()
-            .map(|(op, cnt)| vec![Datum::Int64(op as i64), Datum::Int64(cnt as i64)]);
+            .map(|(op, cnt)| Row::from_iter(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)]));
 
         let histogram = duration
             .map(|(op, t, d)| ((op, d.next_power_of_two()), t, 1i64))
             .as_collection()
             .count()
             .map(|((op, pow), cnt)| {
-                vec![
+                Row::from_iter(&[
                     Datum::Int64(op as i64),
                     Datum::Int64(pow as i64),
                     Datum::Int64(cnt as i64),
-                ]
+                ])
             });
 
         let operates = operates.as_collection();
@@ -301,8 +301,14 @@ pub fn construct<A: Allocate>(
             if config.active_logs().contains(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
+                let mut buffer = DatumsBuffer::new();
                 let trace = collection
-                    .map(move |record| (key.iter().map(|k| record[*k].clone()).collect(), record))
+                    .map(move |row| {
+                        let datums = buffer.from_iter(&row);
+                        let key_row = Row::from_iter(key.iter().map(|k| datums[*k]));
+                        drop(datums);
+                        (key_row, row)
+                    })
                     .arrange_by_key()
                     .trace;
                 result.insert(variant, (key_clone, trace));

@@ -10,12 +10,12 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use std::collections::{BTreeMap, HashMap};
 
 use dataflow_types::{Diff, Timestamp};
-use repr::Datum;
+use repr::Row;
 
 #[allow(dead_code)]
-pub type KeysValsSpine = OrdValSpine<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
+pub type KeysValsSpine = OrdValSpine<Row, Row, Timestamp, Diff>;
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
-pub type KeysValsHandle = TraceValHandle<Vec<Datum>, Vec<Datum>, Timestamp, Diff>;
+pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 
 /// A map from collection names to cached arrangements.
 ///

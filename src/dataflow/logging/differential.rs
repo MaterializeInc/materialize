@@ -7,7 +7,8 @@ use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use differential_dataflow::logging::DifferentialEvent;
-use repr::Datum;
+use repr::{Datum, DatumsBuffer, Row};
+use std::iter::FromIterator;
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
@@ -72,12 +73,12 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map(|((op, worker), count)| {
-                vec![
+                Row::from_iter(&[
                     Datum::Int64(op as i64),
                     Datum::Int64(worker as i64),
                     Datum::Int64(count[0] as i64),
                     Datum::Int64(count[1] as i64),
-                ]
+                ])
             });
 
         // Duration statistics derive from the non-rounded event times.
@@ -93,11 +94,11 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map(|((op, worker), count)| {
-                vec![
+                Row::from_iter(&[
                     Datum::Int64(op as i64),
                     Datum::Int64(worker as i64),
                     Datum::Int64(count as i64),
-                ]
+                ])
             });
 
         let logs = vec![
@@ -114,8 +115,14 @@ pub fn construct<A: Allocate>(
             if config.active_logs().contains(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
+                let mut buffer = DatumsBuffer::new();
                 let trace = collection
-                    .map(move |record| (key.iter().map(|k| record[*k].clone()).collect(), record))
+                    .map(move |row| {
+                        let datums = buffer.from_iter(&row);
+                        let key_row = Row::from_iter(key.iter().map(|k| datums[*k]));
+                        drop(datums);
+                        (key_row, row)
+                    })
                     .arrange_by_key()
                     .trace;
                 result.insert(variant, (key_clone, trace));

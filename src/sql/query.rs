@@ -17,7 +17,7 @@
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
-    ScalarExpr, UnaryFunc, VariadicFunc, LITERAL_NULL, LITERAL_TRUE,
+    ScalarExpr, UnaryFunc, VariadicFunc,
 };
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 use super::statement::extract_sql_object_name;
@@ -268,11 +268,8 @@ fn plan_set_expr(
                     Some(value_types)
                 };
 
-                let row_expr = RelationExpr::Constant {
-                    rows: vec![vec![]],
-                    typ: RelationType::new(vec![]),
-                }
-                .map(value_exprs);
+                let row_expr = RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+                    .map(value_exprs);
                 expr = if let Some(expr) = expr {
                     Some(expr.union(row_expr))
                 } else {
@@ -319,10 +316,7 @@ fn plan_view_select(
         .unwrap_or_else(|| {
             let typ = RelationType::new(vec![]);
             Ok((
-                RelationExpr::Constant {
-                    rows: vec![vec![]],
-                    typ: typ.clone(),
-                },
+                RelationExpr::constant(vec![vec![]], typ.clone()),
                 Scope::from_source(
                     None,
                     iter::empty::<Option<String>>(),
@@ -878,10 +872,12 @@ fn plan_using_constraint(
         right: Box::new(right),
         on: join_exprs
             .into_iter()
-            .fold(LITERAL_TRUE, |expr1, expr2| ScalarExpr::CallBinary {
-                func: BinaryFunc::And,
-                expr1: Box::new(expr1),
-                expr2: Box::new(expr2),
+            .fold(ScalarExpr::literal_true(), |expr1, expr2| {
+                ScalarExpr::CallBinary {
+                    func: BinaryFunc::And,
+                    expr1: Box::new(expr1),
+                    expr2: Box::new(expr2),
+                }
             }),
         kind,
     }
@@ -1136,7 +1132,7 @@ fn plan_aggregate(
     let arg = &sql_func.args[0];
     let (expr, func) = match (&*ident, arg) {
         // COUNT(*) is a special case that doesn't compose well
-        ("count", Expr::Wildcard) => (LITERAL_NULL, AggregateFunc::CountAll),
+        ("count", Expr::Wildcard) => (ScalarExpr::literal_null(), AggregateFunc::CountAll),
         _ => {
             let expr = plan_expr(catalog, ctx, arg)?;
             let typ = ctx.column_type(&expr);
@@ -1247,7 +1243,7 @@ fn plan_function<'a>(
                 let else_expr = plan_expr(catalog, ctx, &sql_func.args[0])?;
                 let expr = ScalarExpr::If {
                     cond: Box::new(cond_expr),
-                    then: Box::new(LITERAL_NULL),
+                    then: Box::new(ScalarExpr::literal_null()),
                     els: Box::new(else_expr),
                 };
                 Ok(expr)
@@ -1665,10 +1661,7 @@ fn plan_like<'a>(
     let mut expr = ScalarExpr::CallBinary {
         func: BinaryFunc::MatchRegex,
         expr1: Box::new(lexpr),
-        expr2: Box::new(ScalarExpr::CallUnary {
-            func: UnaryFunc::BuildLikeRegex,
-            expr: Box::new(rexpr),
-        }),
+        expr2: Box::new(rexpr),
     };
     if negate {
         expr = ScalarExpr::CallUnary {
@@ -1778,7 +1771,7 @@ fn plan_case<'a>(
     }
     result_exprs.push(match else_result {
         Some(else_result) => plan_expr(catalog, ctx, else_result)?,
-        None => LITERAL_NULL,
+        None => ScalarExpr::literal_null(),
     });
     let mut result_exprs = try_coalesce_types(ctx, "CASE", result_exprs)?;
     let mut expr = result_exprs.pop().unwrap();
@@ -1841,7 +1834,7 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
                 )
             }
         }
-        Value::SingleQuotedString(s) => (Datum::String(s.clone()), ScalarType::String),
+        Value::SingleQuotedString(s) => (Datum::String(s), ScalarType::String),
         Value::NationalStringLiteral(_) => {
             bail!("n'' string literals are not supported: {}", l.to_string())
         }
@@ -1897,7 +1890,7 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
     };
     let nullable = datum == Datum::Null;
     let typ = ColumnType::new(scalar_type).nullable(nullable);
-    let expr = ScalarExpr::Literal(datum, typ);
+    let expr = ScalarExpr::literal(datum, typ);
     Ok(expr)
 }
 
@@ -2066,13 +2059,13 @@ where
         (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
         (Decimal(_, s), Float32) => {
             let factor = 10_f32.powi(i32::from(s));
-            let factor = ScalarExpr::Literal(Datum::from(factor), ColumnType::new(to_scalar_type));
+            let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
             expr.call_unary(CastDecimalToFloat32)
                 .call_binary(factor, BinaryFunc::DivFloat32)
         }
         (Decimal(_, s), Float64) => {
             let factor = 10_f64.powi(i32::from(s));
-            let factor = ScalarExpr::Literal(Datum::from(factor), ColumnType::new(to_scalar_type));
+            let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
             expr.call_unary(CastDecimalToFloat64)
                 .call_binary(factor, BinaryFunc::DivFloat64)
         }
@@ -2080,7 +2073,7 @@ where
         (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
         (Null, _) => {
             // assert_eq!(expr, ScalarExpr::Literal(Datum::Null, ColumnType::new(ScalarType::Null)));
-            ScalarExpr::Literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
+            ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
         (from, to) if from == to => expr,
         (from, to) => {
@@ -2114,12 +2107,12 @@ fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
     if s2 > s1 {
         let typ = ColumnType::new(ScalarType::Decimal(38, s2 - s1));
         let factor = 10_i128.pow(u32::from(s2 - s1));
-        let factor = ScalarExpr::Literal(Datum::from(factor), typ);
+        let factor = ScalarExpr::literal(Datum::from(factor), typ);
         expr.call_binary(factor, BinaryFunc::MulDecimal)
     } else if s1 > s2 {
         let typ = ColumnType::new(ScalarType::Decimal(38, s1 - s2));
         let factor = 10_i128.pow(u32::from(s1 - s2));
-        let factor = ScalarExpr::Literal(Datum::from(factor), typ);
+        let factor = ScalarExpr::literal(Datum::from(factor), typ);
         expr.call_binary(factor, BinaryFunc::DivDecimal)
     } else {
         expr

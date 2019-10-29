@@ -9,6 +9,14 @@
 
 set -euo pipefail
 
+if [[ ! "${BUILDKITE-}" ]]; then
+    sqllogictest() {
+        cargo run --release --bin sqllogictest -- "$@"
+    }
+fi
+
+export RUST_BACKTRACE=full
+
 tests=(
     test/*.slt
     # test/sqlite/test/evidence/in1.test
@@ -142,4 +150,4 @@ tests=(
     # test/cockroach/zero.slt
 )
 
-RUST_BACKTRACE=full sqllogictest -v "${tests[@]}"
+sqllogictest -v "${tests[@]}"

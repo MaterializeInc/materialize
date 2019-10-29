@@ -27,7 +27,7 @@ use std::env;
 use ::postgres::rows::Row as PostgresRow;
 use ::postgres::types::FromSql;
 use ::postgres::{Connection, TlsMode};
-use failure::{bail, ensure, format_err};
+use failure::{bail, format_err};
 use postgres::params::{ConnectParams, IntoConnectParams};
 use rust_decimal::Decimal;
 use sqlparser::ast::ColumnOption;
@@ -35,7 +35,7 @@ use sqlparser::ast::{DataType, ObjectType, Statement};
 
 use ore::option::OptionExt;
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
 pub struct Postgres {
@@ -254,11 +254,7 @@ END $$;
         })
     }
 
-    fn run_query(
-        &mut self,
-        table_name: &str,
-        query: String,
-    ) -> Result<Vec<Vec<Datum>>, failure::Error> {
+    fn run_query(&mut self, table_name: &str, query: String) -> Result<Vec<Row>, failure::Error> {
         let (sql_types, desc) = self
             .table_types
             .get(table_name)
@@ -267,77 +263,86 @@ END $$;
         let mut rows = vec![];
         let postgres_rows = self.conn.query(&*query, &[])?;
         for postgres_row in postgres_rows.iter() {
-            let row = (0..postgres_row.len())
-                .map(|c| {
-                    let datum = get_column(
-                        &postgres_row,
-                        c,
-                        &sql_types[c],
-                        desc.typ().column_types[c].nullable,
-                    )?;
-                    ensure!(
-                        datum.is_instance_of(desc.typ().column_types[c]),
-                        "Expected value of type {:?}, got {:?}",
-                        desc.typ().column_types[c],
-                        datum
-                    );
-                    Ok(datum)
-                })
-                .collect::<Result<_, _>>()?;
+            let mut row = Row::new();
+            for c in 0..postgres_row.len() {
+                push_column(
+                    &mut row,
+                    &postgres_row,
+                    c,
+                    &sql_types[c],
+                    desc.typ().column_types[c].nullable,
+                )?;
+            }
             rows.push(row);
         }
         Ok(rows)
     }
 }
 
-fn get_column(
+fn push_column(
+    row: &mut Row,
     postgres_row: &PostgresRow,
     i: usize,
     sql_type: &DataType,
     nullable: bool,
-) -> Result<Datum, failure::Error> {
+) -> Result<(), failure::Error> {
     // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
-    Ok(match sql_type {
-        DataType::Boolean => get_column_inner::<bool>(postgres_row, i, nullable)?.into(),
+    match sql_type {
+        DataType::Boolean => {
+            let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
+            row.push(bool.into());
+        }
         DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => {
-            get_column_inner::<bool>(postgres_row, i, nullable)?.into()
+            let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
+            row.push(bool.into());
         }
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => {
-            get_column_inner::<String>(postgres_row, i, nullable)?.into()
+            let string = get_column_inner::<String>(postgres_row, i, nullable)?;
+            row.push(string.mz_as_deref().into());
         }
         DataType::Custom(name) if name.to_string().to_lowercase() == "string" => {
-            get_column_inner::<String>(postgres_row, i, nullable)?.into()
+            let string = get_column_inner::<String>(postgres_row, i, nullable)?;
+            row.push(string.mz_as_deref().into());
         }
-        DataType::SmallInt => get_column_inner::<i16>(postgres_row, i, nullable)?
-            .map(|i| i32::from(i))
-            .into(),
-        DataType::Int => get_column_inner::<i32>(postgres_row, i, nullable)?
-            .map(|i| i64::from(i))
-            .into(),
-        DataType::BigInt => get_column_inner::<i64>(postgres_row, i, nullable)?.into(),
+        DataType::SmallInt => {
+            let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(|i| i32::from(i));
+            row.push(i.into());
+        }
+        DataType::Int => {
+            let i = get_column_inner::<i32>(postgres_row, i, nullable)?.map(|i| i64::from(i));
+            row.push(i.into());
+        }
+        DataType::BigInt => {
+            let i = get_column_inner::<i64>(postgres_row, i, nullable)?;
+            row.push(i.into());
+        }
         DataType::Float(p) => {
             if p.unwrap_or(53) <= 24 {
-                get_column_inner::<f32>(postgres_row, i, nullable)?
-                    .map(|f| f64::from(f))
-                    .into()
+                let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(|f| f64::from(f));
+                row.push(f.into());
             } else {
-                get_column_inner::<f64>(postgres_row, i, nullable)?.into()
+                let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
+                row.push(f.into());
             }
         }
-        DataType::Real => get_column_inner::<f32>(postgres_row, i, nullable)?
-            .map(|f| f64::from(f))
-            .into(),
-        DataType::Double => get_column_inner::<f64>(postgres_row, i, nullable)?.into(),
+        DataType::Real => {
+            let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(|f| f64::from(f));
+            row.push(f.into());
+        }
+        DataType::Double => {
+            let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
+            row.push(f.into());
+        }
         DataType::Date => {
             let d: chrono::NaiveDate =
                 get_column_inner::<chrono::NaiveDate>(postgres_row, i, nullable)?.unwrap();
-            Datum::Date(d)
+            row.push(Datum::Date(d));
         }
         DataType::Timestamp => {
             let d: chrono::NaiveDateTime =
                 get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?.unwrap();
-            Datum::Timestamp(d)
+            row.push(Datum::Timestamp(d));
         }
         DataType::Interval => {
             let pgi =
@@ -346,7 +351,7 @@ fn get_column(
                 bail!("can't handle pg intervals that have both months and times");
             }
             if pgi.months != 0 {
-                Datum::Interval(Interval::Months(pgi.months.into()))
+                row.push(Datum::Interval(Interval::Months(pgi.months.into())));
             } else {
                 // TODO(quodlibetor): I can't find documentation about how
                 // microseconds and days are supposed to sum before the epoch.
@@ -362,10 +367,10 @@ fn get_column(
                 let seconds = i64::from(pgi.days) * 86_400 + pgi.microseconds / 1_000_000;
                 let nanos = (pgi.microseconds.abs() % 1_000_000) as u32 * 1_000;
 
-                Datum::Interval(Interval::Duration {
+                row.push(Datum::Interval(Interval::Duration {
                     is_positive: seconds >= 0,
                     duration: std::time::Duration::new(seconds.abs() as u64, nanos),
-                })
+                }));
             }
         }
         DataType::Decimal(_, _) => {
@@ -374,7 +379,7 @@ fn get_column(
                 _ => unreachable!(),
             };
             match get_column_inner::<Decimal>(postgres_row, i, nullable)? {
-                None => Datum::Null,
+                None => row.push(Datum::Null),
                 Some(d) => {
                     let d = d.unpack();
                     let mut significand =
@@ -389,16 +394,20 @@ fn get_column(
                     } else {
                         significand *= 10i128.pow((-scale_correction).try_into()?);
                     };
-                    Significand::new(significand).into()
+                    row.push(Significand::new(significand).into());
                 }
             }
         }
-        DataType::Bytea => get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?.into(),
+        DataType::Bytea => {
+            let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
+            row.push(bytes.mz_as_deref().into());
+        }
         _ => bail!(
             "Postgres to materialize conversion not yet supported for {:?}",
             sql_type
         ),
-    })
+    }
+    Ok(())
 }
 
 fn get_column_inner<T>(

@@ -253,7 +253,7 @@ impl PredicatePushdown {
                                 && aggregates[0].func == AggregateFunc::Any
                             {
                                 push_down.push(aggregates[0].expr.clone());
-                                aggregates[0].expr = ScalarExpr::Literal(
+                                aggregates[0].expr = ScalarExpr::literal(
                                     Datum::True,
                                     ColumnType::new(ScalarType::Bool),
                                 );

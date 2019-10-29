@@ -18,9 +18,9 @@ use repr::{ColumnType, Datum, ScalarType};
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
 
-pub fn max_int32<I>(datums: I) -> Datum
+pub fn max_int32<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<i32> = datums
         .into_iter()
@@ -30,9 +30,9 @@ where
     Datum::from(x)
 }
 
-pub fn max_int64<I>(datums: I) -> Datum
+pub fn max_int64<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<i64> = datums
         .into_iter()
@@ -42,9 +42,9 @@ where
     Datum::from(x)
 }
 
-pub fn max_float32<I>(datums: I) -> Datum
+pub fn max_float32<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<OrderedFloat<f32>> = datums
         .into_iter()
@@ -54,9 +54,9 @@ where
     Datum::from(x)
 }
 
-pub fn max_float64<I>(datums: I) -> Datum
+pub fn max_float64<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<OrderedFloat<f64>> = datums
         .into_iter()
@@ -66,9 +66,9 @@ where
     Datum::from(x)
 }
 
-pub fn max_decimal<I>(datums: I) -> Datum
+pub fn max_decimal<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<Significand> = datums
         .into_iter()
@@ -78,9 +78,9 @@ where
     Datum::from(x)
 }
 
-pub fn max_bool<I>(datums: I) -> Datum
+pub fn max_bool<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<bool> = datums
         .into_iter()
@@ -90,21 +90,23 @@ where
     Datum::from(x)
 }
 
-pub fn max_string<I>(datums: I) -> Datum
+pub fn max_string<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<String> = datums
+    match datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_string())
-        .max();
-    Datum::from(x)
+        .max_by(|a, b| a.unwrap_str().cmp(&b.unwrap_str()))
+    {
+        Some(datum) => datum,
+        None => Datum::Null,
+    }
 }
 
-pub fn max_date<I>(datums: I) -> Datum
+pub fn max_date<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<NaiveDate> = datums
         .into_iter()
@@ -114,9 +116,9 @@ where
     Datum::from(x)
 }
 
-pub fn max_timestamp<I>(datums: I) -> Datum
+pub fn max_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<NaiveDateTime> = datums
         .into_iter()
@@ -126,16 +128,16 @@ where
     Datum::from(x)
 }
 
-pub fn max_null<I>(_datums: I) -> Datum
+pub fn max_null<'a, I>(_datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn min_int32<I>(datums: I) -> Datum
+pub fn min_int32<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<i32> = datums
         .into_iter()
@@ -145,9 +147,9 @@ where
     Datum::from(x)
 }
 
-pub fn min_int64<I>(datums: I) -> Datum
+pub fn min_int64<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<i64> = datums
         .into_iter()
@@ -157,9 +159,9 @@ where
     Datum::from(x)
 }
 
-pub fn min_float32<I>(datums: I) -> Datum
+pub fn min_float32<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<OrderedFloat<f32>> = datums
         .into_iter()
@@ -169,9 +171,9 @@ where
     Datum::from(x)
 }
 
-pub fn min_float64<I>(datums: I) -> Datum
+pub fn min_float64<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<OrderedFloat<f64>> = datums
         .into_iter()
@@ -181,9 +183,9 @@ where
     Datum::from(x)
 }
 
-pub fn min_decimal<I>(datums: I) -> Datum
+pub fn min_decimal<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<Significand> = datums
         .into_iter()
@@ -193,9 +195,9 @@ where
     Datum::from(x)
 }
 
-pub fn min_bool<I>(datums: I) -> Datum
+pub fn min_bool<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<bool> = datums
         .into_iter()
@@ -205,21 +207,23 @@ where
     Datum::from(x)
 }
 
-pub fn min_string<I>(datums: I) -> Datum
+pub fn min_string<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
-    let x: Option<String> = datums
+    match datums
         .into_iter()
         .filter(|d| !d.is_null())
-        .map(|d| d.unwrap_string())
-        .min();
-    Datum::from(x)
+        .min_by(|a, b| a.unwrap_str().cmp(&b.unwrap_str()))
+    {
+        Some(datum) => datum,
+        None => Datum::Null,
+    }
 }
 
-pub fn min_date<I>(datums: I) -> Datum
+pub fn min_date<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<NaiveDate> = datums
         .into_iter()
@@ -229,9 +233,9 @@ where
     Datum::from(x)
 }
 
-pub fn min_timestamp<I>(datums: I) -> Datum
+pub fn min_timestamp<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: Option<NaiveDateTime> = datums
         .into_iter()
@@ -241,16 +245,16 @@ where
     Datum::from(x)
 }
 
-pub fn min_null<I>(_datums: I) -> Datum
+pub fn min_null<'a, I>(_datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn sum_int32<I>(datums: I) -> Datum
+pub fn sum_int32<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
@@ -261,9 +265,9 @@ where
     }
 }
 
-pub fn sum_int64<I>(datums: I) -> Datum
+pub fn sum_int64<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
@@ -274,9 +278,9 @@ where
     }
 }
 
-pub fn sum_float32<I>(datums: I) -> Datum
+pub fn sum_float32<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
@@ -287,9 +291,9 @@ where
     }
 }
 
-pub fn sum_float64<I>(datums: I) -> Datum
+pub fn sum_float64<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
@@ -300,9 +304,9 @@ where
     }
 }
 
-pub fn sum_decimal<I>(datums: I) -> Datum
+pub fn sum_decimal<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
     if datums.peek().is_none() {
@@ -313,41 +317,41 @@ where
     }
 }
 
-pub fn sum_null<I>(_datums: I) -> Datum
+pub fn sum_null<'a, I>(_datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     Datum::Null
 }
 
-pub fn count<I>(datums: I) -> Datum
+pub fn count<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: i64 = datums.into_iter().filter(|d| !d.is_null()).count() as i64;
     Datum::from(x)
 }
 
-pub fn count_all<I>(datums: I) -> Datum
+pub fn count_all<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     let x: i64 = datums.into_iter().count() as i64;
     Datum::from(x)
 }
 
-pub fn any<I>(datums: I) -> Datum
+pub fn any<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     datums
         .into_iter()
         .fold(Datum::False, crate::scalar::func::or)
 }
 
-pub fn all<I>(datums: I) -> Datum
+pub fn all<'a, I>(datums: I) -> Datum<'a>
 where
-    I: IntoIterator<Item = Datum>,
+    I: IntoIterator<Item = Datum<'a>>,
 {
     datums
         .into_iter()
@@ -389,9 +393,9 @@ pub enum AggregateFunc {
 }
 
 impl AggregateFunc {
-    pub fn func<I>(self) -> fn(I) -> Datum
+    pub fn func<'a, I>(self) -> fn(I) -> Datum<'a>
     where
-        I: IntoIterator<Item = Datum>,
+        I: IntoIterator<Item = Datum<'a>>,
     {
         match self {
             AggregateFunc::MaxInt32 => max_int32,
@@ -427,7 +431,7 @@ impl AggregateFunc {
         }
     }
 
-    pub fn default(self) -> Datum {
+    pub fn default(self) -> Datum<'static> {
         match self {
             AggregateFunc::Count | AggregateFunc::CountAll => Datum::Int64(0),
             AggregateFunc::Any => Datum::False,

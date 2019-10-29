@@ -15,7 +15,7 @@ pub fn fuzz(sqls: &str) {
     for sql in sqls.split(';') {
         if let Ok(QueryExecuteResponse::SendRows { desc, rx }) = state.run_sql(sql) {
             for row in rx.wait().unwrap().unwrap_rows() {
-                for (typ, datum) in desc.iter_types().zip(row.into_iter()) {
+                for (typ, datum) in desc.iter_types().zip(row.iter()) {
                     assert!(datum.is_instance_of(*typ));
                 }
             }

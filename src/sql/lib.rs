@@ -9,7 +9,7 @@
 
 use dataflow_types::{PeekWhen, RowSetFinishing, Sink, Source, View};
 
-use repr::{Datum, RelationDesc};
+use repr::{RelationDesc, Row};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
 use store::{Catalog, CatalogItem};
@@ -54,7 +54,7 @@ pub enum Plan {
     Tail(CatalogItem),
     SendRows {
         desc: RelationDesc,
-        rows: Vec<Vec<Datum>>,
+        rows: Vec<Row>,
     },
     ExplainPlan {
         desc: RelationDesc,
@@ -62,7 +62,7 @@ pub enum Plan {
     },
     SendDiffs {
         name: String,
-        updates: Vec<(Vec<Datum>, isize)>,
+        updates: Vec<(Row, isize)>,
         affected_rows: usize,
         kind: MutationKind,
     },

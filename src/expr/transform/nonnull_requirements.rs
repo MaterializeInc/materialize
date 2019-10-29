@@ -45,9 +45,10 @@ impl NonNullRequirements {
         gets: &mut HashMap<String, Vec<HashSet<usize>>>,
     ) {
         match relation {
-            RelationExpr::Constant { rows, .. } => {
-                rows.retain(|(row, _)| columns.iter().all(|c| row[*c] != repr::Datum::Null))
-            }
+            RelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
+                let datums = row.as_vec();
+                columns.iter().all(|c| datums[*c] != repr::Datum::Null)
+            }),
             RelationExpr::Get { name, .. } => {
                 gets.entry(name.to_string())
                     .or_insert(Vec::new())

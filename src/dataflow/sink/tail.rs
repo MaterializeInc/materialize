@@ -7,7 +7,7 @@ use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use futures::{Future, Sink};
-use repr::Datum;
+use repr::Row;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
@@ -17,7 +17,7 @@ use timely::Data;
 pub fn tail<G, B>(stream: &Stream<G, B>, name: &str, connector: TailSinkConnector)
 where
     G: Scope<Timestamp = Timestamp>,
-    B: Data + BatchReader<Vec<Datum>, Vec<Datum>, Timestamp, Diff>,
+    B: Data + BatchReader<Row, Row, Timestamp, Diff>,
 {
     let mut tx = connector.tx.connect().wait().unwrap();
     stream.sink(Pipeline, &name, move |input| {

@@ -30,7 +30,7 @@ use dataflow_types::{
 use expr::{ColumnOrder, RelationExpr};
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{Datum, RelationDesc, RelationType, ScalarType};
+use repr::{Datum, RelationDesc, RelationType, Row, ScalarType};
 
 /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
 pub fn handle_statement(
@@ -101,14 +101,20 @@ fn handle_show_variable(
             rows: session
                 .vars()
                 .iter()
-                .map(|v| vec![v.name().into(), v.value().into(), v.description().into()])
+                .map(|v| {
+                    Row::from_iter(&[
+                        Datum::String(v.name()),
+                        Datum::String(&v.value()),
+                        Datum::String(v.description()),
+                    ])
+                })
                 .collect(),
         })
     } else {
         let variable = session.get(&variable.value)?;
         Ok(Plan::SendRows {
             desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
-            rows: vec![vec![variable.value().into()]],
+            rows: vec![Row::from_iter(&[Datum::String(&variable.value())])],
         })
     }
 }
@@ -120,10 +126,10 @@ fn handle_tail(catalog: &Catalog, from: ObjectName) -> Result<Plan, failure::Err
 }
 
 fn handle_show_objects(catalog: &Catalog, object_type: ObjectType) -> Result<Plan, failure::Error> {
-    let mut rows: Vec<Vec<Datum>> = catalog
+    let mut rows: Vec<Row> = catalog
         .iter()
         .filter(|(_k, v)| object_type_matches(object_type, &v))
-        .map(|(k, _v)| vec![Datum::from(k.to_owned())])
+        .map(|(k, _v)| Row::from_iter(&[Datum::from(k)]))
         .collect();
     rows.sort_unstable();
     Ok(Plan::SendRows {
@@ -155,11 +161,11 @@ fn handle_show_columns(
         .get_desc(&table_name.to_string())?
         .iter()
         .map(|(name, typ)| {
-            vec![
-                name.mz_as_deref().unwrap_or("?").into(),
-                if typ.nullable { "YES" } else { "NO" }.into(),
-                typ.scalar_type.to_string().into(),
-            ]
+            Row::from_iter(&[
+                Datum::String(name.mz_as_deref().unwrap_or("?")),
+                Datum::String(if typ.nullable { "YES" } else { "NO" }),
+                Datum::String(&typ.scalar_type.to_string()),
+            ])
         })
         .collect();
 
@@ -186,7 +192,10 @@ fn handle_show_create_view(
         desc: RelationDesc::empty()
             .add_column("View", ScalarType::String)
             .add_column("Create View", ScalarType::String),
-        rows: vec![vec![name.into(), raw_sql.to_owned().into()]],
+        rows: vec![Row::from_iter(&[
+            Datum::String(&name),
+            Datum::String(&raw_sql),
+        ])],
     })
 }
 
@@ -426,7 +435,7 @@ pub fn handle_explain(
     if stage == Stage::Dataflow {
         Ok(Plan::SendRows {
             desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),
-            rows: vec![vec![Datum::from(relation_expr.pretty())]],
+            rows: vec![Row::from_iter(&[Datum::String(&relation_expr.pretty())])],
         })
     } else {
         Ok(Plan::ExplainPlan {

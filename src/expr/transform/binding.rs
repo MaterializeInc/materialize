@@ -515,7 +515,7 @@ impl super::Transform for Normalize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use repr::Datum;
+    use repr::{ColumnType, Datum, ScalarType};
 
     fn trace(label: &str, expr: &RelationExpr) {
         println!(
@@ -527,21 +527,20 @@ mod tests {
         );
     }
 
-    fn not_my_type() -> RelationType {
-        RelationType::new(vec![])
-    }
-
     fn n(i: i32) -> RelationExpr {
-        RelationExpr::constant(vec![vec![Datum::Int32(i)]], not_my_type())
+        RelationExpr::constant(
+            vec![vec![Datum::Int32(i)]],
+            RelationType::new(vec![ColumnType::new(ScalarType::Int32)]),
+        )
     }
 
-    fn r<N>(n: N) -> RelationExpr
+    fn r<N>(n: N, t: RelationType) -> RelationExpr
     where
         N: Into<String>,
     {
         RelationExpr::Get {
             name: n.into(),
-            typ: not_my_type(),
+            typ: t,
         }
     }
 
@@ -603,10 +602,11 @@ mod tests {
     #[test]
     fn test_unbind() {
         let b = bind_local;
+        let a = b("b", n(1), r("b", n(1).typ()).union(r("b", n(1).typ())));
         let mut expr = b(
             "a",
-            b("b", n(1), r("b").union(r("b"))),
-            r("a").union(b("a", n(2), r("a"))),
+            a.clone(),
+            r("a", a.typ()).union(b("a", n(2), r("a", a.typ()))),
         );
 
         trace("IN unbind", &expr);
@@ -616,12 +616,13 @@ mod tests {
         assert_eq!(expr, n(1).union(n(1)).union(n(2)))
     }
 
-    fn extract_names(expr: &RelationExpr) -> (String, String) {
-        if let RelationExpr::Let { name, body, .. } = expr {
+    fn extract_names(expr: &RelationExpr) -> (String, RelationType, String, RelationType) {
+        if let RelationExpr::Let { name, value, body } = expr {
             let n1 = name.clone();
+            let t1 = value.typ();
 
-            if let RelationExpr::Let { name, .. } = &**body {
-                (n1, name.clone())
+            if let RelationExpr::Let { name, value, .. } = &**body {
+                (n1, t1, name.clone(), value.typ())
             } else {
                 panic!("body of outermost expression expected to be local binding");
             }
@@ -644,12 +645,14 @@ mod tests {
         trace("OUT deduplicate", &expr);
 
         let b = bind_local;
-        let (n1, n2) = extract_names(&expr);
+        let (n1, t1, n2, t2) = extract_names(&expr);
 
-        let expected = r(n2.clone()).union(n(5).distinct()).threshold();
-        let expected2 = r(n2.clone()).distinct().union(r(n1.clone()));
+        let expected = r(n2.clone(), t2.clone()).union(n(5).distinct()).threshold();
+        let expected2 = r(n2.clone(), t2)
+            .distinct()
+            .union(r(n1.clone(), t1.clone()));
         let expected = expected.union(expected2);
-        let expected2 = n(1).negate().union(n(2)).union(r(n1.clone()));
+        let expected2 = n(1).negate().union(n(2)).union(r(n1.clone(), t1));
         let expected = b(n2, expected2, expected);
         let expected2 = n(3).negate().union(n(4));
         let expected = b(n1, expected2, expected);
@@ -671,13 +674,22 @@ mod tests {
         trace("OUT normalize", &expr);
 
         let b = bind_local;
-        let expected = r("id-2").union(n(5).distinct()).threshold();
-        let expected2 = r("id-2").distinct().union(r("id-1"));
-        let expected = expected.union(expected2);
-        let expected2 = n(1).negate().union(n(2)).union(r("id-1"));
-        let expected = b("id-2", expected2, expected);
-        let expected2 = n(3).negate().union(n(4));
-        let expected = b("id-1", expected2, expected);
+        let e1 = n(3).negate().union(n(4));
+        let t1 = e1.typ();
+        let e2 = n(1).negate().union(n(2)).union(r("id-1", t1.clone()));
+        let t2 = e2.typ();
+        let expected = b(
+            "id-1",
+            e1,
+            b(
+                "id-2",
+                e2,
+                r("id-2", t2.clone())
+                    .union(n(5).distinct())
+                    .threshold()
+                    .union(r("id-2", t2).distinct().union(r("id-1", t1))),
+            ),
+        );
         assert_eq!(expr, expected);
     }
 }
