@@ -796,7 +796,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#6ee4a587c0373d2784758164a62cd17106eb2216"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#5c7b83a83f0af89d66ef54f4856b608231bf204b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2854,7 +2854,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
- "byteorder 1.3.2",
+ "byteorder 0.5.3",
  "chrono",
  "comm",
  "coord",
@@ -2882,7 +2882,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#e323b1aa1f3c375b2493c1d532dc5f0a78d20eb5"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#5f22011af9a53592cd207dd063faf75ebb63ad52"
 dependencies = [
  "log 0.4.8",
 ]
