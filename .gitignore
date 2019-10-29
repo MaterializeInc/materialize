@@ -3,3 +3,4 @@ target
 .mtrlz.log
 **/*.rs.bk
 .idea
+.envrc
