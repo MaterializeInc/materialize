@@ -34,7 +34,7 @@ use dataflow_types::{
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
-use repr::{Datum, DatumsBuffer, RelationDesc, Row, RowBuffer, ScalarType};
+use repr::{Datum, DatumsBuffer, RelationDesc, Row, RowPacker, ScalarType};
 use sql::{MutationKind, ObjectType, Plan};
 
 /// Glues the external world to the Timely workers.
@@ -309,11 +309,11 @@ where
                                 }
                                 rows.sort_by(&mut sort_by);
                                 let mut buffer = DatumsBuffer::new();
-                                let mut row_buffer = RowBuffer::new();
+                                let mut row_packer = RowPacker::new();
                                 for row in rows {
                                     let datums = buffer.from_iter(&*row);
-                                    let new_row = row_buffer
-                                        .from_iter(finishing.project.iter().map(|i| datums[*i]));
+                                    let new_row = row_packer
+                                        .pack(finishing.project.iter().map(|i| datums[*i]));
                                     drop(datums);
                                     *row = new_row;
                                 }

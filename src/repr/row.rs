@@ -69,6 +69,8 @@ use std::mem::{size_of, transmute};
 /// ```
 ///
 /// In performance-sensitive code, you may not want to allocate a `Vec` for each `Row`. See `DatumsBuffer` for a more frugal alternative.
+///
+/// Similarly, if you are creating a lot of rows, consider using a `RowPacker` to avoid multiple reallocs when growing each row.
 #[derive(
     Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Abomonation,
 )]
@@ -82,12 +84,7 @@ pub struct RowIter<'a> {
     offset: usize,
 }
 
-#[derive(Debug)]
-pub struct RowBuffer {
-    row: Row,
-}
-
-/// `DatumsBuffer` provides a reusable buffer as an alternative to `Row::as_vec` for processing large numbers of `Row`s
+/// `DatumsBuffer` provides a reusable buffer as an alternative to `Row::as_vec` for unpacking large numbers of `Row`s
 ///
 /// ```
 /// # use repr::{Row, Datum, DatumsBuffer};
@@ -109,6 +106,20 @@ pub struct DatumsBuffer {
 #[derive(Debug)]
 pub struct Datums<'a> {
     datums: &'a mut Vec<Datum<'a>>,
+}
+
+/// `RowPacker` provides a reusable buffer as an alternative to `Row::from_iter` for packing large numbers of `Row`s
+///
+/// ```
+/// # use repr::{Row, Datum, DatumsBuffer};
+/// use std::iter::FromIterator;
+/// let mut packer = RowPacker::new();
+/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String("one")]);
+/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String("two")]);
+/// ```
+#[derive(Debug)]
+pub struct RowPacker {
+    row: Row,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -329,20 +340,20 @@ impl<'a> Iterator for RowIter<'a> {
     }
 }
 
-impl RowBuffer {
+impl RowPacker {
     pub fn new() -> Self {
-        RowBuffer { row: Row::new() }
+        RowPacker { row: Row::new() }
     }
 
-    #[allow(clippy::wrong_self_convention)] // this function is deliberately mimicking Vec::from_iter, but with a custom allocator
-    pub fn from_iter<'a, I, D>(&mut self, iter: I) -> Row
+    /// Take some `Datum`s and pack them into a `Row`
+    pub fn pack<'a, I, D>(&mut self, iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
         self.row.extend(iter);
         let row = self.row.clone();
-        // important - `clear` doesn't reset capacity - we want self.row to stay big so we don't churn on realloc
+        // important - `clear` doesn't reset capacity - we want self.row to stay big so we don't have to realloc next time pack is called
         self.row.data.clear();
         row
     }

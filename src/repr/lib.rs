@@ -30,7 +30,7 @@ mod row;
 mod scalar;
 
 pub use relation::{ColumnType, RelationDesc, RelationType};
-pub use row::{Datums, DatumsBuffer, Row, RowBuffer};
+pub use row::{Datums, DatumsBuffer, Row, RowPacker};
 pub use scalar::decimal;
 pub use scalar::regex;
 pub use scalar::{Datum, Interval, ScalarType};

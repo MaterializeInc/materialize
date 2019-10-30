@@ -12,7 +12,6 @@ use differential_dataflow::AsCollection;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::iter::FromIterator;
 use std::rc::Rc;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
@@ -22,7 +21,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
 use expr::RelationExpr;
-use repr::{Datum, DatumsBuffer, Row, RowBuffer};
+use repr::{Datum, DatumsBuffer, Row, RowPacker};
 
 use super::sink;
 use super::source;
@@ -155,13 +154,13 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     for key in keys {
                         let key_clone = key.clone();
                         let mut buffer = DatumsBuffer::new();
-                        let mut row_buffer = RowBuffer::new();
+                        let mut row_packer = RowPacker::new();
                         let arrangement = context
                             .collection(&view.relation_expr)
                             .expect("Render failed to produce collection")
                             .map(move |row| {
                                 let datums = buffer.from_iter(&row);
-                                let key_row = row_buffer.from_iter(key.iter().map(|k| datums[*k]));
+                                let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -267,10 +266,10 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let outputs = outputs.clone();
                     let mut buffer = DatumsBuffer::new();
-                    let mut row_buffer = RowBuffer::new();
+                    let mut row_packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |row| {
                         let datums = buffer.from_iter(&row);
-                        row_buffer.from_iter(outputs.iter().map(|i| datums[*i]))
+                        row_packer.pack(outputs.iter().map(|i| datums[*i]))
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -280,7 +279,7 @@ where
                     self.ensure_rendered(input, scope, worker_index);
                     let scalars = scalars.clone();
                     let mut buffer = DatumsBuffer::new();
-                    let mut row_buffer = RowBuffer::new();
+                    let mut row_packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
                         let mut datums = buffer.from_iter(&input_row);
                         for scalar in &scalars {
@@ -290,7 +289,7 @@ where
                             // Note that this doesn't mutate input_row.
                             datums.push(datum);
                         }
-                        row_buffer.from_iter(&*datums)
+                        row_packer.pack(&*datums)
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -410,11 +409,11 @@ where
                     }
 
                     let mut buffer = DatumsBuffer::new();
-                    let mut row_buffer = RowBuffer::new();
+                    let mut row_packer = RowPacker::new();
                     let old_keyed = joined
                         .map(move |row| {
                             let datums = buffer.from_iter(&row);
-                            let key_row = row_buffer.from_iter(old_keys.iter().map(|i| datums[*i]));
+                            let key_row = row_packer.pack(old_keys.iter().map(|i| datums[*i]));
                             drop(datums);
                             (key_row, row)
                         })
@@ -425,12 +424,11 @@ where
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
                         let mut buffer = DatumsBuffer::new();
-                        let mut row_buffer = RowBuffer::new();
+                        let mut row_packer = RowPacker::new();
                         let new_keyed = built
                             .map(move |row| {
                                 let datums = buffer.from_iter(&row);
-                                let key_row =
-                                    row_buffer.from_iter(new_keys2.iter().map(|i| datums[*i]));
+                                let key_row = row_packer.pack(new_keys2.iter().map(|i| datums[*i]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -441,16 +439,16 @@ where
                         self.set_local(&input, &new_keys[..], new_keyed);
                     }
 
-                    let mut row_buffer = RowBuffer::new();
+                    let mut row_packer = RowPacker::new();
                     joined = match self.arrangement(&input, &new_keys[..]) {
                         Some(ArrangementFlavor::Local(local)) => {
                             old_keyed.join_core(&local, move |_keys, old, new| {
-                                Some(row_buffer.from_iter(old.iter().chain(new.iter())))
+                                Some(row_packer.pack(old.iter().chain(new.iter())))
                             })
                         }
                         Some(ArrangementFlavor::Trace(trace)) => {
                             old_keyed.join_core(&trace, move |_keys, old, new| {
-                                Some(row_buffer.from_iter(old.iter().chain(new.iter())))
+                                Some(row_packer.pack(old.iter().chain(new.iter())))
                             })
                         }
                         None => {
@@ -524,11 +522,11 @@ where
                 .map({
                     let group_key = group_key.clone();
                     let mut buffer = DatumsBuffer::new();
-                    let mut row_buffer = RowBuffer::new();
+                    let mut row_packer = RowPacker::new();
                     move |row| {
                         let datums = buffer.from_iter(&row);
 
-                        let keys = row_buffer.from_iter(group_key.iter().map(|i| datums[*i]));
+                        let keys = row_packer.pack(group_key.iter().map(|i| datums[*i]));
 
                         let mut vals = Row::new();
                         let mut aggs = vec![1i128];
@@ -755,11 +753,10 @@ where
             let arrangement = input
                 .map({
                     let mut buffer = DatumsBuffer::new();
-                    let mut row_buffer = RowBuffer::new();
+                    let mut row_packer = RowPacker::new();
                     move |row| {
                         let datums = buffer.from_iter(&row);
-                        let group_row =
-                            row_buffer.from_iter(group_clone.iter().map(|i| datums[*i]));
+                        let group_row = row_packer.pack(group_clone.iter().map(|i| datums[*i]));
                         drop(datums);
                         (group_row, row)
                     }
@@ -838,11 +835,11 @@ where
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
                 let mut buffer = DatumsBuffer::new();
-                let mut row_buffer = RowBuffer::new();
+                let mut row_packer = RowPacker::new();
                 let keyed = built
                     .map(move |row| {
                         let datums = buffer.from_iter(&row);
-                        let key_row = row_buffer.from_iter(keys2.iter().map(|i| datums[*i]));
+                        let key_row = row_packer.pack(keys2.iter().map(|i| datums[*i]));
                         drop(datums);
                         (key_row, row)
                     })

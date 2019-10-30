@@ -10,7 +10,7 @@ use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
-use repr::{Datum, DatumsBuffer, RowBuffer};
+use repr::{Datum, DatumsBuffer, RowPacker};
 use std::collections::HashMap;
 use std::time::Duration;
 use timely::communication::Allocate;
@@ -79,9 +79,9 @@ pub fn construct<A: Allocate>(
                                 operates_data.insert((event.id, worker), event.clone());
 
                                 operates_session.give({
-                                    let mut row_buffer = RowBuffer::new();
+                                    let mut row_packer = RowPacker::new();
                                     (
-                                        row_buffer.from_iter(&[
+                                        row_packer.pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
                                             Datum::String(&*event.name),
@@ -93,9 +93,9 @@ pub fn construct<A: Allocate>(
 
                                 for (addr_slot, addr_value) in event.addr.iter().enumerate() {
                                     addresses_session.give({
-                                        let mut row_buffer = RowBuffer::new();
+                                        let mut row_packer = RowPacker::new();
                                         (
-                                            row_buffer.from_iter(&[
+                                            row_packer.pack(&[
                                                 Datum::Int64(event.id as i64),
                                                 Datum::Int64(worker as i64),
                                                 Datum::Int64(addr_slot as i64),
@@ -117,9 +117,9 @@ pub fn construct<A: Allocate>(
 
                                 // Present channel description.
                                 channels_session.give({
-                                    let mut row_buffer = RowBuffer::new();
+                                    let mut row_packer = RowPacker::new();
                                     (
-                                        row_buffer.from_iter(&[
+                                        row_packer.pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
                                             Datum::Int64(event.source.0 as i64),
@@ -135,9 +135,9 @@ pub fn construct<A: Allocate>(
                                 // Enumerate the address of the scope containing the channel.
                                 for (addr_slot, addr_value) in event.scope_addr.iter().enumerate() {
                                     addresses_session.give({
-                                        let mut row_buffer = RowBuffer::new();
+                                        let mut row_packer = RowPacker::new();
                                         (
-                                            row_buffer.from_iter(&[
+                                            row_packer.pack(&[
                                                 Datum::Int64(event.id as i64),
                                                 Datum::Int64(worker as i64),
                                                 Datum::Int64(addr_slot as i64),
@@ -155,9 +155,9 @@ pub fn construct<A: Allocate>(
                                 // operator announcement.
                                 if let Some(event) = operates_data.remove(&(event.id, worker)) {
                                     operates_session.give({
-                                        let mut row_buffer = RowBuffer::new();
+                                        let mut row_packer = RowPacker::new();
                                         (
-                                            row_buffer.from_iter(&[
+                                            row_packer.pack(&[
                                                 Datum::Int64(event.id as i64),
                                                 Datum::Int64(worker as i64),
                                                 Datum::String(&*event.name),
@@ -169,9 +169,9 @@ pub fn construct<A: Allocate>(
 
                                     for (addr_slot, addr_value) in event.addr.iter().enumerate() {
                                         addresses_session.give({
-                                            let mut row_buffer = RowBuffer::new();
+                                            let mut row_packer = RowPacker::new();
                                             (
-                                                row_buffer.from_iter(&[
+                                                row_packer.pack(&[
                                                     Datum::Int64(event.id as i64),
                                                     Datum::Int64(worker as i64),
                                                     Datum::Int64(addr_slot as i64),
@@ -192,9 +192,9 @@ pub fn construct<A: Allocate>(
                                             for event in events {
                                                 // Retract channel description.
                                                 channels_session.give({
-                                                    let mut row_buffer = RowBuffer::new();
+                                                    let mut row_packer = RowPacker::new();
                                                     (
-                                                        row_buffer.from_iter(&[
+                                                        row_packer.pack(&[
                                                             Datum::Int64(event.id as i64),
                                                             Datum::Int64(worker as i64),
                                                             Datum::Int64(event.source.0 as i64),
@@ -212,9 +212,9 @@ pub fn construct<A: Allocate>(
                                                     event.scope_addr.iter().enumerate()
                                                 {
                                                     addresses_session.give({
-                                                        let mut row_buffer = RowBuffer::new();
+                                                        let mut row_packer = RowPacker::new();
                                                         (
-                                                            row_buffer.from_iter(&[
+                                                            row_packer.pack(&[
                                                                 Datum::Int64(event.id as i64),
                                                                 Datum::Int64(worker as i64),
                                                                 Datum::Int64(addr_slot as i64),
@@ -291,9 +291,9 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map({
-                let mut row_buffer = RowBuffer::new();
+                let mut row_packer = RowPacker::new();
                 move |(op, cnt)| {
-                    row_buffer.from_iter(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
+                    row_packer.pack(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
                 }
             });
 
@@ -302,9 +302,9 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map({
-                let mut row_buffer = RowBuffer::new();
+                let mut row_packer = RowPacker::new();
                 move |((op, pow), cnt)| {
-                    row_buffer.from_iter(&[
+                    row_packer.pack(&[
                         Datum::Int64(op as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(cnt as i64),
@@ -335,10 +335,10 @@ pub fn construct<A: Allocate>(
                 let trace = collection
                     .map({
                         let mut buffer = DatumsBuffer::new();
-                        let mut row_buffer = RowBuffer::new();
+                        let mut row_packer = RowPacker::new();
                         move |row| {
                             let datums = buffer.from_iter(&row);
-                            let key_row = row_buffer.from_iter(key.iter().map(|k| datums[*k]));
+                            let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
                             drop(datums);
                             (key_row, row)
                         }
