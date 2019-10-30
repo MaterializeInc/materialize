@@ -111,7 +111,7 @@ static void* analyticalThread(void* args) {
 }
 
 static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *pRunState,
-        std::promise<std::vector<Histogram>> promHist) {
+        std::promise<std::vector<Histogram>> promHist, useconds_t sleepMin, useconds_t sleepMax) {
     const mz::Config& config = *pConfig;
     const std::atomic<RunState>& runState = *pRunState;
     pqxx::connection c(config.materializedUrl);
@@ -123,6 +123,8 @@ static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *p
         const auto& q = config.hQueries[iQuery];
         mz::peekView(c, q.first, q.second.order, q.second.limit);
         iQuery = (iQuery + 1) % size;
+        auto sleepTime = chRandom::uniformInt(sleepMin, sleepMax);
+        usleep(sleepTime);
     }
     std::vector<Histogram> hists;
     hists.resize(size);
@@ -131,6 +133,8 @@ static void peekThread(const mz::Config* pConfig, const std::atomic<RunState> *p
         auto latency = mz::peekView(c, q.first, q.second.order, q.second.limit).latency;
         hists[iQuery].increment(latency.count());
         iQuery = (iQuery + 1) % size;
+        auto sleepTime = chRandom::uniformInt(sleepMin, sleepMax);
+        usleep(sleepTime);
     }
     promHist.set_value(std::move(hists));
 }
@@ -154,7 +158,7 @@ static void flushThread(useconds_t sleepTime, const std::atomic<RunState> *pRunS
 }
 static void materializeThread(mz::Config config, std::promise<std::vector<Histogram>> promHist,
                               int peekConns, const std::atomic<RunState> *pRunState,
-                              std::optional<useconds_t> flushSleepTime) {
+                              std::optional<useconds_t> flushSleepTime, useconds_t peekMin, useconds_t peekMax) {
     const auto& connUrl = config.materializedUrl;
     auto& expected = config.expectedSources;
     const auto& kafkaUrl = config.kafkaUrl;
@@ -188,7 +192,7 @@ static void materializeThread(mz::Config config, std::promise<std::vector<Histog
         for (int i = 0; i < peekConns; ++i) {
             std::promise<std::vector<Histogram>> prom;
             futs.push_back(prom.get_future());
-            std::thread(peekThread, &config, pRunState, std::move(prom)).detach();
+            std::thread(peekThread, &config, pRunState, std::move(prom), peekMin, peekMax).detach();
         }
         for (auto& fut: futs) {
             auto threadHists = fut.get();
@@ -580,7 +584,8 @@ static int run(int argc, char* argv[]) {
                     std::move(promHist),
                     peekConns,
                     &runState,
-                    (flushSleepTime == 0) ? std::nullopt : std::optional<useconds_t>(flushSleepTime * 1'000'000)
+                    (flushSleepTime == 0) ? std::nullopt : std::optional<useconds_t>(flushSleepTime * 1'000'000),
+                    peekMinDelay, peekMaxDelay
         ).detach();
     }
 
