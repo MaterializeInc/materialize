@@ -82,6 +82,11 @@ pub struct RowIter<'a> {
     offset: usize,
 }
 
+#[derive(Debug)]
+pub struct RowBuffer {
+    row: Row,
+}
+
 /// `DatumsBuffer` provides a reusable buffer as an alternative to `Row::as_vec` for processing large numbers of `Row`s
 ///
 /// ```
@@ -321,6 +326,25 @@ impl<'a> Iterator for RowIter<'a> {
         } else {
             Some(unsafe { self.row.read_datum(&mut self.offset) })
         }
+    }
+}
+
+impl RowBuffer {
+    pub fn new() -> Self {
+        RowBuffer { row: Row::new() }
+    }
+
+    #[allow(clippy::wrong_self_convention)] // this function is deliberately mimicking Vec::from_iter, but with a custom allocator
+    pub fn from_iter<'a, I, D>(&mut self, iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.row.extend(iter);
+        let row = self.row.clone();
+        // important - `clear` doesn't reset capacity - we want self.row to stay big so we don't churn on realloc
+        self.row.data.clear();
+        row
     }
 }
 

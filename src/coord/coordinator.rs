@@ -21,6 +21,7 @@ use timely::progress::frontier::Antichain;
 use futures::{sink, Future, Sink as FuturesSink, Stream};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::iter::FromIterator;
 use uuid::Uuid;
 
 use crate::QueryExecuteResponse;
@@ -33,9 +34,8 @@ use dataflow_types::{
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
-use repr::{Datum, DatumsBuffer, RelationDesc, Row, ScalarType};
+use repr::{Datum, DatumsBuffer, RelationDesc, Row, RowBuffer, ScalarType};
 use sql::{MutationKind, ObjectType, Plan};
-use std::iter::FromIterator;
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<C>
@@ -309,11 +309,11 @@ where
                                 }
                                 rows.sort_by(&mut sort_by);
                                 let mut buffer = DatumsBuffer::new();
+                                let mut row_buffer = RowBuffer::new();
                                 for row in rows {
                                     let datums = buffer.from_iter(&*row);
-                                    let new_row = Row::from_iter(
-                                        finishing.project.iter().map(|i| datums[*i]),
-                                    );
+                                    let new_row = row_buffer
+                                        .from_iter(finishing.project.iter().map(|i| datums[*i]));
                                     drop(datums);
                                     *row = new_row;
                                 }

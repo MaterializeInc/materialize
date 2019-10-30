@@ -9,7 +9,6 @@
 use std::time::Duration;
 
 use log::error;
-use std::iter::FromIterator;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::operator::Operator;
@@ -18,7 +17,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
-use repr::{Datum, DatumsBuffer, Row};
+use repr::{Datum, DatumsBuffer, RowBuffer};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -173,8 +172,11 @@ pub fn construct<A: Allocate>(
                 ((name, worker), time_ms, if is_create { 1 } else { -1 })
             })
             .as_collection()
-            .map(|(name, worker)| {
-                Row::from_iter(&[Datum::String(&*name), Datum::Int64(worker as i64)])
+            .map({
+                let mut row_buffer = RowBuffer::new();
+                move |(name, worker)| {
+                    row_buffer.from_iter(&[Datum::String(&*name), Datum::Int64(worker as i64)])
+                }
             });
 
         let dependency_current = dependency
@@ -185,12 +187,15 @@ pub fn construct<A: Allocate>(
                 ((dataflow, source, worker), time_ms, diff)
             })
             .as_collection()
-            .map(|(dataflow, source, worker)| {
-                Row::from_iter(&[
-                    Datum::String(&*dataflow),
-                    Datum::String(&*source),
-                    Datum::Int64(worker as i64),
-                ])
+            .map({
+                let mut row_buffer = RowBuffer::new();
+                move |(dataflow, source, worker)| {
+                    row_buffer.from_iter(&[
+                        Datum::String(&*dataflow),
+                        Datum::String(&*source),
+                        Datum::Int64(worker as i64),
+                    ])
+                }
             });
 
         let peek_current = peek
@@ -201,13 +206,16 @@ pub fn construct<A: Allocate>(
                 ((name, worker), time_ms, if is_install { 1 } else { -1 })
             })
             .as_collection()
-            .map(|(peek, worker)| {
-                Row::from_iter(&[
-                    Datum::String(&*format!("{}", peek.conn_id)),
-                    Datum::Int64(worker as i64),
-                    Datum::String(&*peek.name),
-                    Datum::Int64(peek.time as i64),
-                ])
+            .map({
+                let mut row_buffer = RowBuffer::new();
+                move |(peek, worker)| {
+                    row_buffer.from_iter(&[
+                        Datum::String(&*format!("{}", peek.conn_id)),
+                        Datum::Int64(worker as i64),
+                        Datum::String(&*peek.name),
+                        Datum::Int64(peek.time as i64),
+                    ])
+                }
             });
 
         let frontier_current = frontier
@@ -218,8 +226,11 @@ pub fn construct<A: Allocate>(
                 ((name, logical), time_ms, delta)
             })
             .as_collection()
-            .map(|(name, logical)| {
-                Row::from_iter(&[Datum::String(&*name), Datum::Int64(logical as i64)])
+            .map({
+                let mut row_buffer = RowBuffer::new();
+                move |(name, logical)| {
+                    row_buffer.from_iter(&[Datum::String(&*name), Datum::Int64(logical as i64)])
+                }
             });
 
         // Duration statistics derive from the non-rounded event times.
@@ -273,12 +284,15 @@ pub fn construct<A: Allocate>(
             )
             .as_collection()
             .count()
-            .map(|((worker, pow), count)| {
-                Row::from_iter(&[
-                    Datum::Int64(worker as i64),
-                    Datum::Int64(pow as i64),
-                    Datum::Int64(count as i64),
-                ])
+            .map({
+                let mut row_buffer = RowBuffer::new();
+                move |((worker, pow), count)| {
+                    row_buffer.from_iter(&[
+                        Datum::Int64(worker as i64),
+                        Datum::Int64(pow as i64),
+                        Datum::Int64(count as i64),
+                    ])
+                }
             });
 
         let logs = vec![
@@ -310,13 +324,16 @@ pub fn construct<A: Allocate>(
             if config.active_logs().contains(&variant) {
                 let key = variant.index_by();
                 let key_clone = key.clone();
-                let mut buffer = DatumsBuffer::new();
                 let trace = collection
-                    .map(move |row| {
-                        let datums = buffer.from_iter(&row);
-                        let key_row = Row::from_iter(key.iter().map(|k| datums[*k]));
-                        drop(datums);
-                        (key_row, row)
+                    .map({
+                        let mut buffer = DatumsBuffer::new();
+                        let mut row_buffer = RowBuffer::new();
+                        move |row| {
+                            let datums = buffer.from_iter(&row);
+                            let key_row = row_buffer.from_iter(key.iter().map(|k| datums[*k]));
+                            drop(datums);
+                            (key_row, row)
+                        }
                     })
                     .arrange_by_key()
                     .trace;
