@@ -14,6 +14,7 @@ cd "$(dirname "$0")"
 IMAGES=(
     materialize/materialized:latest
     materialize/metrics:latest
+    materialize/chbenchmark:latest
 )
 
 main() {
@@ -84,10 +85,10 @@ nuke_docker() {
 # Long-running load test
 load_test() {
     runv docker-compose run chbench gen --warehouses=1
-    runv docker-compose run chbench run \
-        --mz-sources --mz-views=q01,q03,q06 \
+    runv docker-compose run -d chbench run \
+        --mz-sources --mz-views=q01,q03,q06,q14,q19 \
         --dsn=mysql --gen-dir=/var/lib/mysql-files \
-        --peek-conns=5 \
+        --peek-conns=5 --flush-every=30 \
         --analytic-threads=0 --transactional-threads=1 --run-seconds=864000 \
         --min-delay=.5 --max-delay=1 -l /dev/stdout
 }
