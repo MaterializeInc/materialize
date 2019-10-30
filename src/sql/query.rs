@@ -35,7 +35,7 @@ use sqlparser::ast::{
 };
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{btree_map, BTreeMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 use std::iter;
@@ -44,16 +44,17 @@ use std::rc::Rc;
 use uuid::Uuid;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
-/// plan, the `RelationDesc` describing the shape of the result set, and as well
-/// a `RowSetFinishing` describing post-processing that must occur before
-/// results are sent to the client.
+/// plan, the `RelationDesc` describing the shape of the result set, a
+/// `RowSetFinishing` describing post-processing that must occur before results
+/// are sent to the client, and the types of the parameters in the query, if any
+/// were present.
 ///
 /// Note that the returned `RelationDesc` describes the expression after
 /// applying the returned `RowSetFinishing`.
 pub fn plan_root_query(
     catalog: &Catalog,
     mut query: Query,
-) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
     crate::transform::transform(&mut query);
     let qcx = QueryContext {
         outer_scope: &Scope::empty(None),
@@ -70,7 +71,14 @@ pub fn plan_root_query(
             .collect(),
     );
     let desc = RelationDesc::new(typ, scope.column_names());
-    Ok((expr, desc, finishing))
+    let mut param_types = vec![];
+    for (i, (n, typ)) in qcx.unwrap_param_types().into_iter().enumerate() {
+        if n != i + 1 {
+            bail!("unable to infer type for parameter ${}", i + 1);
+        }
+        param_types.push(typ);
+    }
+    Ok((expr, desc, finishing, param_types))
 }
 
 fn plan_query(
@@ -130,7 +138,7 @@ fn plan_query(
                     relation_type: &output_typ,
                     allow_aggregates: true,
                 };
-                let expr = plan_expr(catalog, ecx, other)?;
+                let expr = plan_expr(catalog, ecx, other, Some(ScalarType::String))?;
                 let idx = output_typ.column_types.len() + map_exprs.len();
                 map_exprs.push(expr);
                 order_by.push(ColumnOrder {
@@ -271,7 +279,7 @@ fn plan_set_expr(
                 let mut value_exprs = vec![];
                 let mut value_types = vec![];
                 for value in row {
-                    let expr = plan_expr(catalog, ecx, value)?;
+                    let expr = plan_expr(catalog, ecx, value, Some(ScalarType::String))?;
                     value_types.push(ecx.column_type(&expr));
                     value_exprs.push(expr);
                 }
@@ -358,7 +366,7 @@ fn plan_view_select(
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: false,
         };
-        let expr = plan_expr(catalog, ecx, &selection)?;
+        let expr = plan_expr(catalog, ecx, &selection, Some(ScalarType::Bool))?;
         let typ = ecx.column_type(&expr);
         if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Null {
             bail!(
@@ -384,7 +392,7 @@ fn plan_view_select(
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in &s.group_by {
-            let expr = plan_expr(catalog, ecx, group_expr)?;
+            let expr = plan_expr(catalog, ecx, group_expr, Some(ScalarType::String))?;
             let new_column = group_key.len();
             // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
             if group_exprs
@@ -458,7 +466,7 @@ fn plan_view_select(
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: true,
         };
-        let expr = plan_expr(catalog, ecx, having)?;
+        let expr = plan_expr(catalog, ecx, having, Some(ScalarType::Bool))?;
         let typ = ecx.column_type(&expr);
         if typ.scalar_type != ScalarType::Bool {
             bail!(
@@ -600,7 +608,7 @@ fn plan_select_item<'a>(
 ) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
     match s {
         SelectItem::UnnamedExpr(sql_expr) => {
-            let expr = plan_expr(catalog, ecx, sql_expr)?;
+            let expr = plan_expr(catalog, ecx, sql_expr, Some(ScalarType::String))?;
             let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
                 ecx.scope.items[*i].clone()
             } else {
@@ -613,7 +621,7 @@ fn plan_select_item<'a>(
             expr: sql_expr,
             alias,
         } => {
-            let expr = plan_expr(catalog, ecx, sql_expr)?;
+            let expr = plan_expr(catalog, ecx, sql_expr, Some(ScalarType::String))?;
             let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
                 ecx.scope.items[*i].clone()
             } else {
@@ -753,7 +761,7 @@ fn plan_join_constraint<'a>(
                 ),
                 allow_aggregates: false,
             };
-            let on = plan_expr(catalog, ecx, expr)?;
+            let on = plan_expr(catalog, ecx, expr, Some(ScalarType::Bool))?;
             for (l, r) in find_trivial_column_equivalences(&on) {
                 // When we can statically prove that two columns are
                 // equivalent after a join, the right column becomes
@@ -901,10 +909,21 @@ fn plan_using_constraint(
     Ok((both, both_scope))
 }
 
+/// Reports whether `e` has an unknown type, due to a query parameter whose type
+/// has not yet been constraint.
+fn expr_has_unknown_type(ecx: &ExprContext, expr: &Expr) -> bool {
+    if let Expr::Parameter(n) = unnest(expr) {
+        !ecx.qcx.param_types.borrow().contains_key(n)
+    } else {
+        false
+    }
+}
+
 fn plan_expr<'a>(
     catalog: &Catalog,
     ecx: &ExprContext,
     e: &'a Expr,
+    type_hint: Option<ScalarType>,
 ) -> Result<ScalarExpr, failure::Error> {
     if let Some((i, _)) = ecx.scope.resolve_expr(e) {
         // surprise - we already calculated this expr before
@@ -932,7 +951,22 @@ fn plan_expr<'a>(
             Expr::Wildcard { .. } | Expr::QualifiedWildcard(_) => {
                 bail!("wildcard in invalid position")
             }
-            Expr::Parameter(_) => bail!("query parameters are not yet supported"),
+            Expr::Parameter(n) => {
+                if *n == 0 || *n > 65536 {
+                    bail!("there is no parameter ${}", n);
+                }
+                match ecx.qcx.param_types.borrow_mut().entry(*n) {
+                    btree_map::Entry::Occupied(_) => (),
+                    btree_map::Entry::Vacant(v) => {
+                        if let Some(typ) = type_hint {
+                            v.insert(typ);
+                        } else {
+                            bail!("unable to infer type for parameter ${}", n);
+                        }
+                    }
+                }
+                Ok(ScalarExpr::Parameter(*n))
+            }
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
             Expr::IsNull(expr) => plan_is_null_expr(catalog, ecx, expr, false),
             Expr::IsNotNull(expr) => plan_is_null_expr(catalog, ecx, expr, true),
@@ -955,7 +989,7 @@ fn plan_expr<'a>(
                 results,
                 else_result,
             } => plan_case(catalog, ecx, operand, conditions, results, else_result),
-            Expr::Nested(expr) => plan_expr(catalog, ecx, expr),
+            Expr::Nested(expr) => plan_expr(catalog, ecx, expr, type_hint),
             Expr::Cast { expr, data_type } => plan_cast(catalog, ecx, expr, data_type),
             Expr::Function(func) => plan_function(catalog, ecx, func),
             Expr::Exists(query) => {
@@ -1025,7 +1059,10 @@ fn plan_expr<'a>(
                 }
             }
             Expr::Extract { field, expr } => {
-                let mut expr = plan_expr(catalog, ecx, expr)?;
+                // No type hint passed to `plan_expr`, because `expr` can be
+                // any date type. PostgreSQL is also unable to infer parameter
+                // types in this position.
+                let mut expr = plan_expr(catalog, ecx, expr, None)?;
                 let mut typ = ecx.column_type(&expr);
                 if let ScalarType::Date = typ.scalar_type {
                     expr = plan_cast_internal(ecx, "EXTRACT", expr, ScalarType::Timestamp)?;
@@ -1058,6 +1095,73 @@ fn plan_expr<'a>(
             Expr::Collate { .. } => bail!("COLLATE is not yet supported"),
         }
     }
+}
+
+// Plans a list of expressions such that all input expressions will be cast to
+// the same type. If successful, returns a new list of expressions in the same
+// order as the input, where each expression has the appropriate casts to make
+// them all of a uniform type.
+//
+// When types don't match exactly, SQL has some poorly-documented type promotion
+// rules. For now, just promote integers into decimals or floats, decimals into
+// floats, dates into timestamps, and small Xs into bigger Xs.
+fn plan_homogeneous_exprs<S>(
+    name: S,
+    catalog: &Catalog,
+    ecx: &ExprContext,
+    exprs: &[impl std::borrow::Borrow<Expr>],
+    type_hint: Option<ScalarType>,
+) -> Result<Vec<ScalarExpr>, failure::Error>
+where
+    S: fmt::Display + Copy,
+{
+    assert!(!exprs.is_empty());
+
+    let mut pending = vec![None; exprs.len()];
+
+    // Compute the types of all known expressions.
+    for (i, expr) in exprs.iter().enumerate() {
+        if expr_has_unknown_type(ecx, expr.borrow()) {
+            continue;
+        }
+        let expr = plan_expr(catalog, ecx, expr.borrow(), None)?;
+        let typ = ecx.column_type(&expr);
+        pending[i] = Some((expr, typ));
+    }
+
+    // Determine the best target type. If all the expressions were parameters,
+    // fall back to `type_hint`.
+    let best_target_type = best_target_type(
+        pending
+            .iter()
+            .filter_map(|slot| slot.as_ref().map(|(_expr, typ)| typ.scalar_type)),
+    )
+    .or(type_hint);
+
+    // Plan all the parameter expressions with `best_target_type` as the type
+    // hint.
+    for (i, slot) in pending.iter_mut().enumerate() {
+        if slot.is_none() {
+            let expr = plan_expr(catalog, ecx, exprs[i].borrow(), best_target_type)?;
+            let typ = ecx.column_type(&expr);
+            *slot = Some((expr, typ));
+        }
+    }
+
+    // Try to cast all expressions to `best_target_type`.
+    let mut out = Vec::new();
+    for (expr, typ) in pending.into_iter().map(Option::unwrap) {
+        match plan_cast_internal(ecx, name, expr, best_target_type.unwrap()) {
+            Ok(expr) => out.push(expr),
+            Err(_) => bail!(
+                "{} does not have uniform type: {:?} vs {:?}",
+                name,
+                typ.scalar_type,
+                best_target_type,
+            ),
+        }
+    }
+    Ok(out)
 }
 
 fn plan_any_or_all<'a>(
@@ -1139,7 +1243,7 @@ fn plan_cast<'a>(
     data_type: &'a DataType,
 ) -> Result<ScalarExpr, failure::Error> {
     let to_scalar_type = scalar_type_from_sql(data_type)?;
-    let expr = plan_expr(catalog, ecx, expr)?;
+    let expr = plan_expr(catalog, ecx, expr, Some(to_scalar_type))?;
     plan_cast_internal(ecx, "CAST", expr, to_scalar_type)
 }
 
@@ -1164,7 +1268,10 @@ fn plan_aggregate(
         // COUNT(*) is a special case that doesn't compose well
         ("count", Expr::Wildcard) => (ScalarExpr::literal_null(), AggregateFunc::CountAll),
         _ => {
-            let expr = plan_expr(catalog, ecx, arg)?;
+            // No type hint passed to `plan_expr`, because all aggregates accept
+            // multiple input types. PostgreSQL is also unable to infer
+            // parameter types in this position.
+            let expr = plan_expr(catalog, ecx, arg, None)?;
             let typ = ecx.column_type(&expr);
             let func = find_agg_func(&ident, typ.scalar_type)?;
             (expr, func)
@@ -1199,7 +1306,7 @@ fn plan_function<'a>(
                 if sql_func.args.len() != 1 {
                     bail!("abs expects one argument, got {}", sql_func.args.len());
                 }
-                let expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::Float64))?;
                 let typ = ecx.column_type(&expr);
                 let func = match typ.scalar_type {
                     ScalarType::Int32 => UnaryFunc::AbsInt32,
@@ -1219,7 +1326,7 @@ fn plan_function<'a>(
                 if sql_func.args.len() != 1 {
                     bail!("ascii expects one argument, got {}", sql_func.args.len());
                 }
-                let expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::String))?;
                 let typ = ecx.column_type(&expr);
                 if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
                     bail!("ascii does not accept arguments of type {:?}", typ);
@@ -1235,14 +1342,15 @@ fn plan_function<'a>(
                 if sql_func.args.is_empty() {
                     bail!("coalesce requires at least one argument");
                 }
-                let mut exprs = Vec::new();
-                for arg in &sql_func.args {
-                    exprs.push(plan_expr(catalog, ecx, arg)?);
-                }
-                let exprs = try_coalesce_types(ecx, "coalesce", exprs)?;
                 let expr = ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
-                    exprs,
+                    exprs: plan_homogeneous_exprs(
+                        "coalesce",
+                        catalog,
+                        ecx,
+                        &sql_func.args,
+                        Some(ScalarType::String),
+                    )?,
                 };
                 Ok(expr)
             }
@@ -1269,8 +1377,8 @@ fn plan_function<'a>(
                     op: BinaryOperator::Eq,
                     right: Box::new(sql_func.args[1].clone()),
                 };
-                let cond_expr = plan_expr(catalog, ecx, &cond)?;
-                let else_expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let cond_expr = plan_expr(catalog, ecx, &cond, None)?;
+                let else_expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
                 let expr = ScalarExpr::If {
                     cond: Box::new(cond_expr),
                     then: Box::new(ScalarExpr::literal_null()),
@@ -1297,18 +1405,19 @@ fn plan_function<'a>(
                     );
                 }
                 let mut exprs = Vec::new();
-                let expr1 = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let expr1 = plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::String))?;
                 let typ1 = ecx.column_type(&expr1);
                 if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Null {
                     bail!("substring first argument has non-string type {:?}", typ1);
                 }
                 exprs.push(expr1);
 
-                let expr2 = plan_expr(catalog, ecx, &sql_func.args[1])?;
+                let expr2 = plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::Int64))?;
                 let expr2 = promote_int_int64(ecx, "substring start", expr2)?;
                 exprs.push(expr2);
                 if sql_func.args.len() == 3 {
-                    let expr3 = plan_expr(catalog, ecx, &sql_func.args[2])?;
+                    let expr3 =
+                        plan_expr(catalog, ecx, &sql_func.args[2], Some(ScalarType::Int64))?;
                     let expr3 = promote_int_int64(ecx, "substring length", expr3)?;
                     exprs.push(expr3);
                 }
@@ -1328,7 +1437,7 @@ fn plan_function<'a>(
                 if sql_func.args.len() != 1 {
                     bail!("internal.avg_promotion requires exactly one argument");
                 }
-                let expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
                 let typ = ecx.column_type(&expr);
                 let output_type = match &typ.scalar_type {
                     ScalarType::Null => ScalarType::Null,
@@ -1352,7 +1461,10 @@ fn plan_is_null_expr<'a>(
     inner: &'a Expr,
     not: bool,
 ) -> Result<ScalarExpr, failure::Error> {
-    let expr = plan_expr(catalog, ecx, inner)?;
+    // No type hint passed to `plan_expr`. In other situations where any type
+    // will do, PostgreSQL uses `ScalarType::String`, but for some reason it
+    // does not here.
+    let expr = plan_expr(catalog, ecx, inner, None)?;
     let mut expr = ScalarExpr::CallUnary {
         func: UnaryFunc::IsNull,
         expr: Box::new(expr),
@@ -1372,7 +1484,11 @@ fn plan_unary_op<'a>(
     op: &'a UnaryOperator,
     expr: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let expr = plan_expr(catalog, ecx, expr)?;
+    let type_hint = match op {
+        UnaryOperator::Not => ScalarType::Bool,
+        UnaryOperator::Plus | UnaryOperator::Minus => ScalarType::Float64,
+    };
+    let expr = plan_expr(catalog, ecx, expr, Some(type_hint))?;
     let typ = ecx.column_type(&expr);
     let func = match op {
         UnaryOperator::Not => UnaryFunc::Not,
@@ -1430,8 +1546,8 @@ fn plan_boolean_op<'a>(
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(catalog, ecx, left)?;
-    let rexpr = plan_expr(catalog, ecx, right)?;
+    let lexpr = plan_expr(catalog, ecx, left, Some(ScalarType::Bool))?;
+    let rexpr = plan_expr(catalog, ecx, right, Some(ScalarType::Bool))?;
     let ltype = ecx.column_type(&lexpr);
     let rtype = ecx.column_type(&rexpr);
 
@@ -1469,51 +1585,118 @@ fn plan_arithmetic_op<'a>(
     use ScalarType::*;
 
     // Step 1. Plan inner expressions.
-    let mut lexpr = plan_expr(catalog, ecx, left)?;
-    let mut rexpr = plan_expr(catalog, ecx, right)?;
-    let mut ltype = ecx.column_type(&lexpr);
-    let mut rtype = ecx.column_type(&rexpr);
+    let left_unknown = expr_has_unknown_type(ecx, left);
+    let right_unknown = expr_has_unknown_type(ecx, right);
+    let (mut lexpr, mut ltype, mut rexpr, mut rtype) = match (left_unknown, right_unknown) {
+        // Both inputs are parameters of unknown types.
+        (true, true) => {
+            // We have no clues as to which operator to select, so bail. To
+            // avoid duplicating the logic for generating the correct error
+            // message, we just plan the left expression with no type hint,
+            // which we know will fail. (We could just as well plan the right
+            // expression.)
+            plan_expr(catalog, ecx, left, None)?;
+            unreachable!();
+        }
 
-    // Step 2. Infer whether any implicit type coercions are required.
-    let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
-        (Decimal(_, _), Decimal(_, _)) => true,
-        _ => false,
-    };
-    let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
-        (Date, Interval) | (Timestamp, Interval) | (Interval, Date) | (Interval, Timestamp) => true,
-        _ => false,
-    };
-    if both_decimals {
-        // When both inputs are already decimals, we skip coalescing, which
-        // could result in a rescale if the decimals have different
-        // precisions, because we tightly control the rescale when planning
-        // the arithmetic operation (below). E.g., decimal multiplication
-        // does not need to rescale its inputs, even when the inputs have
-        // different scales.
-    } else if timelike_and_interval {
-        // If the inputs are a timelike and an interval, we skip coalescing,
-        // because adding and subtracting intervals and timelikes is well
-        // defined. We will, however, promote any date inputs to timestamps.
-        // Adding an
-        if let Date = &ltype.scalar_type {
-            let expr = plan_cast_internal(ecx, &op, lexpr, Timestamp)?;
-            ltype = ecx.column_type(&expr);
-            lexpr = expr;
+        // Neither input is a parameter of an unknown type.
+        (false, false) => {
+            let mut lexpr = plan_expr(catalog, ecx, left, None)?;
+            let mut rexpr = plan_expr(catalog, ecx, right, None)?;
+            let mut ltype = ecx.column_type(&lexpr);
+            let mut rtype = ecx.column_type(&rexpr);
+
+            let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Decimal(_, _), Decimal(_, _)) => true,
+                _ => false,
+            };
+            let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
+                (Date, Interval)
+                | (Timestamp, Interval)
+                | (Interval, Date)
+                | (Interval, Timestamp) => true,
+                _ => false,
+            };
+            if both_decimals || timelike_and_interval {
+                // When both inputs are already decimals, we skip coalescing,
+                // which could result in a rescale if the decimals have
+                // different precisions, because we tightly control the rescale
+                // when planning the arithmetic operation (below). E.g., decimal
+                // multiplication does not need to rescale its inputs, even when
+                // the inputs have different scales.
+                //
+                // Similarly, if the inputs are a timelike and an interval, we
+                // skip coalescing, because adding and subtracting intervals and
+                // timelikes is well defined.
+            } else {
+                // Otherwise, try to find a common type that can represent both
+                // inputs.
+                let best_target_type =
+                    best_target_type(vec![ltype.scalar_type, rtype.scalar_type]).unwrap();
+                lexpr = match plan_cast_internal(ecx, &op, lexpr, best_target_type) {
+                    Ok(expr) => expr,
+                    Err(_) => bail!(
+                        "{} does not have uniform type: {:?} vs {:?}",
+                        &op,
+                        ltype.scalar_type,
+                        best_target_type,
+                    ),
+                };
+                rexpr = match plan_cast_internal(ecx, &op, rexpr, best_target_type) {
+                    Ok(expr) => expr,
+                    Err(_) => bail!(
+                        "{} does not have uniform type: {:?} vs {:?}",
+                        &op,
+                        rtype.scalar_type,
+                        best_target_type,
+                    ),
+                };
+                rtype = ecx.column_type(&rexpr);
+                ltype = ecx.column_type(&lexpr);
+            }
+
+            (lexpr, ltype, rexpr, rtype)
         }
-        if let Date = &rtype.scalar_type {
-            let expr = plan_cast_internal(ecx, &op, rexpr, Timestamp)?;
-            rtype = ecx.column_type(&expr);
-            rexpr = expr;
+
+        // One of the inputs is a parameter of unknown type, but the other is
+        // not.
+        (swap @ false, true) | (swap @ true, false) => {
+            // Knowing the type of one input is sufficiently constraining to
+            // allow us to infer the type of the unknown input.
+
+            // First, adjust so the known input is on the left.
+            let (left, right) = if swap { (right, left) } else { (left, right) };
+
+            // Determine the known type.
+            let lexpr = plan_expr(catalog, ecx, left, None)?;
+            let ltype = ecx.column_type(&lexpr);
+
+            // Infer the unknown type. Dates and timestamps want an interval for
+            // arithmetic. Everything else wants its own type.
+            let type_hint = match ltype.scalar_type {
+                Date | Timestamp => Interval,
+                other => other,
+            };
+            let rexpr = plan_expr(catalog, ecx, right, Some(type_hint))?;
+            let rtype = ecx.column_type(&rexpr);
+
+            (lexpr, ltype, rexpr, rtype)
         }
-    } else {
-        // Otherwise, "coalesce" types by finding a common type that can
-        // represent both inputs.
-        let mut exprs = try_coalesce_types(ecx, &op, vec![lexpr, rexpr])?;
-        assert_eq!(exprs.len(), 2);
-        rexpr = exprs.pop().unwrap();
-        lexpr = exprs.pop().unwrap();
-        rtype = ecx.column_type(&rexpr);
-        ltype = ecx.column_type(&lexpr);
+    };
+
+    // Step 2. Promote dates to intervals.
+    //
+    // Dates can't be added to intervals, but timestamps can, and dates are
+    // trivially promotable to intervals.
+    if let Date = &ltype.scalar_type {
+        let expr = plan_cast_internal(ecx, &op, lexpr, Timestamp)?;
+        ltype = ecx.column_type(&expr);
+        lexpr = expr;
+    }
+    if let Date = &rtype.scalar_type {
+        let expr = plan_cast_internal(ecx, &op, rexpr, Timestamp)?;
+        rtype = ecx.column_type(&expr);
+        rexpr = expr;
     }
 
     // Step 3a. Plan the arithmetic operation for decimals.
@@ -1634,13 +1817,11 @@ fn plan_comparison_op<'a>(
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let mut lexpr = plan_expr(catalog, ecx, left)?;
-    let mut rexpr = plan_expr(catalog, ecx, right)?;
-
-    let mut exprs = try_coalesce_types(ecx, &op, vec![lexpr, rexpr])?;
+    let mut exprs =
+        plan_homogeneous_exprs(&op, catalog, ecx, &[left, right], Some(ScalarType::String))?;
     assert_eq!(exprs.len(), 2);
-    rexpr = exprs.pop().unwrap();
-    lexpr = exprs.pop().unwrap();
+    let rexpr = exprs.pop().unwrap();
+    let lexpr = exprs.pop().unwrap();
     let rtype = ecx.column_type(&rexpr);
     let ltype = ecx.column_type(&lexpr);
 
@@ -1673,9 +1854,9 @@ fn plan_like<'a>(
     right: &'a Expr,
     negate: bool,
 ) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(catalog, ecx, left)?;
+    let lexpr = plan_expr(catalog, ecx, left, Some(ScalarType::String))?;
     let ltype = ecx.column_type(&lexpr);
-    let rexpr = plan_expr(catalog, ecx, right)?;
+    let rexpr = plan_expr(catalog, ecx, right, Some(ScalarType::String))?;
     let rtype = ecx.column_type(&rexpr);
 
     if (ltype.scalar_type != ScalarType::String && ltype.scalar_type != ScalarType::Null)
@@ -1737,7 +1918,7 @@ fn plan_between<'a>(
         },
         right: Box::new(high),
     };
-    plan_expr(catalog, ecx, &both)
+    plan_expr(catalog, ecx, &both, None)
 }
 
 fn plan_in_list<'a>(
@@ -1765,7 +1946,7 @@ fn plan_in_list<'a>(
             expr: Box::new(cond),
         }
     }
-    plan_expr(catalog, ecx, &cond)
+    plan_expr(catalog, ecx, &cond, None)
 }
 
 fn plan_case<'a>(
@@ -1787,7 +1968,7 @@ fn plan_case<'a>(
             },
             None => c.clone(),
         };
-        let cexpr = plan_expr(catalog, ecx, &c)?;
+        let cexpr = plan_expr(catalog, ecx, &c, Some(ScalarType::Bool))?;
         let ctype = ecx.column_type(&cexpr);
         if ctype.scalar_type != ScalarType::Bool {
             bail!(
@@ -1796,14 +1977,19 @@ fn plan_case<'a>(
             );
         }
         cond_exprs.push(cexpr);
-        let rexpr = plan_expr(catalog, ecx, r)?;
-        result_exprs.push(rexpr);
+        result_exprs.push(r);
     }
     result_exprs.push(match else_result {
-        Some(else_result) => plan_expr(catalog, ecx, else_result)?,
-        None => ScalarExpr::literal_null(),
+        Some(else_result) => else_result,
+        None => &Expr::Value(Value::Null),
     });
-    let mut result_exprs = try_coalesce_types(ecx, "CASE", result_exprs)?;
+    let mut result_exprs = plan_homogeneous_exprs(
+        "CASE",
+        catalog,
+        ecx,
+        &result_exprs,
+        Some(ScalarType::String),
+    )?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
     for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
@@ -2006,54 +2192,26 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
     equivalences
 }
 
-// Takes a list of (expression, type), where the type can be different for every
-// expression, and attempts to find a uniform type to which all expressions can
-// be cast. If successful, returns a new list of expressions in the same order
-// as the input, where each expression has the appropriate casts, as well as the
-// selected type for all the expressions.
-//
-// When types don't match exactly, SQL has some poorly-documented type promotion
-// rules. For now, just promote integers into decimals or floats, decimals into
-// floats, and small Xs into bigger Xs.
-fn try_coalesce_types<'a, S>(
-    ecx: &ExprContext<'a>,
-    name: S,
-    exprs: Vec<ScalarExpr>,
-) -> Result<Vec<ScalarExpr>, failure::Error>
-where
-    S: fmt::Display + Copy,
-{
-    assert!(!exprs.is_empty());
-    let types: Vec<_> = exprs.iter().map(|e| ecx.column_type(e)).collect();
-    let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
-        ScalarType::Null => 0,
-        ScalarType::Int32 => 1,
-        ScalarType::Int64 => 2,
-        ScalarType::Decimal(_, _) => 3,
-        ScalarType::Float32 => 4,
-        ScalarType::Float64 => 5,
-        ScalarType::Date => 6,
-        ScalarType::Timestamp => 7,
-        _ => 8,
-    };
-    let max_scalar_type = types
-        .iter()
-        .map(|typ| typ.scalar_type)
-        .max_by_key(|scalar_type| scalar_type_prec(scalar_type))
-        .unwrap();
-    let mut out = Vec::new();
-    for (expr, typ) in exprs.into_iter().zip(types) {
-        match plan_cast_internal(ecx, name, expr, max_scalar_type) {
-            Ok(expr) => out.push(expr),
-            Err(_) => bail!(
-                "{} does not have uniform type: {:?} vs {:?}",
-                name,
-                typ.scalar_type,
-                max_scalar_type,
-            ),
-        }
+fn unnest(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Nested(expr) => unnest(expr),
+        _ => expr,
     }
-    Ok(out)
+}
+
+fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<ScalarType> {
+    iter.into_iter()
+        .max_by_key(|scalar_type| match scalar_type {
+            ScalarType::Null => 0,
+            ScalarType::Int32 => 1,
+            ScalarType::Int64 => 2,
+            ScalarType::Decimal(_, _) => 3,
+            ScalarType::Float32 => 4,
+            ScalarType::Float64 => 5,
+            ScalarType::Date => 6,
+            ScalarType::Timestamp => 7,
+            _ => 8,
+        })
 }
 
 /// Plans a cast between two `RelationExpr`s of different types. If it is
@@ -2260,6 +2418,10 @@ struct QueryContext<'a> {
 }
 
 impl<'a> QueryContext<'a> {
+    fn unwrap_param_types(self) -> BTreeMap<usize, ScalarType> {
+        Rc::try_unwrap(self.param_types).unwrap().into_inner()
+    }
+
     fn relation_type(&self, expr: &RelationExpr) -> RelationType {
         expr.typ(&self.outer_relation_type, &self.param_types.borrow())
     }

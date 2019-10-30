@@ -1004,7 +1004,7 @@ impl ScalarExpr {
         match self {
             ScalarExpr::Column(ColumnRef::Outer(i)) => outer.column_types[*i],
             ScalarExpr::Column(ColumnRef::Inner(i)) => inner.column_types[*i],
-            ScalarExpr::Parameter(n) => ColumnType::new(params[&(n - 1)]).nullable(true),
+            ScalarExpr::Parameter(n) => ColumnType::new(params[&n]).nullable(true),
             ScalarExpr::Literal(_, typ) => *typ,
             ScalarExpr::CallUnary { expr, func } => {
                 func.output_type(expr.typ(outer, inner, params))

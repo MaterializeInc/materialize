@@ -250,7 +250,7 @@ fn handle_parse(
         1 => {
             let stmt = stmts.into_element();
             let desc = match sql::describe(catalog, stmt.clone()) {
-                Ok(desc) => desc,
+                Ok((desc, _param_types)) => desc,
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
                 // only handles commands that do not return rows, so the

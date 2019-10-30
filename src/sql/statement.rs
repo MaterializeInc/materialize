@@ -34,67 +34,89 @@ use repr::{Datum, RelationDesc, Row, ScalarType};
 pub fn describe_statement(
     catalog: &Catalog,
     stmt: Statement,
-) -> Result<Option<RelationDesc>, failure::Error> {
+) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
     Ok(match stmt {
         Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::Drop { .. }
         | Statement::SetVariable { .. }
-        | Statement::Tail { .. } => None,
+        | Statement::Tail { .. } => (None, vec![]),
 
-        Statement::CreateSources { .. } => {
-            Some(RelationDesc::empty().add_column("Topic", ScalarType::String))
-        }
-
-        Statement::Explain { stage, .. } => Some(RelationDesc::empty().add_column(
-            match stage {
-                Stage::Dataflow => "Dataflow",
-                Stage::Plan => "Plan",
-            },
-            ScalarType::String,
-        )),
-
-        Statement::ShowCreateView { .. } => Some(
-            RelationDesc::empty()
-                .add_column("View", ScalarType::String)
-                .add_column("Create View", ScalarType::String),
+        Statement::CreateSources { .. } => (
+            Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
+            vec![],
         ),
 
-        Statement::ShowColumns { .. } => Some(
-            RelationDesc::empty()
-                .add_column("Field", ScalarType::String)
-                .add_column("Nullable", ScalarType::String)
-                .add_column("Type", ScalarType::String),
+        Statement::Explain { stage, .. } => (
+            Some(RelationDesc::empty().add_column(
+                match stage {
+                    Stage::Dataflow => "Dataflow",
+                    Stage::Plan => "Plan",
+                },
+                ScalarType::String,
+            )),
+            vec![],
         ),
 
-        Statement::ShowObjects { object_type } => Some(
-            RelationDesc::empty()
-                .add_column(object_type_as_plural_str(object_type), ScalarType::String),
+        Statement::ShowCreateView { .. } => (
+            Some(
+                RelationDesc::empty()
+                    .add_column("View", ScalarType::String)
+                    .add_column("Create View", ScalarType::String),
+            ),
+            vec![],
+        ),
+
+        Statement::ShowColumns { .. } => (
+            Some(
+                RelationDesc::empty()
+                    .add_column("Field", ScalarType::String)
+                    .add_column("Nullable", ScalarType::String)
+                    .add_column("Type", ScalarType::String),
+            ),
+            vec![],
+        ),
+
+        Statement::ShowObjects { object_type } => (
+            Some(
+                RelationDesc::empty()
+                    .add_column(object_type_as_plural_str(object_type), ScalarType::String),
+            ),
+            vec![],
         ),
 
         Statement::ShowVariable { variable, .. } => {
             if variable.value == unicase::Ascii::new("ALL") {
-                Some(
-                    RelationDesc::empty()
-                        .add_column("name", ScalarType::String)
-                        .add_column("setting", ScalarType::String)
-                        .add_column("description", ScalarType::String),
+                (
+                    Some(
+                        RelationDesc::empty()
+                            .add_column("name", ScalarType::String)
+                            .add_column("setting", ScalarType::String)
+                            .add_column("description", ScalarType::String),
+                    ),
+                    vec![],
                 )
             } else {
-                Some(RelationDesc::empty().add_column(variable.value, ScalarType::String))
+                (
+                    Some(RelationDesc::empty().add_column(variable.value, ScalarType::String)),
+                    vec![],
+                )
             }
         }
 
-        Statement::Peek { name, .. } => Some(catalog.get(&name.to_string())?.desc().clone()),
+        Statement::Peek { name, .. } => {
+            (Some(catalog.get(&name.to_string())?.desc().clone()), vec![])
+        }
 
         Statement::Query(query) => {
             // TODO(benesch): ideally we'd save `relation_expr` and `finishing`
             // somewhere, so we don't have to reanalyze the whole query when
             // `handle_statement` is called. This will require a complicated
             // dance when bind parameters are implemented, so punting for now.
-            let (_relation_expr, desc, _finishing) = query::plan_root_query(catalog, *query)?;
-            Some(desc)
+            let (_relation_expr, desc, _finishing, param_types) =
+                query::plan_root_query(catalog, *query)?;
+            (Some(desc), param_types)
         }
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
@@ -493,7 +515,7 @@ fn handle_query(
     catalog: &Catalog,
     query: Query,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-    let (expr, desc, finishing) = query::plan_root_query(catalog, query)?;
+    let (expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
