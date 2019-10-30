@@ -14,6 +14,7 @@ cd "$(dirname "$0")"
 IMAGES=(
     materialize/materialized:latest
     materialize/metrics:latest
+    materialize/chbenchmark:latest
 )
 
 main() {
