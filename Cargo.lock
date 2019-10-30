@@ -3139,6 +3139,7 @@ dependencies = [
  "interchange",
  "lazy_static",
  "ore",
+ "pg_interval",
  "postgres",
  "predicates",
  "rand 0.7.2",
