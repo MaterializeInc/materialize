@@ -53,10 +53,12 @@ pub fn plan_root_query(
     mut query: Query,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     crate::transform::transform(&mut query);
-    let outer_scope = Scope::empty(None);
-    let outer_relation_type = RelationType::empty();
-    let (expr, scope, finishing) = plan_query(catalog, &query, &outer_scope, &outer_relation_type)?;
-    let typ = expr.typ(&outer_relation_type);
+    let qcx = QueryContext {
+        outer_scope: &Scope::empty(None),
+        outer_relation_type: &RelationType::empty(),
+    };
+    let (expr, scope, finishing) = plan_query(catalog, &qcx, &query)?;
+    let typ = expr.typ(&qcx.outer_relation_type);
     let typ = RelationType::new(
         finishing
             .project
@@ -68,11 +70,10 @@ pub fn plan_root_query(
     Ok((expr, desc, finishing))
 }
 
-pub fn plan_query(
+fn plan_query(
     catalog: &Catalog,
+    qcx: &QueryContext,
     q: &Query,
-    outer_scope: &Scope,
-    outer_relation_type: &RelationType,
 ) -> Result<(RelationExpr, Scope, RowSetFinishing), failure::Error> {
     if !q.ctes.is_empty() {
         bail!("CTEs are not yet supported");
@@ -87,8 +88,8 @@ pub fn plan_query(
         Some(Expr::Value(Value::Number(x))) => x.parse()?,
         _ => bail!("OFFSET must be an integer constant"),
     };
-    let (expr, scope) = plan_set_expr(catalog, &q.body, outer_scope, outer_relation_type)?;
-    let output_typ = expr.typ(outer_relation_type);
+    let (expr, scope) = plan_set_expr(catalog, qcx, &q.body)?;
+    let output_typ = expr.typ(&qcx.outer_relation_type);
     let mut order_by = vec![];
     let mut map_exprs = vec![];
 
@@ -122,7 +123,7 @@ pub fn plan_query(
                 let ecx = &ExprContext {
                     name: "ORDER BY clause",
                     scope: &scope,
-                    outer_relation_type,
+                    outer_relation_type: &qcx.outer_relation_type,
                     inner_relation_type: &output_typ,
                     allow_aggregates: true,
                 };
@@ -150,13 +151,12 @@ pub fn plan_query(
     Ok((expr.map(map_exprs), scope, finishing))
 }
 
-pub fn plan_subquery(
+fn plan_subquery(
     catalog: &Catalog,
+    qcx: &QueryContext,
     q: &Query,
-    outer_scope: &Scope,
-    outer_relation_type: &RelationType,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
-    let (mut expr, scope, finishing) = plan_query(catalog, q, outer_scope, outer_relation_type)?;
+    let (mut expr, scope, finishing) = plan_query(catalog, qcx, q)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
         expr = RelationExpr::TopK {
             input: Box::new(expr),
@@ -177,28 +177,23 @@ pub fn plan_subquery(
 
 fn plan_set_expr(
     catalog: &Catalog,
+    qcx: &QueryContext,
     q: &SetExpr,
-    outer_scope: &Scope,
-    outer_relation_type: &RelationType,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     match q {
-        SetExpr::Select(select) => {
-            plan_view_select(catalog, select, outer_scope, outer_relation_type)
-        }
+        SetExpr::Select(select) => plan_view_select(catalog, qcx, select),
         SetExpr::SetOperation {
             op,
             all,
             left,
             right,
         } => {
-            let (left_expr, left_scope) =
-                plan_set_expr(catalog, left, outer_scope, outer_relation_type)?;
-            let (right_expr, _right_scope) =
-                plan_set_expr(catalog, right, outer_scope, outer_relation_type)?;
+            let (left_expr, left_scope) = plan_set_expr(catalog, qcx, left)?;
+            let (right_expr, _right_scope) = plan_set_expr(catalog, qcx, right)?;
 
             // TODO(jamii) this type-checking is redundant with RelationExpr::typ, but currently it seems that we need both because RelationExpr::typ is not allowed to return errors
-            let left_types = &left_expr.typ(outer_relation_type).column_types;
-            let right_types = &right_expr.typ(outer_relation_type).column_types;
+            let left_types = &left_expr.typ(&qcx.outer_relation_type).column_types;
+            let right_types = &right_expr.typ(&qcx.outer_relation_type).column_types;
             if left_types.len() != right_types.len() {
                 bail!(
                     "set operation {:?} with {:?} and {:?} columns not supported",
@@ -250,7 +245,7 @@ fn plan_set_expr(
                 None,
                 // Column names are taken from the left, as in Postgres.
                 left_scope.column_names(),
-                Some(outer_scope.clone()),
+                Some(qcx.outer_scope.clone()),
             );
 
             Ok((relation_expr, scope))
@@ -262,7 +257,7 @@ fn plan_set_expr(
             );
             let ecx = &ExprContext {
                 name: "values",
-                scope: &Scope::empty(Some(outer_scope.clone())),
+                scope: &Scope::empty(Some(qcx.outer_scope.clone())),
                 outer_relation_type: &RelationType::empty(),
                 inner_relation_type: &RelationType::empty(),
                 allow_aggregates: false,
@@ -303,7 +298,7 @@ fn plan_set_expr(
                     Some(row_expr)
                 };
             }
-            let mut scope = Scope::empty(Some(outer_scope.clone()));
+            let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
             for i in 0..types.unwrap().len() {
                 let name = Some(format!("column{}", i + 1));
                 scope.items.push(ScopeItem::from_column_name(name));
@@ -311,7 +306,7 @@ fn plan_set_expr(
             Ok((expr.unwrap(), scope))
         }
         SetExpr::Query(query) => {
-            let (expr, scope) = plan_subquery(catalog, query, outer_scope, outer_relation_type)?;
+            let (expr, scope) = plan_subquery(catalog, qcx, query)?;
             Ok((expr, scope))
         }
     }
@@ -319,25 +314,24 @@ fn plan_set_expr(
 
 fn plan_view_select(
     catalog: &Catalog,
+    qcx: &QueryContext,
     s: &Select,
-    outer_scope: &Scope,
-    outer_relation_type: &RelationType,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     // Step 1. Handle FROM clause, including joins.
     let (mut relation_expr, from_scope) = s
         .from
         .iter()
-        .map(|twj| plan_table_with_joins(catalog, twj, outer_scope, outer_relation_type))
+        .map(|twj| plan_table_with_joins(catalog, qcx, twj))
         .fallible()
         .fold1(|(left, left_scope), (right, right_scope)| {
             plan_join_operator(
                 catalog,
+                qcx,
                 &JoinOperator::CrossJoin,
                 left,
                 left_scope,
                 right,
                 right_scope,
-                outer_relation_type,
             )
         })
         .unwrap_or_else(|| {
@@ -347,7 +341,7 @@ fn plan_view_select(
                 Scope::from_source(
                     None,
                     iter::empty::<Option<String>>(),
-                    Some(outer_scope.clone()),
+                    Some(qcx.outer_scope.clone()),
                 ),
             ))
         })?;
@@ -357,8 +351,8 @@ fn plan_view_select(
         let ecx = &ExprContext {
             name: "WHERE clause",
             scope: &from_scope,
-            outer_relation_type,
-            inner_relation_type: &relation_expr.typ(outer_relation_type),
+            outer_relation_type: &qcx.outer_relation_type,
+            inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
             allow_aggregates: false,
         };
         let expr = plan_expr(catalog, ecx, &selection)?;
@@ -378,13 +372,13 @@ fn plan_view_select(
         let ecx = &ExprContext {
             name: "GROUP BY clause",
             scope: &from_scope,
-            outer_relation_type,
-            inner_relation_type: &relation_expr.typ(outer_relation_type),
+            outer_relation_type: &qcx.outer_relation_type,
+            inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
             allow_aggregates: false,
         };
         let mut group_key = vec![];
         let mut group_exprs = vec![];
-        let mut group_scope = Scope::empty(Some(outer_scope.clone()));
+        let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = HashMap::new();
         for group_expr in &s.group_by {
             let expr = plan_expr(catalog, ecx, group_expr)?;
@@ -422,11 +416,11 @@ fn plan_view_select(
         let ecx = &ExprContext {
             name: "aggregate function",
             scope: &from_scope,
-            outer_relation_type,
+            outer_relation_type: &qcx.outer_relation_type,
             inner_relation_type: &relation_expr
                 .clone()
                 .map(group_exprs.clone())
-                .typ(outer_relation_type),
+                .typ(&qcx.outer_relation_type),
             allow_aggregates: false,
         };
         let mut aggregates = vec![];
@@ -460,8 +454,8 @@ fn plan_view_select(
         let ecx = &ExprContext {
             name: "HAVING clause",
             scope: &group_scope,
-            outer_relation_type,
-            inner_relation_type: &relation_expr.typ(outer_relation_type),
+            outer_relation_type: &qcx.outer_relation_type,
+            inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
             allow_aggregates: true,
         };
         let expr = plan_expr(catalog, ecx, having)?;
@@ -479,13 +473,13 @@ fn plan_view_select(
     let project_scope = {
         let mut project_exprs = vec![];
         let mut project_key = vec![];
-        let mut project_scope = Scope::empty(Some(outer_scope.clone()));
+        let mut project_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         for p in &s.projection {
             let ecx = &ExprContext {
                 name: "SELECT clause",
                 scope: &group_scope,
-                outer_relation_type,
-                inner_relation_type: &relation_expr.typ(outer_relation_type),
+                outer_relation_type: &qcx.outer_relation_type,
+                inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
                 allow_aggregates: true,
             };
             for (expr, scope_item) in
@@ -510,22 +504,20 @@ fn plan_view_select(
 
 fn plan_table_with_joins<'a>(
     catalog: &Catalog,
+    qcx: &QueryContext,
     table_with_joins: &'a TableWithJoins,
-    outer_scope: &Scope,
-    outer_relation_type: &RelationType,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
-    let (mut left, mut left_scope) =
-        plan_table_factor(catalog, &table_with_joins.relation, outer_scope)?;
+    let (mut left, mut left_scope) = plan_table_factor(catalog, qcx, &table_with_joins.relation)?;
     for join in &table_with_joins.joins {
-        let (right, right_scope) = plan_table_factor(catalog, &join.relation, outer_scope)?;
+        let (right, right_scope) = plan_table_factor(catalog, qcx, &join.relation)?;
         let (new_left, new_left_scope) = plan_join_operator(
             catalog,
+            qcx,
             &join.join_operator,
             left,
             left_scope,
             right,
             right_scope,
-            outer_relation_type,
         )?;
         left = new_left;
         left_scope = new_left_scope;
@@ -535,8 +527,8 @@ fn plan_table_with_joins<'a>(
 
 fn plan_table_factor<'a>(
     catalog: &Catalog,
+    qcx: &QueryContext,
     table_factor: &'a TableFactor,
-    outer_scope: &Scope,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     match table_factor {
         TableFactor::Table {
@@ -565,8 +557,11 @@ fn plan_table_factor<'a>(
             } else {
                 name
             };
-            let scope =
-                Scope::from_source(Some(&alias), desc.iter_names(), Some(outer_scope.clone()));
+            let scope = Scope::from_source(
+                Some(&alias),
+                desc.iter_names(),
+                Some(qcx.outer_scope.clone()),
+            );
             Ok((expr, scope))
         }
         TableFactor::Derived {
@@ -577,12 +572,7 @@ fn plan_table_factor<'a>(
             if *lateral {
                 bail!("LATERAL derived tables are not yet supported");
             }
-            let (expr, scope) = plan_subquery(
-                catalog,
-                &subquery,
-                &Scope::empty(None),
-                &RelationType::empty(),
-            )?;
+            let (expr, scope) = plan_subquery(catalog, &qcx, &subquery)?;
             let alias = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
@@ -591,15 +581,13 @@ fn plan_table_factor<'a>(
             } else {
                 None
             };
-            let scope = Scope::from_source(alias, scope.column_names(), Some(outer_scope.clone()));
+            let scope =
+                Scope::from_source(alias, scope.column_names(), Some(qcx.outer_scope.clone()));
             Ok((expr, scope))
         }
-        TableFactor::NestedJoin(table_with_joins) => plan_table_with_joins(
-            catalog,
-            table_with_joins,
-            outer_scope,
-            &RelationType::empty(),
-        ),
+        TableFactor::NestedJoin(table_with_joins) => {
+            plan_table_with_joins(catalog, qcx, table_with_joins)
+        }
     }
 }
 
@@ -681,52 +669,52 @@ fn plan_select_item<'a>(
 
 fn plan_join_operator(
     catalog: &Catalog,
+    qcx: &QueryContext,
     operator: &JoinOperator,
     left: RelationExpr,
     left_scope: Scope,
     right: RelationExpr,
     right_scope: Scope,
-    outer_relation_type: &RelationType,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     match operator {
         JoinOperator::Inner(constraint) => plan_join_constraint(
             catalog,
+            qcx,
             &constraint,
             left,
             left_scope,
             right,
             right_scope,
-            outer_relation_type,
             JoinKind::Inner,
         ),
         JoinOperator::LeftOuter(constraint) => plan_join_constraint(
             catalog,
+            qcx,
             &constraint,
             left,
             left_scope,
             right,
             right_scope,
-            outer_relation_type,
             JoinKind::LeftOuter,
         ),
         JoinOperator::RightOuter(constraint) => plan_join_constraint(
             catalog,
+            qcx,
             &constraint,
             left,
             left_scope,
             right,
             right_scope,
-            outer_relation_type,
             JoinKind::RightOuter,
         ),
         JoinOperator::FullOuter(constraint) => plan_join_constraint(
             catalog,
+            qcx,
             &constraint,
             left,
             left_scope,
             right,
             right_scope,
-            outer_relation_type,
             JoinKind::FullOuter,
         ),
         JoinOperator::CrossJoin => Ok((left.product(right), left_scope.product(right_scope))),
@@ -741,12 +729,12 @@ fn plan_join_operator(
 #[allow(clippy::too_many_arguments)]
 fn plan_join_constraint<'a>(
     catalog: &Catalog,
+    qcx: &QueryContext,
     constraint: &'a JoinConstraint,
     left: RelationExpr,
     left_scope: Scope,
     right: RelationExpr,
     right_scope: Scope,
-    outer_relation_type: &RelationType,
     kind: JoinKind,
 ) -> Result<(RelationExpr, Scope), failure::Error> {
     let (expr, scope) = match constraint {
@@ -755,12 +743,12 @@ fn plan_join_constraint<'a>(
             let ecx = &ExprContext {
                 name: "ON clause",
                 scope: &product_scope,
-                outer_relation_type,
+                outer_relation_type: &qcx.outer_relation_type,
                 inner_relation_type: &RelationType::new(
-                    left.typ(outer_relation_type)
+                    left.typ(&qcx.outer_relation_type)
                         .column_types
                         .into_iter()
-                        .chain(right.typ(outer_relation_type).column_types)
+                        .chain(right.typ(&qcx.outer_relation_type).column_types)
                         .collect(),
                 ),
                 allow_aggregates: false,
@@ -971,28 +959,34 @@ fn plan_expr<'a>(
             Expr::Cast { expr, data_type } => plan_cast(catalog, ecx, expr, data_type),
             Expr::Function(func) => plan_function(catalog, ecx, func),
             Expr::Exists(query) => {
-                let typ = RelationType::new(
-                    ecx.outer_relation_type
-                        .column_types
-                        .iter()
-                        .cloned()
-                        .chain(ecx.inner_relation_type.column_types.iter().cloned())
-                        .collect(),
-                );
-                let (expr, _scope) = plan_subquery(catalog, query, &ecx.scope, &typ)?;
+                let qcx = QueryContext {
+                    outer_scope: &ecx.scope,
+                    outer_relation_type: &RelationType::new(
+                        ecx.outer_relation_type
+                            .column_types
+                            .iter()
+                            .cloned()
+                            .chain(ecx.inner_relation_type.column_types.iter().cloned())
+                            .collect(),
+                    ),
+                };
+                let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
                 Ok(expr.exists())
             }
             Expr::Subquery(query) => {
-                let typ = RelationType::new(
-                    ecx.outer_relation_type
-                        .column_types
-                        .iter()
-                        .cloned()
-                        .chain(ecx.inner_relation_type.column_types.iter().cloned())
-                        .collect(),
-                );
-                let (expr, _scope) = plan_subquery(catalog, query, &ecx.scope, &typ)?;
-                let column_types = expr.typ(&typ).column_types;
+                let qcx = QueryContext {
+                    outer_scope: &ecx.scope,
+                    outer_relation_type: &RelationType::new(
+                        ecx.outer_relation_type
+                            .column_types
+                            .iter()
+                            .cloned()
+                            .chain(ecx.inner_relation_type.column_types.iter().cloned())
+                            .collect(),
+                    ),
+                };
+                let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
+                let column_types = expr.typ(&qcx.outer_relation_type).column_types;
                 if column_types.len() != 1 {
                     bail!(
                         "Expected subselect to return 1 column, got {} columns",
@@ -1070,18 +1064,21 @@ fn plan_any_or_all<'a>(
     right: &'a Query,
     func: AggregateFunc,
 ) -> Result<ScalarExpr, failure::Error> {
-    let typ = RelationType::new(
-        ecx.outer_relation_type
-            .column_types
-            .iter()
-            .cloned()
-            .chain(ecx.inner_relation_type.column_types.iter().cloned())
-            .collect(),
-    );
+    let qcx = QueryContext {
+        outer_scope: &ecx.scope,
+        outer_relation_type: &RelationType::new(
+            ecx.outer_relation_type
+                .column_types
+                .iter()
+                .cloned()
+                .chain(ecx.inner_relation_type.column_types.iter().cloned())
+                .collect(),
+        ),
+    };
     // plan right
 
-    let (right, _scope) = plan_subquery(catalog, right, &ecx.scope, &typ)?;
-    let column_types = right.typ(&typ).column_types;
+    let (right, _scope) = plan_subquery(catalog, &qcx, right)?;
+    let column_types = right.typ(&qcx.outer_relation_type).column_types;
     if column_types.len() != 1 {
         bail!(
             "Expected subquery of ANY to return 1 column, got {} columns",
@@ -1103,8 +1100,8 @@ fn plan_any_or_all<'a>(
     let any_ecx = ExprContext {
         name: "WHERE clause",
         scope: &scope,
-        outer_relation_type: &typ,
-        inner_relation_type: &right.typ(&typ),
+        outer_relation_type: &qcx.outer_relation_type,
+        inner_relation_type: &right.typ(&qcx.outer_relation_type),
         allow_aggregates: false,
     };
     let op_expr = plan_binary_op(
@@ -2244,8 +2241,16 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     }
 }
 
+/// A bundle of unrelated things that we need for planning `Query`s.
+struct QueryContext<'a> {
+    /// The scope of the outer relation expression.
+    outer_scope: &'a Scope,
+    /// The type of the outer relation expression.
+    outer_relation_type: &'a RelationType,
+}
+
 #[derive(Debug)]
-/// A bundle of unrelated things that we need for planning `Expr`s
+/// A bundle of unrelated things that we need for planning `Expr`s.
 struct ExprContext<'a> {
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
     name: &'static str,
