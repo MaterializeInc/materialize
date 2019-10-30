@@ -119,14 +119,14 @@ pub fn plan_query(
                 });
             }
             other => {
-                let ctx = &ExprContext {
+                let ecx = &ExprContext {
                     name: "ORDER BY clause",
                     scope: &scope,
                     outer_relation_type,
                     inner_relation_type: &output_typ,
                     allow_aggregates: true,
                 };
-                let expr = plan_expr(catalog, ctx, other)?;
+                let expr = plan_expr(catalog, ecx, other)?;
                 let idx = output_typ.column_types.len() + map_exprs.len();
                 map_exprs.push(expr);
                 order_by.push(ColumnOrder {
@@ -260,7 +260,7 @@ fn plan_set_expr(
                 !values.is_empty(),
                 "Can't infer a type for empty VALUES expression"
             );
-            let ctx = &ExprContext {
+            let ecx = &ExprContext {
                 name: "values",
                 scope: &Scope::empty(Some(outer_scope.clone())),
                 outer_relation_type: &RelationType::empty(),
@@ -273,8 +273,8 @@ fn plan_set_expr(
                 let mut value_exprs = vec![];
                 let mut value_types = vec![];
                 for value in row {
-                    let expr = plan_expr(catalog, ctx, value)?;
-                    value_types.push(ctx.column_type(&expr));
+                    let expr = plan_expr(catalog, ecx, value)?;
+                    value_types.push(ecx.column_type(&expr));
                     value_exprs.push(expr);
                 }
                 types = if let Some(types) = types {
@@ -354,15 +354,15 @@ fn plan_view_select(
 
     // Step 2. Handle WHERE clause.
     if let Some(selection) = &s.selection {
-        let ctx = &ExprContext {
+        let ecx = &ExprContext {
             name: "WHERE clause",
             scope: &from_scope,
             outer_relation_type,
             inner_relation_type: &relation_expr.typ(outer_relation_type),
             allow_aggregates: false,
         };
-        let expr = plan_expr(catalog, ctx, &selection)?;
-        let typ = ctx.column_type(&expr);
+        let expr = plan_expr(catalog, ecx, &selection)?;
+        let typ = ecx.column_type(&expr);
         if typ.scalar_type != ScalarType::Bool && typ.scalar_type != ScalarType::Null {
             bail!(
                 "WHERE clause must have boolean type, not {:?}",
@@ -375,7 +375,7 @@ fn plan_view_select(
     // Step 3. Handle GROUP BY clause.
     let (group_scope, select_all_mapping) = {
         // gather group columns
-        let ctx = &ExprContext {
+        let ecx = &ExprContext {
             name: "GROUP BY clause",
             scope: &from_scope,
             outer_relation_type,
@@ -387,7 +387,7 @@ fn plan_view_select(
         let mut group_scope = Scope::empty(Some(outer_scope.clone()));
         let mut select_all_mapping = HashMap::new();
         for group_expr in &s.group_by {
-            let expr = plan_expr(catalog, ctx, group_expr)?;
+            let expr = plan_expr(catalog, ecx, group_expr)?;
             let new_column = group_key.len();
             // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
             if group_exprs
@@ -400,7 +400,7 @@ fn plan_view_select(
                     // If we later have `SELECT foo.*` then we have to find all the `foo` items in `from_scope` and figure out where they ended up in `group_scope`.
                     // This is really hard to do right using SQL name resolution, so instead we just track the movement here.
                     select_all_mapping.insert(*old_column, new_column);
-                    ctx.scope.items[*old_column].clone()
+                    ecx.scope.items[*old_column].clone()
                 } else {
                     ScopeItem::from_column_name(None)
                 };
@@ -419,7 +419,7 @@ fn plan_view_select(
         if let Some(having) = &s.having {
             aggregate_visitor.visit_expr(having);
         }
-        let ctx = &ExprContext {
+        let ecx = &ExprContext {
             name: "aggregate function",
             scope: &from_scope,
             outer_relation_type,
@@ -431,7 +431,7 @@ fn plan_view_select(
         };
         let mut aggregates = vec![];
         for sql_function in aggregate_visitor.into_result()? {
-            aggregates.push(plan_aggregate(catalog, ctx, sql_function)?);
+            aggregates.push(plan_aggregate(catalog, ecx, sql_function)?);
             group_scope.items.push(ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: None,
@@ -457,15 +457,15 @@ fn plan_view_select(
 
     // Step 4. Handle HAVING clause.
     if let Some(having) = &s.having {
-        let ctx = &ExprContext {
+        let ecx = &ExprContext {
             name: "HAVING clause",
             scope: &group_scope,
             outer_relation_type,
             inner_relation_type: &relation_expr.typ(outer_relation_type),
             allow_aggregates: true,
         };
-        let expr = plan_expr(catalog, ctx, having)?;
-        let typ = ctx.column_type(&expr);
+        let expr = plan_expr(catalog, ecx, having)?;
+        let typ = ecx.column_type(&expr);
         if typ.scalar_type != ScalarType::Bool {
             bail!(
                 "HAVING clause must have boolean type, not {:?}",
@@ -481,7 +481,7 @@ fn plan_view_select(
         let mut project_key = vec![];
         let mut project_scope = Scope::empty(Some(outer_scope.clone()));
         for p in &s.projection {
-            let ctx = &ExprContext {
+            let ecx = &ExprContext {
                 name: "SELECT clause",
                 scope: &group_scope,
                 outer_relation_type,
@@ -489,7 +489,7 @@ fn plan_view_select(
                 allow_aggregates: true,
             };
             for (expr, scope_item) in
-                plan_select_item(catalog, ctx, p, &from_scope, &select_all_mapping)?
+                plan_select_item(catalog, ecx, p, &from_scope, &select_all_mapping)?
             {
                 project_key.push(group_scope.len() + project_exprs.len());
                 project_exprs.push(expr);
@@ -605,16 +605,16 @@ fn plan_table_factor<'a>(
 
 fn plan_select_item<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     s: &'a SelectItem,
     select_all_scope: &Scope,
     select_all_mapping: &HashMap<usize, usize>,
 ) -> Result<Vec<(ScalarExpr, ScopeItem)>, failure::Error> {
     match s {
         SelectItem::UnnamedExpr(sql_expr) => {
-            let expr = plan_expr(catalog, ctx, sql_expr)?;
+            let expr = plan_expr(catalog, ecx, sql_expr)?;
             let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
-                ctx.scope.items[*i].clone()
+                ecx.scope.items[*i].clone()
             } else {
                 ScopeItem::from_column_name(None)
             };
@@ -625,9 +625,9 @@ fn plan_select_item<'a>(
             expr: sql_expr,
             alias,
         } => {
-            let expr = plan_expr(catalog, ctx, sql_expr)?;
+            let expr = plan_expr(catalog, ecx, sql_expr)?;
             let mut scope_item = if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
-                ctx.scope.items[*i].clone()
+                ecx.scope.items[*i].clone()
             } else {
                 ScopeItem::from_column_name(None)
             };
@@ -752,7 +752,7 @@ fn plan_join_constraint<'a>(
     let (expr, scope) = match constraint {
         JoinConstraint::On(expr) => {
             let mut product_scope = left_scope.product(right_scope);
-            let ctx = &ExprContext {
+            let ecx = &ExprContext {
                 name: "ON clause",
                 scope: &product_scope,
                 outer_relation_type,
@@ -765,7 +765,7 @@ fn plan_join_constraint<'a>(
                 ),
                 allow_aggregates: false,
             };
-            let on = plan_expr(catalog, ctx, expr)?;
+            let on = plan_expr(catalog, ecx, expr)?;
             for (l, r) in find_trivial_column_equivalences(&on) {
                 // When we can statically prove that two columns are
                 // equivalent after a join, the right column becomes
@@ -915,21 +915,21 @@ fn plan_using_constraint(
 
 fn plan_expr<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     e: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    if let Some((i, _)) = ctx.scope.resolve_expr(e) {
+    if let Some((i, _)) = ecx.scope.resolve_expr(e) {
         // surprise - we already calculated this expr before
         Ok(ScalarExpr::Column(i))
     } else {
         match e {
             Expr::Identifier(name) => {
-                let (i, _) = ctx.scope.resolve_column(&name.value)?;
+                let (i, _) = ecx.scope.resolve_column(&name.value)?;
                 Ok(ScalarExpr::Column(i))
             }
             Expr::CompoundIdentifier(names) => {
                 if names.len() == 2 {
-                    let (i, _) = ctx
+                    let (i, _) = ecx
                         .scope
                         .resolve_table_column(&names[0].value, &names[1].value)?;
                     Ok(ScalarExpr::Column(i))
@@ -946,52 +946,52 @@ fn plan_expr<'a>(
             }
             Expr::Parameter(_) => bail!("query parameters are not yet supported"),
             // TODO(benesch): why isn't IS [NOT] NULL a unary op?
-            Expr::IsNull(expr) => plan_is_null_expr(catalog, ctx, expr, false),
-            Expr::IsNotNull(expr) => plan_is_null_expr(catalog, ctx, expr, true),
-            Expr::UnaryOp { op, expr } => plan_unary_op(catalog, ctx, op, expr),
-            Expr::BinaryOp { op, left, right } => plan_binary_op(catalog, ctx, op, left, right),
+            Expr::IsNull(expr) => plan_is_null_expr(catalog, ecx, expr, false),
+            Expr::IsNotNull(expr) => plan_is_null_expr(catalog, ecx, expr, true),
+            Expr::UnaryOp { op, expr } => plan_unary_op(catalog, ecx, op, expr),
+            Expr::BinaryOp { op, left, right } => plan_binary_op(catalog, ecx, op, left, right),
             Expr::Between {
                 expr,
                 low,
                 high,
                 negated,
-            } => plan_between(catalog, ctx, expr, low, high, *negated),
+            } => plan_between(catalog, ecx, expr, low, high, *negated),
             Expr::InList {
                 expr,
                 list,
                 negated,
-            } => plan_in_list(catalog, ctx, expr, list, *negated),
+            } => plan_in_list(catalog, ecx, expr, list, *negated),
             Expr::Case {
                 operand,
                 conditions,
                 results,
                 else_result,
-            } => plan_case(catalog, ctx, operand, conditions, results, else_result),
-            Expr::Nested(expr) => plan_expr(catalog, ctx, expr),
-            Expr::Cast { expr, data_type } => plan_cast(catalog, ctx, expr, data_type),
-            Expr::Function(func) => plan_function(catalog, ctx, func),
+            } => plan_case(catalog, ecx, operand, conditions, results, else_result),
+            Expr::Nested(expr) => plan_expr(catalog, ecx, expr),
+            Expr::Cast { expr, data_type } => plan_cast(catalog, ecx, expr, data_type),
+            Expr::Function(func) => plan_function(catalog, ecx, func),
             Expr::Exists(query) => {
                 let typ = RelationType::new(
-                    ctx.outer_relation_type
+                    ecx.outer_relation_type
                         .column_types
                         .iter()
                         .cloned()
-                        .chain(ctx.inner_relation_type.column_types.iter().cloned())
+                        .chain(ecx.inner_relation_type.column_types.iter().cloned())
                         .collect(),
                 );
-                let (expr, _scope) = plan_subquery(catalog, query, &ctx.scope, &typ)?;
+                let (expr, _scope) = plan_subquery(catalog, query, &ecx.scope, &typ)?;
                 Ok(expr.exists())
             }
             Expr::Subquery(query) => {
                 let typ = RelationType::new(
-                    ctx.outer_relation_type
+                    ecx.outer_relation_type
                         .column_types
                         .iter()
                         .cloned()
-                        .chain(ctx.inner_relation_type.column_types.iter().cloned())
+                        .chain(ecx.inner_relation_type.column_types.iter().cloned())
                         .collect(),
                 );
-                let (expr, _scope) = plan_subquery(catalog, query, &ctx.scope, &typ)?;
+                let (expr, _scope) = plan_subquery(catalog, query, &ecx.scope, &typ)?;
                 let column_types = expr.typ(&typ).column_types;
                 if column_types.len() != 1 {
                     bail!(
@@ -1006,9 +1006,9 @@ fn plan_expr<'a>(
                 op,
                 right,
                 some: _,
-            } => plan_any_or_all(catalog, ctx, left, op, right, AggregateFunc::Any),
+            } => plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::Any),
             Expr::All { left, op, right } => {
-                plan_any_or_all(catalog, ctx, left, op, right, AggregateFunc::All)
+                plan_any_or_all(catalog, ecx, left, op, right, AggregateFunc::All)
             }
             Expr::InSubquery {
                 expr,
@@ -1019,19 +1019,19 @@ fn plan_expr<'a>(
                 if *negated {
                     // `<expr> NOT IN (<subquery>)` is equivalent to
                     // `<expr> <> ALL (<subquery>)`.
-                    plan_any_or_all(catalog, ctx, expr, &NotEq, subquery, AggregateFunc::All)
+                    plan_any_or_all(catalog, ecx, expr, &NotEq, subquery, AggregateFunc::All)
                 } else {
                     // `<expr> IN (<subquery>)` is equivalent to
                     // `<expr> = ANY (<subquery>)`.
-                    plan_any_or_all(catalog, ctx, expr, &Eq, subquery, AggregateFunc::Any)
+                    plan_any_or_all(catalog, ecx, expr, &Eq, subquery, AggregateFunc::Any)
                 }
             }
             Expr::Extract { field, expr } => {
-                let mut expr = plan_expr(catalog, ctx, expr)?;
-                let mut typ = expr.typ(&ctx.outer_relation_type, &ctx.inner_relation_type);
+                let mut expr = plan_expr(catalog, ecx, expr)?;
+                let mut typ = expr.typ(&ecx.outer_relation_type, &ecx.inner_relation_type);
                 if let ScalarType::Date = typ.scalar_type {
-                    expr = plan_cast_internal(ctx, "EXTRACT", expr, ScalarType::Timestamp)?;
-                    typ = ctx.column_type(&expr);
+                    expr = plan_cast_internal(ecx, "EXTRACT", expr, ScalarType::Timestamp)?;
+                    typ = ecx.column_type(&expr);
                 }
                 let func = match &typ.scalar_type {
                     ScalarType::Interval => match field {
@@ -1064,23 +1064,23 @@ fn plan_expr<'a>(
 
 fn plan_any_or_all<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     left: &'a Expr,
     op: &'a BinaryOperator,
     right: &'a Query,
     func: AggregateFunc,
 ) -> Result<ScalarExpr, failure::Error> {
     let typ = RelationType::new(
-        ctx.outer_relation_type
+        ecx.outer_relation_type
             .column_types
             .iter()
             .cloned()
-            .chain(ctx.inner_relation_type.column_types.iter().cloned())
+            .chain(ecx.inner_relation_type.column_types.iter().cloned())
             .collect(),
     );
     // plan right
 
-    let (right, _scope) = plan_subquery(catalog, right, &ctx.scope, &typ)?;
+    let (right, _scope) = plan_subquery(catalog, right, &ecx.scope, &typ)?;
     let column_types = right.typ(&typ).column_types;
     if column_types.len() != 1 {
         bail!(
@@ -1091,7 +1091,7 @@ fn plan_any_or_all<'a>(
 
     // plan left and op
     // this is a bit of a hack - we want to plan `op` as if the original expr was `(SELECT ANY/ALL(left op right[1]) FROM right)`
-    let mut scope = Scope::empty(Some(ctx.scope.clone()));
+    let mut scope = Scope::empty(Some(ecx.scope.clone()));
     let right_name = format!("right_{}", Uuid::new_v4());
     scope.items.push(ScopeItem {
         names: vec![ScopeItemName {
@@ -1100,7 +1100,7 @@ fn plan_any_or_all<'a>(
         }],
         expr: None,
     });
-    let any_ctx = ExprContext {
+    let any_ecx = ExprContext {
         name: "WHERE clause",
         scope: &scope,
         outer_relation_type: &typ,
@@ -1109,7 +1109,7 @@ fn plan_any_or_all<'a>(
     };
     let op_expr = plan_binary_op(
         catalog,
-        &any_ctx,
+        &any_ecx,
         op,
         left,
         &Expr::Identifier(Ident::new(right_name)),
@@ -1131,18 +1131,18 @@ fn plan_any_or_all<'a>(
 
 fn plan_cast<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     expr: &'a Expr,
     data_type: &'a DataType,
 ) -> Result<ScalarExpr, failure::Error> {
     let to_scalar_type = scalar_type_from_sql(data_type)?;
-    let expr = plan_expr(catalog, ctx, expr)?;
-    plan_cast_internal(ctx, "CAST", expr, to_scalar_type)
+    let expr = plan_expr(catalog, ecx, expr)?;
+    plan_cast_internal(ecx, "CAST", expr, to_scalar_type)
 }
 
 fn plan_aggregate(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     sql_func: &Function,
 ) -> Result<AggregateExpr, failure::Error> {
     let ident = sql_func.name.to_string().to_lowercase();
@@ -1161,8 +1161,8 @@ fn plan_aggregate(
         // COUNT(*) is a special case that doesn't compose well
         ("count", Expr::Wildcard) => (ScalarExpr::literal_null(), AggregateFunc::CountAll),
         _ => {
-            let expr = plan_expr(catalog, ctx, arg)?;
-            let typ = ctx.column_type(&expr);
+            let expr = plan_expr(catalog, ecx, arg)?;
+            let typ = ecx.column_type(&expr);
             let func = find_agg_func(&ident, typ.scalar_type)?;
             (expr, func)
         }
@@ -1176,19 +1176,19 @@ fn plan_aggregate(
 
 fn plan_function<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     sql_func: &'a Function,
 ) -> Result<ScalarExpr, failure::Error> {
     let ident = sql_func.name.to_string().to_lowercase();
     if is_aggregate_func(&ident) {
-        if ctx.allow_aggregates {
+        if ecx.allow_aggregates {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
                 "Internal error: encountered unplanned aggregate function: {:?}",
                 sql_func,
             )
         } else {
-            bail!("aggregate functions are not allowed in {}", ctx.name);
+            bail!("aggregate functions are not allowed in {}", ecx.name);
         }
     } else {
         match ident.as_str() {
@@ -1196,8 +1196,8 @@ fn plan_function<'a>(
                 if sql_func.args.len() != 1 {
                     bail!("abs expects one argument, got {}", sql_func.args.len());
                 }
-                let expr = plan_expr(catalog, ctx, &sql_func.args[0])?;
-                let typ = ctx.column_type(&expr);
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let typ = ecx.column_type(&expr);
                 let func = match typ.scalar_type {
                     ScalarType::Int32 => UnaryFunc::AbsInt32,
                     ScalarType::Int64 => UnaryFunc::AbsInt64,
@@ -1216,8 +1216,8 @@ fn plan_function<'a>(
                 if sql_func.args.len() != 1 {
                     bail!("ascii expects one argument, got {}", sql_func.args.len());
                 }
-                let expr = plan_expr(catalog, ctx, &sql_func.args[0])?;
-                let typ = ctx.column_type(&expr);
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let typ = ecx.column_type(&expr);
                 if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
                     bail!("ascii does not accept arguments of type {:?}", typ);
                 }
@@ -1234,9 +1234,9 @@ fn plan_function<'a>(
                 }
                 let mut exprs = Vec::new();
                 for arg in &sql_func.args {
-                    exprs.push(plan_expr(catalog, ctx, arg)?);
+                    exprs.push(plan_expr(catalog, ecx, arg)?);
                 }
-                let exprs = try_coalesce_types(ctx, "coalesce", exprs)?;
+                let exprs = try_coalesce_types(ecx, "coalesce", exprs)?;
                 let expr = ScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
                     exprs,
@@ -1250,7 +1250,7 @@ fn plan_function<'a>(
                 }
                 plan_binary_op(
                     catalog,
-                    ctx,
+                    ecx,
                     &BinaryOperator::Modulus,
                     &sql_func.args[0],
                     &sql_func.args[1],
@@ -1266,8 +1266,8 @@ fn plan_function<'a>(
                     op: BinaryOperator::Eq,
                     right: Box::new(sql_func.args[1].clone()),
                 };
-                let cond_expr = plan_expr(catalog, ctx, &cond)?;
-                let else_expr = plan_expr(catalog, ctx, &sql_func.args[0])?;
+                let cond_expr = plan_expr(catalog, ecx, &cond)?;
+                let else_expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
                 let expr = ScalarExpr::If {
                     cond: Box::new(cond_expr),
                     then: Box::new(ScalarExpr::literal_null()),
@@ -1283,7 +1283,7 @@ fn plan_function<'a>(
                     over: sql_func.over.clone(),
                     distinct: sql_func.distinct,
                 };
-                plan_function(catalog, ctx, &func)
+                plan_function(catalog, ecx, &func)
             }
 
             "substring" => {
@@ -1294,19 +1294,19 @@ fn plan_function<'a>(
                     );
                 }
                 let mut exprs = Vec::new();
-                let expr1 = plan_expr(catalog, ctx, &sql_func.args[0])?;
-                let typ1 = ctx.column_type(&expr1);
+                let expr1 = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let typ1 = ecx.column_type(&expr1);
                 if typ1.scalar_type != ScalarType::String && typ1.scalar_type != ScalarType::Null {
                     bail!("substring first argument has non-string type {:?}", typ1);
                 }
                 exprs.push(expr1);
 
-                let expr2 = plan_expr(catalog, ctx, &sql_func.args[1])?;
-                let expr2 = promote_int_int64(ctx, "substring start", expr2)?;
+                let expr2 = plan_expr(catalog, ecx, &sql_func.args[1])?;
+                let expr2 = promote_int_int64(ecx, "substring start", expr2)?;
                 exprs.push(expr2);
                 if sql_func.args.len() == 3 {
-                    let expr3 = plan_expr(catalog, ctx, &sql_func.args[2])?;
-                    let expr3 = promote_int_int64(ctx, "substring length", expr3)?;
+                    let expr3 = plan_expr(catalog, ecx, &sql_func.args[2])?;
+                    let expr3 = promote_int_int64(ecx, "substring length", expr3)?;
                     exprs.push(expr3);
                 }
                 let expr = ScalarExpr::CallVariadic {
@@ -1325,8 +1325,8 @@ fn plan_function<'a>(
                 if sql_func.args.len() != 1 {
                     bail!("internal.avg_promotion requires exactly one argument");
                 }
-                let expr = plan_expr(catalog, ctx, &sql_func.args[0])?;
-                let typ = ctx.column_type(&expr);
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0])?;
+                let typ = ecx.column_type(&expr);
                 let output_type = match &typ.scalar_type {
                     ScalarType::Null => ScalarType::Null,
                     ScalarType::Float32 | ScalarType::Float64 => ScalarType::Float64,
@@ -1335,7 +1335,7 @@ fn plan_function<'a>(
                     ScalarType::Int64 => ScalarType::Decimal(19, 0),
                     _ => bail!("internal.avg_promotion called with unexpected argument"),
                 };
-                plan_cast_internal(ctx, "internal.avg_promotion", expr, output_type)
+                plan_cast_internal(ecx, "internal.avg_promotion", expr, output_type)
             }
 
             _ => bail!("unsupported function: {}", ident),
@@ -1345,11 +1345,11 @@ fn plan_function<'a>(
 
 fn plan_is_null_expr<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     inner: &'a Expr,
     not: bool,
 ) -> Result<ScalarExpr, failure::Error> {
-    let expr = plan_expr(catalog, ctx, inner)?;
+    let expr = plan_expr(catalog, ecx, inner)?;
     let mut expr = ScalarExpr::CallUnary {
         func: UnaryFunc::IsNull,
         expr: Box::new(expr),
@@ -1365,12 +1365,12 @@ fn plan_is_null_expr<'a>(
 
 fn plan_unary_op<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     op: &'a UnaryOperator,
     expr: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let expr = plan_expr(catalog, ctx, expr)?;
-    let typ = ctx.column_type(&expr);
+    let expr = plan_expr(catalog, ecx, expr)?;
+    let typ = ecx.column_type(&expr);
     let func = match op {
         UnaryOperator::Not => UnaryFunc::Not,
         UnaryOperator::Plus => return Ok(expr), // no-op
@@ -1392,45 +1392,45 @@ fn plan_unary_op<'a>(
 
 fn plan_binary_op<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     op: &'a BinaryOperator,
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
     use BinaryOperator::*;
     match op {
-        And => plan_boolean_op(catalog, ctx, BooleanOp::And, left, right),
-        Or => plan_boolean_op(catalog, ctx, BooleanOp::Or, left, right),
+        And => plan_boolean_op(catalog, ecx, BooleanOp::And, left, right),
+        Or => plan_boolean_op(catalog, ecx, BooleanOp::Or, left, right),
 
-        Plus => plan_arithmetic_op(catalog, ctx, ArithmeticOp::Plus, left, right),
-        Minus => plan_arithmetic_op(catalog, ctx, ArithmeticOp::Minus, left, right),
-        Multiply => plan_arithmetic_op(catalog, ctx, ArithmeticOp::Multiply, left, right),
-        Divide => plan_arithmetic_op(catalog, ctx, ArithmeticOp::Divide, left, right),
-        Modulus => plan_arithmetic_op(catalog, ctx, ArithmeticOp::Modulo, left, right),
+        Plus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Plus, left, right),
+        Minus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Minus, left, right),
+        Multiply => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Multiply, left, right),
+        Divide => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Divide, left, right),
+        Modulus => plan_arithmetic_op(catalog, ecx, ArithmeticOp::Modulo, left, right),
 
-        Lt => plan_comparison_op(catalog, ctx, ComparisonOp::Lt, left, right),
-        LtEq => plan_comparison_op(catalog, ctx, ComparisonOp::LtEq, left, right),
-        Gt => plan_comparison_op(catalog, ctx, ComparisonOp::Gt, left, right),
-        GtEq => plan_comparison_op(catalog, ctx, ComparisonOp::GtEq, left, right),
-        Eq => plan_comparison_op(catalog, ctx, ComparisonOp::Eq, left, right),
-        NotEq => plan_comparison_op(catalog, ctx, ComparisonOp::NotEq, left, right),
+        Lt => plan_comparison_op(catalog, ecx, ComparisonOp::Lt, left, right),
+        LtEq => plan_comparison_op(catalog, ecx, ComparisonOp::LtEq, left, right),
+        Gt => plan_comparison_op(catalog, ecx, ComparisonOp::Gt, left, right),
+        GtEq => plan_comparison_op(catalog, ecx, ComparisonOp::GtEq, left, right),
+        Eq => plan_comparison_op(catalog, ecx, ComparisonOp::Eq, left, right),
+        NotEq => plan_comparison_op(catalog, ecx, ComparisonOp::NotEq, left, right),
 
-        Like => plan_like(catalog, ctx, left, right, false),
-        NotLike => plan_like(catalog, ctx, left, right, true),
+        Like => plan_like(catalog, ecx, left, right, false),
+        NotLike => plan_like(catalog, ecx, left, right, true),
     }
 }
 
 fn plan_boolean_op<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     op: BooleanOp,
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(catalog, ctx, left)?;
-    let rexpr = plan_expr(catalog, ctx, right)?;
-    let ltype = ctx.column_type(&lexpr);
-    let rtype = ctx.column_type(&rexpr);
+    let lexpr = plan_expr(catalog, ecx, left)?;
+    let rexpr = plan_expr(catalog, ecx, right)?;
+    let ltype = ecx.column_type(&lexpr);
+    let rtype = ecx.column_type(&rexpr);
 
     if ltype.scalar_type != ScalarType::Bool && ltype.scalar_type != ScalarType::Null {
         bail!(
@@ -1456,7 +1456,7 @@ fn plan_boolean_op<'a>(
 
 fn plan_arithmetic_op<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     op: ArithmeticOp,
     left: &'a Expr,
     right: &'a Expr,
@@ -1466,10 +1466,10 @@ fn plan_arithmetic_op<'a>(
     use ScalarType::*;
 
     // Step 1. Plan inner expressions.
-    let mut lexpr = plan_expr(catalog, ctx, left)?;
-    let mut rexpr = plan_expr(catalog, ctx, right)?;
-    let mut ltype = ctx.column_type(&lexpr);
-    let mut rtype = ctx.column_type(&rexpr);
+    let mut lexpr = plan_expr(catalog, ecx, left)?;
+    let mut rexpr = plan_expr(catalog, ecx, right)?;
+    let mut ltype = ecx.column_type(&lexpr);
+    let mut rtype = ecx.column_type(&rexpr);
 
     // Step 2. Infer whether any implicit type coercions are required.
     let both_decimals = match (&ltype.scalar_type, &rtype.scalar_type) {
@@ -1493,24 +1493,24 @@ fn plan_arithmetic_op<'a>(
         // defined. We will, however, promote any date inputs to timestamps.
         // Adding an
         if let Date = &ltype.scalar_type {
-            let expr = plan_cast_internal(ctx, &op, lexpr, Timestamp)?;
-            ltype = ctx.column_type(&expr);
+            let expr = plan_cast_internal(ecx, &op, lexpr, Timestamp)?;
+            ltype = ecx.column_type(&expr);
             lexpr = expr;
         }
         if let Date = &rtype.scalar_type {
-            let expr = plan_cast_internal(ctx, &op, rexpr, Timestamp)?;
-            rtype = ctx.column_type(&expr);
+            let expr = plan_cast_internal(ecx, &op, rexpr, Timestamp)?;
+            rtype = ecx.column_type(&expr);
             rexpr = expr;
         }
     } else {
         // Otherwise, "coalesce" types by finding a common type that can
         // represent both inputs.
-        let mut exprs = try_coalesce_types(ctx, &op, vec![lexpr, rexpr])?;
+        let mut exprs = try_coalesce_types(ecx, &op, vec![lexpr, rexpr])?;
         assert_eq!(exprs.len(), 2);
         rexpr = exprs.pop().unwrap();
         lexpr = exprs.pop().unwrap();
-        rtype = ctx.column_type(&rexpr);
-        ltype = ctx.column_type(&lexpr);
+        rtype = ecx.column_type(&rexpr);
+        ltype = ecx.column_type(&lexpr);
     }
 
     // Step 3a. Plan the arithmetic operation for decimals.
@@ -1626,20 +1626,20 @@ fn plan_arithmetic_op<'a>(
 
 fn plan_comparison_op<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     op: ComparisonOp,
     left: &'a Expr,
     right: &'a Expr,
 ) -> Result<ScalarExpr, failure::Error> {
-    let mut lexpr = plan_expr(catalog, ctx, left)?;
-    let mut rexpr = plan_expr(catalog, ctx, right)?;
+    let mut lexpr = plan_expr(catalog, ecx, left)?;
+    let mut rexpr = plan_expr(catalog, ecx, right)?;
 
-    let mut exprs = try_coalesce_types(ctx, &op, vec![lexpr, rexpr])?;
+    let mut exprs = try_coalesce_types(ecx, &op, vec![lexpr, rexpr])?;
     assert_eq!(exprs.len(), 2);
     rexpr = exprs.pop().unwrap();
     lexpr = exprs.pop().unwrap();
-    let rtype = ctx.column_type(&rexpr);
-    let ltype = ctx.column_type(&lexpr);
+    let rtype = ecx.column_type(&rexpr);
+    let ltype = ecx.column_type(&lexpr);
 
     if ltype.scalar_type != rtype.scalar_type
         && ltype.scalar_type != ScalarType::Null
@@ -1665,15 +1665,15 @@ fn plan_comparison_op<'a>(
 
 fn plan_like<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     left: &'a Expr,
     right: &'a Expr,
     negate: bool,
 ) -> Result<ScalarExpr, failure::Error> {
-    let lexpr = plan_expr(catalog, ctx, left)?;
-    let ltype = ctx.column_type(&lexpr);
-    let rexpr = plan_expr(catalog, ctx, right)?;
-    let rtype = ctx.column_type(&rexpr);
+    let lexpr = plan_expr(catalog, ecx, left)?;
+    let ltype = ecx.column_type(&lexpr);
+    let rexpr = plan_expr(catalog, ecx, right)?;
+    let rtype = ecx.column_type(&rexpr);
 
     if (ltype.scalar_type != ScalarType::String && ltype.scalar_type != ScalarType::Null)
         || (rtype.scalar_type != ScalarType::String && rtype.scalar_type != ScalarType::Null)
@@ -1701,7 +1701,7 @@ fn plan_like<'a>(
 
 fn plan_between<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     expr: &'a Expr,
     low: &'a Expr,
     high: &'a Expr,
@@ -1734,12 +1734,12 @@ fn plan_between<'a>(
         },
         right: Box::new(high),
     };
-    plan_expr(catalog, ctx, &both)
+    plan_expr(catalog, ecx, &both)
 }
 
 fn plan_in_list<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     expr: &'a Expr,
     list: &'a [Expr],
     negated: bool,
@@ -1762,12 +1762,12 @@ fn plan_in_list<'a>(
             expr: Box::new(cond),
         }
     }
-    plan_expr(catalog, ctx, &cond)
+    plan_expr(catalog, ecx, &cond)
 }
 
 fn plan_case<'a>(
     catalog: &Catalog,
-    ctx: &ExprContext,
+    ecx: &ExprContext,
     operand: &'a Option<Box<Expr>>,
     conditions: &'a [Expr],
     results: &'a [Expr],
@@ -1784,8 +1784,8 @@ fn plan_case<'a>(
             },
             None => c.clone(),
         };
-        let cexpr = plan_expr(catalog, ctx, &c)?;
-        let ctype = ctx.column_type(&cexpr);
+        let cexpr = plan_expr(catalog, ecx, &c)?;
+        let ctype = ecx.column_type(&cexpr);
         if ctype.scalar_type != ScalarType::Bool {
             bail!(
                 "CASE expression has non-boolean type {:?}",
@@ -1793,14 +1793,14 @@ fn plan_case<'a>(
             );
         }
         cond_exprs.push(cexpr);
-        let rexpr = plan_expr(catalog, ctx, r)?;
+        let rexpr = plan_expr(catalog, ecx, r)?;
         result_exprs.push(rexpr);
     }
     result_exprs.push(match else_result {
-        Some(else_result) => plan_expr(catalog, ctx, else_result)?,
+        Some(else_result) => plan_expr(catalog, ecx, else_result)?,
         None => ScalarExpr::literal_null(),
     });
-    let mut result_exprs = try_coalesce_types(ctx, "CASE", result_exprs)?;
+    let mut result_exprs = try_coalesce_types(ecx, "CASE", result_exprs)?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
     for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
@@ -2013,7 +2013,7 @@ fn find_trivial_column_equivalences(expr: &ScalarExpr) -> Vec<(usize, usize)> {
 // rules. For now, just promote integers into decimals or floats, decimals into
 // floats, and small Xs into bigger Xs.
 fn try_coalesce_types<'a, S>(
-    ctx: &ExprContext<'a>,
+    ecx: &ExprContext<'a>,
     name: S,
     exprs: Vec<ScalarExpr>,
 ) -> Result<Vec<ScalarExpr>, failure::Error>
@@ -2021,7 +2021,7 @@ where
     S: fmt::Display + Copy,
 {
     assert!(!exprs.is_empty());
-    let types: Vec<_> = exprs.iter().map(|e| ctx.column_type(e)).collect();
+    let types: Vec<_> = exprs.iter().map(|e| ecx.column_type(e)).collect();
     let scalar_type_prec = |scalar_type: &ScalarType| match scalar_type {
         ScalarType::Null => 0,
         ScalarType::Int32 => 1,
@@ -2040,7 +2040,7 @@ where
         .unwrap();
     let mut out = Vec::new();
     for (expr, typ) in exprs.into_iter().zip(types) {
-        match plan_cast_internal(ctx, name, expr, max_scalar_type) {
+        match plan_cast_internal(ecx, name, expr, max_scalar_type) {
             Ok(expr) => out.push(expr),
             Err(_) => bail!(
                 "{} does not have uniform type: {:?} vs {:?}",
@@ -2059,7 +2059,7 @@ where
 /// Note that `plan_cast_internal` only understands [`ScalarType`]s. If you need
 /// to cast between SQL [`DataType`]s, see [`Planner::plan_cast`].
 fn plan_cast_internal<'a, S>(
-    ctx: &ExprContext<'a>,
+    ecx: &ExprContext<'a>,
     name: S,
     expr: ScalarExpr,
     to_scalar_type: ScalarType,
@@ -2069,7 +2069,7 @@ where
 {
     use ScalarType::*;
     use UnaryFunc::*;
-    let from_scalar_type = ctx.column_type(&expr).scalar_type;
+    let from_scalar_type = ecx.column_type(&expr).scalar_type;
     let expr = match (from_scalar_type, to_scalar_type) {
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
         (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
@@ -2116,16 +2116,16 @@ where
 }
 
 fn promote_int_int64<'a, S>(
-    ctx: &ExprContext<'a>,
+    ecx: &ExprContext<'a>,
     name: S,
     expr: ScalarExpr,
 ) -> Result<ScalarExpr, failure::Error>
 where
     S: fmt::Display + Copy,
 {
-    Ok(match ctx.column_type(&expr).scalar_type {
+    Ok(match ecx.column_type(&expr).scalar_type {
         ScalarType::Null | ScalarType::Int64 => expr,
-        ScalarType::Int32 => plan_cast_internal(ctx, name, expr, ScalarType::Int64)?,
+        ScalarType::Int32 => plan_cast_internal(ecx, name, expr, ScalarType::Int64)?,
         other => bail!("{} has non-integer type {:?}", name, other,),
     })
 }
