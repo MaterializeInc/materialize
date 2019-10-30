@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use pg_interval::Interval;
 use postgres::rows::Row;
 use rust_decimal::Decimal;
 use sqlparser::ast::Statement;
@@ -187,6 +188,8 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
             } else if ty == &postgres::types::DATE {
                 row.get::<_, Option<chrono::NaiveDate>>(i)
                     .map(|x| x.to_string())
+            } else if ty == &postgres::types::INTERVAL {
+                row.get::<_, Option<Interval>>(i).map(|x| x.to_sql())
             } else {
                 return Err(format!("unable to handle SQL type: {:?}", ty));
             }

@@ -412,7 +412,27 @@ impl FieldValue {
                 NetworkEndian::write_i64(&mut buf, timestamp);
                 buf.into()
             }
-            FieldValue::Interval(_i) => failure::bail!("cannot serialize binary: interval"),
+            // https://github.com/postgres/postgres/blob/517bf2d9107f0d45c5fea2e3904e8d3b10ce6bb2/src/backend/utils/adt/timestamp.c#L1008
+            // Postgres stores interval objects as a 16 byte memory blob split into 3 parts: 64 bits representing the interval in microseconds,
+            // then 32 bits describing the interval in days, then 32 bits representing the interval in months
+            // See also: https://github.com/diesel-rs/diesel/blob/a8b52bd05be202807e71579acf841735b6f1765e/diesel/src/pg/types/date_and_time/mod.rs#L39
+            // for the Diesel implementation of the same logic
+            FieldValue::Interval(i) => {
+                let mut buf = Vec::with_capacity(16);
+                match i {
+                    repr::Interval::Months(n) => {
+                        buf.write_i64::<NetworkEndian>(0)?;
+                        buf.write_i32::<NetworkEndian>(0)?;
+                        buf.write_i32::<NetworkEndian>(*n as i32)?;
+                    }
+                    repr::Interval::Duration { duration, .. } => {
+                        buf.write_i64::<NetworkEndian>(duration.as_micros() as i64)?;
+                        buf.write_i32::<NetworkEndian>(0)?;
+                        buf.write_i32::<NetworkEndian>(0)?;
+                    }
+                }
+                buf.into()
+            }
             FieldValue::Int4(i) => {
                 let mut buf = vec![0u8; 4];
                 NetworkEndian::write_i32(&mut buf, *i);

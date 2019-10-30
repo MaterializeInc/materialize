@@ -25,6 +25,7 @@ getopts = "0.2"
 interchange = { path = "../interchange" }
 lazy_static = "1.4.0"
 ore = { path = "../ore" }
+pg_interval = "0.3"
 postgres = "0.15"
 serde_json = { version = "1.0.41", features = ["preserve_order"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
