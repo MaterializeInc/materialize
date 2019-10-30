@@ -46,8 +46,6 @@ if [[ -z $docker_compose ]]; then
 fi
 groupadd -f docker
 usermod -aG docker ubuntu
-chmod 777 /mnt/docker
-chown -R ubuntu:docker /mnt/docker
 
 # Mount local SSD as swap
 existing_swap=$(grep swap /etc/fstab || true)
