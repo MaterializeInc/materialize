@@ -121,10 +121,10 @@ fn plan_query(
             }
             other => {
                 let ecx = &ExprContext {
+                    qcx,
                     name: "ORDER BY clause",
                     scope: &scope,
-                    outer_relation_type: &qcx.outer_relation_type,
-                    inner_relation_type: &output_typ,
+                    relation_type: &output_typ,
                     allow_aggregates: true,
                 };
                 let expr = plan_expr(catalog, ecx, other)?;
@@ -256,10 +256,10 @@ fn plan_set_expr(
                 "Can't infer a type for empty VALUES expression"
             );
             let ecx = &ExprContext {
+                qcx,
                 name: "values",
                 scope: &Scope::empty(Some(qcx.outer_scope.clone())),
-                outer_relation_type: &RelationType::empty(),
-                inner_relation_type: &RelationType::empty(),
+                relation_type: &RelationType::empty(),
                 allow_aggregates: false,
             };
             let mut expr: Option<RelationExpr> = None;
@@ -349,10 +349,10 @@ fn plan_view_select(
     // Step 2. Handle WHERE clause.
     if let Some(selection) = &s.selection {
         let ecx = &ExprContext {
+            qcx,
             name: "WHERE clause",
             scope: &from_scope,
-            outer_relation_type: &qcx.outer_relation_type,
-            inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
+            relation_type: &relation_expr.typ(&qcx.outer_relation_type),
             allow_aggregates: false,
         };
         let expr = plan_expr(catalog, ecx, &selection)?;
@@ -370,10 +370,10 @@ fn plan_view_select(
     let (group_scope, select_all_mapping) = {
         // gather group columns
         let ecx = &ExprContext {
+            qcx,
             name: "GROUP BY clause",
             scope: &from_scope,
-            outer_relation_type: &qcx.outer_relation_type,
-            inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
+            relation_type: &relation_expr.typ(&qcx.outer_relation_type),
             allow_aggregates: false,
         };
         let mut group_key = vec![];
@@ -414,10 +414,10 @@ fn plan_view_select(
             aggregate_visitor.visit_expr(having);
         }
         let ecx = &ExprContext {
+            qcx,
             name: "aggregate function",
             scope: &from_scope,
-            outer_relation_type: &qcx.outer_relation_type,
-            inner_relation_type: &relation_expr
+            relation_type: &relation_expr
                 .clone()
                 .map(group_exprs.clone())
                 .typ(&qcx.outer_relation_type),
@@ -452,10 +452,10 @@ fn plan_view_select(
     // Step 4. Handle HAVING clause.
     if let Some(having) = &s.having {
         let ecx = &ExprContext {
+            qcx,
             name: "HAVING clause",
             scope: &group_scope,
-            outer_relation_type: &qcx.outer_relation_type,
-            inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
+            relation_type: &relation_expr.typ(&qcx.outer_relation_type),
             allow_aggregates: true,
         };
         let expr = plan_expr(catalog, ecx, having)?;
@@ -476,10 +476,10 @@ fn plan_view_select(
         let mut project_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         for p in &s.projection {
             let ecx = &ExprContext {
+                qcx,
                 name: "SELECT clause",
                 scope: &group_scope,
-                outer_relation_type: &qcx.outer_relation_type,
-                inner_relation_type: &relation_expr.typ(&qcx.outer_relation_type),
+                relation_type: &relation_expr.typ(&qcx.outer_relation_type),
                 allow_aggregates: true,
             };
             for (expr, scope_item) in
@@ -741,10 +741,10 @@ fn plan_join_constraint<'a>(
         JoinConstraint::On(expr) => {
             let mut product_scope = left_scope.product(right_scope);
             let ecx = &ExprContext {
+                qcx,
                 name: "ON clause",
                 scope: &product_scope,
-                outer_relation_type: &qcx.outer_relation_type,
-                inner_relation_type: &RelationType::new(
+                relation_type: &RelationType::new(
                     left.typ(&qcx.outer_relation_type)
                         .column_types
                         .into_iter()
@@ -962,11 +962,11 @@ fn plan_expr<'a>(
                 let qcx = QueryContext {
                     outer_scope: &ecx.scope,
                     outer_relation_type: &RelationType::new(
-                        ecx.outer_relation_type
+                        ecx.qcx.outer_relation_type
                             .column_types
                             .iter()
                             .cloned()
-                            .chain(ecx.inner_relation_type.column_types.iter().cloned())
+                            .chain(ecx.relation_type.column_types.iter().cloned())
                             .collect(),
                     ),
                 };
@@ -977,11 +977,11 @@ fn plan_expr<'a>(
                 let qcx = QueryContext {
                     outer_scope: &ecx.scope,
                     outer_relation_type: &RelationType::new(
-                        ecx.outer_relation_type
+                        ecx.qcx.outer_relation_type
                             .column_types
                             .iter()
                             .cloned()
-                            .chain(ecx.inner_relation_type.column_types.iter().cloned())
+                            .chain(ecx.relation_type.column_types.iter().cloned())
                             .collect(),
                     ),
                 };
@@ -1022,7 +1022,7 @@ fn plan_expr<'a>(
             }
             Expr::Extract { field, expr } => {
                 let mut expr = plan_expr(catalog, ecx, expr)?;
-                let mut typ = expr.typ(&ecx.outer_relation_type, &ecx.inner_relation_type);
+                let mut typ = expr.typ(&ecx.qcx.outer_relation_type, &ecx.relation_type);
                 if let ScalarType::Date = typ.scalar_type {
                     expr = plan_cast_internal(ecx, "EXTRACT", expr, ScalarType::Timestamp)?;
                     typ = ecx.column_type(&expr);
@@ -1067,11 +1067,11 @@ fn plan_any_or_all<'a>(
     let qcx = QueryContext {
         outer_scope: &ecx.scope,
         outer_relation_type: &RelationType::new(
-            ecx.outer_relation_type
+            ecx.qcx.outer_relation_type
                 .column_types
                 .iter()
                 .cloned()
-                .chain(ecx.inner_relation_type.column_types.iter().cloned())
+                .chain(ecx.relation_type.column_types.iter().cloned())
                 .collect(),
         ),
     };
@@ -1098,10 +1098,10 @@ fn plan_any_or_all<'a>(
         expr: None,
     });
     let any_ecx = ExprContext {
+        qcx: &qcx,
         name: "WHERE clause",
         scope: &scope,
-        outer_relation_type: &qcx.outer_relation_type,
-        inner_relation_type: &right.typ(&qcx.outer_relation_type),
+        relation_type: &right.typ(&qcx.outer_relation_type),
         allow_aggregates: false,
     };
     let op_expr = plan_binary_op(
@@ -2242,6 +2242,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
 }
 
 /// A bundle of unrelated things that we need for planning `Query`s.
+#[derive(Debug)]
 struct QueryContext<'a> {
     /// The scope of the outer relation expression.
     outer_scope: &'a Scope,
@@ -2249,26 +2250,25 @@ struct QueryContext<'a> {
     outer_relation_type: &'a RelationType,
 }
 
-#[derive(Debug)]
 /// A bundle of unrelated things that we need for planning `Expr`s.
+#[derive(Debug)]
 struct ExprContext<'a> {
+    qcx: &'a QueryContext<'a>,
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
     name: &'static str,
-    /// The current scope
+    /// The context for the `Query` that contains this `Expr`.
+    /// The current scope.
     scope: &'a Scope,
-    /// The type of the outer relation expression upon which this scalar
+    /// The type of the current relation expression upon which this scalar
     /// expression will be evaluated.
-    outer_relation_type: &'a RelationType,
-    /// The type of the inner relation expression upon which this scalar
-    /// expression will be evaluated.
-    inner_relation_type: &'a RelationType,
+    relation_type: &'a RelationType,
     /// Are aggregate functions allowed in this context
     allow_aggregates: bool,
 }
 
 impl<'a> ExprContext<'a> {
     fn column_type(&self, expr: &ScalarExpr) -> ColumnType {
-        expr.typ(&self.outer_relation_type, &self.inner_relation_type)
+        expr.typ(&self.qcx.outer_relation_type, &self.relation_type)
     }
 }
 
