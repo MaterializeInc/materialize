@@ -585,7 +585,7 @@ static int run(int argc, char* argv[]) {
                     peekConns,
                     &runState,
                     (flushSleepTime == 0) ? std::nullopt : std::optional<useconds_t>(flushSleepTime * 1'000'000),
-                    peekMinDelay, peekMaxDelay
+                    (unsigned)(peekMinDelay * 1'000'000), (unsigned)(peekMaxDelay * 1'000'000)
         ).detach();
     }
 
