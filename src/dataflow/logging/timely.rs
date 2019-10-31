@@ -10,7 +10,7 @@ use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
-use repr::{Datum, RowUnpacker, RowPacker};
+use repr::{Datum, RowPacker, RowUnpacker};
 use std::collections::HashMap;
 use std::time::Duration;
 use timely::communication::Allocate;
@@ -292,9 +292,7 @@ pub fn construct<A: Allocate>(
             .count()
             .map({
                 let mut packer = RowPacker::new();
-                move |(op, cnt)| {
-                    packer.pack(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
-                }
+                move |(op, cnt)| packer.pack(&[Datum::Int64(op as i64), Datum::Int64(cnt as i64)])
             });
 
         let histogram = duration

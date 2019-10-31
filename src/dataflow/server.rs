@@ -20,7 +20,7 @@ use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
-use repr::{Datum, RowUnpacker, Row};
+use repr::{Datum, Row, RowUnpacker};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;

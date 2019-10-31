@@ -7,7 +7,7 @@ use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use differential_dataflow::logging::DifferentialEvent;
-use repr::{Datum, RowUnpacker, RowPacker};
+use repr::{Datum, RowPacker, RowUnpacker};
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;

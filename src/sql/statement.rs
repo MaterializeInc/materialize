@@ -192,10 +192,7 @@ fn handle_show_create_view(
         desc: RelationDesc::empty()
             .add_column("View", ScalarType::String)
             .add_column("Create View", ScalarType::String),
-        rows: vec![Row::pack(&[
-            Datum::String(&name),
-            Datum::String(&raw_sql),
-        ])],
+        rows: vec![Row::pack(&[Datum::String(&name), Datum::String(&raw_sql)])],
     })
 }
 

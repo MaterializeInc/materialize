@@ -17,7 +17,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
-use repr::{Datum, RowUnpacker, RowPacker};
+use repr::{Datum, RowPacker, RowUnpacker};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;

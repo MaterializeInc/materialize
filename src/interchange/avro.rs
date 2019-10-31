@@ -433,10 +433,7 @@ impl Decoder {
             }
         };
 
-        fn extract_row(
-            v: Value,
-            packer: &mut RowPacker,
-        ) -> Result<Option<Row>, failure::Error> {
+        fn extract_row(v: Value, packer: &mut RowPacker) -> Result<Option<Row>, failure::Error> {
             let v = match v {
                 Value::Union(v) => *v,
                 _ => bail!("unsupported avro value: {:?}", v),
