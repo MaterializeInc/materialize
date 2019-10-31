@@ -14,7 +14,7 @@ steps:
       queue: builder
 
   - id: lint-fast
-    label: Fast linters
+    label: ":bath: lint and rustfmt"
     command: ci/test/lint-fast.sh
     timeout_in_minutes: 10
     plugins:
@@ -28,7 +28,7 @@ steps:
           - CARGO_HOME=/cargo
 
   - id: lint-slow
-    label: ":japanese_ogre: Lint and Format"
+    label: ":paperclip: clippy and doctests"
     command: ci/test/lint-slow.sh
     timeout_in_minutes: 30
     plugins:
