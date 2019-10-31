@@ -349,8 +349,22 @@ static int detectWarehouses(SQLHSTMT& hStmt, int* countOut) {
     return 0;
 }
 
+enum LongOnlyOpts {
+    MIN_DELAY,
+    MAX_DELAY,
+    MZ_SOURCES,
+    MZ_VIEWS,
+    PEEK_CONNS,
+    PEEK_MIN_DELAY,
+    PEEK_MAX_DELAY,
+    FLUSH_EVERY,
+    MZ_URL,
+    SCHEMA_REGISTRY_URL,
+};
+
 static int run(int argc, char* argv[]) {
-    static struct option longOpts[] = {
+    int longopt_idx;
+    struct option longOpts[] = {
         {"dsn", required_argument, nullptr, 'd'},
         {"username", required_argument, nullptr, 'u'},
         {"password", required_argument, nullptr, 'p'},
@@ -360,14 +374,16 @@ static int run(int argc, char* argv[]) {
         {"run-seconds", required_argument, nullptr, 'r'},
         {"gen-dir", required_argument, nullptr, 'g'},
         {"log-file", required_argument, nullptr, 'l'},
-        {"min-delay", required_argument, nullptr, 'm'},
-        {"max-delay", required_argument, nullptr, 'M'},
-        {"mz-sources", no_argument, nullptr, 'S'},
-        {"mz-views", required_argument, nullptr, 'V'},
-        {"peek-conns", required_argument, nullptr, 'P'},
-        {"peek-min-delay", required_argument, nullptr, 'k'},
-        {"peek-max-delay", required_argument, nullptr, 'K'},
-        {"flush-every", required_argument, nullptr, 'F'},
+        {"min-delay", required_argument, &longopt_idx, MIN_DELAY},
+        {"max-delay", required_argument, &longopt_idx, MAX_DELAY},
+        {"mz-sources", no_argument, &longopt_idx, MZ_SOURCES},
+        {"mz-views", required_argument, &longopt_idx, MZ_VIEWS},
+        {"peek-conns", required_argument, &longopt_idx, PEEK_CONNS},
+        {"peek-min-delay", required_argument, &longopt_idx, PEEK_MIN_DELAY},
+        {"peek-max-delay", required_argument, &longopt_idx, PEEK_MAX_DELAY},
+        {"flush-every", required_argument, &longopt_idx, FLUSH_EVERY},
+        {"mz-url", required_argument, &longopt_idx, MZ_URL},
+        {"schema-registry-url", required_argument, &longopt_idx, SCHEMA_REGISTRY_URL},
         {nullptr, 0, nullptr, 0}};
 
     int c;
@@ -388,9 +404,45 @@ static int run(int argc, char* argv[]) {
     bool createSources = false;
     std::vector<std::string> mzViews;
     double flushSleepTime = 0;
+
+    mz::Config mzCfg = mz::defaultConfig();
     while ((c = getopt_long(argc, argv, "d:u:p:a:t:w:r:g:o:l:", longOpts,
                             nullptr)) != -1) {
-        switch (c) {
+        if (c == 0) switch (longopt_idx) {
+        case MIN_DELAY:
+            minDelay = parseDouble("minimum delay between queries (s)", optarg);
+            break;
+        case MAX_DELAY:
+            maxDelay = parseDouble("maximum delay between queries (s)", optarg);
+            break;
+        case MZ_SOURCES:
+            createSources = true;
+            break;
+        case MZ_VIEWS:
+            mzViews = parseCommaSeparated(optarg);
+            break;
+        case PEEK_CONNS:
+            peekConns = parseInt("Materialized peek threads", optarg);
+            break;
+        case PEEK_MIN_DELAY:
+            peekMinDelay = parseDouble("minimum delay between peeks (s)", optarg);
+            break;
+        case PEEK_MAX_DELAY:
+            peekMaxDelay = parseDouble("maximum delay between peeks (s)", optarg);
+            break;
+        case FLUSH_EVERY:
+            flushSleepTime = parseDouble("Interval to run flush-tables hack (s)", optarg);
+            break;
+        case MZ_URL:
+            mzCfg.materializedUrl = optarg;
+            break;
+        case SCHEMA_REGISTRY_URL:
+            mzCfg.schemaRegistryUrl = optarg;
+            break;
+        default:
+            return 1;
+        }
+        else switch (c) {
         case 'd':
             dsn = optarg;
             break;
@@ -417,30 +469,6 @@ static int run(int argc, char* argv[]) {
             break;
         case 'l':
             logFile = optarg;
-            break;
-        case 'm':
-            minDelay = parseDouble("minimum delay between queries (s)", optarg);
-            break;
-        case 'M':
-            maxDelay = parseDouble("maximum delay between queries (s)", optarg);
-            break;
-        case 'S':
-            createSources = true;
-            break;
-        case 'V':
-            mzViews = parseCommaSeparated(optarg);
-            break;
-        case 'P':
-            peekConns = parseInt("Materialized peek threads", optarg);
-            break;
-        case 'k':
-            peekMinDelay = parseDouble("minimum delay between peeks (s)", optarg);
-            break;
-        case 'K':
-            peekMaxDelay = parseDouble("maximum delay between peeks (s)", optarg);
-            break;
-        case 'F':
-            flushSleepTime = parseDouble("Interval to run flush-tables hack (s)", optarg);
             break;
         default:
             return 1;
@@ -568,7 +596,6 @@ static int run(int argc, char* argv[]) {
     std::promise<std::vector<Histogram>> promHist;
     auto futHist = promHist.get_future();
     runState = RunState::warmup;
-    mz::Config mzCfg = mz::defaultConfig();
     if (createSources) {
         const auto& allHQueries = mz::allHQueries();
         for (const auto& view: mzViews) {
