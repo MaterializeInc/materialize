@@ -37,7 +37,8 @@ pub fn describe_statement(
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
     Ok(match stmt {
-        Statement::CreateSource { .. }
+        Statement::CreateIndex { .. }
+        | Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::Drop { .. }

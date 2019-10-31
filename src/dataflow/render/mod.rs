@@ -437,11 +437,12 @@ where
                         self.ensure_rendered(input, scope, worker_index);
                         let built = self.collection(input).unwrap();
                         let keys2 = keys.clone();
-                        let mut buffer = DatumsBuffer::new();
+                        let mut unpacker = RowUnpacker::new();
+                        let mut packer = RowPacker::new();
                         let keyed = built
                             .map(move |row| {
-                                let datums = buffer.from_iter(&row);
-                                let key_row = Row::from_iter(keys2.iter().map(|i| datums[*i]));
+                                let datums = unpacker.unpack(&row);
+                                let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -529,6 +530,7 @@ where
 
                     // TODO: easier idioms for detecting, re-using, and stashing.
                     if self.arrangement(&input, &new_keys[..]).is_none() {
+                        println!("building a trace ({:?}, {:?})", &input, &new_keys[..]);
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
                         let mut unpacker = RowUnpacker::new();

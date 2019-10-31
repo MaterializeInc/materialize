@@ -72,12 +72,9 @@ pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error
 
 /// Response from the queue to an `Execute` command.
 pub enum ExecuteResponse {
-<<<<<<< HEAD
     /// The current session has been taken out of transaction mode by COMMIT
     Commit,
-=======
     CreatedIndex,
->>>>>>> Basic index creation and deletion.
     CreatedSink,
     CreatedSource,
     CreatedTable,
@@ -122,13 +119,9 @@ impl fmt::Debug for ExecuteResponse {
             ExecuteResponse::Inserted(n) => write!(f, "ExecuteResponse::Inserted({})", n),
             ExecuteResponse::SendRows(_) => write!(f, "ExecuteResponse::SendRows(<rx>)"),
             ExecuteResponse::SetVariable { name } => {
-<<<<<<< HEAD
                 write!(f, "ExecuteResponse::SetVariable({})", name)
             }
             ExecuteResponse::StartTransaction => f.write_str("ExecuteResponse::StartTransaction"),
-=======
-                write!(f, "ExecuteResponse::SetVariable({})", name),
->>>>>>> Basic index creation and deletion.
             ExecuteResponse::Tailing { rx: _ } => f.write_str("ExecuteResponse::Tailing"),
             ExecuteResponse::Updated(n) => write!(f, "ExecuteResponse::Updated({})", n),
         }

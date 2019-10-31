@@ -159,7 +159,7 @@ where
 
             Plan::CreateIndex(index) => {
                 self.create_dataflows(vec![DataflowDesc::from(index)]);
-                QueryExecuteResponse::CreatedIndex
+                ExecuteResponse::CreatedIndex
             }
 
             Plan::DropItems(names, item_type) => {

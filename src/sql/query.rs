@@ -537,11 +537,16 @@ pub fn plan_index(
     let desc = catalog.get_desc(&on_name)?;
 
     let scope = Scope::from_source(Some(&on_name), desc.iter_names(), Some(Scope::empty(None)));
-    let ctx = &ExprContext {
+    let qcx = &QueryContext {
+        outer_scope: &Scope::empty(None),
+        outer_relation_type: &RelationType::empty(),
+        param_types: Rc::new(RefCell::new(BTreeMap::new())),
+    };
+    let ecx = &ExprContext {
+        qcx: &qcx,
         name: "INDEX CREATION",
         scope: &scope,
-        outer_relation_type: &RelationType::empty(),
-        inner_relation_type: desc.typ(),
+        relation_type: desc.typ(),
         allow_aggregates: false,
         allow_subqueries: false,
     };
@@ -551,7 +556,7 @@ pub fn plan_index(
     let mut func_count = key_parts.len();
 
     for key_part in key_parts {
-        let expr = plan_expr(catalog, ctx, key_part)?;
+        let expr = plan_expr(catalog, ecx, key_part, Some(ScalarType::String))?;
         if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
             arrange_cols.push(*i);
         } else {
@@ -1107,7 +1112,7 @@ fn plan_expr<'a>(
                 subquery,
                 negated,
             } => {
-                if !ctx.allow_subqueries {
+                if !ecx.allow_subqueries {
                     bail!("Command does not allow subqueries")
                 }
                 use BinaryOperator::{Eq, NotEq};
