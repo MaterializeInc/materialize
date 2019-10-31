@@ -105,3 +105,20 @@ mapfile_shim() {
         var+=("$line")
     done
 }
+
+########################################
+# Text-Coloring commands
+
+# [u]sage-[s]ubcommand: Paint the argument as a subcmd
+#
+# In usage text, write: "usage: $0 `us CMD`"
+us() {
+    echo -ne "\e[34m$*\e[0m"
+}
+
+# [u]sage-[w]arn: Paint the argument as a warning
+#
+# In usage text, write: "usage: $0 `uw WILL DELETE EVERYTHING`"
+uw() {
+    echo -ne "\e[31m$*\e[0m"
+}
