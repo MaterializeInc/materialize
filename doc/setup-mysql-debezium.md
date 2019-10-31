@@ -67,18 +67,6 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s
 1. Load TPC-H with `benesch`'s fork of [`tpch-gen`](https://github.com/benesch/tpch-dbgen)'s data.
 
     ```bash
-    curl -O https://materialize-ddls.s3.amazonaws.com/tpch-mysql.tar.gz
-    tar -zxf tpch-mysql.tar.gz
-    rm tpch-mysql.tar.gz
-    cd tpch-mysql
-    mysql -uroot --local-infile < mysql-tpch-ddl.sql
-    cd ../
-    rm -rf tpch-mysql
-    ```
-
-    You can also download the repo and generate these DDLs on the fly.
-
-    ```bash
     git clone https://github.com/benesch/tpch-dbgen.git
     cd tpch-dbgen
     make
