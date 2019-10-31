@@ -139,15 +139,27 @@ fn plan_query(
                     allow_aggregates: true,
                 };
                 let expr = plan_expr(catalog, ecx, other, Some(ScalarType::String))?;
-                let idx = output_typ.column_types.len() + map_exprs.len();
-                map_exprs.push(expr);
-                order_by.push(ColumnOrder {
-                    column: idx,
-                    desc: match obe.asc {
-                        None => false,
-                        Some(asc) => !asc,
-                    },
-                });
+                // If the expression is a reference to an existing column,
+                // do not introduce a new column to support it.
+                if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
+                    order_by.push(ColumnOrder {
+                        column,
+                        desc: match obe.asc {
+                            None => false,
+                            Some(asc) => !asc,
+                        },
+                    });
+                } else {
+                    let idx = output_typ.column_types.len() + map_exprs.len();
+                    map_exprs.push(expr);
+                    order_by.push(ColumnOrder {
+                        column: idx,
+                        desc: match obe.asc {
+                            None => false,
+                            Some(asc) => !asc,
+                        },
+                    });
+                }
             }
         }
     }
