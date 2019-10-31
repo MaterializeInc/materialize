@@ -22,9 +22,6 @@
 
 #![deny(missing_debug_implementations)]
 
-#[macro_use]
-extern crate abomonation_derive;
-
 mod relation;
 mod row;
 mod scalar;
