@@ -7,7 +7,6 @@ use expr as dataflow_expr;
 use ore::collections::CollectionExt;
 use repr::*;
 use std::collections::{HashMap, HashSet};
-use std::iter::FromIterator;
 use std::mem;
 
 // these happen to be unchanged at the moment, but there might be additions later

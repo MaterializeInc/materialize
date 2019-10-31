@@ -170,6 +170,8 @@ impl Row {
     /// Read a datum starting at byte `offset`.
     ///
     /// Updates `offset` to point to the first byte after the end of the read region.
+    ///
+    /// This function is unsafe because if used incorrectly it could return invalid values, which is Undefined Behavior
     unsafe fn read_datum(&self, offset: &mut usize) -> Datum {
         let tag = self.read_copy::<Tag>(offset);
         match tag {
