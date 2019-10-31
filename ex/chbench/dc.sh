@@ -23,10 +23,25 @@ main() {
     fi
     local arg=$1 && shift
     case "$arg" in
-        up) bring_up ;;
-        down) shut_down ;;
+        up)
+            if [[ $# -eq 0 ]]; then
+                bring_up
+            else
+                dc_up "$@"
+            fi ;;
+        down)
+            if [[ $# -eq 0 ]]; then
+                shut_down
+            else
+                dc_stop "$@"
+            fi ;;
         nuke) nuke_docker ;;
         load-test) load_test;;
+        run)
+            if [[ $# -eq 0 ]]; then
+                usage
+            fi
+            dc_run "$@" ;;
         restart)
             if [[ $# -ne 1 ]]; then
                 usage
@@ -36,13 +51,46 @@ main() {
     esac
 }
 
+# Print out to use this program and then exit
 usage() {
-    die "usage: $0 <up|down|restart (SERVICE|all)>"
+    # legacy backtics are fine for this use IMO
+    # shellcheck disable=SC2006
+    die "usage: $0 `us COMMAND`
+
+Possible COMMANDs:
+
+ Cluster commands:
+
+    `us up \[SERVICE..\]`           With args: Start the list of services
+                             With no args: Start the cluster, doing everything
+                               `uw \*except\*` the chbench gen step from the readme
+    `us down \[SERVICE..\]`         With args: Stop the list of services, without removing them
+                             With no args: Stop the cluster, removing containers, volumes, etc
+
+ Individual service commands:
+
+    `us run SERVICE \[ARGS..\]`     Equivalent of 'docker-compose run ..ARGS'
+    `us restart \(SERVICE\|all\)`    Restart either SERVICE or all services. This preserves data in
+                               volumes (kafka, debezium, etc)
+    `us load-test`                Run a long-running load test, modify this file to change parameters
+
+ Danger Zone:
+
+    `us nuke`                     Destroy *all data* in Docker: volumes, local images, etc"
 }
+
+########################################
+# Commands
 
 dc_up() {
     runv docker-compose up -d --build "$@"
 }
+
+# Run docker-compose stop
+dc_stop() {
+    runv docker-compose stop "$@"
+}
+
 
 bring_up() {
     for image in "${IMAGES[@]}"; do
@@ -61,8 +109,12 @@ bring_up() {
     dc_up grafana
 }
 
+dc_run() {
+    runv docker-compose run "$@"
+}
+
 shut_down() {
-    run docker-compose down
+    runv docker-compose down
 }
 
 restart() {
