@@ -1,0 +1,14 @@
+{{ define "main" }}
+<table>
+    <tr>
+        <th>Page</th>
+        <th>Description</th>
+    </tr>
+    {{ range .Paginator.Pages }}
+    <tr>
+        <td><a href="{{.RelPermalink}}">{{.Title}}</a></td>
+        <td>{{.Description}}</td>
+    </tr>
+    {{end}}
+</table>
+{{end}}

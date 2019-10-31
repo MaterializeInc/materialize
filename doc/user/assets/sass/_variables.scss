@@ -1,0 +1,180 @@
+//
+// VARIABLES
+//
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// breakpoints: 1000px, 800, 640px
+
+@mixin browser1000 {
+  @media screen and (max-width: 1000px) {
+    @content;
+  }
+}
+
+@mixin browser800 {
+  @media screen and (max-width: 800px) {
+    @content;
+  }
+}
+
+@mixin mobile {
+  @media screen and (max-width: 640px) {
+    @content;
+  }
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// type mixins
+
+@mixin fontstyle {
+  @include opentype-defaults;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -webkit-margin-before: 0em;
+  -webkit-margin-after: 0em;
+  -webkit-margin-start: 0px;
+  -webkit-margin-end: 0px;
+}
+
+@mixin opentype-defaults {
+  -moz-font-feature-settings: "liga", "kern";
+  -moz-font-feature-settings: "liga=1, kern=1";
+  -ms-font-feature-settings: "liga", "kern";
+  -o-font-feature-settings: "liga", "kern";
+  -webkit-font-feature-settings: "liga", "kern";
+  font-feature-settings: "liga", "kern";
+  font-kerning: normal;
+  font-variant-ligatures: common-ligatures, contextual;
+  -moz-font-feature-settings: "kern", "liga", "clig", "calt";
+  -ms-font-feature-settings: "kern", "liga", "clig", "alt";
+  -webkit-font-feature-settings: "kern", "liga", "clig", "calt";
+  font-feature-settings: "kern", "liga", "clig", "calt";
+}
+
+@mixin fontstyle {
+  font-family: "graphik", sans-serif;
+  font-style: normal;
+  font-stretch: normal;
+  letter-spacing: 0em;
+  font-weight: normal;
+  font-style: normal;
+}
+
+@mixin fontstyle-bold {
+  font-family: "graphik-semibold", serif;
+  font-weight: 600;
+  font-style: normal;
+  font-stretch: normal;
+  letter-spacing: 0em;
+  font-weight: normal;
+  font-style: normal;
+}
+
+@mixin body-fontstyle {
+  @include fontstyle;
+}
+
+@mixin small-allcaps {
+  text-transform: uppercase;
+  font-size: 0.8em; // 16px
+  line-height: 1.5rem;
+  letter-spacing: 2px;
+}
+
+@mixin vertical-align-center {
+  position: relative;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+@mixin button-basic {
+  background-color: $black;
+  color: $white;
+  transition: all 0.2s ease-in-out;
+  display: inline-block;
+  &:hover {
+    @include button-primary-hover;
+  }
+}
+@mixin button-primary {
+  @include button-basic;
+  font-size: 0.8em;
+
+  padding: 0.75em 3em;
+  vertical-align: middle;
+}
+
+@mixin button-primary-hover {
+  background-color: $black;
+  color: $white;
+}
+
+@mixin hover-raise-effect {
+  border-bottom: 2px solid $color-link;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+  transform: scale(1.04, 1.04);
+}
+
+@mixin section-blue {
+  background-color: $blue-light;
+}
+
+/* Utilities ==================================================================== */
+@mixin clearfix {
+  *zoom: 1;
+  &:before,
+  &:after {
+    display: table;
+    content: "";
+    line-height: 0;
+  }
+  &:after {
+    clear: both;
+  }
+}
+
+@mixin bottom-align {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+}
+
+@mixin bw-image {
+  -webkit-filter: grayscale(100%); /* Safari 6.0 - 9.0 */
+  filter: grayscale(100%);
+}
+
+.bw-image {
+  @include bw-image;
+}
+
+@mixin rotate-90 {
+  /* Rotate from top left corner (not default) */
+  -webkit-transform-origin: 0 0;
+  -moz-transform-origin: 0 0;
+  -ms-transform-origin: 0 0;
+  -o-transform-origin: 0 0;
+
+  -webkit-transform: rotate(-90deg);
+  -moz-transform: rotate(-90deg);
+  -ms-transform: rotate(-90deg);
+  -o-transform: rotate(-90deg);
+}
+
+@mixin rotate-0 {
+  /* Rotate from top left corner (not default) */
+  -webkit-transform-origin: 0 0;
+  -moz-transform-origin: 0 0;
+  -ms-transform-origin: 0 0;
+  -o-transform-origin: 0 0;
+
+  -webkit-transform: rotate(0deg);
+  -moz-transform: rotate(0deg);
+  -ms-transform: rotate(0deg);
+  -o-transform: rotate(0deg);
+}
+
+.overflow-visible {
+  overflow: visible !important;
+  //background-color: red;
+}

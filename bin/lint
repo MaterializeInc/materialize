@@ -61,12 +61,14 @@ copyright_files=$(grep -vE \
     -e '\.png$' \
     -e '\.jpe?g$' \
     -e '\/go\.sum$' \
+    -e 'doc/user/' \
     <<< "$files"
 )
 
 newline_files=$(grep -vE \
     -e '\.png$' \
     -e '\.jpe?g$' \
+    -e 'doc/user/static/font' \
     <<< "$files"
 )
 

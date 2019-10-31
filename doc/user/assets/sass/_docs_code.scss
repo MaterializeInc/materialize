@@ -1,0 +1,20 @@
+p,
+li,
+th,
+td {
+  code {
+    color: #a90d91;
+    font-family: "Roboto Mono", monospace;
+  }
+}
+
+.highlight {
+  font-family: "Roboto Mono", monospace;
+  background-color: #f9f7fd;
+  padding: 1rem;
+  margin-bottom: 1rem;
+
+  pre {
+    background-color: #f9f7fd !important;
+  }
+}

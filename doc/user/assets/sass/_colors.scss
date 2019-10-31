@@ -1,0 +1,42 @@
+// Colors
+$white: #ffffff;
+$black: #212121;
+$grey-dark: #7a7a7a;
+$grey: #d3d3d3;
+
+// Brand Colors
+$purple: #6832d8;
+$purple-light: #a385e8;
+$green: #24bf67;
+$green-light: #9ce181;
+
+// Errors
+$red: #f75229;
+
+// Relative Color Associations
+$color-body-background: $white;
+$color-body: $black;
+$color-link: $purple;
+$color-link-active: $purple;
+$color-h3: $grey;
+$color-form-input-border: $purple-light;
+$color-form-input-text: $purple-light;
+$color-error: $red;
+$color-button-primary: $purple;
+$color-button-primary-text: $white;
+$color-section-border: #f2f2f2;
+
+.h1-callout {
+  color: $purple;
+  text-align: center;
+  display: block;
+}
+
+// Gradient
+@mixin bg-gradient-01 {
+  background: rgb(163, 133, 232);
+  background: -moz-linear-gradient(180deg, rgba(163, 133, 232, 0.1) 0%, rgba(255, 255, 255, 0.1) 100%);
+  background: -webkit-linear-gradient(180deg, rgba(163, 133, 232, 0.1) 0%, rgba(255, 255, 255, 0.1) 100%);
+  background: linear-gradient(180deg, rgba(163, 133, 232, 0.1) 0%, rgba(255, 255, 255, 0.1) 100%);
+  filter: progid:DXImageTransform.Microsoft.gradient(startColorstr="#a385e8",endColorstr="#ffffff",GradientType=1);
+}

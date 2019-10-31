@@ -1,0 +1,60 @@
+.rr-diagram {
+  margin: 1.5rem 0;
+  .line {
+    fill: none;
+    stroke: #151629;
+  }
+  .bold-line {
+    stroke: #07070e;
+    shape-rendering: crispEdges;
+    stroke-width: 2;
+  }
+  .thin-line {
+    stroke: #0a0b14;
+    shape-rendering: crispEdges;
+  }
+  .filled {
+    fill: #151629;
+    stroke: none;
+  }
+  text.terminal {
+    font-family: Verdana, Sans-serif;
+    font-size: 12px;
+    fill: #07070e;
+    font-weight: bold;
+  }
+  text.nonterminal {
+    font-family: Verdana, Sans-serif;
+    font-size: 12px;
+    fill: #090911;
+    font-weight: normal;
+  }
+  text.regexp {
+    font-family: Verdana, Sans-serif;
+    font-size: 12px;
+    fill: #0a0b14;
+    font-weight: normal;
+  }
+  rect,
+  circle,
+  polygon {
+    fill: #151629;
+    stroke: #151629;
+  }
+  rect.terminal {
+    fill: #b8bbdb;
+    stroke: #151629;
+  }
+  rect.nonterminal {
+    fill: #d8daeb;
+    stroke: #151629;
+  }
+  rect.text {
+    fill: none;
+    stroke: none;
+  }
+  polygon.regexp {
+    fill: #e9eaf4;
+    stroke: #151629;
+  }
+}

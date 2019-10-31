@@ -155,7 +155,7 @@ answer in their once you solve it.
 
     ```shell
     cd <path/to/materialized>
-    source doc/demo-utils.sh
+    source doc/developer/assets/demo/utils.sh
     mtrlz-shell
     ```
 

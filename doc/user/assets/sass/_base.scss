@@ -1,0 +1,164 @@
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+/* BASE RULES */
+
+html {
+  font-size: 100%;
+  box-sizing: border-box;
+}
+
+* {
+  @include fontstyle;
+}
+*,
+*:before,
+*:after {
+  box-sizing: inherit;
+}
+body {
+  @include body-fontstyle;
+  background: $color-body-background;
+  font-size: 20px;
+  line-height: 1.3em;
+  color: $color-body;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0 0 1em 0;
+  padding: 0;
+  max-width: 28em;
+}
+
+p {
+  margin-bottom: 1em;
+  line-height: 1.5em;
+  text-align: inherit;
+}
+
+a {
+  color: $color-link;
+  text-decoration: none;
+  border-bottom: 3px solid rgba(0, 0, 0, 0);
+  &:hover,
+  &:active {
+    color: $color-link-active;
+    border-bottom: 3px solid $color-link-active;
+  }
+}
+
+.img-link {
+  border-bottom: none;
+
+  &:hover {
+    border-bottom: none;
+  }
+}
+
+video {
+  max-width: 100%;
+  object-fit: contain;
+}
+
+ul,
+ol,
+li {
+  margin: 0;
+  padding: 0;
+}
+
+ul {
+  list-style-type: none;
+}
+ol {
+  list-style-type: none;
+  counter-reset: list-counter;
+  margin-top: 2rem;
+  //display:						flex;
+  //flex-wrap:						wrap;
+}
+
+ul,
+ol {
+  margin-bottom: 1em;
+}
+
+ul li {
+  padding-left: 0em;
+}
+
+ol li {
+  counter-increment: list-counter;
+  position: relative;
+  padding: 2rem 0rem 1rem 4rem;
+  border-top: 2px dashed rgba(0, 0, 0, 0.25);
+
+  &:before {
+    content: counter(list-counter);
+    color: $grey;
+    @include fontstyle;
+    font-size: 3rem;
+    margin-top: 0.75rem;
+    margin-right: 2rem;
+    position: absolute;
+    top: 1.9rem;
+    left: 0;
+  }
+}
+li {
+  line-height: inherit;
+  margin-bottom: 1em;
+}
+
+ul li:before {
+  content: "→";
+  padding-right: 1em;
+  margin-left: -2em;
+  display: none;
+  line-height: 1;
+}
+
+em,
+i {
+}
+
+strong,
+b {
+  font-weight: bold;
+}
+
+img {
+  max-width: 100%;
+}
+
+sub,
+sup {
+  font-weight: bold;
+  padding: 0 0 0 0.2em;
+  //color: rgba(0,0,0,.5);
+  font-size: 75%;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+sup {
+  top: -0.5em;
+}
+sub {
+  bottom: -0.25em;
+}
+
+// Fixes images in popup boxes from Google Translate
+.gmnoprint img {
+  max-width: none;
+}
+
+.inline-block {
+  display: inline-block;
+}
+.align-right {
+  text-align: right;
+}

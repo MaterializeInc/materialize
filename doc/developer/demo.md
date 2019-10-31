@@ -18,18 +18,18 @@ Each demo involves starting several terminal sessions:
 * At least one Avro producer window -- the channel through which content gets
   into Materialize
 
-The first thing that we need to do is make sure that the core services our
-demos rely upon are running. For now, that means we need `confluent connect`
-and `materialized`.
+The first thing that we need to do is make sure that the core services our demos
+rely upon are running. For now, that means we need `confluent connect` and
+`materialized`.
 
-We have a collection of helpful tools in `doc/assets/demo/utils.sh`, including
-one that makes sure that `confluent` is running and Materialize is up to date
-and running.
+We have a collection of helpful tools in `doc/developer/assets/demo/utils.sh`,
+including one that makes sure that `confluent` is running and Materialize is up
+to date and running.
 
 So, to get the core services running we just run `mtrlz-start`:
 
 ```console
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-start
 ... snip confluent noise ...
 ... snip cargo noise ...
@@ -45,7 +45,7 @@ To get data into materialized we run the `mtrlz-produce` function, which allows
 us to interactively put JSON blobs into Materialize, according to a schema.
 
 ```console
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-produce quotes '{
     "type": "record",
     "name": "envelope",
@@ -84,7 +84,7 @@ Now we are ready to interact with Materialize!
 Open another terminal session and start the Materialize shell:
 
 ```sql
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE quotes FROM 'kafka://localhost/quotes' USING SCHEMA REGISTRY 'http://localhost:8081';
 > SHOW COLUMNS FROM quotes;
@@ -104,7 +104,7 @@ However, it is worth noting one can query data in Materialize with arbitrary
 For your avro producer session do:
 
 ```console
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-produce aggdata '{
     "type": "record",
     "name": "envelope",
@@ -143,7 +143,7 @@ Now you won't have a prompt. Just enter this manually:
 Then, in another session, open the Materialize shell:
 
 ```sql
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE aggdata FROM 'kafka://localhost/aggdata' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE MATERIALIZED VIEW aggtest AS SELECT sum(a) FROM aggdata GROUP BY b;
@@ -153,7 +153,7 @@ $ mtrlz-shell
 ## Join demo
 
 ```console
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-produce src1 '{
     "type": "record",
     "name": "envelope",
@@ -191,7 +191,7 @@ Now you won't have a prompt, just enter this manually:
 Open another terminal and start another producer:
 
 ```console
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-produce src2 '{
     "type": "record",
     "name": "envelope",
@@ -237,7 +237,7 @@ Go back to the `src1` terminal and flush the data:
 Then, in another session, open the Materialize shell:
 
 ```sql
-$ source doc/assets/demo/utils.sh
+$ source doc/developer/assets/demo/utils.sh
 $ mtrlz-shell
 > CREATE SOURCE src1 FROM 'kafka://localhost/src1' USING SCHEMA REGISTRY 'http://localhost:8081';
 > CREATE SOURCE src2 FROM 'kafka://localhost/src2' USING SCHEMA REGISTRY 'http://localhost:8081';

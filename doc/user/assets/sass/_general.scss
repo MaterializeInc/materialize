@@ -1,0 +1,214 @@
+// Typography
+
+h1 {
+  @include fontstyle;
+  text-align: center;
+  font-size: 2.75em; // 55px
+  line-height: 4rem;
+  letter-spacing: -1px;
+  width: 100%;
+
+  @include browser1000 {
+  }
+  @include browser800 {
+    font-size: 2em;
+    line-height: 3rem;
+    // border: 1px solid red;
+  }
+  @include mobile {
+    font-size: 2em;
+    line-height: 3rem;
+  }
+}
+
+h2 {
+  @include fontstyle-bold;
+  font-size: 1.25em; //26px;
+  line-height: 1.5em;
+  position: relative;
+}
+
+.chev {
+  &:before {
+    display: block;
+    width: 12px;
+    height: 20px;
+    content: " ";
+    position: absolute;
+    left: -25px;
+    top: 10px;
+    background-image: url("/images/assets/chevron.png");
+    background-repeat: no-repeat;
+    background-size: 12px 20px;
+  }
+}
+
+h3 {
+  @include small-allcaps;
+  color: $grey-dark;
+}
+
+i {
+  background-color: rgba(0, 0, 0, 0.05);
+  font-color: $grey;
+}
+
+p {
+  font-size: 1em; //20px
+  line-height: 1.75em;
+}
+
+blockquote {
+  margin: 2em 0px;
+  border: 2px solid rgba(0, 0, 0, 0.05);
+  border-bottom: 5px solid rgba(0, 0, 0, 0.05);
+  border-right: 5px solid rgba(0, 0, 0, 0.05);
+  padding: 2em;
+  background-color: rgba(0, 0, 0, 0.01);
+  @include fontstyle;
+  font-style: italic;
+  color: rgba(0, 0, 0, 0.75);
+  &:hover {
+  }
+}
+
+// Buttons
+
+.button-primary {
+  @include button-primary;
+  @include mobile {
+    width: 100%;
+    text-align: center;
+  }
+  //&:hover {
+  // @include button-primary-hover;
+  //}
+}
+
+// Forms
+form {
+}
+fieldset {
+}
+input {
+  margin-bottom: 1em;
+  height: 40px;
+  line-height: 40px;
+  font-size: 20px;
+  border: 1px solid $color-form-input-border;
+
+  &:focus {
+    outline: none;
+    border-color: inherit;
+    -webkit-box-shadow: none;
+    box-shadow: none;
+  }
+}
+.input-text {
+  display: block;
+  width: 100%;
+  padding: 0em 0.5em;
+  color: $color-form-input-text;
+}
+.form-button-submit {
+  display: block;
+  width: 100%;
+  @include button-primary;
+  border: none;
+  height: 40px;
+  line-height: 40px;
+  vertical-align: middle;
+  padding: 0 0.5em;
+}
+.input-error {
+  border: 1px solid $color-error;
+  color: $color-error;
+}
+.error-message {
+  color: $color-error;
+  margin-bottom: 1em;
+}
+
+/******************************************************************************/
+/* LAYOUT / S */
+/******************************************************************************/
+
+section {
+  //clear: both;
+  //@include clearfix;
+  padding: 100px 0px;
+  border-top: 2px solid $color-section-border; //#F2F2F2;
+}
+
+.container {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 1200px;
+  //padding:							0 4em 4em 4em;
+  position: relative;
+  padding: 0 2em;
+
+  @include browser1000 {
+    width: 100%;
+    padding: 0 2em;
+    //
+    //	 padding:	0 2em 3em 2em;
+  }
+  @include browser800 {
+    padding: 0 2em;
+  }
+  @include mobile {
+    width: 100%;
+    padding: 0 1.5em;
+    //	padding: 0 2em 2em 1.5em;
+  }
+}
+
+// UTILITY STUFF ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.clearfix {
+  @include clearfix;
+  clear: both;
+}
+
+.clearfix:before,
+.clearfix:after {
+  content: " ";
+  display: table;
+}
+
+.clearfix:after {
+  clear: both;
+}
+
+.see-overflow {
+  overflow: visible;
+}
+.pos-relative {
+  position: relative;
+}
+.bottom-align {
+  // align to bottom of grid, like contact links on info page
+  // requires pos-relative on parent to work
+  @include bottom-align;
+}
+
+.center-illo {
+  margin-left: auto;
+  margin-right: auto;
+  margin-bottom: 2em;
+  width: 50%;
+
+  div {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  svg {
+    width: 100%;
+  }
+
+  @include mobile {
+    width: 100%;
+  }
+}

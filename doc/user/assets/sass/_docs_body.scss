@@ -1,0 +1,40 @@
+main {
+  flex: 1;
+  font-size: 0.8rem;
+  padding: 1rem 7rem 0rem 4.5rem;
+  max-width: 800px;
+  min-height: 100vh;
+
+  h1 {
+    text-align: left;
+    font-size: 2rem;
+    font-family: "graphik-semibold";
+    margin-bottom: 0.75rem;
+  }
+
+  h2 {
+    margin-top: 3rem;
+  }
+
+  h3 {
+    font-size: 0.85rem;
+    margin-top: 2rem;
+  }
+
+  a {
+    // Needed to remove conflict with nav header underlines.
+    border-bottom: none;
+  }
+
+  ul {
+    li {
+      list-style-type: disc;
+      margin-left: 1rem;
+      margin-bottom: 0.5rem;
+    }
+  }
+
+  .list-page {
+    min-height: 60vh;
+  }
+}

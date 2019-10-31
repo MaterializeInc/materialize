@@ -1,0 +1,29 @@
+.hg {
+  display: flex;
+  flex-direction: column;
+}
+
+.hg-body {
+  display: flex;
+  flex: 1;
+}
+
+.site-header {
+  border-bottom: 1px #d8d8d8d8 solid;
+}
+
+.brand {
+  margin-right: 1rem;
+}
+
+.dn {
+  display: none;
+}
+
+strong {
+  font-family: "graphik-semibold";
+}
+
+em {
+  font-family: "hkgrotesk-italic";
+}
