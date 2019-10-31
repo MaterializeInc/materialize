@@ -1,7 +1,10 @@
 ---
 title: "Architecture" 
 description: "Understand Materialize's architecture."
-menu: "main"
+menu:
+  main:
+    parent: 'overview'
+    weight: 2
 ---
 
 Everything in Materialize is currently handled by the `materialized` process

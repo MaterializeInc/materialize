@@ -1,0 +1,2 @@
+create_view ::=
+  'CREATE' 'MATERIALIZED'? 'VIEW' view_name 'AS' select_stmt
