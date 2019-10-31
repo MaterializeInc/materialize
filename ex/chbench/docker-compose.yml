@@ -3,18 +3,31 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+
+# Map from host-port:internal port
+#
+# This mostly just shows all the ports that are available to the host system, if you want
+# to change these you must restart the docker-compose cluster.
+x-port-mappings:
+  mz: &mz 6875:6875
+  mysql: &mysql 3306:3306
+  kafka-control-center: &control-center 9021:9021
+  grafana: &grafana 3000:3000
+  prometheus: &prometheus 9090:9090
+  pushgateway: &pushgateway 9091:9091
+
 version: '3.7'
 services:
   materialized:
     image: materialize/materialized:latest
     ports:
-     - 6875:6875
+     - *mz
     init: true
     command: -w1
   mysql:
     image: debezium/example-mysql:0.9
     ports:
-     - 3306:3306
+     - *mysql
     environment:
      - MYSQL_ROOT_PASSWORD=debezium
      - MYSQL_USER=mysqluser
@@ -76,7 +89,7 @@ services:
     restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
-      - "9021:9021"
+      - *control-center
     environment:
       CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:9092"
       CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
@@ -145,12 +158,12 @@ services:
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
     ports:
-      - 3000:3000
+      - *grafana
   prometheus:
     image: prom/prometheus:v2.12.0
     init: true
     ports:
-      - 9090:9090
+      - *prometheus
     depends_on:
       - materialized
       - prometheus_sql_exporter
@@ -193,7 +206,7 @@ services:
     # Pinned to v0.9.1 because 0.10+ has the following bug: https://github.com/pingcap/rust-prometheus/issues/287
     image: prom/pushgateway:v0.9.1
     ports:
-      - 9091:9091
+      - *pushgateway
   metrics:
     image: materialize/metrics:latest
     init: true
