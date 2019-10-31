@@ -89,15 +89,21 @@ Check out [`mtrlz-setup`](https://github.com/MaterializeInc/mtrlz-setup)'s
 1. Download the [latest stable Debezium MySQL
    connector](https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/0.9.5.Final/debezium-connector-mysql-0.9.5.Final-plugin.tar.gz)
    and place the `debezium-connector-mysql` directory in
-   `/usr/local/share/java`. If this directory doesn't exist, put the contents of
-   the `tar` into the `share/java` directory under your Confluent install
-   directory.
+   `/usr/local/opt/confluent-platform/share/java/`. If this directory doesn't
+   exist, put the contents of the `tar` into the `share/java` directory under
+   your Confluent install directory. In other words, replace
+   `/usr/local/opt/confluent-platform` in the path above with the path to
+   where you installed Confluent.
 
     ```shell
     curl -O https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/0.9.5.Final/debezium-connector-mysql-0.9.5.Final-plugin.tar.gz
     tar -zxvf debezium-connector-mysql-0.9.5.Final-plugin.tar.gz
     rm debezium-connector-mysql-0.9.5.Final-plugin.tar.gz
-    if [ -d "/usr/local/share/java" ]; then mv debezium-connector-mysql /usr/local/share/java; else echo "Move debezium-connector-mysql into the share/java directory under your Confluent install directory" ; fi
+    if [ -d "/usr/local/opt/confluent-platform/share/java/" ]; then
+      mv debezium-connector-mysql /usr/local/opt/confluent-platform/share/java
+    else
+      echo "Move debezium-connector-mysql into the share/java directory under your Confluent install directory"
+    fi
     ```
 
 ## Loading TPCH
@@ -130,8 +136,6 @@ answer in their once you solve it.
         "database.server.id": "184054",
         "database.history.kafka.bootstrap.servers": "localhost:9092",
         "database.history.kafka.topic": "tpch-history",
-        "time.precision.mode": "connect",
-        "decimal.handling.mode": "double"
         }
     }'
     ```
@@ -155,16 +159,8 @@ answer in their once you solve it.
 
 1. In a new shell (#3), launch a `materialized` server.
 
-    If you have a good build...
-
     ```shell
-    cd <path/to/materialized> && ./target/debug/materialized
-    ```
-
-    Or if not...
-
-    ```shell
-    cd <path/to/materialized> && cargo run --release --bin materialized
+    cd <path/to/materialized> && cargo run --bin materialized
     ```
 
 1. In a new shell (#4), connect to `materialized` and create a source to import the `lineitems` table.
