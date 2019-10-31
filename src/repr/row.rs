@@ -89,7 +89,7 @@ pub struct UnpackedRow<'a> {
 /// `RowPacker` provides a reusable buffer as an alternative to `Row::pack` for packing large numbers of `Row`s.
 ///
 /// ```
-/// # use repr::{Row, Datum, RowUnpacker};
+/// # use repr::{Row, Datum, RowPacker};
 /// let mut packer = RowPacker::new();
 /// let row1 = packer.pack(&[Datum::Int32(1), Datum::String("one")]);
 /// let row2 = packer.pack(&[Datum::Int32(2), Datum::String("two")]);
