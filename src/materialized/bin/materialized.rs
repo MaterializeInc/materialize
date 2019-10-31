@@ -124,7 +124,7 @@ fn run() -> Result<(), failure::Error> {
         Some(startup_file) => read_to_string(&startup_file)?,
     };
 
-    materialized::serve(materialized::Config {
+    let _server = materialized::serve(materialized::Config {
         logging_granularity,
         version,
         threads,
@@ -133,7 +133,12 @@ fn run() -> Result<(), failure::Error> {
         sql,
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
-    })
+    })?;
+
+    // Block forever.
+    loop {
+        thread::park();
+    }
 }
 
 fn read_address_file(path: &str, n: usize) -> Result<Vec<String>, failure::Error> {
