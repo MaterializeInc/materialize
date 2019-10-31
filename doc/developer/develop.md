@@ -95,6 +95,10 @@ cd materialize
 cargo run --bin materialized
 ```
 
+Because the MaterializeInc organization requires two-factor authentication
+(2FA), you'll need to clone via SSH as indicated above, or [configure a personal
+access token for use with HTTPS][github-https].
+
 Note that we currently depend on a private GitHub repository,
 [MaterializeInc/sqlparser], and Cargo doesn't handle this particularly well. In
 particular, you'll need to have an SSH agent running with credentials that
@@ -111,6 +115,7 @@ You'll likely want to do something more clever so that an SSH agent is
 automatically started upon login, but we leave it to you to sort that out.
 
 [MaterializeInc/sqlparser]: https://github.com/MaterializeInc/sqlparser.git
+[github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 
 ## Prepping Confluent
 
@@ -211,3 +216,25 @@ This keeps the Git history tidy, since it avoids creating merge commits when you
 `git pull` with unpushed changes. The `rebase.autoStash` option makes this
 workflow particularly ergonomic by stashing any uncommitted changes you have
 when you run `git pull`, then unstashing them after the rebase is complete.
+
+## Other repositories
+
+Several components of Materialize are maintained in separate Git repositories.
+Where possible, we prefer to keep things in the main repository (a "monorepo"
+approach), but when forking existing packages, maintaining a separate repository
+makes it easier to integrate changes from upstream.
+
+Some notable repositories include:
+
+  * **[mtrlz-setup]**, containing automatic development environment setup
+    scripts;
+  * **[rust-rdkafka]**, a fork of the Rust Kafka library;
+  * **[sqlparser]**, a heavily-customized fork of a general SQL parsing package.
+
+As mentioned before, because the MaterializeInc organization requires two-factor
+authentication (2FA), to clone these repositories you'll need to use either SSH
+or [configure a personal access token for use with HTTPS][github-https].
+
+[mtrlz-setup]: https://github.com/MaterializeInc/mtrlz-setup
+[rust-rdkafka]: https://github.com/MaterializeInc/rust-rdkafka
+[sqlparser]: https://github.com/MaterializeInc/sqlparser
