@@ -3,6 +3,9 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 
+# Generates a massive cross-join so that Materialize's memory footprint can
+# be measured.
+
 statement ok
 CREATE TABLE t1(
   a1 INTEGER PRIMARY KEY,

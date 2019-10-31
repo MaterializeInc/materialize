@@ -9,7 +9,7 @@
 
 use dataflow_types::{PeekWhen, RowSetFinishing, Sink, Source, View};
 
-use repr::{RelationDesc, Row};
+use repr::{RelationDesc, Row, ScalarType};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
 use store::{Catalog, CatalogItem};
@@ -47,19 +47,12 @@ pub enum Plan {
     },
     Peek {
         source: ::expr::RelationExpr,
-        desc: RelationDesc,
         when: PeekWhen,
         finishing: RowSetFinishing,
     },
     Tail(CatalogItem),
-    SendRows {
-        desc: RelationDesc,
-        rows: Vec<Row>,
-    },
-    ExplainPlan {
-        desc: RelationDesc,
-        relation_expr: ::expr::RelationExpr,
-    },
+    SendRows(Vec<Row>),
+    ExplainPlan(::expr::RelationExpr),
     SendDiffs {
         name: String,
         updates: Vec<(Row, isize)>,
@@ -83,4 +76,16 @@ pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
 /// Produces a [`Plan`] from a [`Statement`].
 pub fn plan(catalog: &Catalog, session: &Session, stmt: Statement) -> Result<Plan, failure::Error> {
     statement::handle_statement(catalog, session, stmt)
+}
+
+/// Determines the type of the rows that will be returned by `stmt` and the type
+/// of the parameters required by `stmt`. If the statement will not produce a
+/// result set (e.g., most `CREATE` or `DROP` statements), no `RelationDesc`
+/// will be returned. If the query uses no parameters, then the returned vector
+/// of types will be empty.
+pub fn describe(
+    catalog: &Catalog,
+    stmt: Statement,
+) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
+    statement::describe_statement(catalog, stmt)
 }

@@ -8,6 +8,7 @@ use std::iter;
 use std::sync::Arc;
 
 use byteorder::{ByteOrder, NetworkEndian};
+use failure::format_err;
 use futures::sink::Send as SinkSend;
 use futures::stream;
 use futures::sync::mpsc::UnboundedSender;
@@ -26,7 +27,7 @@ use crate::message::{
     VERSION_3,
 };
 use crate::secrets::SecretManager;
-use coord::{self, QueryExecuteResponse};
+use coord::{self, ExecuteResponse};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::{Recv, StreamExt};
 use repr::{RelationDesc, Row};
@@ -139,7 +140,7 @@ pub enum StateMachine<A: Conn + 'static> {
         SendReadyForQuery,
         SendParameterDescription,
         SendDescribeResponse,
-        HandleBind,
+        SendBindComplete,
         HandleParse,
         Error,
         Done
@@ -157,29 +158,22 @@ pub enum StateMachine<A: Conn + 'static> {
     ))]
     HandleQuery {
         conn: A,
-        rx: futures::sync::oneshot::Receiver<coord::Response<QueryExecuteResponse>>,
+        rx: futures::sync::oneshot::Receiver<coord::Response<ExecuteResponse>>,
         field_formats: Option<Vec<FieldFormat>>,
+        row_desc: Option<RelationDesc>,
         extended: bool,
     },
 
-    #[state_machine_future(transitions(SendParseComplete, SendError))]
+    #[state_machine_future(transitions(SendParseComplete, HandleQuery, SendError))]
     HandleParse {
         conn: A,
         rx: futures::sync::oneshot::Receiver<coord::Response<()>>,
+        extended: bool,
     },
 
     // Extended query flow.
     #[state_machine_future(transitions(RecvQuery, Error))]
     SendParseComplete { send: SinkSend<A>, session: Session },
-
-    #[state_machine_future(transitions(SendBindComplete, SendError, Error, Done))]
-    HandleBind {
-        send: SinkSend<A>,
-        session: Session,
-        portal_name: String,
-        statement_name: String,
-        return_field_formats: Vec<FieldFormat>,
-    },
 
     #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
     SendBindComplete { send: SinkSend<A>, session: Session },
@@ -211,7 +205,7 @@ pub enum StateMachine<A: Conn + 'static> {
         row_desc: RelationDesc,
         rows_rx: coord::RowsFuture,
         field_formats: Option<Vec<FieldFormat>>,
-        currently_extended: bool,
+        extended: bool,
     },
 
     #[state_machine_future(transitions(
@@ -252,7 +246,7 @@ pub enum StateMachine<A: Conn + 'static> {
     SendCommandComplete {
         send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
         session: Session,
-        currently_extended: bool,
+        extended: bool,
         /// Labels for prometheus. These provide the `kind` label value in [`RESPONSES_SENT_COUNTER`]
         label: &'static str,
     },
@@ -427,16 +421,15 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Query { sql } => {
                 debug!("query sql: {}", sql);
                 let (tx, rx) = futures::sync::oneshot::channel();
-                cx.cmdq_tx.unbounded_send(coord::Command::Query {
+                cx.cmdq_tx.unbounded_send(coord::Command::Parse {
+                    name: "".into(),
                     sql,
                     session: state.session,
-                    conn_id: cx.conn_id,
                     tx,
                 })?;
-                transition!(HandleQuery {
+                transition!(HandleParse {
                     conn,
                     rx,
-                    field_formats: None,
                     extended: false,
                 })
             }
@@ -449,7 +442,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     session: state.session,
                     tx,
                 })?;
-                transition!(HandleParse { conn, rx })
+                transition!(HandleParse {
+                    conn,
+                    rx,
+                    extended: true
+                })
             }
             FrontendMessage::CloseStatement { name } => {
                 let mut session = state.session;
@@ -481,19 +478,33 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 portal_name,
                 statement_name,
                 return_field_formats,
-            } => transition!(HandleBind {
-                send: conn.send(BackendMessage::BindComplete),
-                session: state.session,
-                portal_name,
-                statement_name,
-                return_field_formats,
-            }),
+            } => {
+                let mut session = state.session;
+                let fmts = return_field_formats.iter().map(bool::from).collect();
+                trace!(
+                    "cid={} handle bind statement={:?} portal={:?}",
+                    cx.conn_id,
+                    statement_name,
+                    portal_name,
+                );
+                session.set_portal(portal_name, statement_name, fmts)?;
+                transition!(SendBindComplete {
+                    send: conn.send(BackendMessage::BindComplete),
+                    session,
+                });
+            }
             FrontendMessage::Execute { portal_name } => {
                 let (tx, rx) = futures::sync::oneshot::channel();
-                let field_formats = state
+                let portal = state
                     .session
                     .get_portal(&portal_name)
-                    .ok_or_else(|| failure::format_err!("portal {:?} does not exist", portal_name))?
+                    .ok_or_else(|| format_err!("portal {:?} does not exist", portal_name))?;
+                let stmt = state
+                    .session
+                    .get_prepared_statement(&portal.statement_name)
+                    .unwrap();
+                let row_desc = stmt.desc().cloned();
+                let field_formats = portal
                     .return_field_formats
                     .iter()
                     .map(FieldFormat::from)
@@ -507,6 +518,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 transition!(HandleQuery {
                     rx,
                     conn,
+                    row_desc,
                     field_formats: Some(field_formats),
                     extended: true,
                 })
@@ -551,44 +563,36 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                     .send(BackendMessage::CommandComplete { tag: $cmd.into() })
                             ),
                             session,
-                            currently_extended: state.extended,
+                            extended: state.extended,
                             label: $label
                         })
                     };
                 }
 
                 match response {
-                    QueryExecuteResponse::CreatedSource => {
+                    ExecuteResponse::CreatedSource => {
                         command_complete!("CREATE SOURCE", "create_source")
                     }
-                    QueryExecuteResponse::CreatedSink => {
-                        command_complete!("CREATE SINK", "create_sink")
-                    }
-                    QueryExecuteResponse::CreatedTable => {
+                    ExecuteResponse::CreatedSink => command_complete!("CREATE SINK", "create_sink"),
+                    ExecuteResponse::CreatedTable => {
                         command_complete!("CREATE TABLE", "create_sink")
                     }
-                    QueryExecuteResponse::CreatedView => {
-                        command_complete!("CREATE VIEW", "create_view")
-                    }
-                    QueryExecuteResponse::Deleted(n) => {
+                    ExecuteResponse::CreatedView => command_complete!("CREATE VIEW", "create_view"),
+                    ExecuteResponse::Deleted(n) => {
                         command_complete!(format!("DELETE {}", n), "delete");
                     }
-                    QueryExecuteResponse::DroppedSource => {
+                    ExecuteResponse::DroppedSource => {
                         command_complete!("DROP SOURCE", "drop_source")
                     }
-                    QueryExecuteResponse::DroppedTable => {
-                        command_complete!("DROP TABLE", "drop_table")
-                    }
-                    QueryExecuteResponse::DroppedView => {
-                        command_complete!("DROP VIEW", "drop_view")
-                    }
-                    QueryExecuteResponse::EmptyQuery => transition!(SendCommandComplete {
+                    ExecuteResponse::DroppedTable => command_complete!("DROP TABLE", "drop_table"),
+                    ExecuteResponse::DroppedView => command_complete!("DROP VIEW", "drop_view"),
+                    ExecuteResponse::EmptyQuery => transition!(SendCommandComplete {
                         send: Box::new(state.conn.send(BackendMessage::EmptyQueryResponse)),
                         session,
-                        currently_extended: state.extended,
+                        extended: state.extended,
                         label: "empty",
                     }),
-                    QueryExecuteResponse::Inserted(n) => {
+                    ExecuteResponse::Inserted(n) => {
                         // "On successful completion, an INSERT command returns a
                         // command tag of the form `INSERT <oid> <count>`."
                         //     -- https://www.postgresql.org/docs/11/sql-insert.html
@@ -598,29 +602,32 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         // have OIDs.
                         command_complete!(format!("INSERT 0 {}", n), "insert");
                     }
-                    QueryExecuteResponse::SendRows { desc, rx } => {
+                    ExecuteResponse::SendRows(rx) => {
+                        let row_desc = state
+                            .row_desc
+                            .expect("missing row description during ExecuteResponse::SendRows");
                         if state.extended {
                             trace!("cid={} handle extended: send rows", cx.conn_id);
                             transition!(WaitForRows {
                                 session,
                                 conn: state.conn,
-                                row_desc: desc,
+                                row_desc,
                                 rows_rx: rx,
                                 field_formats: state.field_formats,
-                                currently_extended: true
+                                extended: true
                             })
                         } else {
                             transition!(SendRowDescription {
                                 send: state.conn.send(BackendMessage::RowDescription(
-                                    super::message::row_description_from_desc(&desc)
+                                    super::message::row_description_from_desc(&row_desc)
                                 )),
                                 session,
-                                row_desc: desc,
+                                row_desc,
                                 rows_rx: rx,
                             })
                         }
                     }
-                    QueryExecuteResponse::SetVariable { name } => {
+                    ExecuteResponse::SetVariable { name } => {
                         if let Some(var) = session.notify_vars().iter().find(|v| v.name() == name) {
                             trace!("cid={} sending parameter status for {}", cx.conn_id, name);
                             transition!(SendParameterStatus {
@@ -634,12 +641,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             command_complete!("SET", "set")
                         }
                     }
-                    QueryExecuteResponse::Tailing { rx } => transition!(StartCopyOut {
+                    ExecuteResponse::Tailing { rx } => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
                         session,
                         rx,
                     }),
-                    QueryExecuteResponse::Updated(n) => {
+                    ExecuteResponse::Updated(n) => {
                         command_complete!(format!("UPDATE {}", n), "update");
                     }
                 }
@@ -711,7 +718,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             row_desc: state.row_desc,
             rows_rx: state.rows_rx,
             field_formats: None,
-            currently_extended: false
+            extended: false
         })
     }
 
@@ -765,7 +772,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             }
             PeekResponse::Rows(rows) => {
                 let state = state.take();
-                let extended = state.currently_extended;
+                let extended = state.extended;
                 trace!(
                     "cid={} wait for rows: count={} extended={}",
                     cx.conn_id,
@@ -778,7 +785,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     rows,
                     state.row_desc,
                     state.field_formats.clone(),
-                    state.currently_extended,
+                    state.extended,
                     cx.conn_id,
                 ));
             }
@@ -804,7 +811,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        let extended = state.currently_extended;
+        let extended = state.extended;
         trace!(
             "cid={} send command complete extended={}",
             cx.conn_id,
@@ -830,18 +837,45 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     fn poll_handle_parse<'s, 'c>(
         state: &'s mut RentToOwn<'s, HandleParse<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
+        cx: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterHandleParse<A>, failure::Error> {
         match try_ready!(state.rx.poll()) {
             coord::Response {
                 result: Ok(()),
-                session,
+                mut session,
             } => {
                 let state = state.take();
-                transition!(SendParseComplete {
-                    send: state.conn.send(BackendMessage::ParseComplete),
-                    session,
-                })
+                if state.extended {
+                    transition!(SendParseComplete {
+                        send: state.conn.send(BackendMessage::ParseComplete),
+                        session,
+                    })
+                } else {
+                    let statement_name = String::from("");
+                    let stmt = session
+                        .get_prepared_statement(&statement_name)
+                        .expect("unnamed statement to be present during simple query flow");
+                    let row_desc = stmt.desc().cloned();
+                    let portal_name = String::from("");
+                    let params = vec![];
+                    session
+                        .set_portal(portal_name.clone(), statement_name, params)
+                        .expect("unnamed statement to be present during simple query flow");
+                    let (tx, rx) = futures::sync::oneshot::channel();
+                    cx.cmdq_tx.unbounded_send(coord::Command::Execute {
+                        portal_name,
+                        session,
+                        conn_id: cx.conn_id,
+                        tx,
+                    })?;
+                    transition!(HandleQuery {
+                        conn: state.conn,
+                        rx,
+                        field_formats: None,
+                        row_desc,
+                        extended: false,
+                    })
+                }
             }
             coord::Response {
                 result: Err(err),
@@ -856,7 +890,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         detail: None,
                     }),
                     session,
-                    kind: ErrorKind::Extended,
+                    kind: if state.extended {
+                        ErrorKind::Extended
+                    } else {
+                        ErrorKind::Standard
+                    },
                 });
             }
         }
@@ -872,27 +910,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         trace!("cid={} transition to recv extended", cx.conn_id);
         transition!(RecvQuery {
             recv: conn.recv(),
-            session: state.session,
-        })
-    }
-
-    fn poll_handle_bind<'s, 'c>(
-        state: &'s mut RentToOwn<'s, HandleBind<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterHandleBind<A>, failure::Error> {
-        let mut state = state.take();
-        let (sn, pn) = (state.statement_name, state.portal_name);
-        let fmts = state.return_field_formats.iter().map(bool::from).collect();
-        trace!(
-            "cid={} handle bind statement={:?} portal={:?}",
-            cx.conn_id,
-            sn,
-            pn
-        );
-        state.session.set_portal(pn, sn, fmts)?;
-
-        transition!(SendBindComplete {
-            send: state.send,
             session: state.session,
         })
     }
@@ -942,7 +959,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         transition!(SendCommandComplete {
             send: Box::new(conn.send(BackendMessage::CommandComplete { tag: "SET".into() })),
             session: state.session,
-            currently_extended: state.extended,
+            extended: state.extended,
             label: "set",
         })
     }
@@ -980,13 +997,13 @@ fn send_rows<A>(
     rows: Vec<Row>,
     row_desc: RelationDesc,
     field_formats: Option<Vec<FieldFormat>>,
-    currently_extended: bool,
+    extended: bool,
     conn_id: u32,
 ) -> SendCommandComplete<A>
 where
     A: Conn + 'static,
 {
-    trace!("cid={} send rows extended={}", conn_id, currently_extended);
+    trace!("cid={} send rows extended={}", conn_id, extended);
     let formats = FieldFormatIter::new(field_formats.map(Arc::new));
 
     let rows = rows
@@ -1004,7 +1021,7 @@ where
     SendCommandComplete {
         send: Box::new(stream::iter_ok(rows).forward(conn).map(|(_, conn)| conn)),
         session,
-        currently_extended,
+        extended,
         label: "select",
     }
 }

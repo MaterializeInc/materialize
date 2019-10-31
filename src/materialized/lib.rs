@@ -14,13 +14,16 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 use failure::format_err;
 use futures::sync::mpsc::{self, UnboundedSender};
-use futures::Future;
+use futures::{Future, Stream};
 use log::error;
+use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
-use tokio::io;
+use tokio::io::{self, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::prelude::*;
+use tokio::runtime::Runtime;
 
 use comm::Switchboard;
 use dataflow_types::logging::LoggingConfig;
@@ -89,10 +92,11 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 }
 
 /// Start the materialized server.
-pub fn serve(config: Config) -> Result<(), failure::Error> {
+pub fn serve(config: Config) -> Result<Server, failure::Error> {
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
     let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<coord::Command>();
+    let cmdq_tx = Arc::new(cmdq_tx);
 
     // Extract timely dataflow parameters.
     let is_primary = config.process == 0;
@@ -132,6 +136,7 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     let gather_metrics = config.gather_metrics;
     runtime.spawn({
         let switchboard = switchboard.clone();
+        let cmdq_tx = Arc::downgrade(&cmdq_tx);
         listener
             .incoming()
             .for_each(move |conn| {
@@ -148,22 +153,24 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
                 // [0]: https://news.ycombinator.com/item?id=10608356
                 conn.set_nodelay(true).expect("set_nodelay failed");
                 if is_primary {
-                    tokio::spawn(handle_connection(
-                        conn,
-                        switchboard.clone(),
-                        cmdq_tx.clone(),
-                        gather_metrics,
-                    ));
-                } else {
-                    // When not the primary, we only need to route switchboard
-                    // traffic.
-                    let ss = SniffingStream::new(conn).into_sniffed();
-                    tokio::spawn(
-                        switchboard
-                            .handle_connection(ss)
-                            .map_err(|err| error!("error handling connection: {}", err)),
-                    );
+                    if let Some(cmdq_tx) = cmdq_tx.upgrade() {
+                        tokio::spawn(handle_connection(
+                            conn,
+                            switchboard.clone(),
+                            (*cmdq_tx).clone(),
+                            gather_metrics,
+                        ));
+                        return Ok(());
+                    }
                 }
+                // When not the primary, or when shutting down, we only need to
+                // route switchboard traffic.
+                let ss = SniffingStream::new(conn).into_sniffed();
+                tokio::spawn(
+                    switchboard
+                        .handle_connection(ss)
+                        .map_err(|err| error!("error handling connection: {}", err)),
+                );
                 Ok(())
             })
             .map_err(|err| error!("error accepting connection: {}", err))
@@ -181,19 +188,21 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     let logging_config = config.logging_granularity.map(|d| LoggingConfig::new(d));
 
     // Initialize command queue and sql planner, but only on the primary.
-    if is_primary {
-        coord::transient::serve(
+    let coord_thread = if is_primary {
+        Some(coord::transient::serve(
             switchboard.clone(),
             num_timely_workers,
             config.symbiosis_url.mz_as_deref(),
             logging_config.as_ref(),
             config.sql,
             cmdq_rx,
-        )?;
-    }
+        )?)
+    } else {
+        None
+    };
 
     // Construct timely dataflow instance.
-    let _dd_workers = dataflow::serve(
+    let dataflow_guard = dataflow::serve(
         dataflow_conns,
         config.threads,
         config.process,
@@ -203,8 +212,28 @@ pub fn serve(config: Config) -> Result<(), failure::Error> {
     )
     .map_err(|s| format_err!("{}", s))?;
 
-    runtime
-        .shutdown_on_idle()
-        .wait()
-        .map_err(|()| unreachable!())
+    Ok(Server {
+        cmdq_tx: Some(cmdq_tx),
+        dataflow_guard: Some(Box::new(dataflow_guard)),
+        coord_thread,
+        _runtime: runtime,
+    })
+}
+
+/// A running `materialized` server.
+pub struct Server {
+    cmdq_tx: Option<Arc<mpsc::UnboundedSender<coord::Command>>>,
+    dataflow_guard: Option<Box<dyn Any>>,
+    coord_thread: Option<thread::JoinHandle<()>>,
+    _runtime: Runtime,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.cmdq_tx.take();
+        self.dataflow_guard.take();
+        if let Some(coord_thread) = self.coord_thread.take() {
+            coord_thread.join().unwrap();
+        }
+    }
 }
