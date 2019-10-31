@@ -571,7 +571,7 @@ where
                     );
 
                     for _ in 0..copies {
-                        results.push(row.clone());
+                        results.push(row);
                     }
                 }
                 cur.step_val(&storage);
@@ -585,15 +585,15 @@ where
                 pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
                     compare_columns(
                         &peek.finishing.order_by,
-                        &left_unpacker.unpack(left),
-                        &right_unpacker.unpack(right),
+                        &left_unpacker.unpack(left.iter()),
+                        &right_unpacker.unpack(right.iter()),
                     )
                 });
                 results.truncate(offset_plus_limit);
             }
         }
 
-        results
+        results.iter().map(|row| (*row).clone()).collect()
     }
 }
 
