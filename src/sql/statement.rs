@@ -102,7 +102,7 @@ fn handle_show_variable(
                 .vars()
                 .iter()
                 .map(|v| {
-                    Row::from_iter(&[
+                    Row::pack(&[
                         Datum::String(v.name()),
                         Datum::String(&v.value()),
                         Datum::String(v.description()),
@@ -114,7 +114,7 @@ fn handle_show_variable(
         let variable = session.get(&variable.value)?;
         Ok(Plan::SendRows {
             desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
-            rows: vec![Row::from_iter(&[Datum::String(&variable.value())])],
+            rows: vec![Row::pack(&[Datum::String(&variable.value())])],
         })
     }
 }
@@ -129,7 +129,7 @@ fn handle_show_objects(catalog: &Catalog, object_type: ObjectType) -> Result<Pla
     let mut rows: Vec<Row> = catalog
         .iter()
         .filter(|(_k, v)| object_type_matches(object_type, &v))
-        .map(|(k, _v)| Row::from_iter(&[Datum::from(k)]))
+        .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
         .collect();
     rows.sort_unstable();
     Ok(Plan::SendRows {
@@ -161,7 +161,7 @@ fn handle_show_columns(
         .get_desc(&table_name.to_string())?
         .iter()
         .map(|(name, typ)| {
-            Row::from_iter(&[
+            Row::pack(&[
                 Datum::String(name.mz_as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
                 Datum::String(&typ.scalar_type.to_string()),
@@ -192,7 +192,7 @@ fn handle_show_create_view(
         desc: RelationDesc::empty()
             .add_column("View", ScalarType::String)
             .add_column("Create View", ScalarType::String),
-        rows: vec![Row::from_iter(&[
+        rows: vec![Row::pack(&[
             Datum::String(&name),
             Datum::String(&raw_sql),
         ])],
@@ -435,7 +435,7 @@ pub fn handle_explain(
     if stage == Stage::Dataflow {
         Ok(Plan::SendRows {
             desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),
-            rows: vec![Row::from_iter(&[Datum::String(&relation_expr.pretty())])],
+            rows: vec![Row::pack(&[Datum::String(&relation_expr.pretty())])],
         })
     } else {
         Ok(Plan::ExplainPlan {

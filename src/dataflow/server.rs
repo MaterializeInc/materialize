@@ -20,7 +20,7 @@ use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
-use repr::{Datum, DatumsBuffer, Row};
+use repr::{Datum, RowUnpacker, Row};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
@@ -541,12 +541,12 @@ where
     fn collect_finished_data(peek: &PendingPeek, trace: &mut WithDrop<KeysValsHandle>) -> Vec<Row> {
         let (mut cur, storage) = trace.cursor();
         let mut results = Vec::new();
-        let mut buffer = DatumsBuffer::new();
-        let mut left_buffer = DatumsBuffer::new();
-        let mut right_buffer = DatumsBuffer::new();
+        let mut unpacker = RowUnpacker::new();
+        let mut left_unpacker = RowUnpacker::new();
+        let mut right_unpacker = RowUnpacker::new();
         while let Some(_key) = cur.get_key(&storage) {
             while let Some(row) = cur.get_val(&storage) {
-                let datums = buffer.from_iter(row);
+                let datums = unpacker.unpack(row);
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
                 if peek
@@ -566,7 +566,7 @@ where
                         copies >= 0,
                         "Negative multiplicity: {} for {:?} in view {}",
                         copies,
-                        row.as_vec(),
+                        row.unpack(),
                         peek.name
                     );
 
@@ -585,8 +585,8 @@ where
                 pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
                     compare_columns(
                         &peek.finishing.order_by,
-                        &left_buffer.from_iter(left),
-                        &right_buffer.from_iter(right),
+                        &left_unpacker.unpack(left),
+                        &right_unpacker.unpack(right),
                     )
                 });
                 results.truncate(offset_plus_limit);

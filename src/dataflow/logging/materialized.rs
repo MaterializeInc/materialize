@@ -17,7 +17,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
-use repr::{Datum, DatumsBuffer, RowPacker};
+use repr::{Datum, RowUnpacker, RowPacker};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -173,9 +173,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = RowPacker::new();
+                let mut packer = RowPacker::new();
                 move |(name, worker)| {
-                    row_packer.pack(&[Datum::String(&*name), Datum::Int64(worker as i64)])
+                    packer.pack(&[Datum::String(&*name), Datum::Int64(worker as i64)])
                 }
             });
 
@@ -188,9 +188,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = RowPacker::new();
+                let mut packer = RowPacker::new();
                 move |(dataflow, source, worker)| {
-                    row_packer.pack(&[
+                    packer.pack(&[
                         Datum::String(&*dataflow),
                         Datum::String(&*source),
                         Datum::Int64(worker as i64),
@@ -207,9 +207,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = RowPacker::new();
+                let mut packer = RowPacker::new();
                 move |(peek, worker)| {
-                    row_packer.pack(&[
+                    packer.pack(&[
                         Datum::String(&*format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
                         Datum::String(&*peek.name),
@@ -227,9 +227,9 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = RowPacker::new();
+                let mut packer = RowPacker::new();
                 move |(name, logical)| {
-                    row_packer.pack(&[Datum::String(&*name), Datum::Int64(logical as i64)])
+                    packer.pack(&[Datum::String(&*name), Datum::Int64(logical as i64)])
                 }
             });
 
@@ -285,9 +285,9 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count()
             .map({
-                let mut row_packer = RowPacker::new();
+                let mut packer = RowPacker::new();
                 move |((worker, pow), count)| {
-                    row_packer.pack(&[
+                    packer.pack(&[
                         Datum::Int64(worker as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(count as i64),
@@ -326,11 +326,11 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut buffer = DatumsBuffer::new();
-                        let mut row_packer = RowPacker::new();
+                        let mut unpacker = RowUnpacker::new();
+                        let mut packer = RowPacker::new();
                         move |row| {
-                            let datums = buffer.from_iter(&row);
-                            let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
+                            let datums = unpacker.unpack(&row);
+                            let key_row = packer.pack(key.iter().map(|k| datums[*k]));
                             drop(datums);
                             (key_row, row)
                         }

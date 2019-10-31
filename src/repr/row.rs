@@ -51,7 +51,7 @@ use std::mem::{size_of, transmute};
 /// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
 ///
-/// `Row::pack` and `Row::unpack` can cause more allocation than strictly necessary. In performance-sensitive code, use `RowPacker` and `RowUnpacker` instead to reuse intermediate storage.
+/// `Row::pack` and `Row::unpack` can cause a surprising amount of allocation. In performance-sensitive code, use `RowPacker` and `RowUnpacker` instead to reuse intermediate storage.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Row {
     data: Box<[u8]>,
@@ -258,9 +258,7 @@ impl RowPacker {
         D: Borrow<Datum<'a>>,
     {
         let mut packable = self.packable();
-        for datum in iter {
-            packable.push_datum(*(datum.borrow()));
-        }
+        packable.extend(iter);
         packable.finish()
     }
 
@@ -278,7 +276,7 @@ impl RowPacker {
 
 impl<'a> PackableRow<'a> {
     /// Push `datum` onto the end of `self`
-    pub fn push_datum(&mut self, datum: Datum) {
+    pub fn push(&mut self, datum: Datum) {
         let data = &mut self.data;
         match datum {
             Datum::Null => data.push(Tag::Null as u8),
@@ -334,7 +332,17 @@ impl<'a> PackableRow<'a> {
         }
     }
 
-    fn finish(self) -> Row {
+    pub fn extend<'b, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'b>>,
+    {
+        for datum in iter {
+            self.push(*(datum.borrow()));
+        }
+    }
+
+    pub fn finish(self) -> Row {
         Row {
             data: self.data.clone().into_boxed_slice(),
         }

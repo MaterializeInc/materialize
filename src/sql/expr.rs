@@ -477,7 +477,7 @@ impl RelationExpr {
 
     /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        let rows = rows.into_iter().map(|row| Row::from_iter(row)).collect();
+        let rows = rows.into_iter().map(|row| Row::pack(row)).collect();
         RelationExpr::Constant { rows, typ }
     }
 }
@@ -695,7 +695,7 @@ impl ScalarExpr {
     }
 
     pub fn literal(datum: Datum, column_type: ColumnType) -> ScalarExpr {
-        let row = Row::from_iter(&[datum]);
+        let row = Row::pack(&[datum]);
         ScalarExpr::Literal(row, column_type)
     }
 

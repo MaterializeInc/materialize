@@ -10,7 +10,6 @@ use repr::regex::Regex;
 use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::iter::FromIterator;
 use std::mem;
 
 use self::func::{BinaryFunc, UnaryFunc, VariadicFunc};
@@ -59,7 +58,7 @@ impl ScalarExpr {
     }
 
     pub fn literal(datum: Datum, typ: ColumnType) -> Self {
-        let row = Row::from_iter(&[datum]);
+        let row = Row::pack(&[datum]);
         ScalarExpr::Literal(row, typ)
     }
 
@@ -188,16 +187,13 @@ impl ScalarExpr {
     pub fn take(&mut self) -> Self {
         mem::replace(
             self,
-            ScalarExpr::Literal(
-                Row::from_iter(&[Datum::Null]),
-                ColumnType::new(ScalarType::Null),
-            ),
+            ScalarExpr::Literal(Row::pack(&[Datum::Null]), ColumnType::new(ScalarType::Null)),
         )
     }
 
     pub fn as_literal(&self) -> Option<Datum> {
         if let ScalarExpr::Literal(row, _column_type) = self {
-            Some(row.first())
+            Some(row.unpack_first())
         } else {
             None
         }
@@ -366,7 +362,7 @@ impl ScalarExpr {
     pub fn eval<'a>(&'a self, datums: &[Datum<'a>]) -> Datum<'a> {
         match self {
             ScalarExpr::Column(index) => datums[*index],
-            ScalarExpr::Literal(row, _column_type) => row.first(),
+            ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
             ScalarExpr::CallUnary { func, expr } => {
                 let eval = expr.eval(datums);
                 (func.func())(eval)
