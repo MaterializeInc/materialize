@@ -19,7 +19,6 @@ use url::Url;
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query;
-use crate::scope::Scope;
 use crate::session::Session;
 use crate::store::{Catalog, CatalogItem, RemoveMode};
 use crate::Plan;
@@ -30,15 +29,106 @@ use dataflow_types::{
 use expr::{ColumnOrder, RelationExpr};
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{Datum, RelationDesc, RelationType, Row, ScalarType};
+use repr::{Datum, RelationDesc, Row, ScalarType};
+
+pub fn describe_statement(
+    catalog: &Catalog,
+    stmt: Statement,
+) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
+    Ok(match stmt {
+        Statement::CreateSource { .. }
+        | Statement::CreateSink { .. }
+        | Statement::CreateView { .. }
+        | Statement::Drop { .. }
+        | Statement::SetVariable { .. }
+        | Statement::Tail { .. } => (None, vec![]),
+
+        Statement::CreateSources { .. } => (
+            Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
+            vec![],
+        ),
+
+        Statement::Explain { stage, .. } => (
+            Some(RelationDesc::empty().add_column(
+                match stage {
+                    Stage::Dataflow => "Dataflow",
+                    Stage::Plan => "Plan",
+                },
+                ScalarType::String,
+            )),
+            vec![],
+        ),
+
+        Statement::ShowCreateView { .. } => (
+            Some(
+                RelationDesc::empty()
+                    .add_column("View", ScalarType::String)
+                    .add_column("Create View", ScalarType::String),
+            ),
+            vec![],
+        ),
+
+        Statement::ShowColumns { .. } => (
+            Some(
+                RelationDesc::empty()
+                    .add_column("Field", ScalarType::String)
+                    .add_column("Nullable", ScalarType::String)
+                    .add_column("Type", ScalarType::String),
+            ),
+            vec![],
+        ),
+
+        Statement::ShowObjects { object_type } => (
+            Some(
+                RelationDesc::empty()
+                    .add_column(object_type_as_plural_str(object_type), ScalarType::String),
+            ),
+            vec![],
+        ),
+
+        Statement::ShowVariable { variable, .. } => {
+            if variable.value == unicase::Ascii::new("ALL") {
+                (
+                    Some(
+                        RelationDesc::empty()
+                            .add_column("name", ScalarType::String)
+                            .add_column("setting", ScalarType::String)
+                            .add_column("description", ScalarType::String),
+                    ),
+                    vec![],
+                )
+            } else {
+                (
+                    Some(RelationDesc::empty().add_column(variable.value, ScalarType::String)),
+                    vec![],
+                )
+            }
+        }
+
+        Statement::Peek { name, .. } => {
+            (Some(catalog.get(&name.to_string())?.desc().clone()), vec![])
+        }
+
+        Statement::Query(query) => {
+            // TODO(benesch): ideally we'd save `relation_expr` and `finishing`
+            // somewhere, so we don't have to reanalyze the whole query when
+            // `handle_statement` is called. This will require a complicated
+            // dance when bind parameters are implemented, so punting for now.
+            let (_relation_expr, desc, _finishing, param_types) =
+                query::plan_root_query(catalog, *query)?;
+            (Some(desc), param_types)
+        }
+
+        _ => bail!("unsupported SQL statement: {:?}", stmt),
+    })
+}
 
 /// Dispatch from arbitrary [`sqlparser::ast::Statement`]s to specific handle commands
 pub fn handle_statement(
     catalog: &Catalog,
     session: &Session,
-    mut stmt: Statement,
+    stmt: Statement,
 ) -> Result<Plan, failure::Error> {
-    super::transform::transform(&mut stmt);
     match stmt {
         Statement::Peek { name, immediate } => handle_peek(catalog, name, immediate),
         Statement::Tail { name } => handle_tail(catalog, name),
@@ -93,12 +183,8 @@ fn handle_show_variable(
     variable: Ident,
 ) -> Result<Plan, failure::Error> {
     if variable.value == unicase::Ascii::new("ALL") {
-        Ok(Plan::SendRows {
-            desc: RelationDesc::empty()
-                .add_column("name", ScalarType::String)
-                .add_column("setting", ScalarType::String)
-                .add_column("description", ScalarType::String),
-            rows: session
+        Ok(Plan::SendRows(
+            session
                 .vars()
                 .iter()
                 .map(|v| {
@@ -109,13 +195,12 @@ fn handle_show_variable(
                     ])
                 })
                 .collect(),
-        })
+        ))
     } else {
         let variable = session.get(&variable.value)?;
-        Ok(Plan::SendRows {
-            desc: RelationDesc::empty().add_column(variable.name(), ScalarType::String),
-            rows: vec![Row::pack(&[Datum::String(&variable.value())])],
-        })
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
+            &variable.value(),
+        )])]))
     }
 }
 
@@ -132,11 +217,7 @@ fn handle_show_objects(catalog: &Catalog, object_type: ObjectType) -> Result<Pla
         .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
         .collect();
     rows.sort_unstable();
-    Ok(Plan::SendRows {
-        desc: RelationDesc::empty()
-            .add_column(object_type_as_plural_str(object_type), ScalarType::String),
-        rows,
-    })
+    Ok(Plan::SendRows(rows))
 }
 
 /// Create an immediate result that describes all the columns for the given table
@@ -169,13 +250,7 @@ fn handle_show_columns(
         })
         .collect();
 
-    Ok(Plan::SendRows {
-        desc: RelationDesc::empty()
-            .add_column("Field", ScalarType::String)
-            .add_column("Nullable", ScalarType::String)
-            .add_column("Type", ScalarType::String),
-        rows: column_descriptions,
-    })
+    Ok(Plan::SendRows(column_descriptions))
 }
 
 fn handle_show_create_view(
@@ -188,12 +263,10 @@ fn handle_show_create_view(
     } else {
         bail!("{} is not a view", name);
     };
-    Ok(Plan::SendRows {
-        desc: RelationDesc::empty()
-            .add_column("View", ScalarType::String)
-            .add_column("Create View", ScalarType::String),
-        rows: vec![Row::pack(&[Datum::String(&name), Datum::String(&raw_sql)])],
-    })
+    Ok(Plan::SendRows(vec![Row::pack(&[
+        Datum::String(&name),
+        Datum::String(&raw_sql),
+    ])]))
 }
 
 fn handle_create_dataflow(catalog: &Catalog, mut stmt: Statement) -> Result<Plan, failure::Error> {
@@ -208,7 +281,7 @@ fn handle_create_dataflow(catalog: &Catalog, mut stmt: Statement) -> Result<Plan
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            let (mut relation_expr, mut desc, finishing) = plan_toplevel_query(catalog, &query)?;
+            let (mut relation_expr, mut desc, finishing) = handle_query(catalog, *query.clone())?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
                 relation_expr = RelationExpr::Project {
@@ -390,7 +463,6 @@ fn handle_peek(
             name: dataflow.name().to_owned(),
             typ: typ.clone(),
         },
-        desc: dataflow.desc().clone(),
         when: if immediate {
             PeekWhen::Immediately
         } else {
@@ -412,10 +484,9 @@ fn handle_peek(
 }
 
 pub fn handle_select(catalog: &Catalog, query: Query) -> Result<Plan, failure::Error> {
-    let (relation_expr, desc, finishing) = plan_toplevel_query(catalog, &query)?;
+    let (relation_expr, _, finishing) = handle_query(catalog, query)?;
     Ok(Plan::Peek {
         source: relation_expr,
-        desc,
         when: PeekWhen::Immediately,
         finishing,
     })
@@ -426,45 +497,26 @@ pub fn handle_explain(
     stage: Stage,
     query: Query,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) = plan_toplevel_query(catalog, &query)?;
+    let (relation_expr, _desc, _finishing) = handle_query(catalog, query)?;
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
-        Ok(Plan::SendRows {
-            desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),
-            rows: vec![Row::pack(&[Datum::String(&relation_expr.pretty())])],
-        })
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
+            &relation_expr.pretty(),
+        )])]))
     } else {
-        Ok(Plan::ExplainPlan {
-            desc: RelationDesc::empty().add_column("Dataflow", ScalarType::String),
-            relation_expr,
-        })
+        Ok(Plan::ExplainPlan(relation_expr))
     }
 }
 
-/// Plans and decorrelates a query once we've planned all nested RelationExprs.
-/// Decorrelation converts a sql::RelationExpr (which can include correlations)
-/// to an expr::RelationExpr (which cannot include correlations).
-///
-/// Note that the returned `RelationDesc` describes the expression after
-/// applying the returned `RowSetFinishing`.
-fn plan_toplevel_query(
+/// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
+/// an `::expr::RelationExpr`, which cannot include correlated expressions.
+fn handle_query(
     catalog: &Catalog,
-    query: &Query,
+    query: Query,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-    let (expr, scope, finishing) =
-        query::plan_query(catalog, query, &Scope::empty(None), &RelationType::empty())?;
-    let expr = expr.decorrelate()?;
-    let typ = expr.typ();
-    let typ = RelationType::new(
-        finishing
-            .project
-            .iter()
-            .map(|i| typ.column_types[*i])
-            .collect(),
-    );
-    let desc = RelationDesc::new(typ, scope.column_names());
-    Ok((expr, desc, finishing))
+    let (expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
+    Ok((expr.decorrelate()?, desc, finishing))
 }
 
 fn build_source(

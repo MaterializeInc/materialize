@@ -21,9 +21,10 @@ use timely::progress::frontier::Antichain;
 use futures::{sink, Future, Sink as FuturesSink, Stream};
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::iter;
 use uuid::Uuid;
 
-use crate::QueryExecuteResponse;
+use crate::ExecuteResponse;
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -33,7 +34,7 @@ use dataflow_types::{
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
-use repr::{Datum, RelationDesc, Row, RowPacker, RowUnpacker, ScalarType};
+use repr::{Datum, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::{MutationKind, ObjectType, Plan};
 
 /// Glues the external world to the Timely workers.
@@ -118,7 +119,7 @@ where
         }
     }
 
-    pub fn sequence_plan(&mut self, plan: Plan, conn_id: u32) -> QueryExecuteResponse {
+    pub fn sequence_plan(&mut self, plan: Plan, conn_id: u32) -> ExecuteResponse {
         match plan {
             Plan::CreateTable { name, desc } => {
                 self.create_sources(vec![Source {
@@ -126,19 +127,18 @@ where
                     connector: SourceConnector::Local,
                     desc,
                 }]);
-                QueryExecuteResponse::CreatedTable
+                ExecuteResponse::CreatedTable
             }
 
             Plan::CreateSource(source) => {
                 let sources = vec![source];
                 self.create_sources(sources);
-                QueryExecuteResponse::CreatedSource
+                ExecuteResponse::CreatedSource
             }
 
             Plan::CreateSources(sources) => {
                 self.create_sources(sources.clone());
                 send_immediate_rows(
-                    RelationDesc::empty().add_column("Topic", ScalarType::String),
                     sources
                         .iter()
                         .map(|s| Row::pack(&[Datum::String(&s.name)]))
@@ -148,12 +148,12 @@ where
 
             Plan::CreateSink(sink) => {
                 self.create_dataflows(vec![DataflowDesc::from(sink)]);
-                QueryExecuteResponse::CreatedSink
+                ExecuteResponse::CreatedSink
             }
 
             Plan::CreateView(view) => {
                 self.create_dataflows(vec![DataflowDesc::from(view)]);
-                QueryExecuteResponse::CreatedView
+                ExecuteResponse::CreatedView
             }
 
             Plan::DropItems(names, item_type) => {
@@ -181,20 +181,19 @@ where
                 }
                 self.drop_views(views_to_drop);
                 match item_type {
-                    ObjectType::Source => QueryExecuteResponse::DroppedSource,
-                    ObjectType::View => QueryExecuteResponse::DroppedView,
-                    ObjectType::Table => QueryExecuteResponse::DroppedTable,
+                    ObjectType::Source => ExecuteResponse::DroppedSource,
+                    ObjectType::View => ExecuteResponse::DroppedView,
+                    ObjectType::Table => ExecuteResponse::DroppedTable,
                     ObjectType::Sink | ObjectType::Index => unreachable!(),
                 }
             }
 
-            Plan::EmptyQuery => QueryExecuteResponse::EmptyQuery,
+            Plan::EmptyQuery => ExecuteResponse::EmptyQuery,
 
-            Plan::SetVariable { name, .. } => QueryExecuteResponse::SetVariable { name },
+            Plan::SetVariable { name, .. } => ExecuteResponse::SetVariable { name },
 
             Plan::Peek {
                 mut source,
-                desc,
                 when,
                 mut finishing,
             } => {
@@ -243,12 +242,23 @@ where
                     // a new transient dataflow that will be dropped after the
                     // peek completes.
                     let name = format!("<peek_{}>", Uuid::new_v4());
-
+                    let typ = source.typ();
+                    let ncols = typ.column_types.len();
+                    // Cheat a little bit here to get a relation description. A
+                    // relation description is just a relation type with column
+                    // names, but we don't know the column names for `source`
+                    // here. Nothing in the dataflow layer cares about column
+                    // names, so just set them all to `None`. The column names
+                    // will ultimately be correctly transmitted to the client
+                    // because they are safely stashed in the connection's
+                    // session.
+                    let desc =
+                        RelationDesc::new(typ, iter::repeat::<Option<String>>(None).take(ncols));
                     let dataflow = DataflowDesc::from(View {
                         name: name.clone(),
                         raw_sql: "<none>".into(),
                         relation_expr: source,
-                        desc: desc.clone(),
+                        desc,
                     })
                     .as_of(Some(vec![timestamp.clone()]));
 
@@ -323,7 +333,7 @@ where
                     .from_err()
                     .boxed();
 
-                QueryExecuteResponse::SendRows { desc, rx: rows_rx }
+                ExecuteResponse::SendRows(rows_rx)
             }
 
             Plan::Tail(source) => {
@@ -353,19 +363,16 @@ where
                     })]),
                 );
 
-                QueryExecuteResponse::Tailing { rx }
+                ExecuteResponse::Tailing { rx }
             }
 
-            Plan::SendRows { desc, rows } => send_immediate_rows(desc, rows),
+            Plan::SendRows(rows) => send_immediate_rows(rows),
 
-            Plan::ExplainPlan {
-                desc,
-                mut relation_expr,
-            } => {
+            Plan::ExplainPlan(mut relation_expr) => {
                 self.optimizer.optimize(&mut relation_expr);
                 let pretty = relation_expr.pretty();
                 let rows = vec![Row::pack(vec![Datum::from(&*pretty)])];
-                send_immediate_rows(desc, rows)
+                send_immediate_rows(rows)
             }
 
             Plan::SendDiffs {
@@ -409,9 +416,9 @@ where
                 }
 
                 match kind {
-                    MutationKind::Delete => QueryExecuteResponse::Deleted(affected_rows),
-                    MutationKind::Insert => QueryExecuteResponse::Inserted(affected_rows),
-                    MutationKind::Update => QueryExecuteResponse::Updated(affected_rows),
+                    MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
+                    MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
+                    MutationKind::Update => ExecuteResponse::Updated(affected_rows),
                 }
             }
         }
@@ -855,16 +862,13 @@ fn broadcast(
     tx.flush().unwrap();
 }
 
-/// Constructs a [`QueryExecuteResponse`] that that will send some rows to the client
-/// immediately, as opposed to asking the dataflow layer to send along the rows
-/// after some computation.
-fn send_immediate_rows(desc: RelationDesc, rows: Vec<Row>) -> QueryExecuteResponse {
+/// Constructs an [`ExecuteResponse`] that that will send some rows to the
+/// client immediately, as opposed to asking the dataflow layer to send along
+/// the rows after some computation.
+fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
     let (tx, rx) = futures::sync::oneshot::channel();
     tx.send(PeekResponse::Rows(rows)).unwrap();
-    QueryExecuteResponse::SendRows {
-        desc,
-        rx: Box::new(rx.from_err()),
-    }
+    ExecuteResponse::SendRows(Box::new(rx.from_err()))
 }
 
 /// Per-view state.

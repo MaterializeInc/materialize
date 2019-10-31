@@ -10,10 +10,10 @@
 //! but for now we just use the parser's AST directly.
 
 use sqlparser::ast::visit_mut::{self, VisitMut};
-use sqlparser::ast::{BinaryOperator, Expr, Function, ObjectName, Statement};
+use sqlparser::ast::{BinaryOperator, Expr, Function, ObjectName, Query};
 
-pub fn transform(stmt: &mut Statement) {
-    AvgFuncRewriter.visit_statement(stmt);
+pub fn transform(query: &mut Query) {
+    AvgFuncRewriter.visit_query(query);
 }
 
 // Rewrites `avg(col)` to `sum(col) / count(col)`, so that we can pretend the

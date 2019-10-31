@@ -16,7 +16,7 @@ ore = { path = "../ore" }
 postgres = { version = "0.15", features = ["with-chrono"] }
 pg_interval = "0.3"
 repr = { path = "../repr" }
-rust_decimal = "1.0"
+rust_decimal = { version = "1.0", features = ["postgres"] }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 sql = { path = "../sql" }
 whoami = "0.6"
