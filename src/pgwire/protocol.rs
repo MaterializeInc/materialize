@@ -32,6 +32,7 @@ use ore::future::{Recv, StreamExt};
 use repr::{RelationDesc, Row};
 use sql::Session;
 
+use crate::message::FrontendMessage::DescribePortal;
 use prometheus::IntCounterVec;
 
 lazy_static! {
@@ -473,7 +474,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 cx.conn_id,
             ))),
             FrontendMessage::DescribeStatement { name } => transition!(SendParameterDescription {
-                send: conn.send(BackendMessage::ParameterDescription),
+                send: conn.send(BackendMessage::ParameterDescription(0)),
                 session: state.session,
                 name,
             }),
@@ -1031,45 +1032,85 @@ where
         conn_id,
         name
     );
-    let stmt = match kind {
-        DescribeKind::Statement => session.get_prepared_statement(&name),
-        DescribeKind::Portal => session
-            .get_portal(&name)
-            .and_then(|portal| session.get_prepared_statement(&portal.statement_name)),
-    };
-    let stmt = match stmt {
-        Some(stmt) => stmt,
-        None => {
-            return SendError {
-                send: conn.send(BackendMessage::ErrorResponse {
-                    severity: Severity::Fatal,
-                    code: "08P01",
-                    message: "portal or prepared statement does not exist".into(),
-                    detail: Some(format!("name: {}", name)),
-                }),
-                session,
-                kind: ErrorKind::Fatal,
+
+    match kind {
+        DescribeKind::Statement => {
+            let stmt = session.get_prepared_statement(&name);
+            let stmt = match stmt {
+                Some(stmt) => stmt,
+                None => {
+                    return SendError {
+                        send: conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "08P01",
+                            message: "portal or prepared statement does not exist".into(),
+                            detail: Some(format!("name: {}", name)),
+                        }),
+                        session,
+                        kind: ErrorKind::Fatal,
+                    }
+                    .into();
+                }
+            };
+            match stmt.desc() {
+                Some(desc) => {
+                    //                    let desc = super::message::row_description_from_desc(&desc);
+                    trace!("cid={} sending parameter description {:?}", conn_id, desc);
+                    SendDescribeResponse {
+                        send: conn.send(BackendMessage::ParameterDescription(0)), // todo: should send ParameterDescription AND RowDescription for statements
+                        session,
+                    }
+                    .into()
+                }
+                None => {
+                    trace!("cid={} sending no data", conn_id);
+                    SendDescribeResponse {
+                        send: conn.send(BackendMessage::NoData),
+                        session,
+                    }
+                    .into()
+                }
             }
-            .into();
         }
-    };
-    match stmt.desc() {
-        Some(desc) => {
-            let desc = super::message::row_description_from_desc(&desc);
-            trace!("cid={} sending row description {:?}", conn_id, desc);
-            SendDescribeResponse {
-                send: conn.send(BackendMessage::RowDescription(desc)),
-                session,
+        DescribeKind::Portal => {
+            let stmt = session
+                .get_portal(&name)
+                .and_then(|portal| session.get_prepared_statement(&portal.statement_name));
+            let stmt = match stmt {
+                Some(stmt) => stmt,
+                None => {
+                    return SendError {
+                        send: conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "08P01",
+                            message: "portal or prepared statement does not exist".into(),
+                            detail: Some(format!("name: {}", name)),
+                        }),
+                        session,
+                        kind: ErrorKind::Fatal,
+                    }
+                    .into();
+                }
+            };
+            match stmt.desc() {
+                Some(desc) => {
+                    let desc = super::message::row_description_from_desc(&desc);
+                    trace!("cid={} sending row description {:?}", conn_id, desc);
+                    SendDescribeResponse {
+                        send: conn.send(BackendMessage::RowDescription(desc)),
+                        session,
+                    }
+                    .into()
+                }
+                None => {
+                    trace!("cid={} sending no data", conn_id);
+                    SendDescribeResponse {
+                        send: conn.send(BackendMessage::NoData),
+                        session,
+                    }
+                    .into()
+                }
             }
-            .into()
-        }
-        None => {
-            trace!("cid={} sending no data", conn_id);
-            SendDescribeResponse {
-                send: conn.send(BackendMessage::NoData),
-                session,
-            }
-            .into()
         }
     }
 }

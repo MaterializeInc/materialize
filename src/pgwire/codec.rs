@@ -75,6 +75,7 @@ impl Encoder for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        println!("encoding");
         // TODO(benesch): do we need to be smarter about avoiding allocations?
         // At the very least, we won't need a separate buffer when BytesMut
         // automatically grows its capacity (carllerche/bytes#170).
@@ -91,7 +92,7 @@ impl Encoder for Codec {
             BackendMessage::NoData => b'n',
             BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::BackendKeyData { .. } => b'K',
-            BackendMessage::ParameterDescription => b't',
+            BackendMessage::ParameterDescription(_) => b't',
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
             BackendMessage::ErrorResponse { .. } => b'E',
@@ -172,8 +173,13 @@ impl Encoder for Codec {
                 buf.put_u32_be(conn_id);
                 buf.put_u32_be(secret_key);
             }
-            BackendMessage::ParameterDescription => {
-                buf.put_u16_be(0); // the number of parameters used by the statement
+            BackendMessage::ParameterDescription (parameters) => {
+                buf.put_u16_be(parameters); // the number of parameters used by the statement
+                if parameters > 0 {
+                    buf.put_u32_be(crate::types::ANY.oid);
+                } else {
+                    buf.put_u32_be(0);
+                }
             }
             BackendMessage::ErrorResponse {
                 severity,
@@ -285,12 +291,30 @@ impl Decoder for Codec {
                         b'Q' => decode_query(buf)?,
 
                         // Extended query flow.
-                        b'P' => decode_parse(buf)?,
-                        b'D' => decode_describe(buf)?,
-                        b'B' => decode_bind(buf)?,
-                        b'E' => decode_execute(buf)?,
-                        b'S' => decode_sync(buf)?,
-                        b'C' => decode_close(buf)?,
+                        b'P' => {
+                            println!("decoding parse");
+                            decode_parse(buf)?
+                        }
+                        b'D' => {
+                            println!("decode describe");
+                            decode_describe(buf)?
+                        }
+                        b'B' => {
+                            println!("decode bind");
+                            decode_bind(buf)?
+                        }
+                        b'E' => {
+                            println!("decode execute");
+                            decode_execute(buf)?
+                        }
+                        b'S' => {
+                            println!("decode sync");
+                            decode_sync(buf)?
+                        }
+                        b'C' => {
+                            println!("decode close");
+                            decode_close(buf)?
+                        }
 
                         // Invalid.
                         _ => {
@@ -352,6 +376,7 @@ fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     //
     // Oh god
     let parameter_data_type_count = buf.read_u16()?;
+    println!("parameter_data_type_count: {}", parameter_data_type_count);
     let mut param_dts = vec![];
     for _ in 0..parameter_data_type_count {
         param_dts.push(buf.read_u32()?);
@@ -386,8 +411,14 @@ fn decode_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let first_char = buf.read_byte()?;
     let name = buf.read_cstr()?.to_string();
     match first_char {
-        b'S' => Ok(FrontendMessage::DescribeStatement { name }),
-        b'P' => Ok(FrontendMessage::DescribePortal { name }),
+        b'S' => {
+            println!("describe statement");
+            Ok(FrontendMessage::DescribeStatement { name })
+        }
+        b'P' => {
+            println!("describe portal");
+            Ok(FrontendMessage::DescribePortal { name })
+        }
         other => Err(input_err(format!("Invalid describe type: {:#x?}", other))),
     }
 }
@@ -395,6 +426,10 @@ fn decode_describe(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
 fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
+    println!(
+        "decoding bind! portal_name: {}, statement_name: {}",
+        portal_name, statement_name
+    );
 
     // The rules around parameter format codes are complicated. Zero means use
     // text for all parameters, if any. One means use the specified format code
@@ -408,11 +443,16 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     // supply, and then blow up if they actually try to bind any parameters.
     let parameter_format_code_count = buf.read_u16()?;
     for _ in 0..parameter_format_code_count {
-        let _ = buf.read_u16()?;
+        let param_format_code = buf.read_u16()?;
+        println!("param_format_code: {:#?}", param_format_code);
+        //        let _ = buf.read_u16()?;
     }
-    if buf.read_u16()? > 0 {
-        return Err(unsupported_err("binding parameters is not supported"));
-    }
+
+    let num_parameters = buf.read_u16()?;
+    println!("num_parameters: {:#?}", num_parameters);
+    //    if buf.read_u16()? > 0 {
+    //        return Err(unsupported_err("binding parameters is not supported"));
+    //    }
 
     let return_format_code_count = buf.read_u16()?;
     let mut fmt_codes = Vec::with_capacity(usize::from(return_format_code_count));

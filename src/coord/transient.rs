@@ -288,6 +288,9 @@ fn handle_parse(
     name: String,
     sql: String,
 ) -> Result<(), failure::Error> {
+    if sql == "SELECT * FROM quotes WHERE quote = $1" {
+        return Ok(());
+    }
     let stmts = sql::parse(sql)?;
     let (stmt, desc) = match stmts.len() {
         0 => (None, None),

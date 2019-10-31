@@ -188,7 +188,7 @@ pub enum BackendMessage {
         conn_id: u32,
         secret_key: u32,
     },
-    ParameterDescription,
+    ParameterDescription(u16),
     NoData,
     ParseComplete,
     BindComplete,

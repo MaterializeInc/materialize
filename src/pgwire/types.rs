@@ -87,11 +87,11 @@ pub const NUMERIC: PgType = PgType {
 //     typlen: -1,
 // };
 
-// /// A pseudo-type representing any type.
-// pub const ANY: PgType = PgType {
-//     oid: 2276,
-//     typlen: 4,
-// };
+/// A pseudo-type representing any type.
+pub const ANY: PgType = PgType {
+    oid: 2276,
+    typlen: 4,
+};
 
 impl From<&ScalarType> for PgType {
     fn from(typ: &ScalarType) -> PgType {
