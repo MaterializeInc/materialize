@@ -123,7 +123,7 @@ ORDER BY
 	l_linestatus
 ----
 Project {
-  outputs: [0 .. 5, 11 .. 13, 10, 0, 1],
+  outputs: [0 .. 5, 11 .. 13, 10],
   Map {
     scalars: [
       ((#2 * 10000000dec) / (i64todec #6 * 100dec)) * 10dec,
