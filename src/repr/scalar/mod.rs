@@ -487,9 +487,9 @@ impl Hash for ScalarType {
 impl fmt::Display for ScalarType {
     /// Arbitrary display name for scalars
     ///
-    /// Right now the names correspond most closely to rust names (e.g. i32
-    /// instead of int4), but we will want to make them more like some other
-    /// system at some point.
+    /// Right now the names correspond most closely to Rust names (e.g. i32).
+    /// There are other functions in other packages that construct a mapping
+    /// between `ScalarType`s and type names in other systems, like PostgreSQL.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use ScalarType::*;
         match self {

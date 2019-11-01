@@ -245,7 +245,7 @@ fn handle_show_columns(
             Row::pack(&[
                 Datum::String(name.mz_as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
-                Datum::String(&typ.scalar_type.to_string()),
+                Datum::String(postgres_type_name(typ.scalar_type)),
             ])
         })
         .collect();
@@ -657,4 +657,25 @@ pub(crate) fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure:
         bail!("qualified names are not yet supported: {}", n.to_string())
     }
     Ok(n.to_string())
+}
+
+/// Returns the name that PostgreSQL would use for this `ScalarType`. Note that
+/// PostgreSQL does not have an explicit NULL type, so this function panics if
+/// called with `ScalarType::Null`.
+fn postgres_type_name(typ: ScalarType) -> &'static str {
+    match typ {
+        ScalarType::Null => panic!("postgres_type_name called on ScalarType::Null"),
+        ScalarType::Bool => "bool",
+        ScalarType::Int32 => "int4",
+        ScalarType::Int64 => "int8",
+        ScalarType::Float32 => "float4",
+        ScalarType::Float64 => "float8",
+        ScalarType::Decimal(_, _) => "numeric",
+        ScalarType::Date => "date",
+        ScalarType::Time => "time",
+        ScalarType::Timestamp => "timestamp",
+        ScalarType::Interval => "interval",
+        ScalarType::Bytes => "bytea",
+        ScalarType::String => "text",
+    }
 }
