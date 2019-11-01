@@ -313,11 +313,11 @@ impl Decoder for Codec {
 }
 
 fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
-    let version = buf.read_u32()?;
+    let version = buf.read_i32()?;
     if version == VERSION_CANCEL {
         Ok(FrontendMessage::CancelRequest {
-            conn_id: buf.read_u32()?,
-            secret_key: buf.read_u32()?,
+            conn_id: buf.read_i32()? as u32,
+            secret_key: buf.read_i32()? as u32,
         })
     } else {
         Ok(FrontendMessage::Startup { version })
@@ -351,10 +351,10 @@ fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     // having type void.
     //
     // Oh god
-    let parameter_data_type_count = buf.read_u16()?;
+    let parameter_data_type_count = buf.read_i16()?;
     let mut param_dts = vec![];
     for _ in 0..parameter_data_type_count {
-        param_dts.push(buf.read_u32()?);
+        param_dts.push(buf.read_i32()?);
     }
 
     let msg = FrontendMessage::Parse {
@@ -406,18 +406,18 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     // The simplest thing to do, since we don't actually support binding
     // parameters, is to accept whatever parameters format codes folks want to
     // supply, and then blow up if they actually try to bind any parameters.
-    let parameter_format_code_count = buf.read_u16()?;
+    let parameter_format_code_count = buf.read_i16()?;
     for _ in 0..parameter_format_code_count {
-        let _ = buf.read_u16()?;
+        let _ = buf.read_i16()?;
     }
-    if buf.read_u16()? > 0 {
+    if buf.read_i16()? > 0 {
         return Err(unsupported_err("binding parameters is not supported"));
     }
 
-    let return_format_code_count = buf.read_u16()?;
-    let mut fmt_codes = Vec::with_capacity(usize::from(return_format_code_count));
+    let return_format_code_count = buf.read_i16()?;
+    let mut fmt_codes = Vec::with_capacity(return_format_code_count as usize);
     for _ in 0..return_format_code_count {
-        fmt_codes.push(FieldFormat::try_from(buf.read_u16()?).map_err(input_err)?);
+        fmt_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
     }
 
     Ok(FrontendMessage::Bind {
@@ -429,7 +429,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
 
 fn decode_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
-    let max_rows = buf.read_u32()?;
+    let max_rows = buf.read_i32()?;
     if max_rows > 0 {
         log::warn!(
             "Ignoring maximum_rows={} for portal={:?}",
@@ -498,24 +498,24 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Reads the next 16-bit unsigned integer, advancing the cursor by two
+    /// Reads the next 16-bit signed integer, advancing the cursor by two
     /// bytes.
-    fn read_u16(&mut self) -> Result<u16, io::Error> {
+    fn read_i16(&mut self) -> Result<i16, io::Error> {
         if self.buf.len() < 2 {
             return Err(input_err("not enough buffer for an Int16"));
         }
-        let val = NetworkEndian::read_u16(self.buf);
+        let val = NetworkEndian::read_i16(self.buf);
         self.advance(2);
         Ok(val)
     }
 
-    /// Reads the next 32-bit unsigned integer, advancing the cursor by four
+    /// Reads the next 32-bit signed integer, advancing the cursor by four
     /// bytes.
-    fn read_u32(&mut self) -> Result<u32, io::Error> {
+    fn read_i32(&mut self) -> Result<i32, io::Error> {
         if self.buf.len() < 4 {
             return Err(input_err("not enough buffer for an Int32"));
         }
-        let val = NetworkEndian::read_u32(self.buf);
+        let val = NetworkEndian::read_i32(self.buf);
         self.advance(4);
         Ok(val)
     }
