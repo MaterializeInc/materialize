@@ -260,8 +260,8 @@ mod tests {
             raw_sql: "<none>".into(),
             relation_expr: RelationExpr::Project {
                 outputs: vec![1, 2],
-                input: Box::new(RelationExpr::Join {
-                    inputs: vec![
+                input: Box::new(RelationExpr::join(
+                    vec![
                         RelationExpr::Get {
                             name: "orders".into(),
                             typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
@@ -278,8 +278,8 @@ mod tests {
                         })
                         .distinct(),
                     ],
-                    variables: vec![vec![(0, 0), (1, 0)]],
-                }),
+                    vec![vec![(0, 0), (1, 0)]],
+                )),
             },
             desc: RelationDesc::empty()
                 .add_column("name", ScalarType::String)

@@ -339,11 +339,7 @@ impl RelationExpr {
 
     /// Form the Cartesian outer-product of rows in both inputs.
     pub fn product(self, right: Self) -> Self {
-        RelationExpr::Join {
-            inputs: vec![self, right],
-            variables: vec![],
-            projection: None,
-        }
+        RelationExpr::join(vec![self, right], vec![])
     }
 
     /// Performs a relational equijoin among the input collections.
@@ -1081,10 +1077,8 @@ Constant [[665]]"
 
     #[test]
     fn test_pretty_join() {
-        let join = RelationExpr::Join {
-            variables: vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]],
-            inputs: vec![base(), base()],
-        };
+        let join = RelationExpr::join(vec![base(), base()],
+            vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]]);
 
         assert_eq!(
             join.to_doc().pretty(82).to_string(),
