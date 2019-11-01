@@ -1077,8 +1077,10 @@ Constant [[665]]"
 
     #[test]
     fn test_pretty_join() {
-        let join = RelationExpr::join(vec![base(), base()],
-            vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]]);
+        let join = RelationExpr::join(
+            vec![base(), base()],
+            vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]],
+        );
 
         assert_eq!(
             join.to_doc().pretty(82).to_string(),
