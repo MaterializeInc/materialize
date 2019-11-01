@@ -468,64 +468,6 @@ impl RelationExpr {
         }
     }
 
-<<<<<<< HEAD
-=======
-    /// A helper method to finish a left outer join.
-    ///
-    /// This method should be called as `left.join(right).left_outer(left)' in order
-    /// to effect a left outer join. It most likely should not be called in any other
-    /// context without further investigation.
-    pub fn left_outer(self, left: Self) -> Self {
-        let both = self;
-        let both_arity = both.arity();
-        let left_arity = left.arity();
-        assert!(both_arity >= left_arity);
-
-        RelationExpr::join(
-            vec![
-                left.union(both.project((0..left_arity).collect()).distinct().negate()),
-                RelationExpr::Constant {
-                    rows: vec![(vec![Datum::Null; both_arity - left_arity], 1)],
-                    typ: RelationType::new(vec![
-                        ColumnType::new(ScalarType::Null).nullable(true);
-                        both_arity - left_arity
-                    ]),
-                },
-            ],
-            vec![],
-        )
-    }
-
-    /// A helper method to finish a right outer join.
-    ///
-    /// This method should be called as `left.join(right).right_outer(right)' in order
-    /// to effect a right outer join. It most likely should not be called in any other
-    /// context without further investigation.
-    pub fn right_outer(self, right: Self) -> Self {
-        let both = self;
-        let both_arity = both.arity();
-        let right_arity = right.arity();
-        assert!(both_arity >= right_arity);
-
-        RelationExpr::join(
-            vec![
-                RelationExpr::Constant {
-                    rows: vec![(vec![Datum::Null; both_arity - right_arity], 1)],
-                    typ: RelationType::new(vec![
-                        ColumnType::new(ScalarType::Null).nullable(true);
-                        both_arity - right_arity
-                    ]),
-                },
-                right.union(
-                    both.distinct_by(((both_arity - right_arity)..both_arity).collect())
-                        .negate(),
-                ),
-            ],
-            vec![],
-        )
-    }
-
->>>>>>> initial commit
     /// Indicates if this is a constant empty collection.
     ///
     /// A false value does not mean the collection is known to be non-empty,
