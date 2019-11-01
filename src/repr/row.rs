@@ -123,17 +123,20 @@ enum Tag {
 }
 
 impl Row {
-    /// Take some `Datum`s and pack them into a `Row`
+    /// Take some `Datum`s and pack them into a `Row`.
+    ///
+    /// This function can cause a surprising number of allocations. In performance-sensitive code, use `RowPacker::pack` instead to reuse intermediate storage.
     pub fn pack<'a, I, D>(iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        // this adds an unnecessary copy, but this function isn't supposed to be used in performance-sensitive code anyway
         RowPacker::new().pack(iter)
     }
 
-    /// Unpack `self` into a `Vec<Datum>` for efficient random access
+    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
+    ///
+    /// This function can cause a surprising number of allocations. In performance-sensitive code, use `RowUnpacker::unpack` instead to reuse intermediate storage.
     pub fn unpack(&self) -> Vec<Datum> {
         self.iter().collect()
     }
@@ -156,7 +159,10 @@ impl Row {
     ///
     /// Updates `offset` to point to the first byte after the end of the read region.
     ///
-    /// Despite the assert, this function is still unsafe because if used incorrectly it could return invalid values, which is Undefined Behavior
+    /// # Safety
+    ///
+    /// This function is safe if a value of type `T` was previously written at this offset by `RowPacker::push`.
+    /// Otherwise it could return invalid values, which is Undefined Behavior.
     unsafe fn read_copy<T>(&self, offset: &mut usize) -> T
     where
         T: Copy,
@@ -171,7 +177,10 @@ impl Row {
     ///
     /// Updates `offset` to point to the first byte after the end of the read region.
     ///
-    /// This function is unsafe because if used incorrectly it could return invalid values, which is Undefined Behavior
+    /// # Safety
+    ///
+    /// This function is safe is a `Datum` was previously written at this offset by `RowPacker::push`.
+    /// Otherwise it could return invalid values, which is Undefined Behavior.
     unsafe fn read_datum(&self, offset: &mut usize) -> Datum {
         let tag = self.read_copy::<Tag>(offset);
         match tag {
