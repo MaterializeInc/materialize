@@ -10,10 +10,9 @@ use chrono::{NaiveDate, NaiveDateTime};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
-use std::iter::FromIterator;
 use std::mem::{size_of, transmute};
 
-/// A compact representation for `Datum`s.
+/// A packed representation for `Datum`s.
 ///
 /// `Datum` is easy to work with but very space inefficent. A `Datum::Int32(42)` is laid out in memory like this:
 ///
@@ -28,52 +27,34 @@ use std::mem::{size_of, transmute};
 /// We avoid the need for the first set of padding by only providing access to the `Datum`s via calls to `ptr::read_unaligned`, which on modern x86 is barely penalized.
 /// We avoid the need for the second set of padding by not providing mutable access to the `Datum`. Instead, `Row` is append-only.
 ///
-/// `Row`s can be built by pushing `Datum`s on to the end or by `collect`ing an iterator of `Datum`s.
+/// A `Row` can be built from a collection of `Datum`s using `Row::pack`
 ///
 /// ```
-/// # use repr::{Row, Datum, DatumsBuffer};
-/// let mut row = Row::new();
-/// row.push(Datum::Int32(0));
-/// row.extend(vec![Datum::Int32(1), Datum::Int32(2)]);
-/// row.extend(&[Datum::Int32(3), Datum::Int32(4)]);
-/// assert_eq!(row.as_vec(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2), Datum::Int32(3), Datum::Int32(4)])
+/// # use repr::{Row, Datum, RowUnpacker};
+/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// assert_eq!(row.unpack(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)])
 /// ```
 ///
-/// ```
-/// # use repr::{Row, Datum, DatumsBuffer};
-/// let row = (0..5).map(|i| Datum::Int32(i)).collect::<Row>();
-/// assert_eq!(row.as_vec(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2), Datum::Int32(3), Datum::Int32(4)])
-/// ```
+/// `Row`s can be unpacked by iterating over them:
 ///
 /// ```
-/// # use repr::{Row, Datum, DatumsBuffer};
-/// use std::iter::FromIterator;
-/// let row = Row::from_iter((0..5).map(|i| Datum::Int32(i)));
-/// assert_eq!(row.as_vec(), vec![Datum::Int32(0), Datum::Int32(1), Datum::Int32(2), Datum::Int32(3), Datum::Int32(4)])
+/// # use repr::{Row, Datum, RowUnpacker};
+/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// assert_eq!(row.iter().nth(1).unwrap(), Datum::Int32(1));
 /// ```
 ///
-/// `Row`s are iterable:
-///
+/// If you want random access to the `Datum`s in a `Row`, use `Row::unpack` to create a `Vec<Datum>`
 /// ```
-/// # use repr::{Row, Datum, DatumsBuffer};
-/// let row = (0..5).map(|i| Datum::Int32(i)).collect::<Row>();
-/// assert_eq!(row.iter().nth(3).unwrap(), Datum::Int32(3));
-/// ```
-///
-/// If you want random access to the `Datum`s in a `Row`, use `as_vec` to create a `Vec<Datum>`
-/// ```
-/// # use repr::{Row, Datum, DatumsBuffer};
-/// let row = (0..5).map(|i| Datum::Int32(i)).collect::<Row>();
-/// let datums = row.as_vec();
-/// assert_eq!(datums[3], Datum::Int32(3));
+/// # use repr::{Row, Datum, RowUnpacker};
+/// let row = Row::pack(&[Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)]);
+/// let datums = row.unpack();
+/// assert_eq!(datums[1], Datum::Int32(1));
 /// ```
 ///
-/// In performance-sensitive code, you may not want to allocate a `Vec` for each `Row`. See `DatumsBuffer` for a more frugal alternative.
-#[derive(
-    Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, Abomonation,
-)]
+/// `Row::pack` and `Row::unpack` can cause a surprising amount of allocation. In performance-sensitive code, use `RowPacker` and `RowUnpacker` instead to reuse intermediate storage.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Row {
-    data: Vec<u8>,
+    data: Box<[u8]>,
 }
 
 #[derive(Debug)]
@@ -82,28 +63,46 @@ pub struct RowIter<'a> {
     offset: usize,
 }
 
-/// `DatumsBuffer` provides a reusable buffer as an alternative to `Row::as_vec` for processing large numbers of `Row`s
+/// `RowUnpacker` provides a reusable buffer as an alternative to `Row::unpack` for unpacking large numbers of `Row`s.
 ///
 /// ```
-/// # use repr::{Row, Datum, DatumsBuffer};
-/// use std::iter::FromIterator;
-/// let rows = (0..5).map(|i| Row::from_iter(&[Datum::Int32(i), Datum::Null, Datum::Int32(i)]) ).collect::<Vec<Row>>();
+/// # use repr::{Row, Datum, RowUnpacker};
+/// let rows = (0..5).map(|i| Row::pack(&[Datum::Int32(i), Datum::Null, Datum::Int32(i)])).collect::<Vec<Row>>();
 ///
-/// let mut buffer = DatumsBuffer::new();
+/// let mut unpacker = RowUnpacker::new();
 /// for row in rows {
-///     let datums = buffer.from_iter(&row);
+///     let datums = unpacker.unpack(&row);
 ///     assert_eq!(datums[0], datums[2]);
 /// }
 /// ```
 #[derive(Debug)]
-pub struct DatumsBuffer {
+pub struct RowUnpacker {
     datums: Vec<Datum<'static>>,
 }
 
-/// 'Datums' is a temporay view over a `DatumsBuffer`. It `deref`s to `Vec<Datum>`.
+/// 'UnpackedRow' is a tempory storage for unpacked `Datum`s. It is created by `RowUnpacker::unpack` and `deref`s to `Vec<Datum>`.
 #[derive(Debug)]
-pub struct Datums<'a> {
+pub struct UnpackedRow<'a> {
     datums: &'a mut Vec<Datum<'a>>,
+}
+
+/// `RowPacker` provides a reusable buffer as an alternative to `Row::pack` for packing large numbers of `Row`s.
+///
+/// ```
+/// # use repr::{Row, Datum, RowPacker};
+/// let mut packer = RowPacker::new();
+/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String("one")]);
+/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String("two")]);
+/// ```
+#[derive(Debug)]
+pub struct RowPacker {
+    data: Vec<u8>,
+}
+
+/// `PackableRow` is a temporary storage used for building a `Row`. It is created by `RowPacker::packable`.
+#[derive(Debug)]
+pub struct PackableRow<'a> {
+    data: &'a mut Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -124,9 +123,29 @@ enum Tag {
 }
 
 impl Row {
-    /// Create an empty `Row`
-    pub fn new() -> Row {
-        Row { data: vec![] }
+    /// Take some `Datum`s and pack them into a `Row`.
+    ///
+    /// This function can cause a surprising number of allocations. In performance-sensitive code, use `RowPacker::pack` instead to reuse intermediate storage.
+    pub fn pack<'a, I, D>(iter: I) -> Row
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        RowPacker::new().pack(iter)
+    }
+
+    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
+    ///
+    /// This function can cause a surprising number of allocations. In performance-sensitive code, use `RowUnpacker::unpack` instead to reuse intermediate storage.
+    pub fn unpack(&self) -> Vec<Datum> {
+        self.iter().collect()
+    }
+
+    /// Return the first `Datum` in `self`
+    ///
+    /// Panics if the `Row` is empty.
+    pub fn unpack_first(&self) -> Datum {
+        unsafe { self.read_datum(&mut 0) }
     }
 
     pub fn iter(&self) -> RowIter {
@@ -136,91 +155,14 @@ impl Row {
         }
     }
 
-    /// Return the first `Datum` in this `Row`.
-    ///
-    /// Panics if the `Row` is empty.
-    pub fn first(&self) -> Datum {
-        unsafe { self.read_datum(&mut 0) }
-    }
-
-    /// Unpack this `Row` into a `Vec<Datum>` for efficient random access
-    pub fn as_vec(&self) -> Vec<Datum> {
-        self.iter().collect()
-    }
-
-    /// Push `datum` onto the end of this `Row`
-    pub fn push(&mut self, datum: Datum) {
-        match datum {
-            Datum::Null => self.data.push(Tag::Null as u8),
-            Datum::False => self.data.push(Tag::False as u8),
-            Datum::True => self.data.push(Tag::True as u8),
-            Datum::Int32(i) => {
-                self.data.push(Tag::Int32 as u8);
-                self.data.extend(&i.to_le_bytes());
-            }
-            Datum::Int64(i) => {
-                self.data.push(Tag::Int64 as u8);
-                self.data.extend(&i.to_le_bytes());
-            }
-            Datum::Float32(f) => {
-                self.data.push(Tag::Float32 as u8);
-                self.data.extend(&f.to_bits().to_le_bytes());
-            }
-            Datum::Float64(f) => {
-                self.data.push(Tag::Float64 as u8);
-                self.data.extend(&f.to_bits().to_le_bytes());
-            }
-            Datum::Date(d) => {
-                self.data.push(Tag::Date as u8);
-                self.data
-                    .extend(&unsafe { transmute::<NaiveDate, [u8; size_of::<NaiveDate>()]>(d) });
-            }
-            Datum::Timestamp(t) => {
-                self.data.push(Tag::Timestamp as u8);
-                self.data.extend(&unsafe {
-                    transmute::<NaiveDateTime, [u8; size_of::<NaiveDateTime>()]>(t)
-                });
-            }
-            Datum::Interval(i) => {
-                self.data.push(Tag::Interval as u8);
-                self.data
-                    .extend(&unsafe { transmute::<Interval, [u8; size_of::<Interval>()]>(i) });
-            }
-            Datum::Decimal(s) => {
-                self.data.push(Tag::Decimal as u8);
-                self.data.extend(&unsafe {
-                    transmute::<Significand, [u8; size_of::<Significand>()]>(s)
-                });
-            }
-            Datum::Bytes(bytes) => {
-                self.data.push(Tag::Bytes as u8);
-                self.data.extend(&bytes.len().to_le_bytes());
-                self.data.extend(bytes);
-            }
-            Datum::String(string) => {
-                self.data.push(Tag::String as u8);
-                let bytes = string.as_bytes();
-                self.data.extend(&bytes.len().to_le_bytes());
-                self.data.extend(bytes);
-            }
-        }
-    }
-
-    pub fn extend<'a, I, D>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        for datum in iter {
-            self.push(*(datum.borrow()));
-        }
-    }
-
     /// Reads a `Copy` value starting at byte `offset`.
     ///
     /// Updates `offset` to point to the first byte after the end of the read region.
     ///
-    /// Despite the assert, this function is still unsafe because if used incorrectly it could return invalid values, which is Undefined Behavior
+    /// # Safety
+    ///
+    /// This function is safe if a value of type `T` was previously written at this offset by `RowPacker::push`.
+    /// Otherwise it could return invalid values, which is Undefined Behavior.
     unsafe fn read_copy<T>(&self, offset: &mut usize) -> T
     where
         T: Copy,
@@ -234,6 +176,11 @@ impl Row {
     /// Read a datum starting at byte `offset`.
     ///
     /// Updates `offset` to point to the first byte after the end of the read region.
+    ///
+    /// # Safety
+    ///
+    /// This function is safe is a `Datum` was previously written at this offset by `RowPacker::push`.
+    /// Otherwise it could return invalid values, which is Undefined Behavior.
     unsafe fn read_datum(&self, offset: &mut usize) -> Datum {
         let tag = self.read_copy::<Tag>(offset);
         match tag {
@@ -291,20 +238,6 @@ impl Row {
     }
 }
 
-impl<'a, D> FromIterator<D> for Row
-where
-    D: Borrow<Datum<'a>>,
-{
-    fn from_iter<I>(iter: I) -> Row
-    where
-        I: IntoIterator<Item = D>,
-    {
-        let mut row = Row::new();
-        row.extend(iter);
-        row
-    }
-}
-
 impl<'a> IntoIterator for &'a Row {
     type Item = Datum<'a>;
     type IntoIter = RowIter<'a>;
@@ -324,74 +257,175 @@ impl<'a> Iterator for RowIter<'a> {
     }
 }
 
-impl DatumsBuffer {
+impl RowPacker {
     pub fn new() -> Self {
-        DatumsBuffer { datums: vec![] }
+        RowPacker { data: vec![] }
     }
 
-    /// Borrow the buffer.
-    pub fn empty<'a>(&'a mut self) -> Datums<'a> {
-        let inner = &mut self.datums;
-        let datums = Datums {
-            datums: unsafe {
-                // this is safe because:
-                //   nothing else can access buffer.datums while Datums is alive
-                //   Datums can't live longer than self
-                //   when Datums is dropped, it clears buffer.datums
-                transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
-            },
-        };
-        datums
-    }
-
-    /// Borrow the buffer and fill it with `Datum`s copied from `iter`
-    #[allow(clippy::wrong_self_convention)] // this function is deliberately mimicking Vec::from_iter, but with a custom allocator
-    pub fn from_iter<'a, I, D>(&'a mut self, iter: I) -> Datums<'a>
+    /// Take some `Datum`s and pack them into a `Row`, using `self` as a buffer to reduce allocation
+    pub fn pack<'a, I, D>(&mut self, iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        let mut datums = self.empty();
-        datums.extend(iter.into_iter().map(|d| *(d.borrow())));
-        datums
+        let mut packable = self.packable();
+        packable.extend(iter);
+        packable.finish()
+    }
+
+    /// Borrows the internal buffer from `self`.
+    ///
+    /// You can mutate this buffer in the same way as a row, and clone it to make a new row. When the buffer is dropped it will be reset to empty.
+    ///
+    /// There are some awkward cases where this function is needed, but prefer `RowPacker::pack` where possible
+    pub fn packable(&mut self) -> PackableRow {
+        PackableRow {
+            data: &mut self.data,
+        }
     }
 }
 
-impl<'a> std::ops::Deref for Datums<'a> {
+impl<'a> PackableRow<'a> {
+    /// Push `datum` onto the end of `self`
+    pub fn push(&mut self, datum: Datum) {
+        let data = &mut self.data;
+        match datum {
+            Datum::Null => data.push(Tag::Null as u8),
+            Datum::False => data.push(Tag::False as u8),
+            Datum::True => data.push(Tag::True as u8),
+            Datum::Int32(i) => {
+                data.push(Tag::Int32 as u8);
+                data.extend(&i.to_le_bytes());
+            }
+            Datum::Int64(i) => {
+                data.push(Tag::Int64 as u8);
+                data.extend(&i.to_le_bytes());
+            }
+            Datum::Float32(f) => {
+                data.push(Tag::Float32 as u8);
+                data.extend(&f.to_bits().to_le_bytes());
+            }
+            Datum::Float64(f) => {
+                data.push(Tag::Float64 as u8);
+                data.extend(&f.to_bits().to_le_bytes());
+            }
+            Datum::Date(d) => {
+                data.push(Tag::Date as u8);
+                data.extend(&unsafe { transmute::<NaiveDate, [u8; size_of::<NaiveDate>()]>(d) });
+            }
+            Datum::Timestamp(t) => {
+                data.push(Tag::Timestamp as u8);
+                data.extend(&unsafe {
+                    transmute::<NaiveDateTime, [u8; size_of::<NaiveDateTime>()]>(t)
+                });
+            }
+            Datum::Interval(i) => {
+                data.push(Tag::Interval as u8);
+                data.extend(&unsafe { transmute::<Interval, [u8; size_of::<Interval>()]>(i) });
+            }
+            Datum::Decimal(s) => {
+                data.push(Tag::Decimal as u8);
+                data.extend(&unsafe {
+                    transmute::<Significand, [u8; size_of::<Significand>()]>(s)
+                });
+            }
+            Datum::Bytes(bytes) => {
+                data.push(Tag::Bytes as u8);
+                data.extend(&bytes.len().to_le_bytes());
+                data.extend(bytes);
+            }
+            Datum::String(string) => {
+                data.push(Tag::String as u8);
+                let bytes = string.as_bytes();
+                data.extend(&bytes.len().to_le_bytes());
+                data.extend(bytes);
+            }
+        }
+    }
+
+    pub fn extend<'b, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'b>>,
+    {
+        for datum in iter {
+            self.push(*(datum.borrow()));
+        }
+    }
+
+    pub fn finish(self) -> Row {
+        Row {
+            data: self.data.clone().into_boxed_slice(),
+        }
+    }
+}
+
+impl Drop for PackableRow<'_> {
+    fn drop(&mut self) {
+        self.data.clear()
+    }
+}
+
+impl RowUnpacker {
+    pub fn new() -> Self {
+        RowUnpacker { datums: vec![] }
+    }
+
+    /// Unpack `row` into a `Vec<Datum>` for efficient random access, using `self` as a buffer to reduce allocation
+    pub fn unpack<'a, I, D>(&'a mut self, iter: I) -> UnpackedRow<'a>
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        let inner = &mut self.datums;
+        let mut unpacked = UnpackedRow {
+            datums: unsafe {
+                // this is safe because:
+                //   nothing else can access buffer.datums while unpacked is alive
+                //   unpacked can't live longer than self
+                //   when unpacked is dropped, it clears buffer.datums
+                transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
+            },
+        };
+        unpacked.extend(iter.into_iter().map(|d| *(d.borrow())));
+        unpacked
+    }
+}
+
+impl<'a> std::ops::Deref for UnpackedRow<'a> {
     type Target = Vec<Datum<'a>>;
     fn deref(&self) -> &Vec<Datum<'a>> {
         &self.datums
     }
 }
 
-impl<'a> std::ops::DerefMut for Datums<'a> {
+impl<'a> std::ops::DerefMut for UnpackedRow<'a> {
     fn deref_mut(&mut self) -> &mut Vec<Datum<'a>> {
         &mut self.datums
     }
 }
 
-impl Drop for Datums<'_> {
+impl Drop for UnpackedRow<'_> {
     fn drop(&mut self) {
         self.datums.clear()
     }
 }
 
-impl Default for Row {
-    fn default() -> Row {
-        Row::new()
+impl Default for RowPacker {
+    fn default() -> RowPacker {
+        RowPacker::new()
     }
 }
 
-impl Default for DatumsBuffer {
-    fn default() -> DatumsBuffer {
-        DatumsBuffer::new()
+impl Default for RowUnpacker {
+    fn default() -> RowUnpacker {
+        RowUnpacker::new()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::iter::FromIterator;
 
     #[test]
     fn test_assumptions() {
@@ -406,10 +440,10 @@ mod tests {
     #[test]
     fn miri_test_round_trip() {
         fn round_trip(datums: Vec<Datum>) {
-            let row = Row::from_iter(datums.clone());
-            let mut buffer = DatumsBuffer::new();
+            let row = Row::pack(datums.clone());
+            let mut unpacker = RowUnpacker::new();
             let datums2 = row.iter().collect::<Vec<_>>();
-            let datums3 = buffer.from_iter(&row);
+            let datums3 = unpacker.unpack(&row);
             assert_eq!(datums, datums2);
             assert_eq!(&datums, &*datums3);
         }

@@ -188,7 +188,7 @@ fn handle_show_variable(
                 .vars()
                 .iter()
                 .map(|v| {
-                    Row::from_iter(&[
+                    Row::pack(&[
                         Datum::String(v.name()),
                         Datum::String(&v.value()),
                         Datum::String(v.description()),
@@ -198,7 +198,7 @@ fn handle_show_variable(
         ))
     } else {
         let variable = session.get(&variable.value)?;
-        Ok(Plan::SendRows(vec![Row::from_iter(&[Datum::String(
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
             &variable.value(),
         )])]))
     }
@@ -214,7 +214,7 @@ fn handle_show_objects(catalog: &Catalog, object_type: ObjectType) -> Result<Pla
     let mut rows: Vec<Row> = catalog
         .iter()
         .filter(|(_k, v)| object_type_matches(object_type, &v))
-        .map(|(k, _v)| Row::from_iter(&[Datum::from(k)]))
+        .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
         .collect();
     rows.sort_unstable();
     Ok(Plan::SendRows(rows))
@@ -242,7 +242,7 @@ fn handle_show_columns(
         .get_desc(&table_name.to_string())?
         .iter()
         .map(|(name, typ)| {
-            Row::from_iter(&[
+            Row::pack(&[
                 Datum::String(name.mz_as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
                 Datum::String(&typ.scalar_type.to_string()),
@@ -263,7 +263,7 @@ fn handle_show_create_view(
     } else {
         bail!("{} is not a view", name);
     };
-    Ok(Plan::SendRows(vec![Row::from_iter(&[
+    Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name),
         Datum::String(&raw_sql),
     ])]))
@@ -501,7 +501,7 @@ pub fn handle_explain(
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
-        Ok(Plan::SendRows(vec![Row::from_iter(&[Datum::String(
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
             &relation_expr.pretty(),
         )])]))
     } else {

@@ -16,7 +16,7 @@ use url::Url;
 
 use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -315,6 +315,7 @@ pub struct Decoder {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
     fast_row_schema: Option<Schema>,
+    packer: RowPacker,
 }
 
 impl fmt::Debug for Decoder {
@@ -365,6 +366,7 @@ impl Decoder {
             reader_schema,
             writer_schemas,
             fast_row_schema,
+            packer: RowPacker::new(),
         }
     }
 
@@ -431,18 +433,19 @@ impl Decoder {
             }
         };
 
-        fn extract_row(v: Value) -> Result<Option<Row>, failure::Error> {
+        fn extract_row(v: Value, packer: &mut RowPacker) -> Result<Option<Row>, failure::Error> {
             let v = match v {
                 Value::Union(v) => *v,
                 _ => bail!("unsupported avro value: {:?}", v),
             };
             match v {
                 Value::Record(fields) => {
-                    let mut row = Row::new();
-                    for (_, col) in fields {
-                        row.push(value_to_datum(&col)?);
+                    // NOTE We can't use RowPacker::pack here because of the Result from value_to_datum
+                    let mut row = packer.packable();
+                    for (_, col) in fields.iter() {
+                        row.push(value_to_datum(col)?);
                     }
-                    Ok(Some(row))
+                    Ok(Some(row.finish()))
                 }
                 Value::Null => Ok(None),
                 _ => bail!("unsupported avro value: {:?}", v),
@@ -454,17 +457,23 @@ impl Decoder {
         if let (Some(schema), None) = (&self.fast_row_schema, reader_schema) {
             // The record is laid out such that we can extract the `before` and
             // `after` fields without decoding the entire record.
-            before = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
-            after = extract_row(avro_rs::from_avro_datum(&schema, &mut bytes, None)?)?;
+            before = extract_row(
+                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
+                &mut self.packer,
+            )?;
+            after = extract_row(
+                avro_rs::from_avro_datum(&schema, &mut bytes, None)?,
+                &mut self.packer,
+            )?;
         } else {
             let val = avro_rs::from_avro_datum(writer_schema, &mut bytes, reader_schema)?;
             match val {
                 Value::Record(fields) => {
                     for (name, val) in fields {
                         if name == "before" {
-                            before = extract_row(val)?;
+                            before = extract_row(val, &mut self.packer)?;
                         } else if name == "after" {
-                            after = extract_row(val)?;
+                            after = extract_row(val, &mut self.packer)?;
                         } else {
                             // Intentionally ignore other fields.
                         }

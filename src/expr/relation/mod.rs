@@ -19,7 +19,6 @@ use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
 use repr::{ColumnType, Datum, RelationType, Row};
 use serde::{Deserialize, Serialize};
-use std::iter::FromIterator;
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -301,7 +300,7 @@ impl RelationExpr {
         }
         let rows = rows
             .into_iter()
-            .map(|(row, diff)| (Row::from_iter(row), diff))
+            .map(|(row, diff)| (Row::pack(row), diff))
             .collect();
         RelationExpr::Constant { rows, typ }
     }

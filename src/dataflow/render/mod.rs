@@ -12,7 +12,6 @@ use differential_dataflow::AsCollection;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::iter::FromIterator;
 use std::rc::Rc;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
@@ -22,7 +21,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
 use expr::RelationExpr;
-use repr::{Datum, DatumsBuffer, Row};
+use repr::{Datum, Row, RowPacker, RowUnpacker};
 
 use super::sink;
 use super::source;
@@ -154,13 +153,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     }
                     for key in keys {
                         let key_clone = key.clone();
-                        let mut buffer = DatumsBuffer::new();
+                        let mut unpacker = RowUnpacker::new();
+                        let mut packer = RowPacker::new();
                         let arrangement = context
                             .collection(&view.relation_expr)
                             .expect("Render failed to produce collection")
                             .map(move |row| {
-                                let datums = buffer.from_iter(&row);
-                                let key_row = Row::from_iter(key.iter().map(|k| datums[*k]));
+                                let datums = unpacker.unpack(&row);
+                                let key_row = packer.pack(key.iter().map(|k| datums[*k]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -265,10 +265,11 @@ where
                 RelationExpr::Project { input, outputs } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let outputs = outputs.clone();
-                    let mut buffer = DatumsBuffer::new();
+                    let mut unpacker = RowUnpacker::new();
+                    let mut packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |row| {
-                        let datums = buffer.from_iter(&row);
-                        Row::from_iter(outputs.iter().map(|i| datums[*i]))
+                        let datums = unpacker.unpack(&row);
+                        packer.pack(outputs.iter().map(|i| datums[*i]))
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -277,9 +278,10 @@ where
                 RelationExpr::Map { input, scalars } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let scalars = scalars.clone();
-                    let mut buffer = DatumsBuffer::new();
+                    let mut unpacker = RowUnpacker::new();
+                    let mut packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |input_row| {
-                        let mut datums = buffer.from_iter(&input_row);
+                        let mut datums = unpacker.unpack(&input_row);
                         for scalar in &scalars {
                             let datum = scalar.eval(&datums);
                             // Scalar is allowed to see the outputs of previous scalars.
@@ -287,7 +289,7 @@ where
                             // Note that this doesn't mutate input_row.
                             datums.push(datum);
                         }
-                        Row::from_iter(&*datums)
+                        packer.pack(&*datums)
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -296,9 +298,9 @@ where
                 RelationExpr::Filter { input, predicates } => {
                     self.ensure_rendered(input, scope, worker_index);
                     let predicates = predicates.clone();
-                    let mut buffer = DatumsBuffer::new();
+                    let mut unpacker = RowUnpacker::new();
                     let collection = self.collection(input).unwrap().filter(move |input_row| {
-                        let datums = buffer.from_iter(input_row);
+                        let datums = unpacker.unpack(input_row);
                         predicates
                             .iter()
                             .all(|predicate| match predicate.eval(&datums) {
@@ -406,11 +408,12 @@ where
                         }
                     }
 
-                    let mut buffer = DatumsBuffer::new();
+                    let mut unpacker = RowUnpacker::new();
+                    let mut packer = RowPacker::new();
                     let old_keyed = joined
                         .map(move |row| {
-                            let datums = buffer.from_iter(&row);
-                            let key_row = Row::from_iter(old_keys.iter().map(|i| datums[*i]));
+                            let datums = unpacker.unpack(&row);
+                            let key_row = packer.pack(old_keys.iter().map(|i| datums[*i]));
                             drop(datums);
                             (key_row, row)
                         })
@@ -420,11 +423,12 @@ where
                     if self.arrangement(&input, &new_keys[..]).is_none() {
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
-                        let mut buffer = DatumsBuffer::new();
+                        let mut unpacker = RowUnpacker::new();
+                        let mut packer = RowPacker::new();
                         let new_keyed = built
                             .map(move |row| {
-                                let datums = buffer.from_iter(&row);
-                                let key_row = Row::from_iter(new_keys2.iter().map(|i| datums[*i]));
+                                let datums = unpacker.unpack(&row);
+                                let key_row = packer.pack(new_keys2.iter().map(|i| datums[*i]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -435,17 +439,16 @@ where
                         self.set_local(&input, &new_keys[..], new_keyed);
                     }
 
+                    let mut packer = RowPacker::new();
                     joined = match self.arrangement(&input, &new_keys[..]) {
-                        Some(ArrangementFlavor::Local(local)) => {
-                            old_keyed.join_core(&local, move |_keys, old, new| {
-                                Some(Row::from_iter(old.iter().chain(new.iter())))
-                            })
-                        }
-                        Some(ArrangementFlavor::Trace(trace)) => {
-                            old_keyed.join_core(&trace, move |_keys, old, new| {
-                                Some(Row::from_iter(old.iter().chain(new.iter())))
-                            })
-                        }
+                        Some(ArrangementFlavor::Local(local)) => old_keyed
+                            .join_core(&local, move |_keys, old, new| {
+                                Some(packer.pack(old.iter().chain(new.iter())))
+                            }),
+                        Some(ArrangementFlavor::Trace(trace)) => old_keyed
+                            .join_core(&trace, move |_keys, old, new| {
+                                Some(packer.pack(old.iter().chain(new.iter())))
+                            }),
                         None => {
                             panic!("Arrangement alarmingly absent!");
                         }
@@ -511,18 +514,17 @@ where
 
             // Our first action is to take our input from a collection of `tuple`
             // to one structured as `((keys, vals), time, aggs)`
-            let group_key = group_key.clone();
-
             let exploded = input
                 .map({
                     let group_key = group_key.clone();
-                    let mut buffer = DatumsBuffer::new();
+                    let mut unpacker = RowUnpacker::new();
+                    let mut packer = RowPacker::new();
                     move |row| {
-                        let datums = buffer.from_iter(&row);
+                        let datums = unpacker.unpack(&row);
 
-                        let keys = Row::from_iter(group_key.iter().map(|i| datums[*i]));
+                        let keys = packer.pack(group_key.iter().map(|i| datums[*i]));
 
-                        let mut vals = Row::new();
+                        let mut vals = packer.packable();
                         let mut aggs = vec![1i128];
 
                         for (index, aggregate) in aggregates_clone.iter().enumerate() {
@@ -581,7 +583,7 @@ where
                         // A DiffVector holds multiple monoidal accumulations.
                         (
                             keys,
-                            vals,
+                            vals.finish(),
                             differential_dataflow::difference::DiffVector::new(aggs),
                         )
                     }
@@ -605,119 +607,122 @@ where
                     >>("ReduceStage")
                     .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
                         "Reduce",
-                        move |key, source, target| {
-                            sums.clear();
-                            sums.extend(&source[0].1[..]);
-                            for record in source[1..].iter() {
-                                for index in 0..sums.len() {
-                                    sums[index] += record.1[index];
-                                }
-                            }
-
-                            // Our output will be [keys; aggregates].
-                            let mut result = Row::new();
-                            result.extend(key.iter());
-
-                            let mut abelian_pos = 1; // <- advance past the count
-                            let mut non_abelian_pos = 0;
-
-                            for (agg, abl) in aggregates.iter().zip(abelian.iter()) {
-                                if *abl {
-                                    let value = match agg.func {
-                                        AggregateFunc::SumInt32 => {
-                                            let total = sums[abelian_pos] as i32;
-                                            let non_nulls = sums[abelian_pos + 1] as i32;
-                                            abelian_pos += 2;
-                                            if non_nulls > 0 {
-                                                Datum::Int32(total)
-                                            } else {
-                                                Datum::Null
-                                            }
-                                        }
-                                        AggregateFunc::SumInt64 => {
-                                            let total = sums[abelian_pos] as i64;
-                                            let non_nulls = sums[abelian_pos + 1] as i64;
-                                            abelian_pos += 2;
-                                            if non_nulls > 0 {
-                                                Datum::Int64(total)
-                                            } else {
-                                                Datum::Null
-                                            }
-                                        }
-                                        AggregateFunc::SumFloat32 => {
-                                            let total = sums[abelian_pos];
-                                            let non_nulls = sums[abelian_pos + 1];
-                                            abelian_pos += 2;
-                                            if non_nulls > 0 {
-                                                Datum::Float32(
-                                                    (((total as f64) / float_scale) as f32).into(),
-                                                )
-                                            } else {
-                                                Datum::Null
-                                            }
-                                        }
-                                        AggregateFunc::SumFloat64 => {
-                                            let total = sums[abelian_pos];
-                                            let non_nulls = sums[abelian_pos + 1];
-                                            abelian_pos += 2;
-                                            if non_nulls > 0 {
-                                                Datum::Float64(
-                                                    ((total as f64) / float_scale).into(),
-                                                )
-                                            } else {
-                                                Datum::Null
-                                            }
-                                        }
-                                        AggregateFunc::SumDecimal => {
-                                            let total = sums[abelian_pos];
-                                            let non_nulls = sums[abelian_pos + 1];
-                                            abelian_pos += 2;
-                                            if non_nulls > 0 {
-                                                Datum::from(total)
-                                            } else {
-                                                Datum::Null
-                                            }
-                                        }
-                                        AggregateFunc::Count => {
-                                            // Does not count NULLs.
-                                            let total = sums[abelian_pos] as i64;
-                                            abelian_pos += 1;
-                                            Datum::Int64(total)
-                                        }
-                                        AggregateFunc::CountAll => {
-                                            let total = sums[0] as i64;
-                                            Datum::Int64(total)
-                                        }
-                                        x => panic!("Surprising Abelian aggregation: {:?}", x),
-                                    };
-                                    result.push(value);
-                                } else {
-                                    if agg.distinct {
-                                        let iter = source
-                                            .iter()
-                                            .flat_map(|(v, w)| {
-                                                if w[0] > 0 {
-                                                    // <-- really should be true
-                                                    Some(v.iter().nth(non_abelian_pos).unwrap())
-                                                } else {
-                                                    None
-                                                }
-                                            })
-                                            .collect::<HashSet<_>>();
-                                        result.push((agg.func.func())(iter));
-                                    } else {
-                                        let iter = source.iter().flat_map(|(v, w)| {
-                                            // let eval = agg.expr.eval(v);
-                                            std::iter::repeat(v.iter().nth(non_abelian_pos).unwrap())
-                                                .take(std::cmp::max(w[0], 0) as usize)
-                                        });
-                                        result.push((agg.func.func())(iter));
+                        {
+                            let mut packer = RowPacker::new();
+                            move |key, source, target| {
+                                sums.clear();
+                                sums.extend(&source[0].1[..]);
+                                for record in source[1..].iter() {
+                                    for index in 0..sums.len() {
+                                        sums[index] += record.1[index];
                                     }
-                                    non_abelian_pos += 1;
                                 }
+
+                                // Our output will be [keys; aggregates].
+                                let mut result = packer.packable();
+                                result.extend(key.iter());
+
+                                let mut abelian_pos = 1; // <- advance past the count
+                                let mut non_abelian_pos = 0;
+
+                                for (agg, abl) in aggregates.iter().zip(abelian.iter()) {
+                                    if *abl {
+                                        let value = match agg.func {
+                                            AggregateFunc::SumInt32 => {
+                                                let total = sums[abelian_pos] as i32;
+                                                let non_nulls = sums[abelian_pos + 1] as i32;
+                                                abelian_pos += 2;
+                                                if non_nulls > 0 {
+                                                    Datum::Int32(total)
+                                                } else {
+                                                    Datum::Null
+                                                }
+                                            }
+                                            AggregateFunc::SumInt64 => {
+                                                let total = sums[abelian_pos] as i64;
+                                                let non_nulls = sums[abelian_pos + 1] as i64;
+                                                abelian_pos += 2;
+                                                if non_nulls > 0 {
+                                                    Datum::Int64(total)
+                                                } else {
+                                                    Datum::Null
+                                                }
+                                            }
+                                            AggregateFunc::SumFloat32 => {
+                                                let total = sums[abelian_pos];
+                                                let non_nulls = sums[abelian_pos + 1];
+                                                abelian_pos += 2;
+                                                if non_nulls > 0 {
+                                                    Datum::Float32(
+                                                        (((total as f64) / float_scale) as f32).into(),
+                                                    )
+                                                } else {
+                                                    Datum::Null
+                                                }
+                                            }
+                                            AggregateFunc::SumFloat64 => {
+                                                let total = sums[abelian_pos];
+                                                let non_nulls = sums[abelian_pos + 1];
+                                                abelian_pos += 2;
+                                                if non_nulls > 0 {
+                                                    Datum::Float64(
+                                                        ((total as f64) / float_scale).into(),
+                                                    )
+                                                } else {
+                                                    Datum::Null
+                                                }
+                                            }
+                                            AggregateFunc::SumDecimal => {
+                                                let total = sums[abelian_pos];
+                                                let non_nulls = sums[abelian_pos + 1];
+                                                abelian_pos += 2;
+                                                if non_nulls > 0 {
+                                                    Datum::from(total)
+                                                } else {
+                                                    Datum::Null
+                                                }
+                                            }
+                                            AggregateFunc::Count => {
+                                                // Does not count NULLs.
+                                                let total = sums[abelian_pos] as i64;
+                                                abelian_pos += 1;
+                                                Datum::Int64(total)
+                                            }
+                                            AggregateFunc::CountAll => {
+                                                let total = sums[0] as i64;
+                                                Datum::Int64(total)
+                                            }
+                                            x => panic!("Surprising Abelian aggregation: {:?}", x),
+                                        };
+                                        result.push(value);
+                                    } else {
+                                        if agg.distinct {
+                                            let iter = source
+                                                .iter()
+                                                .flat_map(|(v, w)| {
+                                                    if w[0] > 0 {
+                                                        // <-- really should be true
+                                                        Some(v.iter().nth(non_abelian_pos).unwrap())
+                                                    } else {
+                                                        None
+                                                    }
+                                                })
+                                                .collect::<HashSet<_>>();
+                                            result.push((agg.func.func())(iter));
+                                        } else {
+                                            let iter = source.iter().flat_map(|(v, w)| {
+                                                // let eval = agg.expr.eval(v);
+                                                std::iter::repeat(v.iter().nth(non_abelian_pos).unwrap())
+                                                    .take(std::cmp::max(w[0], 0) as usize)
+                                            });
+                                            result.push((agg.func.func())(iter));
+                                        }
+                                        non_abelian_pos += 1;
+                                    }
+                                }
+                                target.push((result.finish(), 1isize));
                             }
-                            target.push((result, 1isize));
-                        },
+                        }
                     );
 
             let index = (0..keys_clone.len()).collect::<Vec<_>>();
@@ -746,17 +751,18 @@ where
             let offset = *offset;
             let arrangement = input
                 .map({
-                    let mut buffer = DatumsBuffer::new();
+                    let mut unpacker = RowUnpacker::new();
+                    let mut packer = RowPacker::new();
                     move |row| {
-                        let datums = buffer.from_iter(&row);
-                        let group_row = Row::from_iter(group_clone.iter().map(|i| datums[*i]));
+                        let datums = unpacker.unpack(&row);
+                        let group_row = packer.pack(group_clone.iter().map(|i| datums[*i]));
                         drop(datums);
                         (group_row, row)
                     }
                 })
                 .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("TopK", {
-                    let mut left_buffer = DatumsBuffer::new();
-                    let mut right_buffer = DatumsBuffer::new();
+                    let mut left_unpacker = RowUnpacker::new();
+                    let mut right_unpacker = RowUnpacker::new();
                     move |_key, source, target| {
                         target.extend(source.iter().map(|&(row, diff)| (row.clone(), diff)));
                         if !order_clone.is_empty() {
@@ -764,8 +770,8 @@ where
                             let sort_by = |left: &(Row, isize), right: &(Row, isize)| {
                                 compare_columns(
                                     &order_clone,
-                                    &*left_buffer.from_iter(&left.0),
-                                    &*right_buffer.from_iter(&right.0),
+                                    &*left_unpacker.unpack(&left.0),
+                                    &*right_unpacker.unpack(&right.0),
                                 )
                             };
                             target.sort_by(sort_by);
@@ -827,11 +833,12 @@ where
                 self.ensure_rendered(input, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();
-                let mut buffer = DatumsBuffer::new();
+                let mut unpacker = RowUnpacker::new();
+                let mut packer = RowPacker::new();
                 let keyed = built
                     .map(move |row| {
-                        let datums = buffer.from_iter(&row);
-                        let key_row = Row::from_iter(keys2.iter().map(|i| datums[*i]));
+                        let datums = unpacker.unpack(&row);
+                        let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
                         drop(datums);
                         (key_row, row)
                     })

@@ -34,9 +34,8 @@ use dataflow_types::{
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
-use repr::{Datum, DatumsBuffer, RelationDesc, Row};
+use repr::{Datum, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::{MutationKind, ObjectType, Plan};
-use std::iter::FromIterator;
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<C>
@@ -142,7 +141,7 @@ where
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::from_iter(&[Datum::String(&s.name)]))
+                        .map(|s| Row::pack(&[Datum::String(&s.name)]))
                         .collect(),
                 )
             }
@@ -293,13 +292,13 @@ where
                     })
                     .map(move |mut resp| {
                         if let PeekResponse::Rows(rows) = &mut resp {
-                            let mut left_buffer = DatumsBuffer::new();
-                            let mut right_buffer = DatumsBuffer::new();
+                            let mut left_unpacker = RowUnpacker::new();
+                            let mut right_unpacker = RowUnpacker::new();
                             let mut sort_by = |left: &Row, right: &Row| {
                                 compare_columns(
                                     &finishing.order_by,
-                                    &left_buffer.from_iter(left),
-                                    &right_buffer.from_iter(right),
+                                    &left_unpacker.unpack(left),
+                                    &right_unpacker.unpack(right),
                                 )
                             };
                             let offset = finishing.offset;
@@ -318,12 +317,12 @@ where
                                     rows.drain(..offset);
                                 }
                                 rows.sort_by(&mut sort_by);
-                                let mut buffer = DatumsBuffer::new();
+                                let mut unpacker = RowUnpacker::new();
+                                let mut packer = RowPacker::new();
                                 for row in rows {
-                                    let datums = buffer.from_iter(&*row);
-                                    let new_row = Row::from_iter(
-                                        finishing.project.iter().map(|i| datums[*i]),
-                                    );
+                                    let datums = unpacker.unpack(&*row);
+                                    let new_row =
+                                        packer.pack(finishing.project.iter().map(|i| datums[*i]));
                                     drop(datums);
                                     *row = new_row;
                                 }
@@ -372,7 +371,7 @@ where
             Plan::ExplainPlan(mut relation_expr) => {
                 self.optimizer.optimize(&mut relation_expr);
                 let pretty = relation_expr.pretty();
-                let rows = vec![Row::from_iter(vec![Datum::from(&*pretty)])];
+                let rows = vec![Row::pack(vec![Datum::from(&*pretty)])];
                 send_immediate_rows(rows)
             }
 

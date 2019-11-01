@@ -8,24 +8,13 @@ checksum = "56e72913c99b1f927aa7bd59a41518fdd9995f63ffc8760f211609e0241c4fb2"
 
 [[package]]
 name = "abomonation_derive"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0bb1889db0b87cd8ef839c56b5283e28c8db68cac904b400a6170c9af1e673c"
-dependencies = [
- "quote 0.3.15",
- "syn 0.11.11",
- "synstructure 0.6.1",
-]
-
-[[package]]
-name = "abomonation_derive"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e50e2a046af56a864c62d97b7153fda72c596e646be1b0c7963736821f6e1efa"
 dependencies = [
  "proc-macro2 1.0.1",
  "quote 1.0.2",
- "synstructure 0.12.1",
+ "synstructure",
 ]
 
 [[package]]
@@ -810,7 +799,7 @@ version = "0.10.0"
 source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#5c7b83a83f0af89d66ef54f4856b608231bf204b"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.5.0",
+ "abomonation_derive",
  "fnv",
  "serde",
  "serde_derive",
@@ -948,7 +937,7 @@ dependencies = [
  "proc-macro2 1.0.1",
  "quote 1.0.2",
  "syn 1.0.3",
- "synstructure 0.12.1",
+ "synstructure",
 ]
 
 [[package]]
@@ -2194,12 +2183,6 @@ checksum = "9274b940887ce9addde99c4eee6b5c44cc494b182b97e73dc8ffdcb3397fd3f0"
 
 [[package]]
 name = "quote"
-version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a6e920b65c65f10b2ae65c831a81a073a89edd28c7cce89475bff467ab4167a"
-
-[[package]]
-name = "quote"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9949cfe66888ffe1d53e6ec9d9f3b70714083854be20fd5e271b232a017401e8"
@@ -2536,8 +2519,6 @@ checksum = "05a51ad2b1c5c710fa89e6b1631068dab84ed687bc6a5fe061ad65da3d0c25b2"
 name = "repr"
 version = "0.1.0"
 dependencies = [
- "abomonation",
- "abomonation_derive 0.3.0",
  "chrono",
  "criterion",
  "failure",
@@ -3020,17 +3001,6 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3b891b9015c88c576343b9b3e41c2c11a51c219ef067b264bd9c8aa9b441dad"
-dependencies = [
- "quote 0.3.15",
- "synom",
- "unicode-xid 0.0.4",
-]
-
-[[package]]
-name = "syn"
 version = "0.13.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14f9bf6292f3a61d2c716723fdb789a41bbe104168e6f496dc6497e531ea1b9b"
@@ -3060,25 +3030,6 @@ dependencies = [
  "proc-macro2 1.0.1",
  "quote 1.0.2",
  "unicode-xid 0.2.0",
-]
-
-[[package]]
-name = "synom"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a393066ed9010ebaed60b9eafa373d4b1baac186dd7e008555b0f702b51945b6"
-dependencies = [
- "unicode-xid 0.0.4",
-]
-
-[[package]]
-name = "synstructure"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a761d12e6d8dcb4dcf952a7a89b475e3a9d69e4a69307e01a470977642914bd"
-dependencies = [
- "quote 0.3.15",
- "syn 0.11.11",
 ]
 
 [[package]]
@@ -3139,6 +3090,7 @@ dependencies = [
  "interchange",
  "lazy_static",
  "ore",
+ "pg_interval",
  "postgres",
  "predicates",
  "rand 0.7.2",
@@ -3186,7 +3138,7 @@ version = "0.10.0"
 source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.5.0",
+ "abomonation_derive",
  "serde",
  "serde_derive",
  "timely_bytes",
@@ -3205,7 +3157,7 @@ version = "0.10.0"
 source = "git+https://github.com/TimelyDataflow/timely-dataflow#78686d7f006db9a8f8cbd76161e44892918828db"
 dependencies = [
  "abomonation",
- "abomonation_derive 0.5.0",
+ "abomonation_derive",
  "bincode",
  "getopts",
  "serde",
@@ -3544,12 +3496,6 @@ name = "unicode-width"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "882386231c45df4700b275c7ff55b6f3698780a650026380e72dabe76fa46526"
-
-[[package]]
-name = "unicode-xid"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c1f860d7d29cf02cb2f3f359fd35991af3d30bac52c57d265a3c461074cb4dc"
 
 [[package]]
 name = "unicode-xid"

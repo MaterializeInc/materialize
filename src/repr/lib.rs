@@ -22,15 +22,12 @@
 
 #![deny(missing_debug_implementations)]
 
-#[macro_use]
-extern crate abomonation_derive;
-
 mod relation;
 mod row;
 mod scalar;
 
 pub use relation::{ColumnType, RelationDesc, RelationType};
-pub use row::{Datums, DatumsBuffer, Row};
+pub use row::{PackableRow, Row, RowPacker, RowUnpacker, UnpackedRow};
 pub use scalar::decimal;
 pub use scalar::regex;
 pub use scalar::{Datum, Interval, ScalarType};

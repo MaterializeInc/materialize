@@ -46,7 +46,7 @@ impl NonNullRequirements {
     ) {
         match relation {
             RelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
-                let datums = row.as_vec();
+                let datums = row.unpack();
                 columns.iter().all(|c| datums[*c] != repr::Datum::Null)
             }),
             RelationExpr::Get { name, .. } => {

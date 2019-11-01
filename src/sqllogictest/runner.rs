@@ -537,7 +537,7 @@ impl State {
 
         // check that output matches inferred types
         for row in &raw_output {
-            if row.as_vec().len() != inferred_types.len() {
+            if row.unpack().len() != inferred_types.len() {
                 return Ok(Outcome::InferenceFailure {
                     expected_types,
                     inferred_types: inferred_types.to_vec(),

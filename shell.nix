@@ -11,12 +11,9 @@ pkgs = import (builtins.fetchTarball {
   sha256 = "0jdi8ihkhhkglx3amkrkkrm4ac60xk2a1bs4mwkffz72lrrg16p0";
 }) {};
 
-demo_utils = pkgs.makeSetupHook { } ./doc/demo-utils.sh;
-
 in pkgs.stdenv.mkDerivation rec {
   name = "materialize";
   buildInputs = with pkgs; [
-    demo_utils
     openssl
     zlib.static
     clang
@@ -35,8 +32,8 @@ in pkgs.stdenv.mkDerivation rec {
     ] else []);
   shellHook = ''
     export LIBCLANG_PATH=${pkgs.llvmPackages.clang-unwrapped.lib}/lib
+    # TODO(jamii) using $(pwd) is fragile
     export PATH=$(pwd)/bin/:$PATH
-    source ${demo_utils}/nix-support/setup-hook
     ulimit -m $((8*1024*1024))
     ulimit -v $((8*1024*1024))
    '';

@@ -8,7 +8,6 @@
 use crate::RelationExpr;
 use repr::{Datum, Row};
 use std::collections::BTreeMap;
-use std::iter::FromIterator;
 
 pub use demorgans::DeMorgans;
 pub use undistribute_and::UndistributeAnd;
@@ -52,7 +51,7 @@ impl FoldConstants {
                             "constant folding encountered reduce on collection \
                              with non-positive multiplicities"
                         );
-                        let datums = row.as_vec();
+                        let datums = row.unpack();
                         let key = group_key.iter().map(|i| datums[*i]).collect::<Vec<_>>();
                         let val = aggregates
                             .iter()
@@ -73,18 +72,16 @@ impl FoldConstants {
                     let new_rows = groups
                         .into_iter()
                         .map(|(key, mut vals)| {
-                            let mut output_row = Row::new();
-                            output_row.extend(key);
-                            for agg in &*aggregates {
-                                // Aggregate inputs are in reverse order so that
-                                // the input for each aggregate function can be
-                                // efficiently popped off the end of each `val`
-                                // in `vals`.
-                                let input = vals.iter_mut().map(|val| val.pop().unwrap());
-                                let accumulated = (agg.func.func())(input);
-                                output_row.push(accumulated);
-                            }
-                            (output_row, 1)
+                            let row =
+                                Row::pack(key.into_iter().chain(aggregates.iter().map(|agg| {
+                                    // Aggregate inputs are in reverse order so that
+                                    // the input for each aggregate function can be
+                                    // efficiently popped off the end of each `val`
+                                    // in `vals`.
+                                    let input = vals.iter_mut().map(|val| val.pop().unwrap());
+                                    (agg.func.func())(input)
+                                })));
+                            (row, 1)
                         })
                         .collect();
 
@@ -123,8 +120,8 @@ impl FoldConstants {
                         .iter()
                         .cloned()
                         .map(|(input_row, diff)| {
-                            let input_datums = input_row.as_vec();
-                            let output_row = Row::from_iter(
+                            let input_datums = input_row.unpack();
+                            let output_row = Row::pack(
                                 input_row
                                     .iter()
                                     .chain(scalars.iter().map(|s| s.eval(&input_datums))),
@@ -155,7 +152,7 @@ impl FoldConstants {
                         .iter()
                         .cloned()
                         .filter(|(row, _diff)| {
-                            let datums = row.as_vec();
+                            let datums = row.unpack();
                             predicates.iter().all(|p| p.eval(&datums) == Datum::True)
                         })
                         .collect();
@@ -170,8 +167,8 @@ impl FoldConstants {
                     let new_rows = rows
                         .iter()
                         .map(|(input_row, diff)| {
-                            let datums = input_row.as_vec();
-                            (Row::from_iter(outputs.iter().map(|i| datums[*i])), *diff)
+                            let datums = input_row.unpack();
+                            (Row::pack(outputs.iter().map(|i| datums[*i])), *diff)
                         })
                         .collect();
                     *relation = RelationExpr::Constant {

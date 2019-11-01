@@ -35,12 +35,16 @@ use sqlparser::ast::{DataType, ObjectType, Statement};
 
 use ore::option::OptionExt;
 use repr::decimal::Significand;
-use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
+use repr::{
+    ColumnType, Datum, Interval, PackableRow, RelationDesc, RelationType, Row, RowPacker,
+    ScalarType,
+};
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
 pub struct Postgres {
     conn: Connection,
     table_types: HashMap<String, (Vec<DataType>, RelationDesc)>,
+    packer: RowPacker,
 }
 
 impl Postgres {
@@ -104,6 +108,7 @@ END $$;
         Ok(Self {
             conn,
             table_types: HashMap::new(),
+            packer: RowPacker::new(),
         })
     }
 
@@ -263,7 +268,9 @@ END $$;
         let mut rows = vec![];
         let postgres_rows = self.conn.query(&*query, &[])?;
         for postgres_row in postgres_rows.iter() {
-            let mut row = Row::new();
+            // NOTE We can't use RowPacker::pack here because PostgresRow::get_opt insists on allocating data for strings,
+            // which has to live somewhere while the iterator is running.
+            let mut row = self.packer.packable();
             for c in 0..postgres_row.len() {
                 push_column(
                     &mut row,
@@ -273,14 +280,14 @@ END $$;
                     desc.typ().column_types[c].nullable,
                 )?;
             }
-            rows.push(row);
+            rows.push(row.finish());
         }
         Ok(rows)
     }
 }
 
 fn push_column(
-    row: &mut Row,
+    row: &mut PackableRow,
     postgres_row: &PostgresRow,
     i: usize,
     sql_type: &DataType,

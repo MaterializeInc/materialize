@@ -22,21 +22,21 @@ fn bench_sort_datums(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
 fn bench_sort_row_raw(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     let rows = rows
         .into_iter()
-        .map(|row| Row::from_iter(row))
+        .map(|row| Row::pack(row))
         .collect::<Vec<_>>();
     b.iter_with_setup(|| rows.clone(), |mut rows| rows.sort())
 }
 
-fn bench_sort_row_buffer(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+fn bench_sort_packer(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     let rows = rows
         .into_iter()
-        .map(|row| Row::from_iter(row))
+        .map(|row| Row::pack(row))
         .collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
         |mut rows| {
-            let mut buffer_a = DatumsBuffer::new();
-            let mut buffer_b = DatumsBuffer::new();
+            let mut buffer_a = RowUnpacker::new();
+            let mut buffer_b = RowUnpacker::new();
             rows.sort_by(move |a, b| buffer_a.from_iter(a).cmp(&buffer_b.from_iter(b)));
         },
     )
@@ -46,7 +46,7 @@ fn bench_sort_row_unpacked(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     let arity = rows[0].len();
     let rows = rows
         .into_iter()
-        .map(|row| Row::from_iter(row))
+        .map(|row| Row::pack(row))
         .collect::<Vec<_>>();
     b.iter_with_setup(
         || rows.clone(),
@@ -59,7 +59,7 @@ fn bench_sort_row_unpacked(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
             slices.sort();
             slices
                 .into_iter()
-                .map(|slice| Row::from_iter(slice))
+                .map(|slice| Row::pack(slice))
                 .collect::<Vec<_>>();
         },
     )
@@ -96,8 +96,8 @@ pub fn bench_sort(c: &mut Criterion) {
     c.bench_function("sort_row_raw_ints", |b| {
         bench_sort_row_raw(int_rows.clone(), b)
     });
-    c.bench_function("sort_row_buffer_ints", |b| {
-        bench_sort_row_buffer(int_rows.clone(), b)
+    c.bench_function("sort_packer_ints", |b| {
+        bench_sort_packer(int_rows.clone(), b)
     });
     c.bench_function("sort_row_unpacked_ints", |b| {
         bench_sort_row_unpacked(int_rows.clone(), b)
@@ -109,8 +109,8 @@ pub fn bench_sort(c: &mut Criterion) {
     c.bench_function("sort_row_raw_bytes", |b| {
         bench_sort_row_raw(byte_rows.clone(), b)
     });
-    c.bench_function("sort_row_buffer_bytes", |b| {
-        bench_sort_row_buffer(byte_rows.clone(), b)
+    c.bench_function("sort_packer_bytes", |b| {
+        bench_sort_packer(byte_rows.clone(), b)
     });
     c.bench_function("sort_row_unpacked_bytes", |b| {
         bench_sort_row_unpacked(byte_rows.clone(), b)
