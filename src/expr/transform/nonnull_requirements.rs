@@ -97,7 +97,9 @@ impl NonNullRequirements {
                 }
                 self.action(input, columns, gets);
             }
-            RelationExpr::Join { inputs, variables, .. } => {
+            RelationExpr::Join {
+                inputs, variables, ..
+            } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types
                     .iter()

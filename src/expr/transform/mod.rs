@@ -9,6 +9,7 @@ use crate::RelationExpr;
 
 pub mod binding;
 pub mod constant_join;
+pub mod demand;
 pub mod empty_map;
 pub mod filter_lets;
 pub mod fusion;
@@ -120,6 +121,7 @@ impl Default for Optimizer {
                 ],
             }),
             // JoinOrder adds Projects, hence need project fusion again.
+            Box::new(crate::transform::demand::Demand),
             Box::new(crate::transform::join_order::JoinOrder),
             Box::new(crate::transform::predicate_pushdown::PredicatePushdown),
             Box::new(crate::transform::fusion::project::Project),

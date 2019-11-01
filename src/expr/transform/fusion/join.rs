@@ -22,7 +22,10 @@ impl Join {
     }
 
     pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Join { inputs, variables, .. } = relation {
+        if let RelationExpr::Join {
+            inputs, variables, ..
+        } = relation
+        {
             let mut new_inputs = Vec::new();
             let mut new_variables = Vec::new();
             let mut new_relation = Vec::new();

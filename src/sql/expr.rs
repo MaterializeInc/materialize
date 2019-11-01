@@ -300,8 +300,10 @@ impl RelationExpr {
                     let right = right.applied_to(id_gen, get_outer.clone())?;
                     let ra = right.arity() - oa;
                     right.let_in(id_gen, |id_gen, get_right| {
-                        let mut product = SR::join(vec![get_left.clone(), get_right.clone()],
-                            (0..oa).map(|i| vec![(0, i), (1, i)]).collect())
+                        let mut product = SR::join(
+                            vec![get_left.clone(), get_right.clone()],
+                            (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
+                        )
                         // project away the repeated copy of get_outer
                         .project(
                             (0..(oa + la))
@@ -795,12 +797,13 @@ where
         keyed_outer.let_in(id_gen, |id_gen, get_keyed_outer| {
             let branch = apply(id_gen, inner, get_keyed_outer)?;
             let ba = branch.arity();
-            let joined = dataflow_expr::RelationExpr::join(vec![get_outer.clone(), branch],
-                key
-                    .iter()
+            let joined = dataflow_expr::RelationExpr::join(
+                vec![get_outer.clone(), branch],
+                key.iter()
                     .enumerate()
                     .map(|(i, &k)| vec![(0, k), (1, i)])
-                    .collect())
+                    .collect(),
+            )
             // throw away the right-hand copy of the key we just joined on
             .project((0..oa).chain((oa + key.len())..(oa + ba)).collect());
             Ok(joined)

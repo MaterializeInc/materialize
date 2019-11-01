@@ -351,7 +351,10 @@ where
     }
 
     fn render_join(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
-        if let RelationExpr::Join { inputs, variables, .. } = relation_expr {
+        if let RelationExpr::Join {
+            inputs, variables, ..
+        } = relation_expr
+        {
             // For the moment, assert that each relation participates at most
             // once in each equivalence class. If not, we should be able to
             // push a filter upwards, and if we can't do that it means a bit

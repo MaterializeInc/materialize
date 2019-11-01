@@ -34,7 +34,7 @@ impl Demand {
         gets: &mut HashMap<String, HashSet<usize>>,
     ) {
         match relation {
-            RelationExpr::Constant { rows, .. } => {
+            RelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
             }
             RelationExpr::Get { name, .. } => {
@@ -47,12 +47,12 @@ impl Demand {
                 // and pushes the union of the requirements at its value.
                 let prior = gets.insert(name.to_string(), HashSet::new());
                 self.action(body, columns, gets);
-                let mut needs = gets.remove(name).unwrap();
+                let needs = gets.remove(name).unwrap();
                 if let Some(prior) = prior {
                     gets.insert(name.to_string(), prior);
                 }
 
-                self.action(value, need, gets);
+                self.action(value, needs, gets);
             }
             RelationExpr::Project { input, outputs } => {
                 self.action(
@@ -68,9 +68,7 @@ impl Demand {
                     if column < arity {
                         new_columns.insert(column);
                     } else {
-                        for column in scalars[column - arity].support() {
-                            new_columns.insert(column);
-                        }
+                        new_columns.extend(scalars[column - arity].support());
                     }
                 }
                 self.action(input, new_columns, gets);
@@ -78,13 +76,16 @@ impl Demand {
             RelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
                     for column in predicate.support() {
-                        new_columns.insert(column);
+                        columns.insert(column);
                     }
                 }
                 self.action(input, columns, gets);
             }
-            RelationExpr::Join { inputs, variables, projection } => {
-
+            RelationExpr::Join {
+                inputs,
+                variables,
+                projection,
+            } => {
                 // Record column demands as an optional projection.
                 *projection = Some(columns.iter().cloned().collect());
 
@@ -137,9 +138,8 @@ impl Demand {
                     // A "non-empty" requirement, I guess?
                     if column < group_key.len() {
                         new_columns.insert(group_key[column]);
-                    }
-                    for aggregate in aggregates {
-                        new_columns.extend(aggregate.expr.support());
+                    } else {
+                        new_columns.extend(aggregates[column - group_key.len()].expr.support());
                     }
                 }
                 self.action(input, new_columns, gets);

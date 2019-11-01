@@ -59,7 +59,10 @@ impl JoinOrder {
         });
     }
     pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Join { inputs, variables, .. } = relation {
+        if let RelationExpr::Join {
+            inputs, variables, ..
+        } = relation
+        {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             let uniques = types.iter().map(|t| t.keys.clone()).collect::<Vec<_>>();
             let arities = types

@@ -668,7 +668,9 @@ impl RelationExpr {
                 let predicates = to_tightly_braced_doc("predicates: [", predicates, "]").group();
                 to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
             }
-            RelationExpr::Join { inputs, variables, .. } => {
+            RelationExpr::Join {
+                inputs, variables, ..
+            } => {
                 fn pair_to_doc(p: &(usize, usize)) -> Doc<BoxDoc<()>, ()> {
                     to_doc!("(", p.0.to_string(), ", ", p.1.to_string(), ")")
                 }
