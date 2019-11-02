@@ -11,7 +11,7 @@
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
 use std::borrow::Cow;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
