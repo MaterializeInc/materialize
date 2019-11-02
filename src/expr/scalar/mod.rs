@@ -268,6 +268,20 @@ impl ScalarExpr {
                         },
                         _ => unreachable!(),
                     }
+                } else if *func == BinaryFunc::And && (expr1.is_literal() || expr2.is_literal()) {
+                    // If we are here, not both inputs are literals.
+                    if expr1.is_literal_false() || expr2.is_literal_true() {
+                        *e = (**expr1).clone();
+                    } else if expr2.is_literal_false() || expr1.is_literal_true() {
+                        *e = (**expr2).clone();
+                    }
+                } else if *func == BinaryFunc::Or && (expr1.is_literal() || expr2.is_literal()) {
+                    // If we are here, not both inputs are literals.
+                    if expr1.is_literal_true() || expr2.is_literal_false() {
+                        *e = (**expr1).clone();
+                    } else if expr2.is_literal_true() || expr1.is_literal_false() {
+                        *e = (**expr2).clone();
+                    }
                 }
             }
             ScalarExpr::CallVariadic { exprs, .. } => {
