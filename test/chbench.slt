@@ -595,7 +595,7 @@ Project {
     Reduce {
       group_key: [81],
       aggregates: [
-        sum(if #75 = "GERMANY" then #38 else i64todec 0 * 100dec),
+        sum(if #75 = "GERMANY" then #38 else 0dec),
         sum(#38)
       ],
       Map {
@@ -888,10 +888,7 @@ AND ol_delivery_d < TIMESTAMP '2020-01-02 00:00:00.000000'
 Let {
   id-1 = Reduce {
     group_key: [],
-    aggregates: [
-      sum(if #14 ~ "PR%" then #8 else i64todec 0 * 100dec),
-      sum(#8)
-    ],
+    aggregates: [sum(if #14 ~ ^PR.*$ then #8 else 0dec), sum(#8)],
     Join {
       variables: [[(0, 4), (1, 0)]],
       Filter {

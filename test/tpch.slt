@@ -135,12 +135,8 @@ Project {
       aggregates: [
         sum(#4),
         sum(#5),
-        sum(#5 * ((i64todec 1 * 100dec) - #6)),
-        sum(
-          (#5 * ((i64todec 1 * 100dec) - #6))
-          *
-          ((i64todec 1 * 100dec) + #7)
-        ),
+        sum(#5 * (100dec - #6)),
+        sum((#5 * (100dec - #6)) * (100dec + #7)),
         countall(null),
         countall(null),
         sum(#6),
@@ -277,7 +273,7 @@ Project {
   outputs: [0, 3, 1, 2],
   Reduce {
     group_key: [17, 12, 15],
-    aggregates: [sum(#22 * ((i64todec 1 * 100dec) - #23))],
+    aggregates: [sum(#22 * (100dec - #23))],
     Join {
       variables: [[(0, 0), (1, 1)], [(1, 0), (2, 0)]],
       Filter { predicates: [#6 = "BUILDING"], Get { customer } },
@@ -368,7 +364,7 @@ order by
 ----
 Reduce {
   group_key: [9],
-  aggregates: [sum(#27 * ((i64todec 1 * 100dec) - #28))],
+  aggregates: [sum(#27 * (100dec - #28))],
   Join {
     variables: [
       [(0, 0), (5, 1)],
@@ -590,7 +586,7 @@ Project {
   outputs: [0, 1, 7, 2, 4, 5, 3, 6],
   Reduce {
     group_key: [0, 1, 5, 4, 9, 2, 7],
-    aggregates: [sum(#26 * ((i64todec 1 * 100dec) - #27))],
+    aggregates: [sum(#26 * (100dec - #27))],
     Join {
       variables: [
         [(0, 0), (2, 1)],
@@ -815,15 +811,8 @@ Let {
   id-1 = Reduce {
     group_key: [],
     aggregates: [
-      sum(
-        if
-          #20 ~ "PROMO%"
-        then
-          #5 * ((i64todec 1 * 100dec) - #6)
-        else
-          i64todec 0 * 10000dec
-      ),
-      sum(#5 * ((i64todec 1 * 100dec) - #6))
+      sum(if #20 ~ ^PROMO.*$ then #5 * (100dec - #6) else 0dec),
+      sum(#5 * (100dec - #6))
     ],
     Join {
       variables: [[(0, 1), (1, 0)]],
@@ -1199,7 +1188,7 @@ where
 Let {
   id-1 = Reduce {
     group_key: [],
-    aggregates: [sum(#5 * ((i64todec 1 * 100dec) - #6))],
+    aggregates: [sum(#5 * (100dec - #6))],
     Filter {
       predicates: [
         (
