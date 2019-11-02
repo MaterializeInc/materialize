@@ -316,8 +316,8 @@ fn decode_startup(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let version = buf.read_i32()?;
     if version == VERSION_CANCEL {
         Ok(FrontendMessage::CancelRequest {
-            conn_id: buf.read_i32()?.try_into().map_err(input_err)?,
-            secret_key: buf.read_i32()?.try_into().map_err(input_err)?,
+            conn_id: buf.read_u32()?,
+            secret_key: buf.read_u32()?,
         })
     } else {
         Ok(FrontendMessage::Startup { version })
@@ -516,6 +516,17 @@ impl<'a> Cursor<'a> {
             return Err(input_err("not enough buffer for an Int32"));
         }
         let val = NetworkEndian::read_i32(self.buf);
+        self.advance(4);
+        Ok(val)
+    }
+
+    /// Reads the next 32-bit unsigned integer, advancing the cursor by four
+    /// bytes.
+    fn read_u32(&mut self) -> Result<u32, io::Error> {
+        if self.buf.len() < 4 {
+            return Err(input_err("not enough buffer for an Int32"));
+        }
+        let val = NetworkEndian::read_u32(self.buf);
         self.advance(4);
         Ok(val)
     }
