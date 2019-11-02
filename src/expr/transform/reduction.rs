@@ -37,6 +37,9 @@ impl FoldConstants {
                 group_key,
                 aggregates,
             } => {
+                for aggregate in aggregates.iter_mut() {
+                    aggregate.expr.reduce();
+                }
                 if let RelationExpr::Constant { rows, .. } = &**input {
                     // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
                     // where `an` is the input to the nth aggregate function in
