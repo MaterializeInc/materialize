@@ -73,7 +73,7 @@ pub fn match_handshake(buf: &[u8]) -> bool {
     if buf.len() < 8 {
         return false;
     }
-    let version = NetworkEndian::read_u32(&buf[4..8]);
+    let version = NetworkEndian::read_i32(&buf[4..8]);
     VERSIONS.contains(&version)
 }
 

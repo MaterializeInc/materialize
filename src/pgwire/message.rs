@@ -28,13 +28,13 @@ use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarT
 // connections. These pseudo-versions were constructed to avoid ever matching
 // a true protocol version.
 
-pub const VERSION_1: u32 = 0x10000;
-pub const VERSION_2: u32 = 0x20000;
-pub const VERSION_3: u32 = 0x30000;
-pub const VERSION_CANCEL: u32 = (1234 << 16) + 5678;
-pub const VERSION_SSL: u32 = (1234 << 16) + 5679;
+pub const VERSION_1: i32 = 0x10000;
+pub const VERSION_2: i32 = 0x20000;
+pub const VERSION_3: i32 = 0x30000;
+pub const VERSION_CANCEL: i32 = (1234 << 16) + 5678;
+pub const VERSION_SSL: i32 = (1234 << 16) + 5679;
 
-pub const VERSIONS: &[u32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_CANCEL, VERSION_SSL];
+pub const VERSIONS: &[i32] = &[VERSION_1, VERSION_2, VERSION_3, VERSION_CANCEL, VERSION_SSL];
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -71,7 +71,7 @@ impl Severity {
 #[derive(Debug)]
 pub enum FrontendMessage {
     /// Begin a connection.
-    Startup { version: u32 },
+    Startup { version: i32 },
 
     /// Cancel a query that is running on another connection.
     CancelRequest {
@@ -102,10 +102,10 @@ pub enum FrontendMessage {
         /// Note that this is not an indication of the number of parameters that
         /// might appear in the query string, but only the number that the
         /// frontend wants to prespecify types for.
-        parameter_data_type_count: u16,
+        parameter_data_type_count: i16,
         /// The OID of each parameter data type. Placing a zero here is
         /// equivalent to leaving the type unspecified.
-        parameter_data_types: Vec<u32>,
+        parameter_data_types: Vec<i32>,
     },
 
     /// Describe an existing prepared statement.
@@ -239,10 +239,10 @@ pub enum FieldFormat {
     Binary = 1,
 }
 
-impl TryFrom<u16> for FieldFormat {
+impl TryFrom<i16> for FieldFormat {
     type Error = failure::Error;
 
-    fn try_from(source: u16) -> Result<FieldFormat, Self::Error> {
+    fn try_from(source: i16) -> Result<FieldFormat, Self::Error> {
         match source {
             0 => Ok(FieldFormat::Text),
             1 => Ok(FieldFormat::Binary),
