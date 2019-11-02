@@ -144,7 +144,16 @@ impl Demand {
                 }
                 self.action(input, new_columns, gets);
             }
-            RelationExpr::TopK { input, .. } => {
+            RelationExpr::TopK {
+                input,
+                group_key,
+                order_key,
+                ..
+            } => {
+                // Group and order keys must be retained, as they define
+                // which rows are retained.
+                columns.extend(group_key.iter().cloned());
+                columns.extend(order_key.iter().map(|o| o.column));
                 self.action(input, columns, gets);
             }
             RelationExpr::Negate { input } => {
