@@ -439,7 +439,7 @@ from
         select
             n1.n_name as supp_nation,
             n2.n_name as cust_nation,
-            -- extract(year from l_shipdate) as l_year,
+            extract(year from l_shipdate) as l_year,
             l_extendedprice * (1 - l_discount) as volume
         from
             supplier,
@@ -468,6 +468,42 @@ order by
     supp_nation,
     cust_nation,
     l_year;
+----
+Reduce {
+  group_key: [41, 45, 48],
+  aggregates: [sum(#49)],
+  Map {
+    scalars: [tsextractyear datetots #17, #12 * (100dec - #13)],
+    Project {
+      outputs: [0 .. 6, 11 .. 43, 7 .. 10, 44 .. 47],
+      Filter {
+        predicates: [
+          ((#8 = "FRANCE") && (#45 = "GERMANY"))
+          ||
+          ((#8 = "GERMANY") && (#45 = "FRANCE"))
+        ],
+        Join {
+          variables: [
+            [(0, 0), (2, 2)],
+            [(0, 3), (1, 0)],
+            [(2, 0), (3, 0)],
+            [(3, 1), (4, 0)],
+            [(4, 3), (5, 0)]
+          ],
+          Get { supplier },
+          Get { nation },
+          Filter {
+            predicates: [#10 <= 1996-12-31, #10 >= 1995-01-01],
+            Get { lineitem }
+          },
+          Get { orders },
+          Get { customer },
+          Get { nation }
+        }
+      }
+    }
+  }
+}
 
 
 query T multiline
@@ -481,7 +517,7 @@ EXPLAIN PLAN FOR SELECT
 from
     (
         select
-            --extract(year from o_orderdate) as o_year,
+            extract(year from o_orderdate) as o_year,
             l_extendedprice * (1 - l_discount) as volume,
             n2.n_name as nation
         from
@@ -509,6 +545,51 @@ group by
     o_year
 order by
     o_year;
+----
+Project {
+  outputs: [0, 3],
+  Map {
+    scalars: [((#1 * 10000000dec) / #2) * 1000dec],
+    Reduce {
+      group_key: [60],
+      aggregates: [
+        sum(if #54 = "BRAZIL" then #61 else 0dec),
+        sum(#61)
+      ],
+      Map {
+        scalars: [tsextractyear datetots #36, #21 * (100dec - #22)],
+        Project {
+          outputs: [0 .. 8, 49 .. 55, 9 .. 45, 56 .. 59, 46 .. 48],
+          Join {
+            variables: [
+              [(0, 0), (1, 1)],
+              [(1, 0), (2, 0)],
+              [(1, 2), (6, 0)],
+              [(2, 1), (3, 0)],
+              [(3, 3), (4, 0)],
+              [(4, 2), (5, 0)],
+              [(6, 3), (7, 0)]
+            ],
+            Filter {
+              predicates: [#4 = "ECONOMY ANODIZED STEEL"],
+              Get { part }
+            },
+            Get { lineitem },
+            Filter {
+              predicates: [#4 <= 1996-12-31, #4 >= 1995-01-01],
+              Get { orders }
+            },
+            Get { customer },
+            Get { nation },
+            Filter { predicates: [#1 = "AMERICA"], Get { region } },
+            Get { supplier },
+            Get { nation }
+          }
+        }
+      }
+    }
+  }
+}
 
 
 query T multiline
@@ -521,7 +602,7 @@ from
     (
         select
             n_name as nation,
-            --extract(year from o_orderdate) as o_year,
+            extract(year from o_orderdate) as o_year,
             l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
         from
             part,
@@ -545,6 +626,36 @@ group by
 order by
     nation,
     o_year desc;
+----
+Reduce {
+  group_key: [47, 50],
+  aggregates: [sum(#51)],
+  Map {
+    scalars: [
+      tsextractyear datetots #41,
+      (#21 * (100dec - #22)) - (#35 * #20)
+    ],
+    Project {
+      outputs: [
+        0 .. 8, 39 .. 45, 14 .. 29, 9 .. 13, 30 .. 38, 46 .. 49
+      ],
+      Join {
+        variables: [
+          [(0, 0), (1, 0), (2, 1)],
+          [(1, 1), (2, 2), (4, 0)],
+          [(2, 0), (3, 0)],
+          [(4, 3), (5, 0)]
+        ],
+        Filter { predicates: [#1 ~ ^green$], Get { part } },
+        Get { partsupp },
+        Get { lineitem },
+        Get { orders },
+        Get { supplier },
+        Get { nation }
+      }
+    }
+  }
+}
 
 
 query T multiline
