@@ -12,7 +12,10 @@ use std::collections::{HashMap, HashSet};
 /// Drive demand from the root through operators.
 ///
 /// This transformation primarily informs the `Join` operator, which can
-/// simplify its intermediate state with
+/// simplify its intermediate state when it knows that certain columns are
+/// not observed in its output. Internal arrangements need not maintain
+/// columns that are no longer required in the join pipeline, which are
+/// those columns not required by the output nor any further equalities.
 #[derive(Debug)]
 pub struct Demand;
 
