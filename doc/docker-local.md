@@ -2,7 +2,10 @@
 
 ## Disclaimer
 
-This is hacky, and not intended to be used for any long-term or production use case! A much better way of doing things would be to run a simple DNS server locally that integrates with Docker to map the container names to IP addresses. There are various explanations of how to do this on Stack Overflow.
+This is hacky, and not intended to be used for any long-term or production
+use case! A much better way of doing things would be to run a simple DNS
+server locally that integrates with Docker to map the container names to IP
+addresses. There are various explanations of how to do this on Stack Overflow.
 
 If you permanently screw up your /etc/hosts somehow, please don't blame me!
 
@@ -13,7 +16,7 @@ I suspect that this will not work at all on macOS.
 * First make sure you have jq installed:
 
 ```
-sudo sh -c 'yes | apt install jq'
+sudo apt install -y jq
 ```
 
 * Edit `ex/chbench/docker-compose.yml` to remove all references to the following containers: `materialize`, `cli`, and all the metrics-related containers (beginning with `grafana` and continuing to the end of the file). Make sure you don't delete the `volumes` section at the bottom.
