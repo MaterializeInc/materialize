@@ -58,6 +58,8 @@ pub fn construct<A: Allocate>(
             let mut channels_data = HashMap::new();
             let mut parks_data = HashMap::new();
 
+            let mut packer = RowPacker::new();
+
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
@@ -83,33 +85,27 @@ pub fn construct<A: Allocate>(
                                 // version when the operator is dropped.
                                 operates_data.insert((event.id, worker), event.clone());
 
-                                operates_session.give({
-                                    let mut packer = RowPacker::new();
-                                    (
+                                operates_session.give((
+                                    packer.pack(&[
+                                        Datum::Int64(event.id as i64),
+                                        Datum::Int64(worker as i64),
+                                        Datum::String(&*event.name),
+                                    ]),
+                                    time_ms,
+                                    1,
+                                ));
+
+                                for (addr_slot, addr_value) in event.addr.iter().enumerate() {
+                                    addresses_session.give((
                                         packer.pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
-                                            Datum::String(&*event.name),
+                                            Datum::Int64(addr_slot as i64),
+                                            Datum::Int64(*addr_value as i64),
                                         ]),
                                         time_ms,
                                         1,
-                                    )
-                                });
-
-                                for (addr_slot, addr_value) in event.addr.iter().enumerate() {
-                                    addresses_session.give({
-                                        let mut packer = RowPacker::new();
-                                        (
-                                            packer.pack(&[
-                                                Datum::Int64(event.id as i64),
-                                                Datum::Int64(worker as i64),
-                                                Datum::Int64(addr_slot as i64),
-                                                Datum::Int64(*addr_value as i64),
-                                            ]),
-                                            time_ms,
-                                            1,
-                                        )
-                                    });
+                                    ));
                                 }
                             }
                             TimelyEvent::Channels(event) => {
@@ -121,37 +117,31 @@ pub fn construct<A: Allocate>(
                                     .push(event.clone());
 
                                 // Present channel description.
-                                channels_session.give({
-                                    let mut packer = RowPacker::new();
-                                    (
-                                        packer.pack(&[
-                                            Datum::Int64(event.id as i64),
-                                            Datum::Int64(worker as i64),
-                                            Datum::Int64(event.source.0 as i64),
-                                            Datum::Int64(event.source.1 as i64),
-                                            Datum::Int64(event.target.0 as i64),
-                                            Datum::Int64(event.target.1 as i64),
-                                        ]),
-                                        time_ms,
-                                        1,
-                                    )
-                                });
+                                channels_session.give((
+                                    packer.pack(&[
+                                        Datum::Int64(event.id as i64),
+                                        Datum::Int64(worker as i64),
+                                        Datum::Int64(event.source.0 as i64),
+                                        Datum::Int64(event.source.1 as i64),
+                                        Datum::Int64(event.target.0 as i64),
+                                        Datum::Int64(event.target.1 as i64),
+                                    ]),
+                                    time_ms,
+                                    1,
+                                ));
 
                                 // Enumerate the address of the scope containing the channel.
                                 for (addr_slot, addr_value) in event.scope_addr.iter().enumerate() {
-                                    addresses_session.give({
-                                        let mut packer = RowPacker::new();
-                                        (
-                                            packer.pack(&[
-                                                Datum::Int64(event.id as i64),
-                                                Datum::Int64(worker as i64),
-                                                Datum::Int64(addr_slot as i64),
-                                                Datum::Int64(*addr_value as i64),
-                                            ]),
-                                            time_ms,
-                                            1,
-                                        )
-                                    });
+                                    addresses_session.give((
+                                        packer.pack(&[
+                                            Datum::Int64(event.id as i64),
+                                            Datum::Int64(worker as i64),
+                                            Datum::Int64(addr_slot as i64),
+                                            Datum::Int64(*addr_value as i64),
+                                        ]),
+                                        time_ms,
+                                        1,
+                                    ));
                                 }
                             }
                             TimelyEvent::Shutdown(event) => {
@@ -159,33 +149,27 @@ pub fn construct<A: Allocate>(
                                 // the `operates` collection, cancelling out the initial
                                 // operator announcement.
                                 if let Some(event) = operates_data.remove(&(event.id, worker)) {
-                                    operates_session.give({
-                                        let mut packer = RowPacker::new();
-                                        (
+                                    operates_session.give((
+                                        packer.pack(&[
+                                            Datum::Int64(event.id as i64),
+                                            Datum::Int64(worker as i64),
+                                            Datum::String(&*event.name),
+                                        ]),
+                                        time_ms,
+                                        -1,
+                                    ));
+
+                                    for (addr_slot, addr_value) in event.addr.iter().enumerate() {
+                                        addresses_session.give((
                                             packer.pack(&[
                                                 Datum::Int64(event.id as i64),
                                                 Datum::Int64(worker as i64),
-                                                Datum::String(&*event.name),
+                                                Datum::Int64(addr_slot as i64),
+                                                Datum::Int64(*addr_value as i64),
                                             ]),
                                             time_ms,
                                             -1,
-                                        )
-                                    });
-
-                                    for (addr_slot, addr_value) in event.addr.iter().enumerate() {
-                                        addresses_session.give({
-                                            let mut packer = RowPacker::new();
-                                            (
-                                                packer.pack(&[
-                                                    Datum::Int64(event.id as i64),
-                                                    Datum::Int64(worker as i64),
-                                                    Datum::Int64(addr_slot as i64),
-                                                    Datum::Int64(*addr_value as i64),
-                                                ]),
-                                                time_ms,
-                                                -1,
-                                            )
-                                        });
+                                        ));
                                     }
                                     // If we are observing a dataflow shutdown, we should also
                                     // issue a deletion for channels in the dataflow.
@@ -196,39 +180,33 @@ pub fn construct<A: Allocate>(
                                         {
                                             for event in events {
                                                 // Retract channel description.
-                                                channels_session.give({
-                                                    let mut packer = RowPacker::new();
-                                                    (
-                                                        packer.pack(&[
-                                                            Datum::Int64(event.id as i64),
-                                                            Datum::Int64(worker as i64),
-                                                            Datum::Int64(event.source.0 as i64),
-                                                            Datum::Int64(event.source.1 as i64),
-                                                            Datum::Int64(event.target.0 as i64),
-                                                            Datum::Int64(event.target.1 as i64),
-                                                        ]),
-                                                        time_ms,
-                                                        -1,
-                                                    )
-                                                });
+                                                channels_session.give((
+                                                    packer.pack(&[
+                                                        Datum::Int64(event.id as i64),
+                                                        Datum::Int64(worker as i64),
+                                                        Datum::Int64(event.source.0 as i64),
+                                                        Datum::Int64(event.source.1 as i64),
+                                                        Datum::Int64(event.target.0 as i64),
+                                                        Datum::Int64(event.target.1 as i64),
+                                                    ]),
+                                                    time_ms,
+                                                    -1,
+                                                ));
 
                                                 // Enumerate the address of the scope containing the channel.
                                                 for (addr_slot, addr_value) in
                                                     event.scope_addr.iter().enumerate()
                                                 {
-                                                    addresses_session.give({
-                                                        let mut packer = RowPacker::new();
-                                                        (
-                                                            packer.pack(&[
-                                                                Datum::Int64(event.id as i64),
-                                                                Datum::Int64(worker as i64),
-                                                                Datum::Int64(addr_slot as i64),
-                                                                Datum::Int64(*addr_value as i64),
-                                                            ]),
-                                                            time_ms,
-                                                            -1,
-                                                        )
-                                                    });
+                                                    addresses_session.give((
+                                                        packer.pack(&[
+                                                            Datum::Int64(event.id as i64),
+                                                            Datum::Int64(worker as i64),
+                                                            Datum::Int64(addr_slot as i64),
+                                                            Datum::Int64(*addr_value as i64),
+                                                        ]),
+                                                        time_ms,
+                                                        -1,
+                                                    ));
                                                 }
                                             }
                                         }
