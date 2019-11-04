@@ -80,7 +80,8 @@ impl ProjectionLifting {
                     }
                     // Retain projected columns and scalar columns.
                     let mut new_outputs = outputs.clone();
-                    new_outputs.extend(outputs.len()..(outputs.len() + scalars.len()));
+                    let inner_arity = inner.arity();
+                    new_outputs.extend(inner_arity..(inner_arity + scalars.len()));
                     *relation = inner
                         .take_dangerous()
                         .map(scalars.clone())
