@@ -14,13 +14,17 @@ distributed without the express permission of Materialize, Inc.  */}}
 <body class="hg">
     {{ partial "header.html" . }}
     <div class="hg-body">
-        <main>
+        <main class="hg-content">
             {{ block "main" . }}{{ end }}
-
+            <!-- Footer goes in main so the border-right of
+            sidebar.html can extend to the bottom of the page. -->
             {{ partial "footer.html" . }}
         </main>
         {{ partial "sidebar.html" . }}
+        {{ partial "toc.html" . }}
+
     </div>
+
 </body>
 
 </html>

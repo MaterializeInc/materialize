@@ -1,17 +1,13 @@
-footer {
-  color: #d8d8d8;
+.hg-footer {
+  color: #bbbbbb;
   justify-content: flex-end;
   min-height: 5rem;
   text-align: center;
   padding-top: 5rem;
+  font-size: small;
 
   a {
     border-bottom: none;
     color: rgba(105, 49, 216, 0.4);
-    &:hover,
-    &:active {
-      color: rgba(105, 49, 216, 0.4);
-      border-bottom: none;
-    }
   }
 }

@@ -1,0 +1,12 @@
+{{ if not (.Params.disable_toc) }}
+<aside class="hg-right">
+    <div class="toc">
+        <a href="javascript:void(0)" class="js-toggle nav-parent nav-parent-open"
+            data-target=".toc-container-content">On this
+            page</a>
+        <div class="toc-container-content">
+            {{ .TableOfContents }}
+        </div>
+    </div>
+</aside>
+{{end}}
