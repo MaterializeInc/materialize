@@ -469,11 +469,28 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 DescribeKind::Portal,
                 cx.conn_id,
             ))),
-            FrontendMessage::DescribeStatement { name } => transition!(SendParameterDescription {
-                send: conn.send(BackendMessage::ParameterDescription),
-                session: state.session,
-                name,
-            }),
+            FrontendMessage::DescribeStatement { name } => {
+                let stmt = match state.session.get_prepared_statement(&name) {
+                    Some(stmt) => stmt,
+                    None => transition!(SendError {
+                        send: conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "08P01",
+                            message: "prepared statement does not exist".into(),
+                            detail: Some(format!("name: {}", name)),
+                        }),
+                        session: state.session,
+                        kind: ErrorKind::Fatal,
+                    }),
+                };
+                transition!(SendParameterDescription {
+                    send: conn.send(BackendMessage::ParameterDescription(
+                        super::message::parameter_description_from_types(&stmt.param_types()),
+                    )),
+                    session: state.session,
+                    name,
+                });
+            }
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,

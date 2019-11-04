@@ -33,7 +33,7 @@ use std::fmt;
 
 use failure::bail;
 
-use repr::RelationDesc;
+use repr::{RelationDesc, ScalarType};
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
@@ -451,6 +451,7 @@ impl Var for SessionVar<i32> {
 pub struct PreparedStatement {
     sql: Option<sqlparser::ast::Statement>,
     desc: Option<RelationDesc>,
+    param_types: Vec<ScalarType>,
 }
 
 impl PreparedStatement {
@@ -458,8 +459,13 @@ impl PreparedStatement {
     pub fn new(
         sql: Option<sqlparser::ast::Statement>,
         desc: Option<RelationDesc>,
+        param_types: Vec<ScalarType>,
     ) -> PreparedStatement {
-        PreparedStatement { sql, desc }
+        PreparedStatement {
+            sql,
+            desc,
+            param_types,
+        }
     }
 
     /// Returns the raw SQL string associated with this prepared statement,
@@ -472,6 +478,11 @@ impl PreparedStatement {
     /// statement, if this prepared statement will return rows at all.
     pub fn desc(&self) -> Option<&RelationDesc> {
         self.desc.as_ref()
+    }
+
+    /// Returns the types of any parameters in this prepared statement.
+    pub fn param_types(&self) -> &[ScalarType] {
+        &self.param_types
     }
 }
 
