@@ -3,9 +3,6 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-// Prefering higher-order methods to equivalent lower complexity methods is wrong.
-#![allow(clippy::or_fun_call)]
-
 use crate::RelationExpr;
 use std::collections::HashMap;
 
@@ -24,7 +21,7 @@ impl ProjectionLifting {
     pub fn transform(&self, relation: &mut RelationExpr) {
         self.action(relation, &mut HashMap::new());
     }
-    /// Columns that must be non-null.
+    // Lift projections out from under `relation`.
     pub fn action(
         &self,
         relation: &mut RelationExpr,
