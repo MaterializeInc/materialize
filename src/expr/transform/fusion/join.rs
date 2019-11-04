@@ -70,9 +70,24 @@ impl Join {
             *inputs = new_inputs;
             *variables = new_variables;
 
+            // Join variables may not be an equivalance class. Better ensure!
+            for index in 1..variables.len() {
+                for inner in 0..index {
+                    if variables[index]
+                        .iter()
+                        .any(|pair| variables[inner].contains(pair))
+                    {
+                        let to_extend = std::mem::replace(&mut variables[index], Vec::new());
+                        variables[inner].extend(to_extend);
+                    }
+                }
+            }
+            variables.retain(|v| !v.is_empty());
+
             // put join constraints in a canonical format.
             for variable in variables.iter_mut() {
                 variable.sort();
+                variable.dedup();
             }
             variables.sort();
         }
