@@ -210,6 +210,25 @@ impl ProjectionLifting {
                 // We cannot, in general, lift projections out of unions.
                 self.action(left, gets);
                 self.action(right, gets);
+
+                if let (
+                    RelationExpr::Project {
+                        input: input1,
+                        outputs: output1,
+                    },
+                    RelationExpr::Project {
+                        input: input2,
+                        outputs: output2,
+                    },
+                ) = (&mut **left, &mut **right)
+                {
+                    if output1 == output2 && input1.arity() == input2.arity() {
+                        let outputs = output1.clone();
+                        **left = input1.take_dangerous();
+                        **right = input2.take_dangerous();
+                        *relation = relation.take_dangerous().project(outputs);
+                    }
+                }
             }
         }
     }
