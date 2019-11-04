@@ -1,0 +1,2 @@
+<!-- headline hasher -->
+{{ . | replaceRE "(<h[2-9] id=\"([^\"]+)\".+)(</h[2-9]+>)" `<a class="headline-hash" href="#${2}">${1}&nbsp;</a> ${3}` | safeHTML }}
