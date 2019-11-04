@@ -1730,7 +1730,7 @@ Let {
   }
 } in
 Reduce {
-  group_key: [10],
+  group_key: [13],
   aggregates: [countall(null), sum(#5)],
   Map {
     scalars: [substr(#4, 1, 2)],
