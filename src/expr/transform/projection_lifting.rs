@@ -198,14 +198,11 @@ impl ProjectionLifting {
                 }
             }
             RelationExpr::Threshold { input } => {
+                // We cannot, in general, lift projections out of threshold.
+                // If we could reason that the input cannot be negative, we
+                // would be able to lift the projection, but otherwise our
+                // action on weights need to accumulate the restricted rows.
                 self.action(input, gets);
-                if let RelationExpr::Project {
-                    input: inner,
-                    outputs,
-                } = &mut **input
-                {
-                    *relation = inner.take_dangerous().threshold().project(outputs.clone());
-                }
             }
             RelationExpr::Union { left, right } => {
                 // We cannot, in general, lift projections out of unions.
