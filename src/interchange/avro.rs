@@ -120,7 +120,10 @@ fn validate_schema_1(schema: &Schema) -> Result<RelationDesc, Error> {
                     })
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
-            let column_names = fields.iter().map(|f| Some(f.name.clone()));
+            let mut column_names = Vec::with_capacity(fields.len());
+            for field in fields.iter() {
+                column_names.push(Some(field.name.parse()?));
+            }
             Ok(RelationDesc::new(
                 RelationType::new(column_types),
                 column_names,

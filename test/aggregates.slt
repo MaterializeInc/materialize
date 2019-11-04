@@ -35,7 +35,7 @@ SELECT a+1 FROM t GROUP BY a+1 HAVING sum(b) = 3;
 query TTT colnames
 SHOW COLUMNS FROM t
 ----
- Field Nullable Type
+ field nullable type
  a     YES      int8
  b     YES      int8
 

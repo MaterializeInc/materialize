@@ -678,7 +678,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         }
                     }
                     ExecuteResponse::SetVariable { name } => {
-                        if let Some(var) = session.notify_vars().iter().find(|v| v.name() == name) {
+                        let qn = name.to_string();
+                        if let Some(var) = session.notify_vars().iter().find(|v| v.name() == qn) {
                             trace!("cid={} sending parameter status for {}", cx.conn_id, name);
                             transition!(SendParameterStatus {
                                 send: state

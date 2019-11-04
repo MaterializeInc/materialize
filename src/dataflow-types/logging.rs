@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use repr::{RelationDesc, ScalarType};
+use repr::{LiteralName, QualName, RelationDesc, ScalarType};
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -82,24 +82,24 @@ impl LogVariant {
         ]
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> QualName {
         // Bind all names in one place to avoid accidental clashes.
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => "logs_operates",
-            LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
-            LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
-            LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
-            LogVariant::Timely(TimelyLog::Addresses) => "logs_addresses",
-            LogVariant::Timely(TimelyLog::Parks) => "logs_parks",
-            LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
-            LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
+            LogVariant::Timely(TimelyLog::Operates) => "logs_operates".lit(),
+            LogVariant::Timely(TimelyLog::Channels) => "logs_channels".lit(),
+            LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed".lit(),
+            LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram".lit(),
+            LogVariant::Timely(TimelyLog::Addresses) => "logs_addresses".lit(),
+            LogVariant::Timely(TimelyLog::Parks) => "logs_parks".lit(),
+            LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement".lit(),
+            LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing".lit(),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows".lit(),
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
-                "logs_dataflow_dependency"
+                "logs_dataflow_dependency".lit()
             }
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers",
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks",
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations",
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers".lit(),
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks".lit(),
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations".lit(),
         }
     }
 
@@ -119,83 +119,83 @@ impl LogVariant {
     pub fn schema(&self) -> RelationDesc {
         match self {
             LogVariant::Timely(TimelyLog::Operates) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("name", ScalarType::String)
+                .add_column("id".lit(), ScalarType::Int64)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("name".lit(), ScalarType::String)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Channels) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("source_node", ScalarType::Int64)
-                .add_column("source_port", ScalarType::Int64)
-                .add_column("target_node", ScalarType::Int64)
-                .add_column("target_port", ScalarType::Int64)
+                .add_column("id".lit(), ScalarType::Int64)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("source_node".lit(), ScalarType::Int64)
+                .add_column("source_port".lit(), ScalarType::Int64)
+                .add_column("target_node".lit(), ScalarType::Int64)
+                .add_column("target_port".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Elapsed) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("elapsed_ns", ScalarType::Int64)
+                .add_column("id".lit(), ScalarType::Int64)
+                .add_column("elapsed_ns".lit(), ScalarType::Int64)
                 .add_keys(vec![0]),
 
             LogVariant::Timely(TimelyLog::Histogram) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("duration_ns", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
+                .add_column("id".lit(), ScalarType::Int64)
+                .add_column("duration_ns".lit(), ScalarType::Int64)
+                .add_column("count".lit(), ScalarType::Int64)
                 .add_keys(vec![0]),
 
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
-                .add_column("id", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("slot", ScalarType::Int64)
-                .add_column("value", ScalarType::Int64)
+                .add_column("id".lit(), ScalarType::Int64)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("slot".lit(), ScalarType::Int64)
+                .add_column("value".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
-                .add_column("worker", ScalarType::Int64)
-                .add_column("slept_for", ScalarType::Int64)
-                .add_column("requested", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("slept_for".lit(), ScalarType::Int64)
+                .add_column("requested".lit(), ScalarType::Int64)
+                .add_column("count".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1, 2]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
-                .add_column("operator", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("records", ScalarType::Int64)
-                .add_column("batches", ScalarType::Int64)
+                .add_column("operator".lit(), ScalarType::Int64)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("records".lit(), ScalarType::Int64)
+                .add_column("batches".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Differential(DifferentialLog::Sharing) => RelationDesc::empty()
-                .add_column("operator", ScalarType::Int64)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
+                .add_column("operator".lit(), ScalarType::Int64)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("count".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => RelationDesc::empty()
-                .add_column("name", ScalarType::String)
-                .add_column("worker", ScalarType::Int64)
+                .add_column("name".lit(), ScalarType::String)
+                .add_column("worker".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => RelationDesc::empty()
-                .add_column("dataflow", ScalarType::String)
-                .add_column("source", ScalarType::String)
-                .add_column("worker", ScalarType::Int64),
+                .add_column("dataflow".lit(), ScalarType::String)
+                .add_column("source".lit(), ScalarType::String)
+                .add_column("worker".lit(), ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => RelationDesc::empty()
-                .add_column("name", ScalarType::String)
-                .add_column("time", ScalarType::Int64),
+                .add_column("name".lit(), ScalarType::String)
+                .add_column("time".lit(), ScalarType::Int64),
 
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
-                .add_column("uuid", ScalarType::String)
-                .add_column("worker", ScalarType::Int64)
-                .add_column("name", ScalarType::String)
-                .add_column("time", ScalarType::Int64)
+                .add_column("uuid".lit(), ScalarType::String)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("name".lit(), ScalarType::String)
+                .add_column("time".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 
             LogVariant::Materialized(MaterializedLog::PeekDuration) => RelationDesc::empty()
-                .add_column("worker", ScalarType::Int64)
-                .add_column("duration_ns", ScalarType::Int64)
-                .add_column("count", ScalarType::Int64)
+                .add_column("worker".lit(), ScalarType::Int64)
+                .add_column("duration_ns".lit(), ScalarType::Int64)
+                .add_column("count".lit(), ScalarType::Int64)
                 .add_keys(vec![0, 1]),
         }
     }

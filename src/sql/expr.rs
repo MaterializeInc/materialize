@@ -21,7 +21,7 @@ pub enum RelationExpr {
         typ: RelationType,
     },
     Get {
-        name: String,
+        name: QualName,
         typ: RelationType,
     },
     // only needed for CTEs

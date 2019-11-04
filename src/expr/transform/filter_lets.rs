@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::{RelationExpr, ScalarExpr};
+use repr::QualName;
 
 /// Pushes common filter predicates on gets into the let binding.
 ///
@@ -50,7 +51,7 @@ impl FilterLets {
 /// filter, the list is immediately set to the empty list.
 fn common_constraints(
     expr: &RelationExpr,
-    bound_name: &str,
+    bound_name: &QualName,
     constraints: &mut Option<Vec<ScalarExpr>>,
 ) {
     match expr {
@@ -78,7 +79,7 @@ fn common_constraints(
 }
 
 /// Delete each constraint in `constraints` from any filter immediately preceding a get for `bound_name`.
-fn delete_constraints(expr: &mut RelationExpr, bound_name: &str, constraints: &[ScalarExpr]) {
+fn delete_constraints(expr: &mut RelationExpr, bound_name: &QualName, constraints: &[ScalarExpr]) {
     match expr {
         RelationExpr::Filter { input, predicates } => {
             if let RelationExpr::Get { name, .. } = &**input {

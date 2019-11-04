@@ -24,6 +24,7 @@ mod session;
 mod statement;
 mod transform;
 
+use repr::QualName;
 // this is used by sqllogictest to turn sql values into `Datum`
 pub use query::scalar_type_from_sql;
 
@@ -35,13 +36,14 @@ pub enum Plan {
     CreateSources(Vec<Source>),
     CreateSink(Sink),
     CreateTable {
-        name: String,
+        name: QualName,
         desc: RelationDesc,
     },
     CreateView(View),
-    DropItems(Vec<String>, ObjectType),
+    DropItems(Vec<QualName>, ObjectType),
     EmptyQuery,
     SetVariable {
+        /// The name of the variable
         name: String,
         value: String,
     },
@@ -66,7 +68,7 @@ pub enum Plan {
     SendRows(Vec<Row>),
     ExplainPlan(::expr::RelationExpr),
     SendDiffs {
-        name: String,
+        name: QualName,
         updates: Vec<(Row, isize)>,
         affected_rows: usize,
         kind: MutationKind,

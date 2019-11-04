@@ -6,8 +6,10 @@
 // Prefering higher-order methods to equivalent lower complexity methods is wrong.
 #![allow(clippy::or_fun_call)]
 
-use crate::RelationExpr;
 use std::collections::{HashMap, HashSet};
+
+use crate::RelationExpr;
+use repr::QualName;
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
 ///
@@ -42,7 +44,7 @@ impl NonNullRequirements {
         &self,
         relation: &mut RelationExpr,
         mut columns: HashSet<usize>,
-        gets: &mut HashMap<String, Vec<HashSet<usize>>>,
+        gets: &mut HashMap<QualName, Vec<HashSet<usize>>>,
     ) {
         match relation {
             RelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
@@ -50,7 +52,7 @@ impl NonNullRequirements {
                 columns.iter().all(|c| datums[*c] != repr::Datum::Null)
             }),
             RelationExpr::Get { name, .. } => {
-                gets.entry(name.to_string())
+                gets.entry(name.clone())
                     .or_insert(Vec::new())
                     .push(columns.clone());
             }
@@ -58,11 +60,11 @@ impl NonNullRequirements {
                 // Let harvests any non-null requirements from its body,
                 // and acts on the intersection of the requirements for
                 // each corresponding Get, pushing them at its value.
-                let prior = gets.insert(name.to_string(), Vec::new());
+                let prior = gets.insert(name.clone(), Vec::new());
                 self.action(body, columns, gets);
                 let mut needs = gets.remove(name).unwrap();
                 if let Some(prior) = prior {
-                    gets.insert(name.to_string(), prior);
+                    gets.insert(name.clone(), prior);
                 }
                 if let Some(mut need) = needs.pop() {
                     while let Some(x) = needs.pop() {

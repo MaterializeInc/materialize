@@ -1,0 +1,94 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (
+    v integer
+)
+
+statement ok
+INSERT INTO t VALUES
+    (1),
+    (2)
+
+statement ok
+INSERT INTO "t" VALUES
+    (3)
+
+query T
+SELECT * FROM "t" ORDER BY v
+----
+1
+2
+3
+
+query T
+SELECT * FROM t ORDER BY "v"
+----
+1
+2
+3
+
+query T
+SELECT count(*) AS "count" FROM t
+----
+3
+
+query T
+SELECT count(*) AS count FROM "t"
+----
+3
+
+query T
+SELECT count(*) AS "count" FROM "t"
+----
+3
+
+# quoted creation
+
+statement ok
+CREATE TABLE "q" (
+    "p" integer
+)
+
+statement ok
+INSERT INTO q VALUES
+    (1),
+    (2)
+
+statement ok
+INSERT INTO "q" VALUES
+    (3)
+
+query T
+SELECT * FROM "q" ORDER BY p
+----
+1
+2
+3
+
+query T
+SELECT * FROM q ORDER BY "p"
+----
+1
+2
+3
+
+query T
+SELECT count(*) AS "count" FROM q
+----
+3
+
+query T
+SELECT count(*) AS count FROM "q"
+----
+3
+
+query T
+SELECT count(*) AS "count" FROM "q"
+----
+3
