@@ -86,6 +86,11 @@ disabled_lints=(
     # when the for loop is clearer.
     clippy::needless_range_loop
 
+    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#cognitive_complexity
+    # 
+    # Clippy's cognitive complexity is too easily reached.
+    clippy::cognitive-complexity
+
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/#redundant_closure
     #
     # clippy::redundant_closure prohibits using closures when the closure
