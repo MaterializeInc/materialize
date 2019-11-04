@@ -137,6 +137,8 @@ pub enum FrontendMessage {
         /// The source prepared statement. An empty string selects the unnamed
         /// prepared statement.
         statement_name: String,
+        /// Actual bytes being passed from Postgres wire protocol.
+        parameters: Vec<Option<Vec<u8>>>,
         /// The format of each field. If a field is missing from the vector,
         /// then `FieldFormat::Text` should be assumed.
         return_field_formats: Vec<FieldFormat>,
@@ -188,7 +190,7 @@ pub enum BackendMessage {
         conn_id: u32,
         secret_key: u32,
     },
-    ParameterDescription,
+    ParameterDescription(Vec<ParameterDescription>),
     NoData,
     ParseComplete,
     BindComplete,
@@ -200,6 +202,11 @@ pub enum BackendMessage {
     },
     CopyOutResponse,
     CopyData(Vec<u8>),
+}
+
+#[derive(Debug)]
+pub struct ParameterDescription {
+    pub type_oid: u32,
 }
 
 #[derive(Debug)]
@@ -538,6 +545,18 @@ pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
                     _ => -1,
                 },
                 format: FieldFormat::Text,
+            }
+        })
+        .collect()
+}
+
+pub fn parameter_description_from_types(types: &[ScalarType]) -> Vec<ParameterDescription> {
+    types
+        .iter()
+        .map(|typ| {
+            let pg_type: PgType = typ.into();
+            ParameterDescription {
+                type_oid: pg_type.oid,
             }
         })
         .collect()

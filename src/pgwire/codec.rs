@@ -91,7 +91,7 @@ impl Encoder for Codec {
             BackendMessage::NoData => b'n',
             BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::BackendKeyData { .. } => b'K',
-            BackendMessage::ParameterDescription => b't',
+            BackendMessage::ParameterDescription(_) => b't',
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
             BackendMessage::ErrorResponse { .. } => b'E',
@@ -172,8 +172,11 @@ impl Encoder for Codec {
                 buf.put_u32_be(conn_id);
                 buf.put_u32_be(secret_key);
             }
-            BackendMessage::ParameterDescription => {
-                buf.put_u16_be(0); // the number of parameters used by the statement
+            BackendMessage::ParameterDescription(params) => {
+                buf.put_u16_be(params.len() as u16);
+                for param in params {
+                    buf.put_u32_be(param.type_oid);
+                }
             }
             BackendMessage::ErrorResponse {
                 severity,
@@ -407,11 +410,25 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     // parameters, is to accept whatever parameters format codes folks want to
     // supply, and then blow up if they actually try to bind any parameters.
     let parameter_format_code_count = buf.read_i16()?;
+    let mut parameter_formats = Vec::with_capacity(parameter_format_code_count as usize);
     for _ in 0..parameter_format_code_count {
-        let _ = buf.read_i16()?;
+        parameter_formats.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
     }
-    if buf.read_i16()? > 0 {
-        return Err(unsupported_err("binding parameters is not supported"));
+
+    let parameter_count = buf.read_i16()?;
+    let mut parameters = vec![];
+    for _ in 0..parameter_count {
+        let parameter_value_length = buf.read_i32()?;
+        if parameter_value_length == -1 {
+            // Null, no value bytes follow.
+            parameters.push(None)
+        } else {
+            let mut value = vec![];
+            for _ in 0..parameter_value_length {
+                value.push(buf.read_byte()?);
+            }
+            parameters.push(Some(value));
+        }
     }
 
     let return_format_code_count = buf.read_i16()?;
@@ -423,6 +440,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     Ok(FrontendMessage::Bind {
         portal_name,
         statement_name,
+        parameters,
         return_field_formats: fmt_codes,
     })
 }
