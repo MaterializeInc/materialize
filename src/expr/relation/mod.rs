@@ -474,7 +474,7 @@ impl RelationExpr {
     }
 
     /// Arranges the collection by the specified columns
-    pub fn arrangeby(self, keys: &[usize]) -> Self {
+    pub fn arrange_by(self, keys: &[usize]) -> Self {
         RelationExpr::ArrangeBy {
             input: Box::new(self),
             keys: keys.to_vec(),

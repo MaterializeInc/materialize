@@ -221,7 +221,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     }
                 };
                 context.ensure_rendered(
-                    &to_arrange.clone().arrangeby(&idx.keys),
+                    &to_arrange.clone().arrange_by(&idx.keys),
                     region,
                     worker_index,
                 );
