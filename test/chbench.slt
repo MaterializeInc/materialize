@@ -382,9 +382,9 @@ Reduce {
       ],
       Get { id-1 },
       Distinct {
-        group_key: [10 .. 13],
+        group_key: [10 .. 12, 14],
         Filter {
-          predicates: [#6 >= #13],
+          predicates: [#6 >= #14],
           Join {
             variables: [
               [(0, 0), (1, 0)],
@@ -392,7 +392,7 @@ Reduce {
               [(0, 2), (1, 2)]
             ],
             Get { orderline },
-            Project { outputs: [0 .. 2, 4], Get { id-1 } }
+            Get { id-1 }
           }
         }
       }
@@ -481,7 +481,7 @@ Union {
   Map {
     scalars: [null],
     Union {
-      Negate { Project { outputs: [], Get { id-1 } } },
+      Project { outputs: [], Negate { Get { id-1 } } },
       Constant [[]]
     }
   }
@@ -518,11 +518,11 @@ ORDER BY su_nationkey, cust_nation, l_year
 ----
 Reduce {
   group_key: [3, 73, 74],
-  aggregates: [sum(#33)],
+  aggregates: [sum(#34)],
   Map {
-    scalars: [substr(#52, 1, 1), tsextractyear datetots #39],
+    scalars: [substr(#53, 1, 1), tsextractyear datetots #40],
     Project {
-      outputs: [0 .. 6, 12 .. 69, 8 .. 11, 70 .. 72, 74],
+      outputs: [0 .. 7, 12 .. 69, 8 .. 11, 70 .. 74],
       Filter {
         predicates: [
           ((#9 = "GERMANY") && (#71 = "CAMBODIA"))
@@ -595,15 +595,15 @@ Project {
     Reduce {
       group_key: [81],
       aggregates: [
-        sum(if #75 = "GERMANY" then #38 else 0dec),
-        sum(#38)
+        sum(if #77 = "GERMANY" then #39 else 0dec),
+        sum(#39)
       ],
       Map {
-        scalars: [tsextractyear datetots #44],
+        scalars: [tsextractyear datetots #45],
         Project {
           outputs: [
-            0 .. 4, 71 .. 77, 45 .. 62, 5 .. 44,
-            63 .. 65, 67, 79 .. 82, 68 .. 70
+            0 .. 4, 71 .. 78, 45 .. 62, 5 .. 44,
+            63 .. 67, 79 .. 82, 68 .. 70
           ],
           Join {
             variables: [
@@ -663,12 +663,12 @@ GROUP BY n_name, extract(year FROM o_entry_d)
 ORDER BY n_name, l_year DESC
 ----
 Reduce {
-  group_key: [49, 52],
-  aggregates: [sum(#38)],
+  group_key: [50, 52],
+  aggregates: [sum(#39)],
   Map {
-    scalars: [tsextractyear datetots #44],
+    scalars: [tsextractyear datetots #45],
     Project {
-      outputs: [0 .. 4, 23 .. 47, 5 .. 22, 49 .. 52],
+      outputs: [0 .. 4, 23 .. 48, 5 .. 22, 49 .. 52],
       Join {
         variables: [
           [(0, 0), (1, 4), (3, 0)],
@@ -754,33 +754,23 @@ HAVING sum(s_order_cnt) > (
 ORDER BY ordercount DESC
 ----
 Let {
-  id-1 = Project {
-    outputs: [0 .. 24, 26 .. 29],
-    Join {
-      variables: [[(0, 17), (1, 7)], [(1, 3), (2, 0)]],
-      Get { stock },
-      Map { scalars: [i32toi64 #0], Get { supplier } },
-      Filter { predicates: [#1 = "GERMANY"], Get { nation } }
-    }
+  id-1 = Join {
+    variables: [[(0, 17), (1, 7)], [(1, 3), (2, 0)]],
+    Get { stock },
+    Map { scalars: [i32toi64 #0], Get { supplier } },
+    Filter { predicates: [#1 = "GERMANY"], Get { nation } }
   }
 } in
 Project {
   outputs: [0, 1],
   Filter {
-    predicates: [(i32todec #1 * 1000000dec) > #2],
+    predicates: [(i32todec #1 * 1000000dec) > #3],
     Join {
       variables: [],
       Reduce { group_key: [0], aggregates: [sum(#14)], Get { id-1 } },
-      Project {
-        outputs: [1],
-        Map {
-          scalars: [(i32todec #0 * 1000dec) * 5dec],
-          Reduce {
-            group_key: [],
-            aggregates: [sum(#14)],
-            Get { id-1 }
-          }
-        }
+      Map {
+        scalars: [(i32todec #0 * 1000dec) * 5dec],
+        Reduce { group_key: [], aggregates: [sum(#14)], Get { id-1 } }
       }
     }
   }
@@ -913,7 +903,7 @@ Project {
       Map {
         scalars: [null, null],
         Union {
-          Negate { Project { outputs: [], Get { id-1 } } },
+          Project { outputs: [], Negate { Get { id-1 } } },
           Constant [[]]
         }
       }
@@ -968,17 +958,11 @@ Let {
   }
 } in
 Project {
-  outputs: [0 .. 2, 4, 8],
+  outputs: [0 .. 2, 4, 9],
   Join {
-    variables: [[(0, 8), (1, 0)]],
-    Project {
-      outputs: [0 .. 6, 8, 9],
-      Join {
-        variables: [[(0, 7), (1, 0)]],
-        Map { scalars: [i32toi64 #0], Get { supplier } },
-        Filter { predicates: [!isnull #1], Get { id-1 } }
-      }
-    },
+    variables: [[(0, 7), (1, 0)], [(1, 1), (2, 0)]],
+    Map { scalars: [i32toi64 #0], Get { supplier } },
+    Filter { predicates: [!isnull #1], Get { id-1 } },
     Filter {
       predicates: [!isnull #0],
       Reduce { group_key: [], aggregates: [max(#1)], Get { id-1 } }
@@ -1027,19 +1011,16 @@ Reduce {
   aggregates: [count(distinct #17)],
   Map {
     scalars: [substr(#22, 1, 3)],
-    Project {
-      outputs: [0 .. 22],
-      Join {
-        variables: [[(0, 17), (1, 0)]],
-        Get { id-1 },
-        Union {
-          Filter { predicates: [#1], Get { id-3 } },
-          Map {
-            scalars: [true],
-            Union {
-              Negate { Project { outputs: [0], Get { id-3 } } },
-              Get { id-2 }
-            }
+    Join {
+      variables: [[(0, 17), (1, 0)]],
+      Get { id-1 },
+      Union {
+        Filter { predicates: [#1], Get { id-3 } },
+        Map {
+          scalars: [true],
+          Union {
+            Project { outputs: [0], Negate { Get { id-3 } } },
+            Get { id-2 }
           }
         }
       }
@@ -1068,24 +1049,21 @@ Let {
     group_key: [],
     aggregates: [sum(#8)],
     Filter {
-      predicates: [(i32todec #7 * 1000000dec) < #11],
+      predicates: [(i32todec #7 * 1000000dec) < #13],
       Join {
         variables: [[(0, 4), (1, 0)]],
         Get { orderline },
-        Project {
-          outputs: [0, 3],
-          Map {
-            scalars: [
-              ((i32todec #1 * 10000000dec) / i64todec #2) / 10dec
-            ],
-            Reduce {
-              group_key: [10],
-              aggregates: [sum(#7), count(#7)],
-              Join {
-                variables: [[(0, 4), (1, 0)]],
-                Get { orderline },
-                Filter { predicates: [#4 ~ ^.*b$], Get { item } }
-              }
+        Map {
+          scalars: [
+            ((i32todec #1 * 10000000dec) / i64todec #2) / 10dec
+          ],
+          Reduce {
+            group_key: [10],
+            aggregates: [sum(#7), count(#7)],
+            Join {
+              variables: [[(0, 4), (1, 0)]],
+              Get { orderline },
+              Filter { predicates: [#4 ~ ^.*b$], Get { item } }
             }
           }
         }
@@ -1102,7 +1080,7 @@ Project {
       Map {
         scalars: [null],
         Union {
-          Negate { Project { outputs: [], Get { id-1 } } },
+          Project { outputs: [], Negate { Get { id-1 } } },
           Constant [[]]
         }
       }
@@ -1208,7 +1186,7 @@ Union {
   Map {
     scalars: [null],
     Union {
-      Negate { Project { outputs: [], Get { id-1 } } },
+      Project { outputs: [], Negate { Get { id-1 } } },
       Constant [[]]
     }
   }
@@ -1240,14 +1218,13 @@ Let {
     Filter { predicates: [#1 = "GERMANY"], Get { nation } }
   }
 } in
-Let { id-2 = Distinct { group_key: [0], Get { id-1 } } } in
 Let {
-  id-3 = Project {
-    outputs: [0, 12 .. 29, 2 .. 11],
+  id-2 = Project {
+    outputs: [0 .. 10, 32 .. 49, 11 .. 31],
     Join {
       variables: [[(0, 0), (1, 0)], [(2, 4), (3, 0)]],
-      Get { id-2 },
-      Get { id-2 },
+      Get { id-1 },
+      Get { id-1 },
       Filter {
         predicates: [datetots #6 > 2010-05-23 12:00:00],
         Get { orderline }
@@ -1271,23 +1248,17 @@ Project {
           Filter {
             predicates: [(2 * i32toi64 #3) > i32toi64 #4],
             Reduce {
-              group_key: [0 .. 3],
-              aggregates: [sum(#26)],
+              group_key: [0, 11 .. 13],
+              aggregates: [sum(#47)],
               Join {
-                variables: [[(0, 1), (1, 0)]],
-                Get { id-3 },
-                Project {
-                  outputs: [0, 6],
-                  Map {
-                    scalars: [true],
-                    Join {
-                      variables: [[(0, 0), (1, 0)]],
-                      Distinct { group_key: [1], Get { id-3 } },
-                      Filter {
-                        predicates: [#4 ~ ^co.*$],
-                        Get { item }
-                      }
-                    }
+                variables: [[(0, 11), (1, 0)]],
+                Get { id-2 },
+                Map {
+                  scalars: [true],
+                  Join {
+                    variables: [[(0, 0), (1, 0)]],
+                    Distinct { group_key: [11], Get { id-2 } },
+                    Filter { predicates: [#4 ~ ^co.*$], Get { item } }
                   }
                 }
               }
@@ -1328,7 +1299,7 @@ ORDER BY numwait DESC, su_name
 ----
 Let {
   id-1 = Project {
-    outputs: [0 .. 6, 30 .. 47, 12 .. 29, 8 .. 11],
+    outputs: [0 .. 7, 30 .. 47, 12 .. 29, 8 .. 11],
     Filter {
       predicates: [#36 > #44],
       Join {
@@ -1349,7 +1320,7 @@ Let {
     }
   }
 } in
-Let { id-2 = Distinct { group_key: [7 .. 9, 13], Get { id-1 } } } in
+Let { id-2 = Distinct { group_key: [8 .. 10, 14], Get { id-1 } } } in
 Let {
   id-3 = Map {
     scalars: [true],
@@ -1375,10 +1346,10 @@ Reduce {
   aggregates: [countall(null)],
   Join {
     variables: [
-      [(0, 7), (1, 0)],
-      [(0, 8), (1, 1)],
-      [(0, 9), (1, 2)],
-      [(0, 13), (1, 3)]
+      [(0, 8), (1, 0)],
+      [(0, 9), (1, 1)],
+      [(0, 10), (1, 2)],
+      [(0, 14), (1, 3)]
     ],
     Get { id-1 },
     Union {
@@ -1386,7 +1357,7 @@ Reduce {
       Map {
         scalars: [false],
         Union {
-          Negate { Project { outputs: [0 .. 3], Get { id-3 } } },
+          Project { outputs: [0 .. 3], Negate { Get { id-3 } } },
           Get { id-2 }
         }
       }
@@ -1418,88 +1389,81 @@ GROUP BY substr(c_state, 1, 1)
 ORDER BY substr(c_state, 1, 1)
 ----
 Let {
-  id-1 = Project {
-    outputs: [0 .. 21],
-    Filter {
-      predicates: [(#16 * 1000000dec) > #22],
-      Join {
-        variables: [],
-        Filter {
-          predicates: [
+  id-1 = Filter {
+    predicates: [(#16 * 1000000dec) > #24],
+    Join {
+      variables: [],
+      Filter {
+        predicates: [
+          (
             (
               (
                 (
                   (
-                    (
-                      (substr(#11, 1, 1) = "1")
-                      ||
-                      (substr(#11, 1, 1) = "2")
-                    )
+                    (substr(#11, 1, 1) = "1")
                     ||
-                    (substr(#11, 1, 1) = "3")
+                    (substr(#11, 1, 1) = "2")
                   )
                   ||
-                  (substr(#11, 1, 1) = "4")
+                  (substr(#11, 1, 1) = "3")
                 )
                 ||
-                (substr(#11, 1, 1) = "5")
+                (substr(#11, 1, 1) = "4")
               )
               ||
-              (substr(#11, 1, 1) = "6")
+              (substr(#11, 1, 1) = "5")
             )
             ||
-            (substr(#11, 1, 1) = "7")
-          ],
-          Get { customer }
-        },
-        Project {
-          outputs: [2],
-          Map {
-            scalars: [
-              ((#0 * 10000000dec) / (i64todec #1 * 100dec)) * 10dec
-            ],
-            Reduce {
-              group_key: [],
-              aggregates: [sum(#16), count(#16)],
-              Filter {
-                predicates: [
+            (substr(#11, 1, 1) = "6")
+          )
+          ||
+          (substr(#11, 1, 1) = "7")
+        ],
+        Get { customer }
+      },
+      Map {
+        scalars: [
+          ((#0 * 10000000dec) / (i64todec #1 * 100dec)) * 10dec
+        ],
+        Reduce {
+          group_key: [],
+          aggregates: [sum(#16), count(#16)],
+          Filter {
+            predicates: [
+              (
+                (
                   (
                     (
                       (
-                        (
-                          (
-                            (substr(#11, 1, 1) = "1")
-                            ||
-                            (substr(#11, 1, 1) = "2")
-                          )
-                          ||
-                          (substr(#11, 1, 1) = "3")
-                        )
+                        (substr(#11, 1, 1) = "1")
                         ||
-                        (substr(#11, 1, 1) = "4")
+                        (substr(#11, 1, 1) = "2")
                       )
                       ||
-                      (substr(#11, 1, 1) = "5")
+                      (substr(#11, 1, 1) = "3")
                     )
                     ||
-                    (substr(#11, 1, 1) = "6")
+                    (substr(#11, 1, 1) = "4")
                   )
                   ||
-                  (substr(#11, 1, 1) = "7"),
-                  #16 > 0dec
-                ],
-                Get { customer }
-              }
-            }
+                  (substr(#11, 1, 1) = "5")
+                )
+                ||
+                (substr(#11, 1, 1) = "6")
+              )
+              ||
+              (substr(#11, 1, 1) = "7"),
+              #16 > 0dec
+            ],
+            Get { customer }
           }
         }
       }
     }
   }
 } in
-Let { id-2 = Distinct { group_key: [0 .. 2], Get { id-1 } } } in
 Let {
-  id-3 = Map {
+  id-2 = Map {
     scalars: [true],
     Distinct {
       group_key: [8 .. 10],
@@ -1510,35 +1474,35 @@ Let {
           [(0, 3), (1, 0)]
         ],
         Get { "order" },
-        Get { id-2 }
+        Get { id-1 }
       }
     }
   }
 } in
 Reduce {
-  group_key: [22],
+  group_key: [24],
   aggregates: [countall(null), sum(#16)],
   Map {
     scalars: [substr(#9, 1, 1)],
     Project {
-      outputs: [0 .. 21],
+      outputs: [4 .. 28, 0 .. 3],
       Join {
         variables: [
           [(0, 0), (1, 0)],
           [(0, 1), (1, 1)],
           [(0, 2), (1, 2)]
         ],
-        Get { id-1 },
         Union {
-          Filter { predicates: [!#3], Get { id-3 } },
+          Filter { predicates: [!#3], Get { id-2 } },
           Map {
             scalars: [false],
             Union {
-              Negate { Project { outputs: [0 .. 2], Get { id-3 } } },
-              Get { id-2 }
+              Project { outputs: [0 .. 2], Negate { Get { id-2 } } },
+              Project { outputs: [0 .. 2], Get { id-1 } }
             }
           }
-        }
+        },
+        Get { id-1 }
       }
     }
   }
