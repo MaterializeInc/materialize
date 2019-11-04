@@ -63,6 +63,8 @@ pub enum MaterializedLog {
     FrontierCurrent,
     PeekCurrent,
     PeekDuration,
+    PrimaryKeys,
+    ForeignKeys,
 }
 
 impl LogVariant {
@@ -81,6 +83,8 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::FrontierCurrent),
             LogVariant::Materialized(MaterializedLog::PeekCurrent),
             LogVariant::Materialized(MaterializedLog::PeekDuration),
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys),
+            LogVariant::Materialized(MaterializedLog::ForeignKeys),
         ]
     }
 
@@ -98,10 +102,12 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows".lit(),
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
                 "logs_dataflow_dependency".lit()
-            }
+            },
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers".lit(),
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks".lit(),
             LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations".lit(),
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => "logs_primary_keys".lit(),
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => "logs_foreign_keys".lit(),
         }
     }
 
@@ -121,6 +127,8 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => GlobalId::system(11),
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => GlobalId::system(12),
             LogVariant::Materialized(MaterializedLog::PeekDuration) => GlobalId::system(13),
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => GlobalId::system(14),
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => GlobalId::system(15),
         }
     }
 
@@ -170,7 +178,7 @@ impl LogVariant {
                 .add_column("worker", ScalarType::Int64)
                 .add_column("slot", ScalarType::Int64)
                 .add_column("value", ScalarType::Int64)
-                .add_keys(vec![0, 1]),
+                .add_keys(vec![0, 1, 2]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
                 .add_column("worker", ScalarType::Int64)
@@ -218,6 +226,44 @@ impl LogVariant {
                 .add_column("duration_ns", ScalarType::Int64)
                 .add_column("count", ScalarType::Int64)
                 .add_keys(vec![0, 1]),
+
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => RelationDesc::empty()
+                .add_column("name", ScalarType::String)
+                .add_column("column", ScalarType::Int64)
+                .add_column("key_group", ScalarType::Int64)
+                .add_keys(vec![0, 1]),
+
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => RelationDesc::empty()
+                .add_column("child_name", ScalarType::String)
+                .add_column("child_column", ScalarType::Int64)
+                .add_column("parent_name", ScalarType::String)
+                .add_column("parent_column", ScalarType::Int64)
+                .add_column("key_group", ScalarType::Int64)
+                .add_keys(vec![0, 1, 2, 3]),
+        }
+    }
+
+    /// Foreign key relations from the log variant to other log collections.
+    ///
+    /// The result is a list of other variants, and for each a list of local
+    /// and other column identifiers that can be equated.
+    pub fn foreign_keys(&self) -> Vec<(LogVariant, Vec<(usize, usize)>)> {
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => vec![],
+            LogVariant::Timely(TimelyLog::Channels) => vec![],
+            LogVariant::Timely(TimelyLog::Elapsed) => vec![],
+            LogVariant::Timely(TimelyLog::Histogram) => vec![],
+            LogVariant::Timely(TimelyLog::Addresses) => vec![(LogVariant::Timely(TimelyLog::Operates), vec![(0,0), (1,1)])],
+            LogVariant::Timely(TimelyLog::Parks) => vec![],
+            LogVariant::Differential(DifferentialLog::Arrangement) => vec![],
+            LogVariant::Differential(DifferentialLog::Sharing) => vec![],
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
+            LogVariant::Materialized(MaterializedLog::PrimaryKeys) => vec![],
+            LogVariant::Materialized(MaterializedLog::ForeignKeys) => vec![(LogVariant::Materialized(MaterializedLog::PrimaryKeys), vec![(2, 0), (3, 1)])],
         }
     }
 }

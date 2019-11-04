@@ -225,11 +225,6 @@ where
             let m_linked = std::rc::Rc::new(EventLink::new());
             let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
-            // Construct logging dataflows and endpoints before registering any.
-            let t_traces = logging::timely::construct(&mut self.inner, logging, t_linked);
-            let d_traces = logging::differential::construct(&mut self.inner, logging, d_linked);
-            let m_traces = logging::materialized::construct(&mut self.inner, logging, m_linked);
-
             // Register each logger endpoint.
             self.inner
                 .log_register()
@@ -250,6 +245,11 @@ where
                     "materialized",
                     move |time, data| m_logger.publish_batch(time, data),
                 );
+
+            // Construct logging dataflows and endpoints *after* registering them.
+            let t_traces = logging::timely::construct(&mut self.inner, logging, t_linked);
+            let d_traces = logging::differential::construct(&mut self.inner, logging, d_linked);
+            let m_traces = logging::materialized::construct(&mut self.inner, logging, m_linked);
 
             // Install traces as maintained views.
             for (log, (key, trace)) in t_traces {
