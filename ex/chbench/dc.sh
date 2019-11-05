@@ -94,7 +94,11 @@ dc_stop() {
 
 bring_up() {
     for image in "${IMAGES[@]}"; do
-        runv docker pull "$image"
+        # if we are running with `:local` images then we don't need to pull, so check
+        # that `<tag>:latest` is actually in the compose file
+        if (grep "$image" docker-compose.yml >/dev/null 2>&1); then
+            runv docker pull "$image"
+        fi
     done
     dc_up materialized mysql
     docker-compose logs materialized | tail -n 5
