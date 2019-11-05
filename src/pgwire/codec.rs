@@ -399,34 +399,62 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
-    // The rules around parameter format codes are complicated. Zero means use
-    // text for all parameters, if any. One means use the specified format code
-    // for all parameters, if any. (Particularly confusingly, you can specify
-    // one text or binary parameter format code, and then proceed to bind zero
-    // parameters.) Any additional number of parameter format codes means that
-    // you're supplying one paramater format code per actual bound parameter.
-    //
-    // The simplest thing to do, since we don't actually support binding
-    // parameters, is to accept whatever parameters format codes folks want to
-    // supply, and then blow up if they actually try to bind any parameters.
+    // Actions depending on the number of format codes provided:
+    //     0 => use text for all parameters, if any exist
+    //     1 => use the specified format code for all parameters
+    //    >1 => use separate format code for each parameter
     let parameter_format_code_count = buf.read_i16()?;
-    for _ in 0..parameter_format_code_count {
-        let _ = buf.read_i16()?;
-    }
-    if buf.read_i16()? > 0 {
-        return Err(unsupported_err("binding parameters is not supported"));
+    let mut parameter_format_codes = Vec::with_capacity(parameter_format_code_count as usize);
+    if parameter_format_code_count == 0 {
+        parameter_format_codes.push(FieldFormat::Text);
+    } else {
+        for _ in 0..parameter_format_code_count {
+            parameter_format_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+        }
     }
 
-    let return_format_code_count = buf.read_i16()?;
-    let mut fmt_codes = Vec::with_capacity(return_format_code_count as usize);
-    for _ in 0..return_format_code_count {
-        fmt_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+    let parameter_count = buf.read_i16()?;
+    // If we have fewer format codes than parameters,
+    // we're using the same format code for all parameters.
+    // Add parameter number of that format code to
+    // FrontendMessage::Bind to provide a cleaner interface.
+    if parameter_format_code_count < parameter_count {
+        for _ in 0..parameter_count - parameter_format_code_count {
+            parameter_format_codes.push(parameter_format_codes[0]);
+        }
+    }
+
+    let mut parameters = Vec::new();
+    for _ in 0..parameter_count {
+        let param_value_length = buf.read_i32()?;
+        if param_value_length == -1 {
+            // Only happens if the value is Null.
+            parameters.push(None);
+        } else {
+            let mut value: Vec<u8> = Vec::new();
+            for _ in 0..param_value_length {
+                value.push(buf.read_byte()?);
+            }
+            parameters.push(Some(value));
+        }
+    }
+
+    // Actions depending on the number of result format codes provided:
+    //     0 => no result columns or all should use text
+    //     1 => use the specified format code for all results
+    //    >1 => use separate format code for each result
+    let result_column_format_codes_count = buf.read_i16()?;
+    let mut format_codes = Vec::with_capacity(result_column_format_codes_count as usize);
+    for _ in 0..result_column_format_codes_count {
+        format_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
     }
 
     Ok(FrontendMessage::Bind {
         portal_name,
         statement_name,
-        return_field_formats: fmt_codes,
+        parameters,
+        parameter_format_codes,
+        return_field_formats: format_codes,
     })
 }
 
