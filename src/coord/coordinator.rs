@@ -193,6 +193,10 @@ where
 
             Plan::SetVariable { name, .. } => ExecuteResponse::SetVariable { name },
 
+            Plan::StartTransaction => ExecuteResponse::StartTransaction,
+            Plan::Commit => ExecuteResponse::Commit,
+            Plan::Rollback => ExecuteResponse::Rollback,
+
             Plan::Peek {
                 mut source,
                 when,

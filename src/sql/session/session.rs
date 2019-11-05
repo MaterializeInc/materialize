@@ -5,6 +5,10 @@
 
 //! All the state that is associated with a specific session.
 //!
+//! The primary docs for this module are in the parent [`sql::session`] module docs, this
+//! just exists to make the top level more clear in terms of what is actually exported vs
+//! required internally.
+//!
 //! Client connections each get a new [`Session`], which is composed of [`Var`]s and the
 //! elements of prepared statements.
 
@@ -13,9 +17,10 @@ use std::fmt;
 
 use failure::bail;
 
-use crate::session::statements::{Portal, PreparedStatement};
-use crate::session::vars::{ServerVar, SessionVar, Var};
-use crate::session::vars::{
+use crate::session::statement::{Portal, PreparedStatement};
+use crate::session::transaction::TransactionStatus;
+use crate::session::var::{ServerVar, SessionVar, Var};
+use crate::session::var::{
     APPLICATION_NAME, CLIENT_ENCODING, DATABASE, DATE_STYLE, EXTRA_FLOAT_DIGITS, SERVER_VERSION,
     SQL_SAFE_UPDATES,
 };
@@ -30,6 +35,8 @@ pub struct Session {
     extra_float_digits: SessionVar<i32>,
     server_version: ServerVar<&'static str>,
     sql_safe_updates: SessionVar<bool>,
+    /// The current state of the the session's transaction
+    transaction: TransactionStatus,
     /// A map from statement names to SQL queries
     prepared_statements: HashMap<String, PreparedStatement>,
     /// Portals associated with the current session
@@ -49,6 +56,7 @@ impl fmt::Debug for Session {
             .field("extra_float_digits", &self.extra_float_digits())
             .field("server_version", &self.server_version())
             .field("sql_safe_updates", &self.sql_safe_updates())
+            .field("transaction", &self.transaction())
             .field("prepared_statements", &self.prepared_statements.keys())
             .field("portals", &self.portals.keys())
             .finish()
@@ -66,6 +74,7 @@ impl std::default::Default for Session {
             extra_float_digits: SessionVar::new(&EXTRA_FLOAT_DIGITS),
             server_version: SERVER_VERSION,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
+            transaction: TransactionStatus::Idle,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
         }
@@ -189,6 +198,35 @@ impl Session {
     /// Returns the value of the `sql_safe_updates` configuration parameter.
     pub fn sql_safe_updates(&self) -> bool {
         *self.sql_safe_updates.value()
+    }
+
+    /// Put the session into a transaction
+    ///
+    /// This does not nest, it just keeps us in a transaction even if we were already in
+    /// one.
+    pub fn start_transaction(&mut self) {
+        self.transaction = TransactionStatus::InTransaction;
+    }
+
+    /// Take the session out of a transaction
+    ///
+    /// This is fine to do even if we are not in a transaction
+    pub fn end_transaction(&mut self) {
+        self.transaction = TransactionStatus::Idle;
+    }
+
+    /// If the session is currenlty in a transaction, mark it failed
+    ///
+    /// Does nothing in other cases
+    pub fn fail_transaction(&mut self) {
+        if self.transaction == TransactionStatus::InTransaction {
+            self.transaction = TransactionStatus::Failed;
+        }
+    }
+
+    /// Get the current transaction status of the session
+    pub fn transaction(&self) -> &TransactionStatus {
+        &self.transaction
     }
 
     /// Ensure that the given prepared statement is present in this session

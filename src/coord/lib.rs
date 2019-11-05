@@ -72,6 +72,8 @@ pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error
 
 /// Response from the queue to an `Execute` command.
 pub enum ExecuteResponse {
+    /// The current session has been taken out of transaction mode by COMMIT
+    Commit,
     CreatedSink,
     CreatedSource,
     CreatedTable,
@@ -82,10 +84,14 @@ pub enum ExecuteResponse {
     DroppedView,
     EmptyQuery,
     Inserted(usize),
+    /// The current session has been taken out of transaction mode by ROLLBACK
+    Rollback,
     SendRows(RowsFuture),
     SetVariable {
         name: String,
     },
+    /// The current session has been placed into transaction mode
+    StartTransaction,
     Tailing {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
@@ -104,11 +110,14 @@ impl fmt::Debug for ExecuteResponse {
             ExecuteResponse::DroppedTable => f.write_str("ExecuteResponse::DroppedTable"),
             ExecuteResponse::DroppedView => f.write_str("ExecuteResponse::DroppedView"),
             ExecuteResponse::EmptyQuery => f.write_str("ExecuteResponse::EmptyQuery"),
+            ExecuteResponse::Commit => f.write_str("ExecuteResponse::Commit"),
+            ExecuteResponse::Rollback => f.write_str("ExecuteResponse::Rollback"),
             ExecuteResponse::Inserted(n) => write!(f, "ExecuteResponse::Inserted({})", n),
             ExecuteResponse::SendRows(_) => write!(f, "ExecuteResponse::SendRows(<rx>)"),
             ExecuteResponse::SetVariable { name } => {
                 write!(f, "ExecuteResponse::SetVariable({})", name)
             }
+            ExecuteResponse::StartTransaction => f.write_str("ExecuteResponse::StartTransaction"),
             ExecuteResponse::Tailing { rx: _ } => f.write_str("ExecuteResponse::Tailing"),
             ExecuteResponse::Updated(n) => write!(f, "ExecuteResponse::Updated({})", n),
         }
