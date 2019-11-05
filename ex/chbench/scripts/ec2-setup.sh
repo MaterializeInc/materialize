@@ -76,6 +76,11 @@ if [[ ! -L $docker_dir ]]; then
     # make ext4 file system
     ext4=$(file -sL $docker_partition | grep ext4 || true)
     if [[ -z $ext4 ]]; then
+        while [[ ! -b $docker_partition ]]; do
+            # Work around a race with fdisk.
+            echo "Waiting for $docker_partition to become available"
+            sleep 1
+        done
         mkfs.ext4 $docker_partition
     fi
 
@@ -91,3 +96,6 @@ if [[ ! -L $docker_dir ]]; then
     ln -sf $docker_mount $docker_dir
     service docker start
 fi
+
+git config --global pull.rebase true
+git config --global rebase.autoStash true
