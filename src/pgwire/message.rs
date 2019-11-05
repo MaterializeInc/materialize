@@ -207,6 +207,15 @@ pub struct ParameterDescription {
     pub type_oid: u32,
 }
 
+impl From<&ScalarType> for ParameterDescription {
+    fn from(typ: &ScalarType) -> Self {
+        let pg_type: PgType = typ.into();
+        ParameterDescription {
+            type_oid: pg_type.oid,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct FieldDescription {
     pub name: String,
@@ -543,18 +552,6 @@ pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
                     _ => -1,
                 },
                 format: FieldFormat::Text,
-            }
-        })
-        .collect()
-}
-
-pub fn parameter_description_from_types(types: &[ScalarType]) -> Vec<ParameterDescription> {
-    types
-        .iter()
-        .map(|typ| {
-            let pg_type: PgType = typ.into();
-            ParameterDescription {
-                type_oid: pg_type.oid,
             }
         })
         .collect()

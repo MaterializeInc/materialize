@@ -23,8 +23,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::codec::Codec;
 use crate::message::{
-    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity, VERSIONS,
-    VERSION_3,
+    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, ParameterDescription,
+    Severity, VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
 use coord::{self, ExecuteResponse};
@@ -470,8 +470,19 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 cx.conn_id,
             ))),
             FrontendMessage::DescribeStatement { name } => {
-                let stmt = match state.session.get_prepared_statement(&name) {
-                    Some(stmt) => stmt,
+                match state.session.get_prepared_statement(&name) {
+                    Some(stmt) => {
+                        transition!(SendParameterDescription {
+                            send: conn.send(BackendMessage::ParameterDescription(
+                                stmt.param_types()
+                                    .iter()
+                                    .map(ParameterDescription::from)
+                                    .collect(),
+                            )),
+                            session: state.session,
+                            name,
+                        });
+                    }
                     None => transition!(SendError {
                         send: conn.send(BackendMessage::ErrorResponse {
                             severity: Severity::Fatal,
@@ -482,14 +493,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         session: state.session,
                         kind: ErrorKind::Fatal,
                     }),
-                };
-                transition!(SendParameterDescription {
-                    send: conn.send(BackendMessage::ParameterDescription(
-                        super::message::parameter_description_from_types(&stmt.param_types()),
-                    )),
-                    session: state.session,
-                    name,
-                });
+                }
             }
             FrontendMessage::Bind {
                 portal_name,
