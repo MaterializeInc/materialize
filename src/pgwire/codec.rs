@@ -91,7 +91,7 @@ impl Encoder for Codec {
             BackendMessage::NoData => b'n',
             BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::BackendKeyData { .. } => b'K',
-            BackendMessage::ParameterDescription => b't',
+            BackendMessage::ParameterDescription(_) => b't',
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
             BackendMessage::ErrorResponse { .. } => b'E',
@@ -172,8 +172,11 @@ impl Encoder for Codec {
                 buf.put_u32_be(conn_id);
                 buf.put_u32_be(secret_key);
             }
-            BackendMessage::ParameterDescription => {
-                buf.put_u16_be(0); // the number of parameters used by the statement
+            BackendMessage::ParameterDescription(params) => {
+                buf.put_u16_be(params.len() as u16);
+                for param in params {
+                    buf.put_u32_be(param.type_oid);
+                }
             }
             BackendMessage::ErrorResponse {
                 severity,

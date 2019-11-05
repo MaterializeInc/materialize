@@ -188,7 +188,7 @@ pub enum BackendMessage {
         conn_id: u32,
         secret_key: u32,
     },
-    ParameterDescription,
+    ParameterDescription(Vec<ParameterDescription>),
     NoData,
     ParseComplete,
     BindComplete,
@@ -200,6 +200,20 @@ pub enum BackendMessage {
     },
     CopyOutResponse,
     CopyData(Vec<u8>),
+}
+
+#[derive(Debug)]
+pub struct ParameterDescription {
+    pub type_oid: u32,
+}
+
+impl From<&ScalarType> for ParameterDescription {
+    fn from(typ: &ScalarType) -> Self {
+        let pg_type: PgType = typ.into();
+        ParameterDescription {
+            type_oid: pg_type.oid,
+        }
+    }
 }
 
 #[derive(Debug)]

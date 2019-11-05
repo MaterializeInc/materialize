@@ -245,25 +245,25 @@ fn handle_parse(
     sql: String,
 ) -> Result<(), failure::Error> {
     let stmts = sql::parse(sql)?;
-    let (stmt, desc) = match stmts.len() {
-        0 => (None, None),
+    let (stmt, desc, param_types) = match stmts.len() {
+        0 => (None, None, vec![]),
         1 => {
             let stmt = stmts.into_element();
-            let desc = match sql::describe(catalog, stmt.clone()) {
-                Ok((desc, _param_types)) => desc,
+            let (desc, param_types) = match sql::describe(catalog, stmt.clone()) {
+                Ok((desc, param_types)) => (desc, param_types),
                 // Describing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it. Note that Postgres
                 // only handles commands that do not return rows, so the
                 // `RelationDesc` is always `None`.
                 Err(err) => match postgres {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => None,
+                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
                     _ => return Err(err),
                 },
             };
-            (Some(stmt), desc)
+            (Some(stmt), desc, param_types)
         }
         n => bail!("expected no more than one query, got {}", n),
     };
-    session.set_prepared_statement(name, PreparedStatement::new(stmt, desc));
+    session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
     Ok(())
 }

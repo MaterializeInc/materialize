@@ -23,8 +23,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::codec::Codec;
 use crate::message::{
-    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, Severity, VERSIONS,
-    VERSION_3,
+    self, BackendMessage, FieldFormat, FieldFormatIter, FrontendMessage, ParameterDescription,
+    Severity, VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
 use coord::{self, ExecuteResponse};
@@ -469,11 +469,32 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 DescribeKind::Portal,
                 cx.conn_id,
             ))),
-            FrontendMessage::DescribeStatement { name } => transition!(SendParameterDescription {
-                send: conn.send(BackendMessage::ParameterDescription),
-                session: state.session,
-                name,
-            }),
+            FrontendMessage::DescribeStatement { name } => {
+                match state.session.get_prepared_statement(&name) {
+                    Some(stmt) => {
+                        transition!(SendParameterDescription {
+                            send: conn.send(BackendMessage::ParameterDescription(
+                                stmt.param_types()
+                                    .iter()
+                                    .map(ParameterDescription::from)
+                                    .collect(),
+                            )),
+                            session: state.session,
+                            name,
+                        });
+                    }
+                    None => transition!(SendError {
+                        send: conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "08P01",
+                            message: "prepared statement does not exist".into(),
+                            detail: Some(format!("name: {}", name)),
+                        }),
+                        session: state.session,
+                        kind: ErrorKind::Fatal,
+                    }),
+                }
+            }
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,
