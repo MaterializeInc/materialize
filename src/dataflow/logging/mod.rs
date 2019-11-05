@@ -38,13 +38,21 @@ where
     /// Publishes a batch of logged events and advances the capability.
     #[allow(clippy::clone_on_copy)]
     pub fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
-        let new_frontier = time.clone().as_millis() as Timestamp;
-        let old_frontier = self.time.clone().as_millis() as Timestamp;
-        self.event_pusher.push(Event::Messages(
-            self.time.as_millis() as Timestamp,
-            ::std::mem::replace(data, Vec::new()),
-        ));
+        let new_frontier = time.as_millis() as Timestamp;
+        let old_frontier = self.time.as_millis() as Timestamp;
+        if !data.is_empty() {
+            self.event_pusher.push(Event::Messages(
+                self.time.as_millis() as Timestamp,
+                // In earlier versions of the code this was a
+                // swap, but without any allocations to return
+                // it resulted in sizeable logger allocations.
+                data.drain(..).collect(),
+            ));
+        }
         if old_frontier < new_frontier {
+            // In principle we can buffer up until this point, if that is appealing to us.
+            // We could buffer more aggressively if the logging granularity were exposed
+            // here, as the forward ticks would be that much less frequent.
             self.event_pusher
                 .push(Event::Progress(vec![(new_frontier, 1), (old_frontier, -1)]));
         }
