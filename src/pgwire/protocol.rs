@@ -7,7 +7,7 @@ use std::io::Write;
 use std::iter;
 use std::sync::Arc;
 
-use byteorder::{ByteOrder, NetworkEndian};
+use byteorder::{BigEndian, ByteOrder, NetworkEndian};
 use failure::format_err;
 use futures::sink::Send as SinkSend;
 use futures::stream;
@@ -15,8 +15,10 @@ use futures::sync::mpsc::UnboundedSender;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use lazy_static::lazy_static;
 use log::{debug, trace};
+use ordered_float::OrderedFloat;
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
+use std::str;
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -30,7 +32,7 @@ use crate::secrets::SecretManager;
 use coord::{self, ExecuteResponse};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::{Recv, StreamExt};
-use repr::{RelationDesc, Row};
+use repr::{Datum, RelationDesc, Row, ScalarType};
 use sql::Session;
 
 use prometheus::IntCounterVec;
@@ -502,8 +504,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 parameter_format_codes,
                 return_field_formats,
             } => {
-                let mut session = state.session;
-                let fmts = return_field_formats.iter().map(bool::from).collect();
                 trace!(
                     "cid={} handle bind statement={:?} portal={:?}, parameters={:?}, format_codes={:?}, return_field_formats={:?}",
                     cx.conn_id,
@@ -514,7 +514,21 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     return_field_formats
                 );
 
-                session.set_portal(portal_name, statement_name, fmts)?;
+                let mut session = state.session;
+                let stmt = session.get_prepared_statement(&statement_name).unwrap();
+                let param_types = stmt.param_types();
+
+                let mut datums: Vec<Option<Datum>> = Vec::new();
+                for (i, param) in parameters.iter().enumerate() {
+                    datums.push(match parameter_format_codes[i] {
+                        FieldFormat::Binary => generate_datum_from_bytes(param, param_types[i]),
+                        FieldFormat::Text => None, // todo: write something like generate_datum_from_bytes
+                    });
+                }
+
+                let fmts = return_field_formats.iter().map(bool::from).collect();
+                dbg!(&portal_name, &statement_name, &datums, &fmts);
+                session.create_or_set_portal(portal_name, statement_name, datums, fmts);
 
                 transition!(SendBindComplete {
                     send: conn.send(BackendMessage::BindComplete),
@@ -886,8 +900,15 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     let row_desc = stmt.desc().cloned();
                     let portal_name = String::from("");
                     let params = vec![];
+                    let return_types = vec![];
+                    // would need to set more empty fields here.
                     session
-                        .set_portal(portal_name.clone(), statement_name, params)
+                        .create_or_set_portal(
+                            portal_name.clone(),
+                            statement_name,
+                            params,
+                            return_types,
+                        )
                         .expect("unnamed statement to be present during simple query flow");
                     let (tx, rx) = futures::sync::oneshot::channel();
                     cx.cmdq_tx.unbounded_send(coord::Command::Execute {
@@ -1116,5 +1137,31 @@ where
             }
             .into()
         }
+    }
+}
+
+fn generate_datum_from_bytes(bytes: &Option<Vec<u8>>, typ: ScalarType) -> Option<Datum> {
+    match bytes {
+        Some(bytes) => {
+            match typ {
+                ScalarType::Null => Some(Datum::Null),
+                ScalarType::Bool => Some(Datum::True), //todo: figure out true/false?
+                ScalarType::Int32 => Some(Datum::Int32(BigEndian::read_i32(bytes))),
+                ScalarType::Int64 => Some(Datum::Int64(BigEndian::read_i64(bytes))),
+                ScalarType::Float32 => Some(Datum::Float32(OrderedFloat::from(
+                    BigEndian::read_f32(bytes),
+                ))),
+                ScalarType::Float64 => Some(Datum::Float64(OrderedFloat::from(
+                    BigEndian::read_f64(bytes),
+                ))),
+                ScalarType::Bytes => Some(Datum::Bytes(bytes)),
+                ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())), //todo: is this the right thing to do here?
+                _ => {
+                    // todo: currently ignoring: Decimal, Date, Time, Timestamp, Interval
+                    Some(Datum::Null)
+                }
+            }
+        }
+        None => None,
     }
 }

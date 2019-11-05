@@ -21,6 +21,7 @@ failure = "0.1.5"
 futures = "0.1"
 lazy_static = "1.4.0"
 log = "0.4"
+ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 prometheus = { version = "0.7.0", default-features = false, features = ["process"] }
 rand = "0.7"
