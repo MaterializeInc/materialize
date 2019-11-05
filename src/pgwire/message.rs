@@ -8,7 +8,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
-use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use lazy_static::lazy_static;
 
 use super::types::PgType;
@@ -383,6 +383,7 @@ pub enum FieldValue {
     Float8(f64),
     Date(NaiveDate),
     Timestamp(NaiveDateTime),
+    TimestampTz(DateTime<Utc>),
     Interval(Interval),
     Text(String),
     Numeric(Decimal),
@@ -400,6 +401,7 @@ impl FieldValue {
             Datum::Float64(f) => Some(FieldValue::Float8(*f)),
             Datum::Date(d) => Some(FieldValue::Date(d)),
             Datum::Timestamp(d) => Some(FieldValue::Timestamp(d)),
+            Datum::TimestampTz(d) => Some(FieldValue::TimestampTz(d)),
             Datum::Interval(i) => Some(FieldValue::Interval(i)),
             Datum::Decimal(d) => {
                 let (_, scale) = typ.scalar_type.unwrap_decimal_parts();
@@ -421,6 +423,7 @@ impl FieldValue {
             FieldValue::Bytea(b) => b.into(),
             FieldValue::Date(d) => d.to_string().into_bytes().into(),
             FieldValue::Timestamp(ts) => ts.to_string().into_bytes().into(),
+            FieldValue::TimestampTz(ts) => ts.to_string().into_bytes().into(),
             FieldValue::Interval(i) => match i {
                 repr::Interval::Months(count) => format!("{} months", count).into_bytes().into(),
                 repr::Interval::Duration {
@@ -455,6 +458,13 @@ impl FieldValue {
                 buf.into()
             }
             FieldValue::Timestamp(ts) => {
+                let timestamp = (ts.timestamp() - EPOCH.timestamp()) * 1_000_000
+                    + i64::from(ts.timestamp_subsec_micros());
+                let mut buf = vec![0u8; 8];
+                NetworkEndian::write_i64(&mut buf, timestamp);
+                buf.into()
+            }
+            FieldValue::TimestampTz(ts) => {
                 let timestamp = (ts.timestamp() - EPOCH.timestamp()) * 1_000_000
                     + i64::from(ts.timestamp_subsec_micros());
                 let mut buf = vec![0u8; 8];

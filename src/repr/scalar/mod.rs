@@ -5,7 +5,7 @@
 
 pub mod decimal;
 pub mod regex;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use failure::format_err;
 use ordered_float::OrderedFloat;
 use pretty::{BoxDoc, Doc};
@@ -39,6 +39,8 @@ pub enum Datum<'a> {
     Date(NaiveDate),
     /// A DateTime
     Timestamp(NaiveDateTime),
+    /// A time zone aware DateTime
+    TimestampTz(DateTime<Utc>),
     /// A span of time
     ///
     /// Either a concrete number of seconds, or an abstract number of Months
@@ -97,6 +99,44 @@ impl<'a> Datum<'a> {
                 )
             })?;
         Ok(Datum::Timestamp(d))
+    }
+
+    /// Create a Datum representing a TimestampTz
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_ymd_hms_nano_tz_offset(
+        year: i32,
+        month: u8,
+        day: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+        nano: u32,
+        timezone_offset_second: i64,
+    ) -> Result<Datum<'static>, failure::Error> {
+        let d = NaiveDate::from_ymd_opt(year, month.into(), day.into())
+            .ok_or_else(|| format_err!("Invalid date: {}-{:02}-{:02}", year, month, day))?
+            .and_hms_nano_opt(hour.into(), minute.into(), second.into(), nano)
+            .ok_or_else(|| {
+                format_err!(
+                    "Invalid time: {:02}:{:02}:{:02}.{} (in date {}-{:02}-{:02})",
+                    hour,
+                    minute,
+                    second,
+                    nano,
+                    year,
+                    month,
+                    day
+                )
+            })?;
+        let offset = FixedOffset::east(timezone_offset_second as i32);
+        let dt_fixed_offset = offset
+            .from_local_datetime(&d)
+            .earliest()
+            .ok_or_else(|| format_err!("Invalid tz conversion"))?;
+        Ok(Datum::TimestampTz(DateTime::<Utc>::from_utc(
+            dt_fixed_offset.naive_utc(),
+            Utc,
+        )))
     }
 
     pub fn unwrap_bool(&self) -> bool {
@@ -163,6 +203,13 @@ impl<'a> Datum<'a> {
         }
     }
 
+    pub fn unwrap_timestamptz(&self) -> chrono::DateTime<Utc> {
+        match self {
+            Datum::TimestampTz(ts) => *ts,
+            _ => panic!("Datum::unwrap_timestamptz called on {:?}", self),
+        }
+    }
+
     pub fn unwrap_interval(&self) -> Interval {
         match self {
             Datum::Interval(iv) => *iv,
@@ -195,6 +242,7 @@ impl<'a> Datum<'a> {
             Datum::Float64(_) => ScalarType::Float64,
             Datum::Date(_) => ScalarType::Date,
             Datum::Timestamp(_) => ScalarType::Timestamp,
+            Datum::TimestampTz(_) => ScalarType::TimestampTz,
             Datum::Interval(_) => ScalarType::Interval,
             Datum::Decimal(_) => panic!("don't support decimal"), // todo: figure out what to do here
             Datum::Bytes(_) => ScalarType::Bytes,
@@ -222,6 +270,8 @@ impl<'a> Datum<'a> {
             (Datum::Date(_), _) => false,
             (Datum::Timestamp(_), ScalarType::Timestamp) => true,
             (Datum::Timestamp(_), _) => false,
+            (Datum::TimestampTz(_), ScalarType::TimestampTz) => true,
+            (Datum::TimestampTz(_), _) => false,
             (Datum::Interval(_), ScalarType::Interval) => true,
             (Datum::Interval(_), _) => false,
             (Datum::Decimal(_), ScalarType::Decimal(_, _)) => true,
@@ -335,6 +385,12 @@ impl<'a> From<NaiveDateTime> for Datum<'a> {
     }
 }
 
+impl<'a> From<DateTime<Utc>> for Datum<'a> {
+    fn from(dt: DateTime<Utc>) -> Datum<'a> {
+        Datum::TimestampTz(dt)
+    }
+}
+
 impl<'a, T> From<Option<T>> for Datum<'a>
 where
     Datum<'a>: From<T>,
@@ -360,6 +416,7 @@ impl fmt::Display for Datum<'_> {
             Datum::Float64(num) => write!(f, "{}", num),
             Datum::Date(d) => write!(f, "{}", d),
             Datum::Timestamp(t) => write!(f, "{}", t),
+            Datum::TimestampTz(t) => write!(f, "{}", t),
             Datum::Interval(iv) => write!(f, "{}", iv),
             Datum::Decimal(sig) => write!(f, "{}dec", sig.as_i128()),
             Datum::Bytes(dat) => {
@@ -417,6 +474,7 @@ pub enum ScalarType {
     Date,
     Time,
     Timestamp,
+    TimestampTz,
     /// A possibly-negative time span
     ///
     /// Represented by the [`Interval`] enum
@@ -452,6 +510,7 @@ impl PartialEq for ScalarType {
             | (Date, Date)
             | (Time, Time)
             | (Timestamp, Timestamp)
+            | (TimestampTz, TimestampTz)
             | (Interval, Interval)
             | (Bytes, Bytes)
             | (String, String) => true,
@@ -466,6 +525,7 @@ impl PartialEq for ScalarType {
             | (Date, _)
             | (Time, _)
             | (Timestamp, _)
+            | (TimestampTz, _)
             | (Interval, _)
             | (Bytes, _)
             | (String, _) => false,
@@ -492,9 +552,10 @@ impl Hash for ScalarType {
             Date => state.write_u8(7),
             Time => state.write_u8(8),
             Timestamp => state.write_u8(9),
-            Interval => state.write_u8(10),
-            Bytes => state.write_u8(11),
-            String => state.write_u8(12),
+            TimestampTz => state.write_u8(10),
+            Interval => state.write_u8(11),
+            Bytes => state.write_u8(12),
+            String => state.write_u8(13),
         }
     }
 }
@@ -518,6 +579,7 @@ impl fmt::Display for ScalarType {
             Date => f.write_str("date"),
             Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
+            TimestampTz => f.write_str("timestamptz"),
             Interval => f.write_str("interval"),
             Bytes => f.write_str("bytes"),
             String => f.write_str("string"),

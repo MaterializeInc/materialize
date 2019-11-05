@@ -857,6 +857,7 @@ fn postgres_type_name(typ: ScalarType) -> &'static str {
         ScalarType::Date => "date",
         ScalarType::Time => "time",
         ScalarType::Timestamp => "timestamp",
+        ScalarType::TimestampTz => "timestamptz",
         ScalarType::Interval => "interval",
         ScalarType::Bytes => "bytea",
         ScalarType::String => "text",
