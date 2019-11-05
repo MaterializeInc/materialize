@@ -69,8 +69,8 @@ b  sum
 > SHOW COLUMNS FROM test1;
 Field Nullable Type
 -------------------
-b     NO       i64
-sum   YES      i64
+b     NO       int8
+sum   YES      int8
 
 > SHOW CREATE VIEW test1
 View   Create View
