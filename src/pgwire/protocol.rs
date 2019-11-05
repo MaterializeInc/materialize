@@ -498,17 +498,24 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,
+                parameters,
+                parameter_format_codes,
                 return_field_formats,
             } => {
                 let mut session = state.session;
                 let fmts = return_field_formats.iter().map(bool::from).collect();
                 trace!(
-                    "cid={} handle bind statement={:?} portal={:?}",
+                    "cid={} handle bind statement={:?} portal={:?}, parameters={:?}, format_codes={:?}, return_field_formats={:?}",
                     cx.conn_id,
                     statement_name,
                     portal_name,
+                    parameters,
+                    parameter_format_codes,
+                    return_field_formats
                 );
+
                 session.set_portal(portal_name, statement_name, fmts)?;
+
                 transition!(SendBindComplete {
                     send: conn.send(BackendMessage::BindComplete),
                     session,

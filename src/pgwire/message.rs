@@ -137,6 +137,12 @@ pub enum FrontendMessage {
         /// The source prepared statement. An empty string selects the unnamed
         /// prepared statement.
         statement_name: String,
+        /// Bytes representing parameter values passed from Postgres
+        /// to be decoded later.
+        parameters: Vec<Option<Vec<u8>>>,
+        /// Each parameter in parameters has a corresponding format code in
+        /// this list indicating whether it should be parsed as bytes or text.
+        parameter_format_codes: Vec<FieldFormat>,
         /// The format of each field. If a field is missing from the vector,
         /// then `FieldFormat::Text` should be assumed.
         return_field_formats: Vec<FieldFormat>,
