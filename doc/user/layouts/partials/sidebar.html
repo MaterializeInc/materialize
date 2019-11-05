@@ -1,0 +1,25 @@
+{{ $currentPage := . }}
+<nav role="navigation" class="sidenav">
+    <ul>
+        <li class="nav-top-level"><a href="/docs">Home</a></li>
+        {{ range .Site.Menus.main.ByName }}
+        <li class="nav-top-level">
+            <a href="{{ if .HasChildren }}javascript:void(0){{ else }}{{ .URL }}{{ end }}"
+                class="js-toggle {{ if .HasChildren }} nav-parent {{if or ($currentPage.IsMenuCurrent "main" .) ($currentPage.HasMenuCurrent "main" .) }} nav-parent-open {{else}} nav-parent-closed {{end}} {{ end }} {{if $currentPage.IsMenuCurrent "main" . }} underline {{end}}"
+                data-target=".{{ .Identifier }}">{{ .Name }}</a>
+
+            {{- if .HasChildren }}
+            <ul class="{{ .Identifier }} {{if $currentPage.HasMenuCurrent "main" . }} db {{ else }} dn {{ end }}">
+                {{- range .Children }}
+                <li>
+                    <a href="{{.URL}}" class="{{if $currentPage.IsMenuCurrent "main" . }} underline {{end}}">
+                        {{ .Name }}
+                    </a>
+                </li>
+                {{- end}}
+            </ul>
+            {{- end}}
+        </li>
+        {{- end}}
+    </ul>
+</nav>

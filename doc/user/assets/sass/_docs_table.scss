@@ -1,0 +1,18 @@
+table {
+  margin-bottom: 1.5rem;
+}
+tr {
+  border-bottom: 1px $grey solid;
+}
+
+th {
+  color: $purple;
+  font-family: "graphik-bold";
+  border-bottom: 2px $purple solid;
+  padding: 10px;
+}
+
+td {
+  padding: 10px;
+  min-width: 160px;
+}

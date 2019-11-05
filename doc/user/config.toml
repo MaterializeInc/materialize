@@ -1,0 +1,11 @@
+baseURL = "http://materialize.io/docs"
+languageCode = "en-us"
+title = "Materialize Documentation"
+pygmentsCodeFences = true
+pygmentsStyle = "xcode"
+
+[menu]
+    [[menu.main]]
+    name = "SQL"
+    weight = 1
+    identifier = "sql"

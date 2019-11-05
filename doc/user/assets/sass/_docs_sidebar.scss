@@ -1,0 +1,50 @@
+.sidenav {
+  background-image: linear-gradient(#f9f7fd, #fff);
+  border-right: 1px #d8d8d8d8 solid;
+  font-size: 0.8rem;
+  /* put the nav on the left */
+  order: -1;
+  padding: 2rem;
+  min-width: 20%;
+
+  a {
+    // Needed to remove conflict with nav header underlines.
+    border-bottom: none;
+    display: block;
+    color: #683bd6;
+    text-decoration: none;
+  }
+
+  .nav-top-level {
+    border-bottom: 1px solid lightgray;
+  }
+
+  .nav-parent {
+    font-family: "graphik-semibold";
+  }
+
+  .nav-parent-closed::after {
+    content: ">";
+    display: inline-block;
+    margin-left: 0.3rem;
+    transform: rotate(0deg);
+    transition: transform 0.3s;
+  }
+
+  .nav-parent-open::after {
+    content: ">";
+    display: inline-block;
+    margin-left: 0.3rem;
+    transform: rotate(90deg);
+    transition: transform 0.3s;
+  }
+
+  .underline {
+    border-bottom: 3px solid $color-link-active;
+  }
+
+  .hg-ads {
+    /* 12em is the width of the columns */
+    flex: 0 0 12em;
+  }
+}

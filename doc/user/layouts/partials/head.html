@@ -1,0 +1,13 @@
+{{/*  Include all JavaScript files here  */}}
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+{{ $toggle := resources.Get "js/menutoggle.js" -}}
+{{ $js := slice $toggle | resources.Concat "js/bundle.js" | resources.Minify }}
+<script src="{{ $js.Permalink }}" {{ printf "integrity=%q" $js.Data.Integrity | safeHTMLAttr }}></script>
+
+{{/*  Sass processing here  */}}
+{{ $style := resources.Get "sass/main.scss" | toCSS }}
+<link rel="stylesheet" href="{{ $style.RelPermalink }}">
+
+{{/* Linked fonts here  */}}
+<link href="https://fonts.googleapis.com/css?family=Roboto+Mono&display=swap" rel="stylesheet">

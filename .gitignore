@@ -4,3 +4,5 @@ target
 **/*.rs.bk
 .idea
 .envrc
+doc/user/public
+doc/user/resources
