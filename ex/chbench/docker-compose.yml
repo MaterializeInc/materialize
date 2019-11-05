@@ -24,6 +24,9 @@ services:
      - *mz
     init: true
     command: -w1
+    environment:
+      # you can for example add `pgwire=trace` or change `info` to `debug` to get more verbose logs
+      - MZ_LOG=info
   mysql:
     image: debezium/example-mysql:0.9
     ports:
