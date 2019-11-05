@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
-use timely::logging::{TimelyEvent, WorkerIdentifier};
+use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 
 // Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -47,6 +47,7 @@ pub fn construct<A: Allocate>(
         let (mut operates_out, operates) = demux.new_output();
         let (mut channels_out, channels) = demux.new_output();
         let (mut addresses_out, addresses) = demux.new_output();
+        let (mut parks_out, parks) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -55,11 +56,15 @@ pub fn construct<A: Allocate>(
             // events for the corresponding operators.
             let mut operates_data = HashMap::new();
             let mut channels_data = HashMap::new();
+            let mut parks_data = HashMap::new();
+
+            let mut packer = RowPacker::new();
 
             move |_frontiers| {
                 let mut operates = operates_out.activate();
                 let mut channels = channels_out.activate();
                 let mut addresses = addresses_out.activate();
+                let mut parks = parks_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -67,8 +72,10 @@ pub fn construct<A: Allocate>(
                     let mut operates_session = operates.session(&time);
                     let mut channels_session = channels.session(&time);
                     let mut addresses_session = addresses.session(&time);
+                    let mut parks_sesssion = parks.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
+                        let time_ns = time.as_nanos();
                         let time_ms = (((time.as_millis() as Timestamp / granularity_ms) + 1)
                             * granularity_ms) as Timestamp;
 
@@ -78,33 +85,27 @@ pub fn construct<A: Allocate>(
                                 // version when the operator is dropped.
                                 operates_data.insert((event.id, worker), event.clone());
 
-                                operates_session.give({
-                                    let mut packer = RowPacker::new();
-                                    (
+                                operates_session.give((
+                                    packer.pack(&[
+                                        Datum::Int64(event.id as i64),
+                                        Datum::Int64(worker as i64),
+                                        Datum::String(&*event.name),
+                                    ]),
+                                    time_ms,
+                                    1,
+                                ));
+
+                                for (addr_slot, addr_value) in event.addr.iter().enumerate() {
+                                    addresses_session.give((
                                         packer.pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
-                                            Datum::String(&*event.name),
+                                            Datum::Int64(addr_slot as i64),
+                                            Datum::Int64(*addr_value as i64),
                                         ]),
                                         time_ms,
                                         1,
-                                    )
-                                });
-
-                                for (addr_slot, addr_value) in event.addr.iter().enumerate() {
-                                    addresses_session.give({
-                                        let mut packer = RowPacker::new();
-                                        (
-                                            packer.pack(&[
-                                                Datum::Int64(event.id as i64),
-                                                Datum::Int64(worker as i64),
-                                                Datum::Int64(addr_slot as i64),
-                                                Datum::Int64(*addr_value as i64),
-                                            ]),
-                                            time_ms,
-                                            1,
-                                        )
-                                    });
+                                    ));
                                 }
                             }
                             TimelyEvent::Channels(event) => {
@@ -116,37 +117,31 @@ pub fn construct<A: Allocate>(
                                     .push(event.clone());
 
                                 // Present channel description.
-                                channels_session.give({
-                                    let mut packer = RowPacker::new();
-                                    (
-                                        packer.pack(&[
-                                            Datum::Int64(event.id as i64),
-                                            Datum::Int64(worker as i64),
-                                            Datum::Int64(event.source.0 as i64),
-                                            Datum::Int64(event.source.1 as i64),
-                                            Datum::Int64(event.target.0 as i64),
-                                            Datum::Int64(event.target.1 as i64),
-                                        ]),
-                                        time_ms,
-                                        1,
-                                    )
-                                });
+                                channels_session.give((
+                                    packer.pack(&[
+                                        Datum::Int64(event.id as i64),
+                                        Datum::Int64(worker as i64),
+                                        Datum::Int64(event.source.0 as i64),
+                                        Datum::Int64(event.source.1 as i64),
+                                        Datum::Int64(event.target.0 as i64),
+                                        Datum::Int64(event.target.1 as i64),
+                                    ]),
+                                    time_ms,
+                                    1,
+                                ));
 
                                 // Enumerate the address of the scope containing the channel.
                                 for (addr_slot, addr_value) in event.scope_addr.iter().enumerate() {
-                                    addresses_session.give({
-                                        let mut packer = RowPacker::new();
-                                        (
-                                            packer.pack(&[
-                                                Datum::Int64(event.id as i64),
-                                                Datum::Int64(worker as i64),
-                                                Datum::Int64(addr_slot as i64),
-                                                Datum::Int64(*addr_value as i64),
-                                            ]),
-                                            time_ms,
-                                            1,
-                                        )
-                                    });
+                                    addresses_session.give((
+                                        packer.pack(&[
+                                            Datum::Int64(event.id as i64),
+                                            Datum::Int64(worker as i64),
+                                            Datum::Int64(addr_slot as i64),
+                                            Datum::Int64(*addr_value as i64),
+                                        ]),
+                                        time_ms,
+                                        1,
+                                    ));
                                 }
                             }
                             TimelyEvent::Shutdown(event) => {
@@ -154,33 +149,27 @@ pub fn construct<A: Allocate>(
                                 // the `operates` collection, cancelling out the initial
                                 // operator announcement.
                                 if let Some(event) = operates_data.remove(&(event.id, worker)) {
-                                    operates_session.give({
-                                        let mut packer = RowPacker::new();
-                                        (
+                                    operates_session.give((
+                                        packer.pack(&[
+                                            Datum::Int64(event.id as i64),
+                                            Datum::Int64(worker as i64),
+                                            Datum::String(&*event.name),
+                                        ]),
+                                        time_ms,
+                                        -1,
+                                    ));
+
+                                    for (addr_slot, addr_value) in event.addr.iter().enumerate() {
+                                        addresses_session.give((
                                             packer.pack(&[
                                                 Datum::Int64(event.id as i64),
                                                 Datum::Int64(worker as i64),
-                                                Datum::String(&*event.name),
+                                                Datum::Int64(addr_slot as i64),
+                                                Datum::Int64(*addr_value as i64),
                                             ]),
                                             time_ms,
                                             -1,
-                                        )
-                                    });
-
-                                    for (addr_slot, addr_value) in event.addr.iter().enumerate() {
-                                        addresses_session.give({
-                                            let mut packer = RowPacker::new();
-                                            (
-                                                packer.pack(&[
-                                                    Datum::Int64(event.id as i64),
-                                                    Datum::Int64(worker as i64),
-                                                    Datum::Int64(addr_slot as i64),
-                                                    Datum::Int64(*addr_value as i64),
-                                                ]),
-                                                time_ms,
-                                                -1,
-                                            )
-                                        });
+                                        ));
                                     }
                                     // If we are observing a dataflow shutdown, we should also
                                     // issue a deletion for channels in the dataflow.
@@ -191,45 +180,58 @@ pub fn construct<A: Allocate>(
                                         {
                                             for event in events {
                                                 // Retract channel description.
-                                                channels_session.give({
-                                                    let mut packer = RowPacker::new();
-                                                    (
-                                                        packer.pack(&[
-                                                            Datum::Int64(event.id as i64),
-                                                            Datum::Int64(worker as i64),
-                                                            Datum::Int64(event.source.0 as i64),
-                                                            Datum::Int64(event.source.1 as i64),
-                                                            Datum::Int64(event.target.0 as i64),
-                                                            Datum::Int64(event.target.1 as i64),
-                                                        ]),
-                                                        time_ms,
-                                                        -1,
-                                                    )
-                                                });
+                                                channels_session.give((
+                                                    packer.pack(&[
+                                                        Datum::Int64(event.id as i64),
+                                                        Datum::Int64(worker as i64),
+                                                        Datum::Int64(event.source.0 as i64),
+                                                        Datum::Int64(event.source.1 as i64),
+                                                        Datum::Int64(event.target.0 as i64),
+                                                        Datum::Int64(event.target.1 as i64),
+                                                    ]),
+                                                    time_ms,
+                                                    -1,
+                                                ));
 
                                                 // Enumerate the address of the scope containing the channel.
                                                 for (addr_slot, addr_value) in
                                                     event.scope_addr.iter().enumerate()
                                                 {
-                                                    addresses_session.give({
-                                                        let mut packer = RowPacker::new();
-                                                        (
-                                                            packer.pack(&[
-                                                                Datum::Int64(event.id as i64),
-                                                                Datum::Int64(worker as i64),
-                                                                Datum::Int64(addr_slot as i64),
-                                                                Datum::Int64(*addr_value as i64),
-                                                            ]),
-                                                            time_ms,
-                                                            -1,
-                                                        )
-                                                    });
+                                                    addresses_session.give((
+                                                        packer.pack(&[
+                                                            Datum::Int64(event.id as i64),
+                                                            Datum::Int64(worker as i64),
+                                                            Datum::Int64(addr_slot as i64),
+                                                            Datum::Int64(*addr_value as i64),
+                                                        ]),
+                                                        time_ms,
+                                                        -1,
+                                                    ));
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
+                            TimelyEvent::Park(event) => match event {
+                                ParkEvent::Park(duration) => {
+                                    parks_data.insert(worker, (time_ns, duration));
+                                }
+                                ParkEvent::Unpark => {
+                                    if let Some((start_ns, requested)) = parks_data.remove(&worker)
+                                    {
+                                        let duration_ns = time_ns - start_ns;
+                                        parks_sesssion.give((
+                                            worker,
+                                            duration_ns,
+                                            requested,
+                                            time_ms,
+                                        ));
+                                    } else {
+                                        panic!("Park data not found!");
+                                    }
+                                }
+                            },
                             _ => {}
                         }
                     }
@@ -314,6 +316,32 @@ pub fn construct<A: Allocate>(
         let channels = channels.as_collection();
         let addresses = addresses.as_collection();
 
+        let parks = parks
+            .map(|(w, d, r, t)| {
+                (
+                    (
+                        w,
+                        d.next_power_of_two(),
+                        r.map(|r| r.as_nanos().next_power_of_two()),
+                    ),
+                    t,
+                    1,
+                )
+            })
+            .as_collection()
+            .count()
+            .map({
+                let mut packer = RowPacker::new();
+                move |((w, d, r), c)| {
+                    packer.pack(&[
+                        Datum::Int64(w as i64),
+                        Datum::Int64(d as i64),
+                        r.map(|r| Datum::Int64(r as i64)).unwrap_or(Datum::Null),
+                        Datum::Int64(c),
+                    ])
+                }
+            });
+
         use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 
         // Restrict results by those logs that are meant to be active.
@@ -323,6 +351,7 @@ pub fn construct<A: Allocate>(
             (LogVariant::Timely(TimelyLog::Elapsed), elapsed),
             (LogVariant::Timely(TimelyLog::Histogram), histogram),
             (LogVariant::Timely(TimelyLog::Addresses), addresses),
+            (LogVariant::Timely(TimelyLog::Parks), parks),
         ];
 
         let mut result = std::collections::HashMap::new();
