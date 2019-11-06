@@ -108,18 +108,14 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     as_of.clone(),
                                 );
                                 let arranged = arranged.enter(region);
-                                context.set_trace(
-                                    if let Some(expr) = &key.expr { expr } else { &e },
-                                    &key.columns,
-                                    arranged,
-                                );
+                                context.set_trace(&e, &key, arranged);
                                 tokens.push((button.press_on_drop(), token));
                             }
 
                             // Log the dependency.
                             if let Some(logger) = logger {
                                 logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: view.name.to_string(),
+                                    dataflow: view.name.clone(),
                                     source: name.clone(),
                                 });
                             }
@@ -135,6 +131,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 // Having ensured that `view.relation_expr` is rendered, we can now extract it
                 // or re-arrange it by other keys. The only information we have at the moment
                 // is whether the dataflow results in an arranged form of the expression.
+
                 if let Some(arrangements) = context.get_all_local(&view.relation_expr) {
                     if arrangements.is_empty() {
                         panic!("Lied to about arrangement availability");
@@ -181,43 +178,29 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     name: idx.on_name.clone(),
                     typ: idx.relation_type.clone(),
                 };
-                for (key, trace) in manager.get_all_keyed(&idx.on_name).unwrap() {
-                    let token = trace.to_drop().clone();
-                    let (arranged, button) = trace.import_frontier_core(
-                        scope,
-                        &format!("View({}, {:?})", &idx.on_name, key),
-                        vec![0],
-                    );
-                    let arranged = arranged.enter(region);
-                    context.set_trace(
-                        if let Some(expr) = &key.expr {
-                            expr
-                        } else {
-                            &get_expr
-                        },
-                        &key.columns,
-                        arranged,
-                    );
-                    tokens.push((button.press_on_drop(), token));
-                }
-
-                // Log the dependency.
-                if let Some(logger) = logger {
-                    logger.log(MaterializedEvent::DataflowDependency {
-                        dataflow: idx.name.to_string(),
-                        source: idx.on_name.clone(),
-                    });
-                }
+                // TODO (wangandi) for the function-based column case,
+                // think about checking if there is another index
+                // with the function pre-rendered
+                let (key, trace) = manager.get_default_with_key(&idx.on_name).unwrap();
+                let token = trace.to_drop().clone();
+                let (arranged, button) = trace.import_frontier_core(
+                    scope,
+                    &format!("View({}, {:?})", &idx.on_name, key),
+                    vec![0],
+                );
+                let arranged = arranged.enter(region);
+                context.set_trace(&get_expr, &key, arranged);
+                tokens.push((button.press_on_drop(), token));
 
                 // Capture both the tokens of imported traces and those of sources.
                 let tokens = Rc::new((tokens, source_tokens.clone()));
 
-                let to_arrange = if idx.fxns.is_empty() {
+                let to_arrange = if idx.funcs.is_empty() {
                     get_expr
                 } else {
                     RelationExpr::Map {
                         input: Box::new(get_expr),
-                        scalars: idx.fxns.clone(),
+                        scalars: idx.funcs.clone(),
                     }
                 };
                 context.ensure_rendered(
@@ -228,29 +211,15 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
                 match context.arrangement(&to_arrange, &idx.keys) {
                     Some(ArrangementFlavor::Local(local)) => {
-                        manager.set_named_by_keys(
+                        manager.set_user_created(
                             idx.on_name,
-                            idx.name,
-                            if idx.fxns.is_empty() {
-                                None
-                            } else {
-                                Some(to_arrange)
-                            },
                             &idx.keys,
                             WithDrop::new(local.trace.clone(), tokens.clone()),
                         );
                     }
                     Some(ArrangementFlavor::Trace(_)) => {
-                        manager.set_alias(
-                            idx.on_name,
-                            idx.name,
-                            if idx.fxns.is_empty() {
-                                None
-                            } else {
-                                Some(to_arrange)
-                            },
-                            &idx.keys,
-                        );
+                        // do nothing. there already exists an system
+                        // index on the same keys
                     }
                     None => {
                         panic!("Arrangement alarmingly absent!");
@@ -301,7 +270,6 @@ where
         worker_index: usize,
     ) {
         if !self.has_collection(relation_expr) {
-            println!("did not find trace for {:?}", relation_expr);
             // Each of the `RelationExpr` variants have logic to render themselves to either
             // a collection or an arrangement. In either case, we associate the result with
             // the `relation_expr` argument in the context.
@@ -451,8 +419,6 @@ where
                     }
                 }
             };
-        } else {
-            println!("found trace for {:?}", relation_expr);
         }
     }
 
@@ -955,8 +921,6 @@ where
                     })
                     .arrange_by_key();
                 self.set_local(&input, &keys[..], keyed);
-            } else {
-                println!("found an extant trace for ({:?}, {:?})", &input, &keys[..]);
             }
 
             use differential_dataflow::operators::reduce::ReduceCore;

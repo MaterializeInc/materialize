@@ -271,7 +271,7 @@ pub struct Index {
     /// Includes the numbers of extra columns defined in `fxns`
     pub keys: Vec<usize>,
     /// Functions of the columns to evaluate and arrange on
-    pub fxns: Vec<ScalarExpr>,
+    pub funcs: Vec<ScalarExpr>,
 }
 
 #[cfg(test)]

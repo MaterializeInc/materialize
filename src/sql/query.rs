@@ -530,10 +530,9 @@ fn plan_view_select(
 
 pub fn plan_index(
     catalog: &Catalog,
-    on_name: &ObjectName,
+    on_name: &str,
     key_parts: &[Expr],
 ) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
-    let on_name = extract_sql_object_name(on_name)?;
     let desc = catalog.get_desc(&on_name)?;
 
     let scope = Scope::from_source(Some(&on_name), desc.iter_names(), Some(Scope::empty(None)));
@@ -544,7 +543,7 @@ pub fn plan_index(
     };
     let ecx = &ExprContext {
         qcx: &qcx,
-        name: "INDEX CREATION",
+        name: "CREATE INDEX",
         scope: &scope,
         relation_type: desc.typ(),
         allow_aggregates: false,
@@ -1011,6 +1010,9 @@ fn plan_expr<'a>(
                 bail!("wildcard in invalid position")
             }
             Expr::Parameter(n) => {
+                if !ecx.allow_subqueries {
+                    bail!("{} does not allow subqueries", ecx.name)
+                }
                 if *n == 0 || *n > 65536 {
                     bail!("there is no parameter ${}", n);
                 }
@@ -1053,7 +1055,7 @@ fn plan_expr<'a>(
             Expr::Function(func) => plan_function(catalog, ecx, func),
             Expr::Exists(query) => {
                 if !ecx.allow_subqueries {
-                    bail!("Command does not allow subqueries")
+                    bail!("{} does not allow subqueries", ecx.name)
                 }
                 let qcx = QueryContext {
                     outer_scope: &ecx.scope,
@@ -1073,7 +1075,7 @@ fn plan_expr<'a>(
             }
             Expr::Subquery(query) => {
                 if !ecx.allow_subqueries {
-                    bail!("Command does not allow subqueries")
+                    bail!("{} does not allow subqueries", ecx.name)
                 }
                 let qcx = QueryContext {
                     outer_scope: &ecx.scope,
@@ -1113,7 +1115,7 @@ fn plan_expr<'a>(
                 negated,
             } => {
                 if !ecx.allow_subqueries {
-                    bail!("Command does not allow subqueries")
+                    bail!("{} does not allow subqueries", ecx.name)
                 }
                 use BinaryOperator::{Eq, NotEq};
                 if *negated {
@@ -1241,7 +1243,7 @@ fn plan_any_or_all<'a>(
     func: AggregateFunc,
 ) -> Result<ScalarExpr, failure::Error> {
     if !ecx.allow_subqueries {
-        bail!("Command does not allow subqueries")
+        bail!("{} does not allow subqueries", ecx.name)
     }
     let qcx = QueryContext {
         outer_scope: &ecx.scope,

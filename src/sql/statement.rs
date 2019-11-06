@@ -12,8 +12,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 
 use failure::{bail, ResultExt};
 use sqlparser::ast::{
-    Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
-    Stage, Statement, Value,
+    Expr, Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
+    SourceSchema, Stage, Statement, Value,
 };
 use url::Url;
 
@@ -30,7 +30,8 @@ use dataflow_types::{
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use expr::{ColumnOrder, RelationExpr, ScalarExpr};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -461,17 +462,18 @@ fn handle_create_dataflow(
             on_name,
             key_parts,
         } => {
-            let (relation_type, arrange_cols, map_exprs) =
-                query::plan_index(catalog, &on_name, &key_parts)?;
+            let on_name = extract_sql_object_name(on_name)?;
+            let (relation_type, keys, funcs) = handle_create_index(catalog, &on_name, &key_parts)?;
+            // TODO (andiwang) remove this when trace manager supports ScalarExpr keys
+            if !funcs.is_empty() {
+                bail!("function-based indexes are not supported yet");
+            }
             let index = Index {
                 name: name.to_string(),
-                on_name: extract_sql_object_name(&on_name)?,
+                on_name: on_name.to_string(),
                 relation_type,
-                keys: arrange_cols,
-                fxns: map_exprs
-                    .into_iter()
-                    .map(move |x| x.convert_to_index_dataflow())
-                    .collect(),
+                keys,
+                funcs,
             };
             Ok(Plan::CreateIndex(index))
         }
@@ -637,6 +639,22 @@ fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data
             ),
         );
     };
+}
+
+fn handle_create_index(
+    catalog: &Catalog,
+    on_name: &str,
+    key_parts: &[Expr],
+) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
+    let (relation_type, keys, map_exprs) = query::plan_index(catalog, on_name, key_parts)?;
+    Ok((
+        relation_type,
+        keys,
+        map_exprs
+            .into_iter()
+            .map(move |x| x.lower_uncorrelated())
+            .collect(),
+    ))
 }
 
 fn build_source(

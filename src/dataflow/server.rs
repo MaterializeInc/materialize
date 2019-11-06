@@ -69,7 +69,7 @@ pub enum SequencedCommand {
     /// Drop the sinks bound to these names.
     DropSinks(Vec<String>),
     /// Drop the indexes bound to these names.
-    DropIndexes(Vec<String>),
+    DropIndexes(Vec<(String, Vec<usize>)>),
     /// Peek at a materialized view.
     Peek {
         name: String,
@@ -367,9 +367,6 @@ where
                             }
                             logger.log(MaterializedEvent::Dataflow(view.name.to_string(), true));
                         }
-                        for index in dataflow.indexes.iter() {
-                            logger.log(MaterializedEvent::Dataflow(index.name.to_string(), true));
-                        }
                     }
                     for view in dataflow.views.iter() {
                         let prior = self
@@ -414,13 +411,9 @@ where
                 }
             }
 
-            SequencedCommand::DropIndexes(names) => {
-                for name in &names {
-                    if self.traces.del_index_trace(name) {
-                        if let Some(logger) = self.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
-                        }
-                    }
+            SequencedCommand::DropIndexes(trace_keys) => {
+                for (collection_name, keys) in &trace_keys {
+                    self.traces.del_user_trace(collection_name, keys);
                 }
             }
 
