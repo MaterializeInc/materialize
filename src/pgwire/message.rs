@@ -88,35 +88,29 @@ impl RawParameterBytes {
     ) -> Result<Vec<Option<Datum>>, failure::Error> {
         let mut datums: Vec<Option<Datum>> = Vec::new();
         for i in 0..self.parameters.len() {
-            let decoded = match &self.parameters[i] {
+            datums.push(match &self.parameters[i] {
                 Some(bytes) => match self.parameter_format_codes[i] {
-                    FieldFormat::Binary => {
-                        RawParameterBytes::generate_datum_from_bytes(bytes.as_ref(), typs[i])
-                    }
+                    FieldFormat::Binary => Some(RawParameterBytes::generate_datum_from_bytes(
+                        bytes.as_ref(),
+                        typs[i],
+                    )?),
                     FieldFormat::Text => failure::bail!("Can't currently decode text parameters."),
                 },
-                None => Ok(None),
-            };
-            match decoded {
-                Ok(option) => datums.push(option),
-                Err(err) => failure::bail!(err),
-            }
+                None => None,
+            });
         }
         Ok(datums)
     }
 
-    fn generate_datum_from_bytes(
-        bytes: &[u8],
-        typ: ScalarType,
-    ) -> Result<Option<Datum>, failure::Error> {
-        let datum = match typ {
-            ScalarType::Null => Some(Datum::Null),
-            ScalarType::Int32 => Some(Datum::Int32(NetworkEndian::read_i32(bytes))),
-            ScalarType::Int64 => Some(Datum::Int64(NetworkEndian::read_i64(bytes))),
-            ScalarType::Float32 => Some(Datum::Float32(NetworkEndian::read_f32(bytes).into())),
-            ScalarType::Float64 => Some(Datum::Float64(NetworkEndian::read_f64(bytes).into())),
-            ScalarType::Bytes => Some(Datum::Bytes(bytes)),
-            ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())),
+    fn generate_datum_from_bytes(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {
+        Ok(match typ {
+            ScalarType::Null => Datum::Null,
+            ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(bytes)),
+            ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(bytes)),
+            ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(bytes).into()),
+            ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(bytes).into()),
+            ScalarType::Bytes => Datum::Bytes(bytes),
+            ScalarType::String => Datum::String(str::from_utf8(bytes)?),
             _ => {
                 // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(
@@ -124,8 +118,7 @@ impl RawParameterBytes {
                     typ
                 )
             }
-        };
-        Ok(datum)
+        })
     }
 }
 
