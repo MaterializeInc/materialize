@@ -11,7 +11,6 @@ use std::sync::Arc;
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
-use ordered_float::OrderedFloat;
 
 use super::types::PgType;
 use repr::decimal::Decimal;
@@ -115,12 +114,8 @@ impl RawParameterBytes {
             ScalarType::Null => Some(Datum::Null),
             ScalarType::Int32 => Some(Datum::Int32(NetworkEndian::read_i32(bytes))),
             ScalarType::Int64 => Some(Datum::Int64(NetworkEndian::read_i64(bytes))),
-            ScalarType::Float32 => Some(Datum::Float32(OrderedFloat::from(
-                NetworkEndian::read_f32(bytes),
-            ))),
-            ScalarType::Float64 => Some(Datum::Float64(OrderedFloat::from(
-                NetworkEndian::read_f64(bytes),
-            ))),
+            ScalarType::Float32 => Some(Datum::Float32(NetworkEndian::read_f32(bytes).into())),
+            ScalarType::Float64 => Some(Datum::Float64(NetworkEndian::read_f64(bytes).into())),
             ScalarType::Bytes => Some(Datum::Bytes(bytes)),
             ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())),
             _ => {
