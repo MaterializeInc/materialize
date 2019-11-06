@@ -33,7 +33,7 @@ use std::fmt;
 
 use failure::bail;
 
-use repr::{Datum, RelationDesc, ScalarType};
+use repr::{RelationDesc, ScalarType};
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
@@ -275,11 +275,10 @@ impl Session {
     /// Ensure that the given portal exists
     ///
     /// **Errors** if the statement name has not be set
-    pub fn create_or_set_portal(
+    pub fn set_portal(
         &mut self,
         portal_name: String,
         statement_name: String,
-        params: Vec<Option<Datum>>, // bytes
         return_field_formats: Vec<bool>,
     ) -> Result<(), failure::Error> {
         if self.prepared_statements.contains_key(&statement_name) {
@@ -287,7 +286,6 @@ impl Session {
                 portal_name,
                 Portal {
                     statement_name,
-                    sql: None,
                     return_field_formats,
                 },
             );
@@ -492,7 +490,6 @@ impl PreparedStatement {
 #[derive(Debug)]
 pub struct Portal {
     pub statement_name: String,
-    pub sql: Option<sqlparser::ast::Statement>,
     /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
     pub return_field_formats: Vec<bool>,
 }
