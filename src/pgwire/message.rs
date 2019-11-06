@@ -86,7 +86,6 @@ impl RawParameterBytes {
         &self,
         typs: &[ScalarType],
     ) -> Result<Vec<Option<Datum>>, failure::Error> {
-        // bytes -> bytes or text -> Datum
         let mut datums: Vec<Option<Datum>> = Vec::new();
         for i in 0..self.parameters.len() {
             let decoded = match &self.parameters[i] {
@@ -119,7 +118,7 @@ impl RawParameterBytes {
             ScalarType::Bytes => Some(Datum::Bytes(bytes)),
             ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())),
             _ => {
-                // todo: implement Bool, Decimal, Date, Time, Timestamp, Interval
+                // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(
                     "Generating datum not implemented for ScalarType: {:#?}",
                     typ

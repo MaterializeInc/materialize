@@ -516,7 +516,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let stmt = session.get_prepared_statement(&statement_name).unwrap();
                 let param_types = stmt.param_types();
                 match raw_parameter_bytes.decode_parameters(param_types) {
-                    Ok(datums) => {
+                    Ok(_datums) => {
                         // todo(jldlaughlin): actually bind datums
                         session.set_portal(portal_name, statement_name, fmts)?;
                         transition!(SendBindComplete {
@@ -527,7 +527,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     Err(e) => transition!(SendError {
                         send: conn.send(BackendMessage::ErrorResponse {
                             severity: Severity::Fatal,
-                            code: "08P01", // todo: right code?
+                            code: "08P01",
                             message: e.to_string(),
                             detail: None,
                         }),
