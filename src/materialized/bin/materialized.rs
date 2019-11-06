@@ -5,10 +5,7 @@
 
 //! The main Materialize server.
 //!
-//! The name is pronounced "materialize-deee," as in "[delicious, delovely,
-//! delectable, devine, degroovy, dewith it,
-//! Deee-Lite](https://www.youtube.com/watch?v=zD71055315c)"! It listens on port
-//! 6875 (MTRL).
+//! The name is pronounced "materialize-dee." It listens on port 6875 (MTRL).
 //!
 //! The design and implementation of materialized is very much in flux. See the
 //! draft architecture doc for the most up-to-date plan [0]. Access is limited

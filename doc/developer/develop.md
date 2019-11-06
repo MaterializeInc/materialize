@@ -38,7 +38,7 @@ Rustup will automatically select the correct toolchain version specified in
 
 ### Confluent Platform
 
-On macOS, [Homebrew] makes package installation easy breezy:
+On macOS, the easiest installation method is to use [Homebrew]:
 
 ```shell
 brew install confluent-platform
