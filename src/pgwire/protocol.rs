@@ -499,31 +499,42 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,
-                raw_bind_bytes,
+                raw_parameter_bytes,
+                return_field_formats,
             } => {
                 trace!(
-                    "cid={} handle bind statement={:?} portal={:?}, raw_bind_bytes={:?}",
+                    "cid={} handle bind statement={:?} portal={:?}, raw_parameter_bytes={:?}, return_field_formats={:?}",
                     cx.conn_id,
                     statement_name,
                     portal_name,
-                    raw_bind_bytes
+                    raw_parameter_bytes,
+                    return_field_formats
                 );
 
                 let mut session = state.session;
-                let fmts = raw_bind_bytes.get_return_field_parameters();
-
-                let mut datums = Vec::new();
-                if raw_bind_bytes.has_parameters() {
-                    let stmt = session.get_prepared_statement(&statement_name).unwrap();
-                    let param_types = stmt.param_types();
-                    datums = raw_bind_bytes.get_decoded_parameters(param_types);
+                let fmts = return_field_formats.iter().map(bool::from).collect();
+                let stmt = session.get_prepared_statement(&statement_name).unwrap();
+                let param_types = stmt.param_types();
+                match raw_parameter_bytes.decode_parameters(param_types) {
+                    Ok(datums) => {
+                        dbg!(&portal_name, &statement_name, &datums, &fmts);
+                        session.create_or_set_portal(portal_name, statement_name, datums, fmts)?;
+                        transition!(SendBindComplete {
+                            send: conn.send(BackendMessage::BindComplete),
+                            session,
+                        });
+                    }
+                    Err(e) => transition!(SendError {
+                        send: conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "08P01", // todo: right code?
+                            message: e.to_string(),
+                            detail: None,
+                        }),
+                        session: session,
+                        kind: ErrorKind::Fatal,
+                    }),
                 }
-                dbg!(&portal_name, &statement_name, &datums, &fmts);
-                session.create_or_set_portal(portal_name, statement_name, Vec::new(), fmts)?;
-                transition!(SendBindComplete {
-                    send: conn.send(BackendMessage::BindComplete),
-                    session,
-                });
             }
             FrontendMessage::Execute { portal_name } => {
                 let (tx, rx) = futures::sync::oneshot::channel();

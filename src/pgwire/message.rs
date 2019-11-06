@@ -67,68 +67,71 @@ impl Severity {
 }
 
 #[derive(Debug)]
-pub struct RawBindBytes {
+pub struct RawParameterBytes {
     parameters: Vec<Option<Vec<u8>>>,
     parameter_format_codes: Vec<FieldFormat>,
-    return_field_formats: Vec<FieldFormat>,
 }
 
-impl RawBindBytes {
+impl RawParameterBytes {
     pub fn new(
         parameters: Vec<Option<Vec<u8>>>,
         parameter_format_codes: Vec<FieldFormat>,
-        return_field_formats: Vec<FieldFormat>,
-    ) -> RawBindBytes {
-        RawBindBytes {
+    ) -> RawParameterBytes {
+        RawParameterBytes {
             parameters,
             parameter_format_codes,
-            return_field_formats,
         }
     }
 
-    pub fn has_parameters(&self) -> bool {
-        !self.parameters.is_empty()
-    }
-
-    pub fn get_return_field_parameters(&self) -> Vec<bool> {
-        self.return_field_formats.iter().map(bool::from).collect()
-    }
-
-    pub fn get_decoded_parameters(&self, typs: &[ScalarType]) -> Vec<Option<Datum>> {
+    pub fn decode_parameters(
+        &self,
+        typs: &[ScalarType],
+    ) -> Result<Vec<Option<Datum>>, failure::Error> {
+        // bytes -> bytes or text -> Datum
         let mut datums: Vec<Option<Datum>> = Vec::new();
         for i in 0..self.parameters.len() {
-            datums.push(match self.parameter_format_codes[i] {
-                FieldFormat::Binary => generate_datum_from_bytes(&self.parameters[i], typs[i]),
-                FieldFormat::Text => panic!("Don't support decoding Text parameters yet!"),
-            })
-        }
-        datums
-    }
-}
-
-fn generate_datum_from_bytes(bytes: &Option<Vec<u8>>, typ: ScalarType) -> Option<Datum> {
-    match bytes {
-        Some(bytes) => {
-            match typ {
-                ScalarType::Null => Some(Datum::Null),
-                ScalarType::Bool => Some(Datum::True), //todo: figure out true/false?
-                ScalarType::Int32 => Some(Datum::Int32(NetworkEndian::read_i32(bytes))),
-                ScalarType::Int64 => Some(Datum::Int64(NetworkEndian::read_i64(bytes))),
-                ScalarType::Float32 => Some(Datum::Float32(OrderedFloat::from(
-                    NetworkEndian::read_f32(bytes),
-                ))),
-                ScalarType::Float64 => Some(Datum::Float64(OrderedFloat::from(
-                    NetworkEndian::read_f64(bytes),
-                ))),
-                ScalarType::Bytes => Some(Datum::Bytes(bytes)),
-                ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())), //todo: is this the right thing to do here?
-                _ => {
-                    // todo: currently ignoring: Decimal, Date, Time, Timestamp, Interval
-                    Some(Datum::Null)
-                }
+            let decoded = match &self.parameters[i] {
+                Some(bytes) => match self.parameter_format_codes[i] {
+                    FieldFormat::Binary => {
+                        RawParameterBytes::generate_datum_from_bytes(bytes.as_ref(), typs[i])
+                    }
+                    FieldFormat::Text => failure::bail!("Can't currently decode text parameters."),
+                },
+                None => Ok(None),
+            };
+            match decoded {
+                Ok(option) => datums.push(option),
+                Err(err) => failure::bail!(err),
             }
         }
-        None => None,
+        Ok(datums)
+    }
+
+    fn generate_datum_from_bytes(
+        bytes: &[u8],
+        typ: ScalarType,
+    ) -> Result<Option<Datum>, failure::Error> {
+        let datum = match typ {
+            ScalarType::Null => Some(Datum::Null),
+            ScalarType::Int32 => Some(Datum::Int32(NetworkEndian::read_i32(bytes))),
+            ScalarType::Int64 => Some(Datum::Int64(NetworkEndian::read_i64(bytes))),
+            ScalarType::Float32 => Some(Datum::Float32(OrderedFloat::from(
+                NetworkEndian::read_f32(bytes),
+            ))),
+            ScalarType::Float64 => Some(Datum::Float64(OrderedFloat::from(
+                NetworkEndian::read_f64(bytes),
+            ))),
+            ScalarType::Bytes => Some(Datum::Bytes(bytes)),
+            ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())),
+            _ => {
+                // todo: implement Bool, Decimal, Date, Time, Timestamp, Interval
+                failure::bail!(
+                    "Generating datum not implemented for ScalarType: {:#?}",
+                    typ
+                )
+            }
+        };
+        Ok(datum)
     }
 }
 
@@ -205,16 +208,11 @@ pub enum FrontendMessage {
         /// The source prepared statement. An empty string selects the unnamed
         /// prepared statement.
         statement_name: String,
-        raw_bind_bytes: RawBindBytes,
-        //        /// Bytes representing parameter values passed from Postgres
-        //        /// to be decoded later.
-        //        parameters: Vec<Option<Vec<u8>>>,
-        //        /// Each parameter in parameters has a corresponding format code in
-        //        /// this list indicating whether it should be parsed as bytes or text.
-        //        parameter_format_codes: Vec<FieldFormat>,
-        //        /// The format of each field. If a field is missing from the vector,
-        //        /// then `FieldFormat::Text` should be assumed.
-        //        return_field_formats: Vec<FieldFormat>,
+        // todo: something here
+        raw_parameter_bytes: RawParameterBytes,
+        /// The format of each field. If a field is missing from the vector,
+        /// then `FieldFormat::Text` should be assumed.
+        return_field_formats: Vec<FieldFormat>,
     },
 
     /// Execute a bound portal.
