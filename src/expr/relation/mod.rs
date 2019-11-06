@@ -82,6 +82,12 @@ pub enum RelationExpr {
         /// Each element of the sequence is a set of pairs, where the values described by each pair must
         /// be equal to all other values in the same set.
         variables: Vec<Vec<(usize, usize)>>,
+        /// This optional field is a hint for which columns are actually used
+        /// by operators that use this collection. Although the join does not
+        /// have permission to change the schema, it can introduce dummy values
+        /// at the end of its computation, avoiding the maintenance of values
+        /// not present in this list (when it is non-None).
+        projection: Option<Vec<usize>>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {
@@ -172,7 +178,9 @@ impl RelationExpr {
                 typ
             }
             RelationExpr::Filter { input, .. } => input.typ(),
-            RelationExpr::Join { inputs, variables } => {
+            RelationExpr::Join {
+                inputs, variables, ..
+            } => {
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
 
                 // Iterating and cloning types inside the flat_map() avoids allocating Vec<>,
@@ -331,10 +339,7 @@ impl RelationExpr {
 
     /// Form the Cartesian outer-product of rows in both inputs.
     pub fn product(self, right: Self) -> Self {
-        RelationExpr::Join {
-            inputs: vec![self, right],
-            variables: vec![],
-        }
+        RelationExpr::join(vec![self, right], vec![])
     }
 
     /// Performs a relational equijoin among the input collections.
@@ -383,7 +388,11 @@ impl RelationExpr {
     /// let result = joined.project(vec![0, 1, 3]);
     /// ```
     pub fn join(inputs: Vec<RelationExpr>, variables: Vec<Vec<(usize, usize)>>) -> Self {
-        RelationExpr::Join { inputs, variables }
+        RelationExpr::Join {
+            inputs,
+            variables,
+            projection: None,
+        }
     }
 
     /// Perform a key-wise reduction / aggregation.
@@ -655,7 +664,9 @@ impl RelationExpr {
                 let predicates = to_tightly_braced_doc("predicates: [", predicates, "]").group();
                 to_braced_doc("Filter {", to_doc!(predicates, ",", Space, input), "}")
             }
-            RelationExpr::Join { inputs, variables } => {
+            RelationExpr::Join {
+                inputs, variables, ..
+            } => {
                 fn pair_to_doc(p: &(usize, usize)) -> Doc<BoxDoc<()>, ()> {
                     to_doc!("(", p.0.to_string(), ", ", p.1.to_string(), ")")
                 }
@@ -1066,10 +1077,10 @@ Constant [[665]]"
 
     #[test]
     fn test_pretty_join() {
-        let join = RelationExpr::Join {
-            variables: vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]],
-            inputs: vec![base(), base()],
-        };
+        let join = RelationExpr::join(
+            vec![base(), base()],
+            vec![vec![(0, 0), (1, 0)], vec![(0, 1), (1, 1)]],
+        );
 
         assert_eq!(
             join.to_doc().pretty(82).to_string(),

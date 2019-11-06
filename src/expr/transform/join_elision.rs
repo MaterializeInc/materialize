@@ -26,7 +26,10 @@ impl JoinElision {
     // Tuples have lengths, which may be zero; they are not "empty".
     #[allow(clippy::len_zero)]
     pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Join { inputs, variables } = relation {
+        if let RelationExpr::Join {
+            inputs, variables, ..
+        } = relation
+        {
             // We re-accumulate `inputs` into `new_inputs` in order to perform
             // some clean-up logic as we go. Mainly, we need to update the key
             // equivalence classes which contain relation indices which should

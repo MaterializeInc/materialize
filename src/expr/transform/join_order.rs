@@ -59,7 +59,10 @@ impl JoinOrder {
         });
     }
     pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Join { inputs, variables } = relation {
+        if let RelationExpr::Join {
+            inputs, variables, ..
+        } = relation
+        {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             let uniques = types.iter().map(|t| t.keys.clone()).collect::<Vec<_>>();
             let arities = types
@@ -116,10 +119,7 @@ impl JoinOrder {
             }
             new_variables.sort();
 
-            let join = RelationExpr::Join {
-                inputs: new_inputs,
-                variables: new_variables,
-            };
+            let join = RelationExpr::join(new_inputs, new_variables);
 
             // Output projection
             *relation = join.project(projection);

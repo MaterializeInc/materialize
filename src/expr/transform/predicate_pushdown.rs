@@ -69,7 +69,9 @@ impl PredicatePushdown {
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Filter { input, predicates } = relation {
             match &mut **input {
-                RelationExpr::Join { inputs, variables } => {
+                RelationExpr::Join {
+                    inputs, variables, ..
+                } => {
                     // We want to scan `predicates` for any that can apply
                     // to individual elements of `inputs`.
 

@@ -22,7 +22,10 @@ impl ConstantJoin {
     }
 
     pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Join { variables, inputs } = relation {
+        if let RelationExpr::Join {
+            variables, inputs, ..
+        } = relation
+        {
             // If the tail end of `inputs` contains singleton constant relations whose
             // columns are not used in constraints, we can remove them from the join and
             // introduce them as a map around the results.

@@ -86,11 +86,7 @@ impl SimplifyFilterPredicates {
     pub fn generate_simplified_relation(&self, relation: &mut RelationExpr) {
         let mut columns_to_drop = Vec::new();
         if let RelationExpr::Filter { input, predicates } = relation {
-            if let RelationExpr::Join {
-                inputs,
-                variables: _,
-            } = &mut **input
-            {
+            if let RelationExpr::Join { inputs, .. } = &mut **input {
                 let mut input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let mut input_arities = input_types
                     .iter()
