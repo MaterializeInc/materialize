@@ -203,7 +203,8 @@ pub enum FrontendMessage {
         /// The source prepared statement. An empty string selects the unnamed
         /// prepared statement.
         statement_name: String,
-        // todo: something here
+        /// Struct holding the raw bytes representing parameter values passed
+        /// from Postgres and their format codes
         raw_parameter_bytes: RawParameterBytes,
         /// The format of each field. If a field is missing from the vector,
         /// then `FieldFormat::Text` should be assumed.
