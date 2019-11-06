@@ -7,7 +7,7 @@ use std::io::Write;
 use std::iter;
 use std::sync::Arc;
 
-use byteorder::{BigEndian, ByteOrder, NetworkEndian};
+use byteorder::{ByteOrder, NetworkEndian};
 use failure::format_err;
 use futures::sink::Send as SinkSend;
 use futures::stream;
@@ -15,7 +15,6 @@ use futures::sync::mpsc::UnboundedSender;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use lazy_static::lazy_static;
 use log::{debug, trace};
-use ordered_float::OrderedFloat;
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
 use std::str;
@@ -32,7 +31,7 @@ use crate::secrets::SecretManager;
 use coord::{self, ExecuteResponse};
 use dataflow_types::{PeekResponse, Update};
 use ore::future::{Recv, StreamExt};
-use repr::{Datum, RelationDesc, Row, ScalarType};
+use repr::{RelationDesc, Row};
 use sql::Session;
 
 use prometheus::IntCounterVec;
@@ -500,36 +499,27 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,
-                parameters,
-                parameter_format_codes,
-                return_field_formats,
+                raw_bind_bytes,
             } => {
                 trace!(
-                    "cid={} handle bind statement={:?} portal={:?}, parameters={:?}, format_codes={:?}, return_field_formats={:?}",
+                    "cid={} handle bind statement={:?} portal={:?}, raw_bind_bytes={:?}",
                     cx.conn_id,
                     statement_name,
                     portal_name,
-                    parameters,
-                    parameter_format_codes,
-                    return_field_formats
+                    raw_bind_bytes
                 );
 
                 let mut session = state.session;
-                let stmt = session.get_prepared_statement(&statement_name).unwrap();
-                let param_types = stmt.param_types();
+                let fmts = raw_bind_bytes.get_return_field_parameters();
 
-                let mut datums: Vec<Option<Datum>> = Vec::new();
-                for (i, param) in parameters.iter().enumerate() {
-                    datums.push(match parameter_format_codes[i] {
-                        FieldFormat::Binary => generate_datum_from_bytes(param, param_types[i]),
-                        FieldFormat::Text => None, // todo: write something like generate_datum_from_bytes
-                    });
+                let mut datums = Vec::new();
+                if raw_bind_bytes.has_parameters() {
+                    let stmt = session.get_prepared_statement(&statement_name).unwrap();
+                    let param_types = stmt.param_types();
+                    datums = raw_bind_bytes.get_decoded_parameters(param_types);
                 }
-
-                let fmts = return_field_formats.iter().map(bool::from).collect();
                 dbg!(&portal_name, &statement_name, &datums, &fmts);
-                session.create_or_set_portal(portal_name, statement_name, datums, fmts);
-
+                session.create_or_set_portal(portal_name, statement_name, Vec::new(), fmts)?;
                 transition!(SendBindComplete {
                     send: conn.send(BackendMessage::BindComplete),
                     session,
@@ -1137,31 +1127,5 @@ where
             }
             .into()
         }
-    }
-}
-
-fn generate_datum_from_bytes(bytes: &Option<Vec<u8>>, typ: ScalarType) -> Option<Datum> {
-    match bytes {
-        Some(bytes) => {
-            match typ {
-                ScalarType::Null => Some(Datum::Null),
-                ScalarType::Bool => Some(Datum::True), //todo: figure out true/false?
-                ScalarType::Int32 => Some(Datum::Int32(BigEndian::read_i32(bytes))),
-                ScalarType::Int64 => Some(Datum::Int64(BigEndian::read_i64(bytes))),
-                ScalarType::Float32 => Some(Datum::Float32(OrderedFloat::from(
-                    BigEndian::read_f32(bytes),
-                ))),
-                ScalarType::Float64 => Some(Datum::Float64(OrderedFloat::from(
-                    BigEndian::read_f64(bytes),
-                ))),
-                ScalarType::Bytes => Some(Datum::Bytes(bytes)),
-                ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())), //todo: is this the right thing to do here?
-                _ => {
-                    // todo: currently ignoring: Decimal, Date, Time, Timestamp, Interval
-                    Some(Datum::Null)
-                }
-            }
-        }
-        None => None,
     }
 }

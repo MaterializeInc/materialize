@@ -5,11 +5,13 @@
 
 use std::borrow::Cow;
 use std::convert::TryFrom;
+use std::str;
 use std::sync::Arc;
 
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
+use ordered_float::OrderedFloat;
 
 use super::types::PgType;
 use repr::decimal::Decimal;
@@ -61,6 +63,72 @@ impl Severity {
             Severity::Info => "INFO",
             Severity::Log => "LOG",
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RawBindBytes {
+    parameters: Vec<Option<Vec<u8>>>,
+    parameter_format_codes: Vec<FieldFormat>,
+    return_field_formats: Vec<FieldFormat>,
+}
+
+impl RawBindBytes {
+    pub fn new(
+        parameters: Vec<Option<Vec<u8>>>,
+        parameter_format_codes: Vec<FieldFormat>,
+        return_field_formats: Vec<FieldFormat>,
+    ) -> RawBindBytes {
+        RawBindBytes {
+            parameters,
+            parameter_format_codes,
+            return_field_formats,
+        }
+    }
+
+    pub fn has_parameters(&self) -> bool {
+        !self.parameters.is_empty()
+    }
+
+    pub fn get_return_field_parameters(&self) -> Vec<bool> {
+        self.return_field_formats.iter().map(bool::from).collect()
+    }
+
+    pub fn get_decoded_parameters(&self, typs: &[ScalarType]) -> Vec<Option<Datum>> {
+        let mut datums: Vec<Option<Datum>> = Vec::new();
+        for i in 0..self.parameters.len() {
+            datums.push(match self.parameter_format_codes[i] {
+                FieldFormat::Binary => generate_datum_from_bytes(&self.parameters[i], typs[i]),
+                FieldFormat::Text => panic!("Don't support decoding Text parameters yet!"),
+            })
+        }
+        datums
+    }
+}
+
+fn generate_datum_from_bytes(bytes: &Option<Vec<u8>>, typ: ScalarType) -> Option<Datum> {
+    match bytes {
+        Some(bytes) => {
+            match typ {
+                ScalarType::Null => Some(Datum::Null),
+                ScalarType::Bool => Some(Datum::True), //todo: figure out true/false?
+                ScalarType::Int32 => Some(Datum::Int32(NetworkEndian::read_i32(bytes))),
+                ScalarType::Int64 => Some(Datum::Int64(NetworkEndian::read_i64(bytes))),
+                ScalarType::Float32 => Some(Datum::Float32(OrderedFloat::from(
+                    NetworkEndian::read_f32(bytes),
+                ))),
+                ScalarType::Float64 => Some(Datum::Float64(OrderedFloat::from(
+                    NetworkEndian::read_f64(bytes),
+                ))),
+                ScalarType::Bytes => Some(Datum::Bytes(bytes)),
+                ScalarType::String => Some(Datum::String(str::from_utf8(bytes).unwrap())), //todo: is this the right thing to do here?
+                _ => {
+                    // todo: currently ignoring: Decimal, Date, Time, Timestamp, Interval
+                    Some(Datum::Null)
+                }
+            }
+        }
+        None => None,
     }
 }
 
@@ -137,15 +205,16 @@ pub enum FrontendMessage {
         /// The source prepared statement. An empty string selects the unnamed
         /// prepared statement.
         statement_name: String,
-        /// Bytes representing parameter values passed from Postgres
-        /// to be decoded later.
-        parameters: Vec<Option<Vec<u8>>>,
-        /// Each parameter in parameters has a corresponding format code in
-        /// this list indicating whether it should be parsed as bytes or text.
-        parameter_format_codes: Vec<FieldFormat>,
-        /// The format of each field. If a field is missing from the vector,
-        /// then `FieldFormat::Text` should be assumed.
-        return_field_formats: Vec<FieldFormat>,
+        raw_bind_bytes: RawBindBytes,
+        //        /// Bytes representing parameter values passed from Postgres
+        //        /// to be decoded later.
+        //        parameters: Vec<Option<Vec<u8>>>,
+        //        /// Each parameter in parameters has a corresponding format code in
+        //        /// this list indicating whether it should be parsed as bytes or text.
+        //        parameter_format_codes: Vec<FieldFormat>,
+        //        /// The format of each field. If a field is missing from the vector,
+        //        /// then `FieldFormat::Text` should be assumed.
+        //        return_field_formats: Vec<FieldFormat>,
     },
 
     /// Execute a bound portal.

@@ -18,7 +18,7 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::message::{BackendMessage, FieldFormat, FrontendMessage, VERSION_CANCEL};
+use crate::message::{BackendMessage, FieldFormat, FrontendMessage, RawBindBytes, VERSION_CANCEL};
 use ore::netio;
 
 #[derive(Debug)]
@@ -404,6 +404,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     //     1 => use the specified format code for all parameters
     //    >1 => use separate format code for each parameter
     let parameter_format_code_count = buf.read_i16()?;
+    dbg!(parameter_format_code_count);
     let mut parameter_format_codes = Vec::with_capacity(parameter_format_code_count as usize);
     if parameter_format_code_count == 0 {
         parameter_format_codes.push(FieldFormat::Text);
@@ -449,12 +450,11 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
         format_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
     }
 
+    let raw_bind_bytes = RawBindBytes::new(parameters, parameter_format_codes, format_codes);
     Ok(FrontendMessage::Bind {
         portal_name,
         statement_name,
-        parameters,
-        parameter_format_codes,
-        return_field_formats: format_codes,
+        raw_bind_bytes,
     })
 }
 
