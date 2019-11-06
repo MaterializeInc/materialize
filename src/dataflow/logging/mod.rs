@@ -17,10 +17,16 @@ pub struct BatchLogger<T, E, P>
 where
     P: EventPusher<Timestamp, (Duration, E, T)>,
 {
-    // None when the logging stream is closed
-    time: Duration,
+    /// Time in milliseconds of the current expressed capability.
+    time_ms: Timestamp,
     event_pusher: P,
     _phantom: ::std::marker::PhantomData<(E, T)>,
+    /// Each time is advanced to the strictly next millisecond that is a multiple of this granularity.
+    /// This means we should be able to perform the same action on timestamp capabilities, and only
+    /// flush buffers when this timestamp advances.
+    granularity_ms: u64,
+    /// A stash for data that does not yet need to be sent.
+    buffer: Vec<(Duration, E, T)>,
 }
 
 impl<T, E, P> BatchLogger<T, E, P>
@@ -28,35 +34,45 @@ where
     P: EventPusher<Timestamp, (Duration, E, T)>,
 {
     /// Creates a new batch logger.
-    pub fn new(event_pusher: P) -> Self {
+    pub fn new(event_pusher: P, granularity_ms: u64) -> Self {
         BatchLogger {
-            time: Default::default(),
+            time_ms: 0,
             event_pusher,
             _phantom: ::std::marker::PhantomData,
+            granularity_ms,
+            buffer: Vec::with_capacity(1024),
         }
     }
     /// Publishes a batch of logged events and advances the capability.
     #[allow(clippy::clone_on_copy)]
     pub fn publish_batch(&mut self, time: &Duration, data: &mut Vec<(Duration, E, T)>) {
-        let new_frontier = time.as_millis() as Timestamp;
-        let old_frontier = self.time.as_millis() as Timestamp;
+        let new_time_ms =
+            (((time.as_millis() as Timestamp) / self.granularity_ms) + 1) * self.granularity_ms;
         if !data.is_empty() {
-            self.event_pusher.push(Event::Messages(
-                self.time.as_millis() as Timestamp,
-                // In earlier versions of the code this was a
-                // swap, but without any allocations to return
-                // it resulted in sizeable logger allocations.
-                data.drain(..).collect(),
-            ));
+            // If we don't need to grow our buffer, move
+            if data.len() > self.buffer.capacity() - self.buffer.len() {
+                self.event_pusher.push(Event::Messages(
+                    self.time_ms as Timestamp,
+                    self.buffer.drain(..).collect(),
+                ));
+            }
+
+            self.buffer.extend(data.drain(..));
         }
-        if old_frontier < new_frontier {
+        if self.time_ms < new_time_ms {
+            // Flush buffered events that may need to advance.
+            self.event_pusher.push(Event::Messages(
+                self.time_ms as Timestamp,
+                self.buffer.drain(..).collect(),
+            ));
+
             // In principle we can buffer up until this point, if that is appealing to us.
             // We could buffer more aggressively if the logging granularity were exposed
             // here, as the forward ticks would be that much less frequent.
             self.event_pusher
-                .push(Event::Progress(vec![(new_frontier, 1), (old_frontier, -1)]));
+                .push(Event::Progress(vec![(new_time_ms, 1), (self.time_ms, -1)]));
         }
-        self.time = time.clone();
+        self.time_ms = new_time_ms;
     }
 }
 impl<T, E, P> Drop for BatchLogger<T, E, P>
@@ -64,9 +80,7 @@ where
     P: EventPusher<Timestamp, (Duration, E, T)>,
 {
     fn drop(&mut self) {
-        self.event_pusher.push(Event::Progress(vec![(
-            self.time.as_millis() as Timestamp,
-            -1,
-        )]));
+        self.event_pusher
+            .push(Event::Progress(vec![(self.time_ms as Timestamp, -1)]));
     }
 }

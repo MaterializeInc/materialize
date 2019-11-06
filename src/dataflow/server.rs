@@ -217,13 +217,16 @@ where
             use crate::logging::BatchLogger;
             use timely::dataflow::operators::capture::event::link::EventLink;
 
+            let granularity_ms =
+                std::cmp::max(1, logging.granularity_ns() / 1_000_000) as Timestamp;
+
             // Establish loggers first, so we can either log the logging or not, as we like.
             let t_linked = std::rc::Rc::new(EventLink::new());
-            let mut t_logger = BatchLogger::new(t_linked.clone());
+            let mut t_logger = BatchLogger::new(t_linked.clone(), granularity_ms);
             let d_linked = std::rc::Rc::new(EventLink::new());
-            let mut d_logger = BatchLogger::new(d_linked.clone());
+            let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
             let m_linked = std::rc::Rc::new(EventLink::new());
-            let mut m_logger = BatchLogger::new(m_linked.clone());
+            let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
 
             // Construct logging dataflows and endpoints before registering any.
             let t_traces = logging::timely::construct(&mut self.inner, logging, t_linked);
