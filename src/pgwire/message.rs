@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 use std::convert::TryFrom;
+use std::str;
 use std::sync::Arc;
 
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
@@ -61,6 +62,63 @@ impl Severity {
             Severity::Info => "INFO",
             Severity::Log => "LOG",
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct RawParameterBytes {
+    parameters: Vec<Option<Vec<u8>>>,
+    parameter_format_codes: Vec<FieldFormat>,
+}
+
+impl RawParameterBytes {
+    pub fn new(
+        parameters: Vec<Option<Vec<u8>>>,
+        parameter_format_codes: Vec<FieldFormat>,
+    ) -> RawParameterBytes {
+        RawParameterBytes {
+            parameters,
+            parameter_format_codes,
+        }
+    }
+
+    pub fn decode_parameters(
+        &self,
+        typs: &[ScalarType],
+    ) -> Result<Vec<Option<Datum>>, failure::Error> {
+        let mut datums: Vec<Option<Datum>> = Vec::new();
+        for i in 0..self.parameters.len() {
+            datums.push(match &self.parameters[i] {
+                Some(bytes) => match self.parameter_format_codes[i] {
+                    FieldFormat::Binary => Some(RawParameterBytes::generate_datum_from_bytes(
+                        bytes.as_ref(),
+                        typs[i],
+                    )?),
+                    FieldFormat::Text => failure::bail!("Can't currently decode text parameters."),
+                },
+                None => None,
+            });
+        }
+        Ok(datums)
+    }
+
+    fn generate_datum_from_bytes(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {
+        Ok(match typ {
+            ScalarType::Null => Datum::Null,
+            ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(bytes)),
+            ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(bytes)),
+            ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(bytes).into()),
+            ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(bytes).into()),
+            ScalarType::Bytes => Datum::Bytes(bytes),
+            ScalarType::String => Datum::String(str::from_utf8(bytes)?),
+            _ => {
+                // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
+                failure::bail!(
+                    "Generating datum not implemented for ScalarType: {:#?}",
+                    typ
+                )
+            }
+        })
     }
 }
 
@@ -137,12 +195,9 @@ pub enum FrontendMessage {
         /// The source prepared statement. An empty string selects the unnamed
         /// prepared statement.
         statement_name: String,
-        /// Bytes representing parameter values passed from Postgres
-        /// to be decoded later.
-        parameters: Vec<Option<Vec<u8>>>,
-        /// Each parameter in parameters has a corresponding format code in
-        /// this list indicating whether it should be parsed as bytes or text.
-        parameter_format_codes: Vec<FieldFormat>,
+        /// Struct holding the raw bytes representing parameter values passed
+        /// from Postgres and their format codes
+        raw_parameter_bytes: RawParameterBytes,
         /// The format of each field. If a field is missing from the vector,
         /// then `FieldFormat::Text` should be assumed.
         return_field_formats: Vec<FieldFormat>,

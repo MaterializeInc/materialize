@@ -18,7 +18,9 @@ use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::message::{BackendMessage, FieldFormat, FrontendMessage, VERSION_CANCEL};
+use crate::message::{
+    BackendMessage, FieldFormat, FrontendMessage, RawParameterBytes, VERSION_CANCEL,
+};
 use ore::netio;
 
 #[derive(Debug)]
@@ -443,18 +445,18 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     //     0 => no result columns or all should use text
     //     1 => use the specified format code for all results
     //    >1 => use separate format code for each result
-    let result_column_format_codes_count = buf.read_i16()?;
-    let mut format_codes = Vec::with_capacity(result_column_format_codes_count as usize);
-    for _ in 0..result_column_format_codes_count {
-        format_codes.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
+    let return_field_formats_count = buf.read_i16()?;
+    let mut return_field_formats = Vec::with_capacity(return_field_formats_count as usize);
+    for _ in 0..return_field_formats_count {
+        return_field_formats.push(FieldFormat::try_from(buf.read_i16()?).map_err(input_err)?);
     }
 
+    let raw_parameter_bytes = RawParameterBytes::new(parameters, parameter_format_codes);
     Ok(FrontendMessage::Bind {
         portal_name,
         statement_name,
-        parameters,
-        parameter_format_codes,
-        return_field_formats: format_codes,
+        raw_parameter_bytes,
+        return_field_formats,
     })
 }
 

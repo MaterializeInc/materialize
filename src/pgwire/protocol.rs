@@ -17,6 +17,7 @@ use lazy_static::lazy_static;
 use log::{debug, trace};
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
+use std::str;
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -498,28 +499,42 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Bind {
                 portal_name,
                 statement_name,
-                parameters,
-                parameter_format_codes,
+                raw_parameter_bytes,
                 return_field_formats,
             } => {
-                let mut session = state.session;
-                let fmts = return_field_formats.iter().map(bool::from).collect();
                 trace!(
-                    "cid={} handle bind statement={:?} portal={:?}, parameters={:?}, format_codes={:?}, return_field_formats={:?}",
+                    "cid={} handle bind statement={:?} portal={:?}, raw_parameter_bytes={:?}, return_field_formats={:?}",
                     cx.conn_id,
                     statement_name,
                     portal_name,
-                    parameters,
-                    parameter_format_codes,
+                    raw_parameter_bytes,
                     return_field_formats
                 );
 
-                session.set_portal(portal_name, statement_name, fmts)?;
-
-                transition!(SendBindComplete {
-                    send: conn.send(BackendMessage::BindComplete),
-                    session,
-                });
+                let mut session = state.session;
+                let fmts = return_field_formats.iter().map(bool::from).collect();
+                let stmt = session.get_prepared_statement(&statement_name).unwrap();
+                let param_types = stmt.param_types();
+                match raw_parameter_bytes.decode_parameters(param_types) {
+                    Ok(_datums) => {
+                        // todo(jldlaughlin): actually bind datums
+                        session.set_portal(portal_name, statement_name, fmts)?;
+                        transition!(SendBindComplete {
+                            send: conn.send(BackendMessage::BindComplete),
+                            session,
+                        });
+                    }
+                    Err(e) => transition!(SendError {
+                        send: conn.send(BackendMessage::ErrorResponse {
+                            severity: Severity::Fatal,
+                            code: "08P01",
+                            message: e.to_string(),
+                            detail: None,
+                        }),
+                        session: session,
+                        kind: ErrorKind::Fatal,
+                    }),
+                }
             }
             FrontendMessage::Execute { portal_name } => {
                 let (tx, rx) = futures::sync::oneshot::channel();
