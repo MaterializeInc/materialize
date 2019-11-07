@@ -26,5 +26,5 @@ rand = "0.7.2"
 rand_chacha = "0.2.1"
 
 [[bench]]
-name = "sorting"
+name = "row"
 harness = false

@@ -7,11 +7,10 @@
 extern crate criterion;
 extern crate repr;
 
+use chrono::NaiveDate;
 use criterion::{Bencher, Criterion};
 use rand::Rng;
 use repr::*;
-use std::cmp::Ordering;
-use std::iter::FromIterator;
 
 const NUM_ROWS: usize = 10_000;
 
@@ -35,9 +34,9 @@ fn bench_sort_packer(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     b.iter_with_setup(
         || rows.clone(),
         |mut rows| {
-            let mut buffer_a = RowUnpacker::new();
-            let mut buffer_b = RowUnpacker::new();
-            rows.sort_by(move |a, b| buffer_a.from_iter(a).cmp(&buffer_b.from_iter(b)));
+            let mut unpacker_a = RowUnpacker::new();
+            let mut unpacker_b = RowUnpacker::new();
+            rows.sort_by(move |a, b| unpacker_a.unpack(a).cmp(&unpacker_b.unpack(b)));
         },
     )
 }
@@ -60,7 +59,42 @@ fn bench_sort_row_unpacked(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
             slices
                 .into_iter()
                 .map(|slice| Row::pack(slice))
-                .collect::<Vec<_>>();
+                .collect::<Vec<_>>()
+        },
+    )
+}
+
+fn bench_filter_unpacked(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+    let rows = rows
+        .into_iter()
+        .map(|row| Row::pack(row))
+        .collect::<Vec<_>>();
+    b.iter_with_setup(
+        || rows.clone(),
+        |mut rows| {
+            let mut unpacker = RowUnpacker::new();
+            rows.retain(|row| {
+                let row = unpacker.unpack(row.iter());
+                row[0] == filter
+            })
+        },
+    )
+}
+
+fn bench_filter_packed(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+    let filter = Row::pack(&[filter]);
+    let rows = rows
+        .into_iter()
+        .map(|row| Row::pack(row))
+        .collect::<Vec<_>>();
+    b.iter_with_setup(
+        || rows.clone(),
+        |mut rows| {
+            let mut unpacker = RowUnpacker::new();
+            rows.retain(|row| {
+                let row = unpacker.unpack(row.iter());
+                row[0] == filter.unpack_first()
+            })
         },
     )
 }
@@ -117,5 +151,27 @@ pub fn bench_sort(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_sort);
+fn bench_filter(c: &mut Criterion) {
+    let mut rng = seeded_rng();
+    let mut random_date = || {
+        NaiveDate::from_isoywd(
+            rng.gen_range(2000, 2020),
+            rng.gen_range(1, 52),
+            chrono::Weekday::Mon,
+        )
+    };
+    let date_rows = (0..NUM_ROWS)
+        .map(|_| vec![Datum::Date(random_date())])
+        .collect::<Vec<_>>();
+    let filter = Datum::Date(random_date());
+
+    c.bench_function("filter_unpacked", |b| {
+        bench_filter_unpacked(filter.clone(), date_rows.clone(), b)
+    });
+    c.bench_function("filter_packed", |b| {
+        bench_filter_packed(filter.clone(), date_rows.clone(), b)
+    });
+}
+
+criterion_group!(benches, bench_sort, bench_filter);
 criterion_main!(benches);
