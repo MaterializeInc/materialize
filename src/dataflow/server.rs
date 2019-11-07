@@ -326,9 +326,9 @@ where
             let mut progress = Vec::new();
             let names = self.traces.traces.keys().cloned().collect::<Vec<_>>();
             for name in names {
-                if let Some(mut traces) = self.traces.get_all_keyed(&name) {
+                if let Some(trace) = self.traces.get_default(&name) {
                     // Read the upper frontier and compare to what we've reported.
-                    traces.ne  xt().unwrap().1.clone().read_upper(&mut upper);
+                    trace.clone().read_upper(&mut upper);
                     let lower = self
                         .reported_frontiers
                         .get_mut(&name)

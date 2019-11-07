@@ -496,7 +496,6 @@ where
 
                     // TODO: easier idioms for detecting, re-using, and stashing.
                     if self.arrangement(&input, &new_keys[..]).is_none() {
-                        println!("building a trace ({:?}, {:?})", &input, &new_keys[..]);
                         let built = self.collection(input).unwrap();
                         let new_keys2 = new_keys.clone();
                         let mut unpacker = RowUnpacker::new();
@@ -906,7 +905,6 @@ where
 
             // TODO: easier idioms for detecting, re-using, and stashing.
             if self.arrangement(&input, &keys[..]).is_none() {
-                println!("building a trace for ({:?}, {:?})", &input, &keys[..]);
                 self.ensure_rendered(input, scope, worker_index);
                 let built = self.collection(input).unwrap();
                 let keys2 = keys.clone();

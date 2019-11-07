@@ -12,13 +12,8 @@
 // Clippy doesn't understand `as_of` and complains.
 #![allow(clippy::wrong_self_convention)]
 
-<<<<<<< HEAD
-use expr::{ColumnOrder, RelationExpr};
-use repr::{Datum, RelationDesc, Row};
-=======
 use expr::{ColumnOrder, RelationExpr, ScalarExpr};
 use repr::{Datum, RelationDesc, RelationType, Row};
->>>>>>> Basic index creation and deletion.
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use url::Url;
@@ -187,7 +182,7 @@ impl From<Sink> for DataflowDesc {
 
 impl From<Index> for DataflowDesc {
     fn from(i: Index) -> Self {
-        DataflowDesc::new(None).add_index(i)
+        DataflowDesc::new().add_index(i)
     }
 }
 

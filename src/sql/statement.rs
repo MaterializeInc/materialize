@@ -31,7 +31,6 @@ use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
-use expr::{ColumnOrder, RelationExpr, ScalarExpr};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -112,7 +111,12 @@ pub fn describe_statement(
         }
 
         Statement::Peek { name, .. } => {
-            (Some(catalog.get(&name.to_string())?.desc().clone()), vec![])
+            let sql_object = catalog.get(&name.to_string())?;
+            match sql_object {
+                CatalogItem::Index(_) => bail!("unsupported SQL statement: PEEK index"),
+                CatalogItem::Sink(_) => bail!("unsupported SQL statement: PEEK sink"),
+                _ => (Some(sql_object.desc().clone()), vec![]),
+            }
         }
 
         Statement::Query(query) => {
@@ -152,8 +156,6 @@ pub fn handle_statement(
             }
             None => bail!("tried to create a dataflow without a portal"),
         },
-        | Statement::CreateSources { .. }
-        | Statement::CreateIndex { .. } => handle_create_dataflow(catalog, stmt),
         Statement::Drop { .. } => handle_drop_dataflow(catalog, stmt),
         Statement::Query(query) => match portal_name {
             Some(portal_name) => handle_select(catalog, *query, session.get_portal(&portal_name)),
@@ -529,11 +531,6 @@ fn handle_peek(
 ) -> Result<Plan, failure::Error> {
     let name = name.to_string();
     let dataflow = catalog.get(&name)?.clone();
-    match dataflow {
-        CatalogItem::Index(_) => bail!("unsupported SQL statement: PEEK index"),
-        CatalogItem::Sink(_) => bail!("unsupported SQL statement: PEEK sink"),
-        _ => {}
-    }
     let typ = dataflow.typ();
     Ok(Plan::Peek {
         source: relationexpr::RelationExpr::Get {
@@ -645,7 +642,7 @@ fn handle_create_index(
     catalog: &Catalog,
     on_name: &str,
     key_parts: &[Expr],
-) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
+) -> Result<(RelationType, Vec<usize>, Vec<relationexpr::ScalarExpr>), failure::Error> {
     let (relation_type, keys, map_exprs) = query::plan_index(catalog, on_name, key_parts)?;
     Ok((
         relation_type,

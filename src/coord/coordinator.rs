@@ -604,7 +604,6 @@ where
                     let count = self.indexes.get_mut(&trace_key).unwrap();
                     if count == &1 {
                         self.indexes.remove(&trace_key);
-                        println!("dropping index {}", name);
                         trace_keys.push(trace_key);
                     } else {
                         *count -= 1;

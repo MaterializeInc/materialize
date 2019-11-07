@@ -136,3 +136,8 @@ b  c
 ------
 1  3
 2  1
+
+> CREATE INDEX idx1 ON test5(c)
+
+! PEEK idx1
+unsupported SQL statement: PEEK index
