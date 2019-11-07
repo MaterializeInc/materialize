@@ -82,24 +82,20 @@ impl RawParameterBytes {
         }
     }
 
-    pub fn decode_parameters(
-        &self,
-        typs: &[ScalarType],
-    ) -> Result<Vec<Option<Datum>>, failure::Error> {
-        let mut datums: Vec<Option<Datum>> = Vec::new();
+    pub fn decode_parameters(&self, typs: &[ScalarType]) -> Result<Row, failure::Error> {
+        let mut datums: Vec<Datum> = Vec::new();
         for i in 0..self.parameters.len() {
             datums.push(match &self.parameters[i] {
                 Some(bytes) => match self.parameter_format_codes[i] {
-                    FieldFormat::Binary => Some(RawParameterBytes::generate_datum_from_bytes(
-                        bytes.as_ref(),
-                        typs[i],
-                    )?),
+                    FieldFormat::Binary => {
+                        RawParameterBytes::generate_datum_from_bytes(bytes.as_ref(), typs[i])?
+                    }
                     FieldFormat::Text => failure::bail!("Can't currently decode text parameters."),
                 },
-                None => None,
+                None => Datum::Null,
             });
         }
-        Ok(datums)
+        Ok(Row::pack(datums))
     }
 
     fn generate_datum_from_bytes(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {

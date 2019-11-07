@@ -33,7 +33,7 @@ use std::fmt;
 
 use failure::bail;
 
-use repr::{RelationDesc, ScalarType};
+use repr::{RelationDesc, Row, ScalarType};
 
 // NOTE(benesch): there is a lot of duplicative code in this file in order to
 // avoid runtime type casting. If the approach gets hard to maintain, we can
@@ -279,6 +279,7 @@ impl Session {
         &mut self,
         portal_name: String,
         statement_name: String,
+        row: Row,
         return_field_formats: Vec<bool>,
     ) -> Result<(), failure::Error> {
         if self.prepared_statements.contains_key(&statement_name) {
@@ -286,6 +287,7 @@ impl Session {
                 portal_name,
                 Portal {
                     statement_name,
+                    row,
                     return_field_formats,
                 },
             );
@@ -490,6 +492,8 @@ impl PreparedStatement {
 #[derive(Debug)]
 pub struct Portal {
     pub statement_name: String,
+    /// A Row of Datum of parameter values to be used in the query.
+    pub row: Row,
     /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
     pub return_field_formats: Vec<bool>,
 }

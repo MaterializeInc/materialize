@@ -19,7 +19,7 @@ use url::Url;
 
 use crate::expr::like::build_like_regex_from_string;
 use crate::query;
-use crate::session::Session;
+use crate::session::{Portal, Session};
 use crate::store::{Catalog, CatalogItem, RemoveMode};
 use crate::Plan;
 use dataflow_types::{
@@ -128,6 +128,7 @@ pub fn handle_statement(
     catalog: &Catalog,
     session: &Session,
     stmt: Statement,
+    portal_name: String,
 ) -> Result<Plan, failure::Error> {
     match stmt {
         Statement::Peek { name, immediate } => handle_peek(catalog, name, immediate),
@@ -135,9 +136,11 @@ pub fn handle_statement(
         Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
-        | Statement::CreateSources { .. } => handle_create_dataflow(catalog, stmt),
+        | Statement::CreateSources { .. } => {
+            handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
+        }
         Statement::Drop { .. } => handle_drop_dataflow(catalog, stmt),
-        Statement::Query(query) => handle_select(catalog, *query),
+        Statement::Query(query) => handle_select(catalog, *query, session.get_portal(&portal_name)),
         Statement::SetVariable {
             local,
             variable,
@@ -152,7 +155,9 @@ pub fn handle_statement(
             filter,
         } => handle_show_columns(catalog, extended, full, &table_name, filter.as_ref()),
         Statement::ShowCreateView { view_name } => handle_show_create_view(catalog, view_name),
-        Statement::Explain { stage, query } => handle_explain(catalog, stage, *query),
+        Statement::Explain { stage, query } => {
+            handle_explain(catalog, stage, *query, session.get_portal(&portal_name))
+        }
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     }
@@ -269,7 +274,11 @@ fn handle_show_create_view(
     ])]))
 }
 
-fn handle_create_dataflow(catalog: &Catalog, mut stmt: Statement) -> Result<Plan, failure::Error> {
+fn handle_create_dataflow(
+    catalog: &Catalog,
+    mut stmt: Statement,
+    portal: Option<&Portal>,
+) -> Result<Plan, failure::Error> {
     match &mut stmt {
         Statement::CreateView {
             name,
@@ -281,7 +290,8 @@ fn handle_create_dataflow(catalog: &Catalog, mut stmt: Statement) -> Result<Plan
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            let (mut relation_expr, mut desc, finishing) = handle_query(catalog, *query.clone())?;
+            let (mut relation_expr, mut desc, finishing) =
+                handle_query(catalog, *query.clone(), portal)?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
                 relation_expr = RelationExpr::Project {
@@ -483,8 +493,12 @@ fn handle_peek(
     })
 }
 
-pub fn handle_select(catalog: &Catalog, query: Query) -> Result<Plan, failure::Error> {
-    let (relation_expr, _, finishing) = handle_query(catalog, query)?;
+pub fn handle_select(
+    catalog: &Catalog,
+    query: Query,
+    portal: Option<&Portal>,
+) -> Result<Plan, failure::Error> {
+    let (relation_expr, _, finishing) = handle_query(catalog, query, portal)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
@@ -496,8 +510,9 @@ pub fn handle_explain(
     catalog: &Catalog,
     stage: Stage,
     query: Query,
+    portal: Option<&Portal>,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) = handle_query(catalog, query)?;
+    let (relation_expr, _desc, _finishing) = handle_query(catalog, query, portal)?;
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
@@ -514,8 +529,21 @@ pub fn handle_explain(
 fn handle_query(
     catalog: &Catalog,
     query: Query,
+    portal: Option<&Portal>,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
+    // todo: Parameters => Datums here!!
+    if let Some(portal) = portal {
+        let parameter_datum = portal.row.unpack();
+        if !parameter_datum.is_empty() {
+            // do the transformation.
+            println!("need to transform!!");
+            dbg!(&parameter_datum);
+        }
+    }
+    // once we have a RElationExpr, we can deal with datums
+    // need to write a visitor here that will transform any Parameters into the Datums being passed through
+    // question: am I going to see them in order?
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
