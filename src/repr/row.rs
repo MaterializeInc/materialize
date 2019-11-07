@@ -163,11 +163,12 @@ impl Row {
     ///
     /// This function is safe if a value of type `T` was previously written at this offset by `RowPacker::push`.
     /// Otherwise it could return invalid values, which is Undefined Behavior.
+    #[inline(always)]
     unsafe fn read_copy<T>(&self, offset: &mut usize) -> T
     where
         T: Copy,
     {
-        assert!(self.data.len() >= *offset + size_of::<T>());
+        debug_assert!(self.data.len() >= *offset + size_of::<T>());
         let ptr = self.data.as_ptr().add(*offset);
         *offset += size_of::<T>();
         (ptr as *const T).read_unaligned()
@@ -181,6 +182,7 @@ impl Row {
     ///
     /// This function is safe is a `Datum` was previously written at this offset by `RowPacker::push`.
     /// Otherwise it could return invalid values, which is Undefined Behavior.
+    #[inline(always)]
     unsafe fn read_datum(&self, offset: &mut usize) -> Datum {
         let tag = self.read_copy::<Tag>(offset);
         match tag {
