@@ -167,7 +167,7 @@ impl Row {
     where
         T: Copy,
     {
-        assert!(self.data.len() >= *offset + size_of::<T>());
+        debug_assert!(self.data.len() >= *offset + size_of::<T>());
         let ptr = self.data.as_ptr().add(*offset);
         *offset += size_of::<T>();
         (ptr as *const T).read_unaligned()
