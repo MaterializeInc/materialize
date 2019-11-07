@@ -7,9 +7,11 @@
 extern crate criterion;
 extern crate repr;
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use criterion::{Bencher, Criterion};
+use ordered_float::OrderedFloat;
 use rand::Rng;
+use repr::decimal::Significand;
 use repr::*;
 
 const NUM_ROWS: usize = 10_000;
@@ -99,6 +101,60 @@ fn bench_filter_packed(filter: Datum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
     )
 }
 
+#[allow(dead_code)]
+enum OwnedDatum {
+    Null,
+    False,
+    True,
+    Int32(i32),
+    Int64(i64),
+    Float32(OrderedFloat<f32>),
+    Float64(OrderedFloat<f64>),
+    Date(NaiveDate),
+    Timestamp(NaiveDateTime),
+    Interval(Interval),
+    Decimal(Significand),
+    Bytes(Vec<u8>),
+    String(String),
+}
+
+impl OwnedDatum {
+    fn borrow(&self) -> Datum {
+        match self {
+            OwnedDatum::Null => Datum::Null,
+            OwnedDatum::False => Datum::False,
+            OwnedDatum::True => Datum::True,
+            OwnedDatum::Int32(i) => Datum::Int32(*i),
+            OwnedDatum::Int64(i) => Datum::Int64(*i),
+            OwnedDatum::Float32(f) => Datum::Float32(*f),
+            OwnedDatum::Float64(f) => Datum::Float64(*f),
+            OwnedDatum::Date(d) => Datum::Date(*d),
+            OwnedDatum::Timestamp(d) => Datum::Timestamp(*d),
+            OwnedDatum::Interval(i) => Datum::Interval(*i),
+            OwnedDatum::Decimal(s) => Datum::Decimal(*s),
+            OwnedDatum::Bytes(bs) => Datum::Bytes(&**bs),
+            OwnedDatum::String(s) => Datum::String(&**s),
+        }
+    }
+}
+
+fn bench_filter_owned(filter: OwnedDatum, rows: Vec<Vec<Datum>>, b: &mut Bencher) {
+    let rows = rows
+        .into_iter()
+        .map(|row| Row::pack(row))
+        .collect::<Vec<_>>();
+    b.iter_with_setup(
+        || rows.clone(),
+        |mut rows| {
+            let mut unpacker = RowUnpacker::new();
+            rows.retain(|row| {
+                let row = unpacker.unpack(row.iter());
+                row[0] == filter.borrow()
+            })
+        },
+    )
+}
+
 fn seeded_rng() -> rand_chacha::ChaChaRng {
     rand::SeedableRng::from_seed([
         224, 38, 155, 23, 190, 65, 147, 224, 136, 172, 167, 36, 125, 199, 232, 59, 191, 4, 243,
@@ -163,13 +219,16 @@ fn bench_filter(c: &mut Criterion) {
     let date_rows = (0..NUM_ROWS)
         .map(|_| vec![Datum::Date(random_date())])
         .collect::<Vec<_>>();
-    let filter = Datum::Date(random_date());
+    let filter = random_date();
 
     c.bench_function("filter_unpacked", |b| {
-        bench_filter_unpacked(filter.clone(), date_rows.clone(), b)
+        bench_filter_unpacked(Datum::Date(filter), date_rows.clone(), b)
     });
     c.bench_function("filter_packed", |b| {
-        bench_filter_packed(filter.clone(), date_rows.clone(), b)
+        bench_filter_packed(Datum::Date(filter), date_rows.clone(), b)
+    });
+    c.bench_function("filter_owned", |b| {
+        bench_filter_owned(OwnedDatum::Date(filter), date_rows.clone(), b)
     });
 }
 

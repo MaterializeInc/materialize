@@ -163,6 +163,7 @@ impl Row {
     ///
     /// This function is safe if a value of type `T` was previously written at this offset by `RowPacker::push`.
     /// Otherwise it could return invalid values, which is Undefined Behavior.
+    #[inline(always)]
     unsafe fn read_copy<T>(&self, offset: &mut usize) -> T
     where
         T: Copy,
@@ -181,6 +182,7 @@ impl Row {
     ///
     /// This function is safe is a `Datum` was previously written at this offset by `RowPacker::push`.
     /// Otherwise it could return invalid values, which is Undefined Behavior.
+    #[inline(always)]
     unsafe fn read_datum(&self, offset: &mut usize) -> Datum {
         let tag = self.read_copy::<Tag>(offset);
         match tag {
