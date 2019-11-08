@@ -72,6 +72,14 @@ Field Nullable Type
 b     NO       int8
 sum   YES      int8
 
+> SHOW TABLES LIKE '%peeks%';
+logs_peeks
+
+> SHOW TABLES LIKE '%data%';
+data
+logs_dataflow_dependency
+logs_dataflows
+
 > SHOW CREATE VIEW test1
 View   Create View
 ------------------

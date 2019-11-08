@@ -78,7 +78,7 @@ pub fn describe_statement(
             vec![],
         ),
 
-        Statement::ShowObjects { object_type } => (
+        Statement::ShowObjects { object_type, .. } => (
             Some(
                 RelationDesc::empty()
                     .add_column(object_type_as_plural_str(object_type), ScalarType::String),
@@ -144,7 +144,10 @@ pub fn handle_statement(
             value,
         } => handle_set_variable(catalog, local, variable, value),
         Statement::ShowVariable { variable } => handle_show_variable(catalog, session, variable),
-        Statement::ShowObjects { object_type: ot } => handle_show_objects(catalog, ot),
+        Statement::ShowObjects {
+            object_type: ot,
+            like,
+        } => handle_show_objects(catalog, ot, like),
         Statement::ShowColumns {
             extended,
             full,
@@ -210,12 +213,27 @@ fn handle_tail(catalog: &Catalog, from: ObjectName) -> Result<Plan, failure::Err
     Ok(Plan::Tail(dataflow.clone()))
 }
 
-fn handle_show_objects(catalog: &Catalog, object_type: ObjectType) -> Result<Plan, failure::Error> {
-    let mut rows: Vec<Row> = catalog
-        .iter()
-        .filter(|(_k, v)| object_type_matches(object_type, &v))
-        .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
-        .collect();
+fn handle_show_objects(
+    catalog: &Catalog,
+    object_type: ObjectType,
+    like: Option<String>,
+) -> Result<Plan, failure::Error> {
+    let mut rows: Vec<Row> = match like {
+        Some(like) => {
+            let like_regex = build_like_regex_from_string(like.as_ref())?;
+            catalog
+                .iter()
+                .filter(|(k, _v)| like_regex.is_match(k))
+                .filter(|(_k, v)| object_type_matches(object_type, &v))
+                .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
+                .collect()
+        }
+        None => catalog
+            .iter()
+            .filter(|(_k, v)| object_type_matches(object_type, &v))
+            .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
+            .collect(),
+    };
     rows.sort_unstable();
     Ok(Plan::SendRows(rows))
 }
