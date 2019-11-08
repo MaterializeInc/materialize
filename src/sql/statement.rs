@@ -17,6 +17,7 @@ use sqlparser::ast::{
 };
 use url::Url;
 
+use crate::expr as sqlexpr;
 use crate::expr::like::build_like_regex_from_string;
 use crate::query;
 use crate::session::{Portal, Session};
@@ -26,10 +27,10 @@ use dataflow_types::{
     KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink, SinkConnector,
     Source, SourceConnector, View,
 };
-use expr::{ColumnOrder, RelationExpr};
+use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{Datum, RelationDesc, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -294,8 +295,8 @@ fn handle_create_dataflow(
                 handle_query(catalog, *query.clone(), portal)?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
-                relation_expr = RelationExpr::Project {
-                    input: Box::new(RelationExpr::TopK {
+                relation_expr = relationexpr::RelationExpr::Project {
+                    input: Box::new(relationexpr::RelationExpr::TopK {
                         input: Box::new(relation_expr),
                         group_key: vec![],
                         order_key: finishing.order_by,
@@ -469,7 +470,7 @@ fn handle_peek(
     let dataflow = catalog.get(&name)?.clone();
     let typ = dataflow.typ();
     Ok(Plan::Peek {
-        source: ::expr::RelationExpr::Get {
+        source: relationexpr::RelationExpr::Get {
             name: dataflow.name().to_owned(),
             typ: typ.clone(),
         },
@@ -483,7 +484,7 @@ fn handle_peek(
             offset: 0,
             limit: None,
             order_by: (0..typ.column_types.len())
-                .map(|column| ColumnOrder {
+                .map(|column| relationexpr::ColumnOrder {
                     column,
                     desc: false,
                 })
@@ -530,21 +531,50 @@ fn handle_query(
     catalog: &Catalog,
     query: Query,
     portal: Option<&Portal>,
-) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-    let (expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
-    // todo: Parameters => Datums here!!
+) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+    let (mut expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
     if let Some(portal) = portal {
         let parameter_datum = portal.row.unpack();
         if !parameter_datum.is_empty() {
-            // do the transformation.
-            println!("need to transform!!");
-            dbg!(&parameter_datum);
+            expr.visit_mut(&mut |e| {
+                dbg!(&e);
+                match e {
+                    sqlexpr::RelationExpr::Map { scalars, .. } => {
+                        for scalar in scalars {
+                            replace_parameter_with_datum(scalar, &parameter_datum);
+                        }
+                    }
+                    sqlexpr::RelationExpr::Filter { predicates, .. } => {
+                        for scalar in predicates {
+                            replace_parameter_with_datum(scalar, &parameter_datum);
+                        }
+                    }
+                    sqlexpr::RelationExpr::Join { on, .. } => {
+                        replace_parameter_with_datum(on, &parameter_datum);
+                    }
+                    _ => (),
+                }
+            });
         }
     }
-    // once we have a RElationExpr, we can deal with datums
-    // need to write a visitor here that will transform any Parameters into the Datums being passed through
-    // question: am I going to see them in order?
     Ok((expr.decorrelate()?, desc, finishing))
+}
+
+fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_datum: &Vec<Datum>) {
+    let replacement_scalar = if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
+        // there is no .take() for sqlexpr::RelationExpr...
+        let datum = parameter_datum[*position - 1];
+        let column_type = ColumnType::new(datum.scalar_type());
+        Some(sqlexpr::ScalarExpr::Literal(
+            Row::pack(vec![datum]),
+            column_type,
+        ))
+    } else {
+        None
+    };
+    if let Some(replacement_scalar) = replacement_scalar {
+        std::mem::replace(scalar, replacement_scalar);
+    }
 }
 
 fn build_source(

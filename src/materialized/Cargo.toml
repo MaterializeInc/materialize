@@ -33,4 +33,5 @@ prometheus = { version = "0.7.0", default-features = false, features = ["process
 tokio = "0.1"
 
 [dev-dependencies]
+postgres = "0.15"
 pretty_assertions = "0.6.1"
