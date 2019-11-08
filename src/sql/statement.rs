@@ -218,22 +218,12 @@ fn handle_show_objects(
     object_type: ObjectType,
     like: Option<String>,
 ) -> Result<Plan, failure::Error> {
-    let mut rows: Vec<Row> = match like {
-        Some(like) => {
-            let like_regex = build_like_regex_from_string(like.as_ref())?;
-            catalog
-                .iter()
-                .filter(|(k, _v)| like_regex.is_match(k))
-                .filter(|(_k, v)| object_type_matches(object_type, &v))
-                .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
-                .collect()
-        }
-        None => catalog
-            .iter()
-            .filter(|(_k, v)| object_type_matches(object_type, &v))
-            .map(|(k, _v)| Row::pack(&[Datum::from(k)]))
-            .collect(),
-    };
+    let like_regex = build_like_regex_from_string(like.as_ref().unwrap_or(&String::from(".")))?;
+    let mut rows: Vec<Row> = catalog
+        .iter()
+        .filter(|(name, ci)| object_type_matches(object_type, ci) && like_regex.is_match(name))
+        .map(|(name, _ci)| Row::pack(&[Datum::from(name)]))
+        .collect();
     rows.sort_unstable();
     Ok(Plan::SendRows(rows))
 }
