@@ -14,6 +14,7 @@ use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::{ActivateCapability, UnorderedHandle};
 use timely::progress::frontier::Antichain;
+use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 
 use futures::sync::mpsc::UnboundedReceiver;
@@ -105,7 +106,8 @@ pub struct WorkerFeedbackWithMeta {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
-    FrontierUppers(Vec<(String, Vec<Timestamp>)>),
+    /// A list of names of traces, with prior and new upper frontiers.
+    FrontierUppers(Vec<(String, ChangeBatch<Timestamp>)>),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -168,6 +170,7 @@ where
             materialized_logger: None,
             sink_tokens: HashMap::new(),
             local_inputs: HashMap::new(),
+            reported_frontiers: HashMap::new(),
         }
         .run()
     })
@@ -201,6 +204,7 @@ where
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<String, Box<dyn Any>>,
     local_inputs: HashMap<String, LocalInput>,
+    reported_frontiers: HashMap<String, Antichain<Timestamp>>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -255,14 +259,20 @@ where
             for (log, (key, trace)) in t_traces {
                 self.traces
                     .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                self.reported_frontiers
+                    .insert(log.name().to_string(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in d_traces {
                 self.traces
                     .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                self.reported_frontiers
+                    .insert(log.name().to_string(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in m_traces {
                 self.traces
                     .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                self.reported_frontiers
+                    .insert(log.name().to_string(), Antichain::from_elem(0));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -305,8 +315,23 @@ where
                 let names = self.traces.traces.keys().cloned().collect::<Vec<_>>();
                 for name in names {
                     if let Some(mut traces) = self.traces.get_all_keyed(&name) {
+                        // Read the upper frontier and compare to what we've reported.
                         traces.next().unwrap().1.clone().read_upper(&mut upper);
-                        progress.push((name.to_owned(), upper.elements().to_vec()));
+                        let lower = self
+                            .reported_frontiers
+                            .get_mut(&name)
+                            .expect(&format!("Name absent: {}", name));
+                        let mut changes = ChangeBatch::new();
+                        for time in lower.elements().iter() {
+                            changes.update(time.clone(), -1);
+                        }
+                        for time in upper.elements().iter() {
+                            changes.update(time.clone(), 1);
+                        }
+                        let lower = self.reported_frontiers.get_mut(&name).unwrap();
+                        changes.compact();
+                        progress.push((name, changes));
+                        lower.clone_from(&upper);
                     }
                 }
                 feedback_tx
@@ -344,6 +369,12 @@ where
                             logger.log(MaterializedEvent::Dataflow(view.name.to_string(), true));
                         }
                     }
+                    for view in dataflow.views.iter() {
+                        let prior = self
+                            .reported_frontiers
+                            .insert(view.name.to_string(), Antichain::from_elem(0));
+                        assert!(prior == None);
+                    }
 
                     render::build_dataflow(
                         dataflow,
@@ -369,6 +400,9 @@ where
                             logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                         }
                     }
+                    self.reported_frontiers
+                        .remove(name)
+                        .expect("Dropped view with no frontier");
                 }
             }
 
