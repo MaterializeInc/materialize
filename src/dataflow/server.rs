@@ -320,7 +320,7 @@ where
                         let lower = self
                             .reported_frontiers
                             .get_mut(&name)
-                            .expect(&format!("Name absent: {}", name));
+                            .expect("Frontier missing!");
                         let mut changes = ChangeBatch::new();
                         for time in lower.elements().iter() {
                             changes.update(time.clone(), -1);
