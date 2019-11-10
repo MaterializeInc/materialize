@@ -123,13 +123,11 @@ impl FoldConstants {
                         .iter()
                         .cloned()
                         .map(|(input_row, diff)| {
-                            let input_datums = input_row.unpack();
-                            let output_row = Row::pack(
-                                input_row
-                                    .iter()
-                                    .chain(scalars.iter().map(|s| s.eval(&input_datums))),
-                            );
-                            (output_row, diff)
+                            let mut unpacked = input_row.unpack();
+                            for scalar in scalars.iter() {
+                                unpacked.push(scalar.eval(&unpacked))
+                            }
+                            (Row::pack(unpacked), diff)
                         })
                         .collect();
                     *relation = RelationExpr::Constant {
