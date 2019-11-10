@@ -66,7 +66,7 @@ impl JoinElision {
 
             match inputs.len() {
                 0 => {
-                    *relation = RelationExpr::constant(vec![vec![]], RelationType::new(Vec::new()));
+                    *relation = RelationExpr::constant(vec![], RelationType::empty());
                 }
                 1 => {
                     // if there are constraints, they probably should have
