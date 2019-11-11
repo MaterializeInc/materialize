@@ -86,3 +86,7 @@ Note that this process will be more automated in the near future.
 - Headers are not linkable.
 - Pages have no TOC feature.
 - Is not "responsive" and makes naive decisions about breakpoints. If someone would like to volunteer their web development expertise to make this more sane, I would be really happy to help them out.
+
+# Miscellany, Trivia, & Footguns
+
+- Headers are automatically hyperlinked using `/doc/user/layouts/partials/content-parser.html`, inspired by [this Hugo thread](https://discourse.gohugo.io/t/adding-anchor-next-to-headers/1726/8), and more specifically [kaushalmodi/hugo-onyx-theme](https://github.com/kaushalmodi/hugo-onyx-theme/blob/cd232177f1af37f5371d252f8401ce049dc52db8/layouts/partials/headline-hash.html).

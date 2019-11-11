@@ -37,4 +37,11 @@ main {
   .list-page {
     min-height: 60vh;
   }
+
+  .headline-hash {
+    color: black;
+    &:hover {
+      opacity: 0.75;
+    }
+  }
 }
