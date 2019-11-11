@@ -122,17 +122,13 @@ where
                 }
 
                 Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id,
+                    worker_id: _,
                     message: WorkerFeedback::FrontierUppers(updates),
                 }) => {
-                    // Only take information from worker 0 for now. We'll want
-                    // to do something smarter soon. Ask Frank for details.
-                    if worker_id == 0 {
-                        for (name, frontier) in updates {
-                            coord.update_upper(&name, &frontier);
-                        }
-                        coord.maintenance();
+                    for (name, changes) in updates {
+                        coord.update_upper(&name, changes);
                     }
+                    coord.maintenance();
                 }
             }
         }

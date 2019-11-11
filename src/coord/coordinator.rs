@@ -16,7 +16,8 @@
 // may become non-copy in the future.
 #![allow(clippy::clone_on_copy)]
 
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::ChangeBatch;
 
 use futures::{sink, Future, Sink as FuturesSink, Stream};
 use std::collections::{HashMap, HashSet};
@@ -350,7 +351,6 @@ where
                 let since = self
                     .upper_of(&source_name)
                     .expect("name missing at coordinator")
-                    .elements()
                     .get(0)
                     .copied()
                     .unwrap_or(Timestamp::max_value());
@@ -652,13 +652,12 @@ where
                                     name = &rename;
                                 }
                             }
-                            let upper = self
-                                .upper_of(name)
-                                .expect("Absent relation in view")
-                                .elements()
-                                .iter()
-                                .cloned();
-                            bound.extend(upper);
+                            bound.extend(
+                                self.upper_of(name)
+                                    .expect("Upper bound missing")
+                                    .iter()
+                                    .cloned(),
+                            );
                         }
                     }
                     _ => unreachable!(),
@@ -703,7 +702,7 @@ where
                     // which means we need not investigate their input frontiers (which
                     // should be at least as far along).
                     let upper = self.upper_of(name).expect("Name missing at coordinator");
-                    bound.extend(upper.elements().iter().cloned());
+                    bound.extend(upper.iter().cloned());
                 } else {
                     for name in view.uses.iter() {
                         if !reached.contains(name) {
@@ -716,39 +715,27 @@ where
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(&mut self, name: &str, upper: &[Timestamp]) {
+    pub fn update_upper(&mut self, name: &str, mut changes: ChangeBatch<Timestamp>) {
         if let Some(entry) = self.views.get_mut(name) {
-            // We may be informed of non-changes; suppress them.
-            if entry.upper.elements() != upper {
-                // Log the change to frontiers.
+            let changes: Vec<_> = entry.upper.update_iter(changes.drain()).collect();
+            if !changes.is_empty() {
                 if self.log {
-                    for time in upper.iter() {
+                    for (time, change) in changes {
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::AppendLog(MaterializedEvent::Frontier(
                                 name.to_string(),
-                                time.clone(),
-                                1,
-                            )),
-                        );
-                    }
-                    for time in entry.upper.elements().iter() {
-                        broadcast(
-                            &mut self.broadcast_tx,
-                            SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                name.to_string(),
-                                time.clone(),
-                                -1,
+                                time,
+                                change,
                             )),
                         );
                     }
                 }
 
-                entry.upper.clear();
-                entry.upper.extend(upper.iter().cloned());
-
+                // Advance the compaction frontier to trail the new frontier.
+                // This logic assumes one-dimensional `Timestamp` time.
                 let mut since = Antichain::new();
-                for time in entry.upper.elements() {
+                for time in entry.upper.frontier().iter() {
                     since.insert(time.saturating_sub(entry.compaction_latency_ms));
                 }
                 self.since_updates
@@ -758,8 +745,8 @@ where
     }
 
     /// The upper frontier of a maintained view, if it exists.
-    fn upper_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
-        self.views.get(name).map(|v| &v.upper)
+    fn upper_of(&self, name: &str) -> Option<AntichainRef<Timestamp>> {
+        self.views.get(name).map(|v| v.upper.frontier())
     }
 
     /// Updates the since frontier of a named view.
@@ -789,10 +776,10 @@ where
         let contains_sources = !dataflow.sources.is_empty();
         for view in dataflow.views.iter() {
             self.remove_view(&view.name);
-            let mut viewstate = ViewState::from(view);
+            let mut viewstate = ViewState::from_view(view, self.num_timely_workers);
             viewstate.depends_on_source = contains_sources;
             if self.log {
-                for time in viewstate.upper.elements() {
+                for time in viewstate.upper.frontier().iter() {
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::Frontier(
@@ -813,9 +800,9 @@ where
     /// This is most commonly used for internal sources such as logging.
     fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
         self.remove_view(name);
-        let mut viewstate = ViewState::default();
+        let mut viewstate = ViewState::new(self.num_timely_workers);
         if self.log {
-            for time in viewstate.upper.elements() {
+            for time in viewstate.upper.frontier().iter() {
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::AppendLog(MaterializedEvent::Frontier(
@@ -836,7 +823,7 @@ where
     fn remove_view(&mut self, name: &str) {
         if let Some(state) = self.views.remove(name) {
             if self.log {
-                for time in state.upper.elements() {
+                for time in state.upper.frontier().iter() {
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::Frontier(
@@ -877,7 +864,7 @@ pub struct ViewState {
     uses: Vec<String>,
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
-    upper: Antichain<Timestamp>,
+    upper: MutableAntichain<Timestamp>,
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
@@ -896,33 +883,33 @@ pub struct ViewState {
 }
 
 impl ViewState {
-    /// Sets the latency behind the collection frontier at which compaction occurs.
-    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
-        self.compaction_latency_ms = latency_ms;
-    }
-}
-
-impl Default for ViewState {
-    fn default() -> Self {
+    /// Creates an empty view state from a number of workers.
+    pub fn new(workers: u64) -> Self {
+        let mut upper = MutableAntichain::new();
+        upper.update_iter(Some((0, workers as i64)));
         Self {
             uses: Vec::new(),
-            upper: Antichain::from_elem(0),
+            upper,
             since: Antichain::from_elem(0),
             compaction_latency_ms: 60_000,
             depends_on_source: true,
         }
     }
-}
 
-impl<'view> From<&'view View> for ViewState {
-    fn from(view: &'view View) -> Self {
-        let mut view_state = Self::default();
+    /// Creates view state from a view, and number of workers.
+    pub fn from_view(view: &View, workers: u64) -> Self {
+        let mut view_state = Self::new(workers);
         let mut out = Vec::new();
         view.relation_expr.unbound_uses(&mut out);
         out.sort();
         out.dedup();
         view_state.uses = out.iter().map(|x| x.to_string()).collect();
         view_state
+    }
+
+    /// Sets the latency behind the collection frontier at which compaction occurs.
+    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
+        self.compaction_latency_ms = latency_ms;
     }
 }
 

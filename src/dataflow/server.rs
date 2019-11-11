@@ -14,6 +14,7 @@ use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::{ActivateCapability, UnorderedHandle};
 use timely::progress::frontier::Antichain;
+use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 
 use futures::sync::mpsc::UnboundedReceiver;
@@ -24,7 +25,6 @@ use repr::{Datum, Row, RowUnpacker};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
-use std::mem;
 use std::net::TcpStream;
 use std::sync::Mutex;
 
@@ -105,7 +105,8 @@ pub struct WorkerFeedbackWithMeta {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
-    FrontierUppers(Vec<(String, Vec<Timestamp>)>),
+    /// A list of names of traces, with prior and new upper frontiers.
+    FrontierUppers(Vec<(String, ChangeBatch<Timestamp>)>),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -168,24 +169,10 @@ where
             materialized_logger: None,
             sink_tokens: HashMap::new(),
             local_inputs: HashMap::new(),
+            reported_frontiers: HashMap::new(),
         }
         .run()
     })
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct PendingPeek {
-    /// The name of the dataflow to peek.
-    name: String,
-    /// The ID of the connection that submitted the peek. For logging only.
-    conn_id: u32,
-    /// A transmitter connected to the intended recipient of the peek.
-    tx: comm::mpsc::Sender<PeekResponse>,
-    /// Time at which the collection should be materialized.
-    timestamp: Timestamp,
-    /// Finishing operations to perform on the peek, like an ordering and a
-    /// limit.
-    finishing: RowSetFinishing,
 }
 
 struct Worker<'w, A>
@@ -193,7 +180,7 @@ where
     A: Allocate,
 {
     inner: &'w mut TimelyWorker<A>,
-    pending_peeks: Vec<(PendingPeek, WithDrop<KeysValsHandle>)>,
+    pending_peeks: Vec<PendingPeek>,
     traces: TraceManager,
     logging_config: Option<LoggingConfig>,
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
@@ -201,11 +188,12 @@ where
     materialized_logger: Option<logging::materialized::Logger>,
     sink_tokens: HashMap<String, Box<dyn Any>>,
     local_inputs: HashMap<String, LocalInput>,
+    reported_frontiers: HashMap<String, Antichain<Timestamp>>,
 }
 
 impl<'w, A> Worker<'w, A>
 where
-    A: Allocate,
+    A: Allocate + 'w,
 {
     /// Initializes timely dataflow logging and publishes as a view.
     ///
@@ -258,14 +246,20 @@ where
             for (log, (key, trace)) in t_traces {
                 self.traces
                     .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                self.reported_frontiers
+                    .insert(log.name().to_string(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in d_traces {
                 self.traces
                     .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                self.reported_frontiers
+                    .insert(log.name().to_string(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in m_traces {
                 self.traces
                     .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                self.reported_frontiers
+                    .insert(log.name().to_string(), Antichain::from_elem(0));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -301,37 +295,60 @@ where
             // a command or when new Kafka messages have arrived.
             self.inner.step_or_park(None);
 
-            // Send progress information to the coordinator.
-            if let Some(feedback_tx) = &mut self.feedback_tx {
-                let mut upper = Antichain::new();
-                let mut progress = Vec::new();
-                let names = self.traces.traces.keys().cloned().collect::<Vec<_>>();
-                for name in names {
-                    if let Some(mut traces) = self.traces.get_all_keyed(&name) {
-                        traces.next().unwrap().1.clone().read_upper(&mut upper);
-                        progress.push((name.to_owned(), upper.elements().to_vec()));
-                    }
-                }
-                feedback_tx
-                    .send(WorkerFeedbackWithMeta {
-                        worker_id: self.inner.index(),
-                        message: WorkerFeedback::FrontierUppers(progress),
-                    })
-                    .wait()
-                    .unwrap();
-            }
+            // Report frontier information back the coordinator.
+            self.report_frontiers();
 
             // Handle any received commands.
             while let Ok(Some(cmd)) = self.command_rx.try_next() {
                 if let SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
-                self.handle_command(cmd);
+                // Avoid non-determinism in post-shutdown commands.
+                if !shutdown {
+                    self.handle_command(cmd);
+                }
             }
 
             if !shutdown {
                 self.process_peeks();
             }
+        }
+    }
+
+    /// Send progress information to the coordinator.
+    fn report_frontiers(&mut self) {
+        if let Some(feedback_tx) = &mut self.feedback_tx {
+            let mut upper = Antichain::new();
+            let mut progress = Vec::new();
+            let names = self.traces.traces.keys().cloned().collect::<Vec<_>>();
+            for name in names {
+                if let Some(mut traces) = self.traces.get_all_keyed(&name) {
+                    // Read the upper frontier and compare to what we've reported.
+                    traces.next().unwrap().1.clone().read_upper(&mut upper);
+                    let lower = self
+                        .reported_frontiers
+                        .get_mut(&name)
+                        .expect("Frontier missing!");
+                    let mut changes = ChangeBatch::new();
+                    for time in lower.elements().iter() {
+                        changes.update(time.clone(), -1);
+                    }
+                    for time in upper.elements().iter() {
+                        changes.update(time.clone(), 1);
+                    }
+                    let lower = self.reported_frontiers.get_mut(&name).unwrap();
+                    changes.compact();
+                    progress.push((name, changes));
+                    lower.clone_from(&upper);
+                }
+            }
+            feedback_tx
+                .send(WorkerFeedbackWithMeta {
+                    worker_id: self.inner.index(),
+                    message: WorkerFeedback::FrontierUppers(progress),
+                })
+                .wait()
+                .unwrap();
         }
     }
 
@@ -346,6 +363,12 @@ where
                             }
                             logger.log(MaterializedEvent::Dataflow(view.name.to_string(), true));
                         }
+                    }
+                    for view in dataflow.views.iter() {
+                        let prior = self
+                            .reported_frontiers
+                            .insert(view.name.to_string(), Antichain::from_elem(0));
+                        assert!(prior == None);
                     }
 
                     render::build_dataflow(
@@ -372,6 +395,9 @@ where
                             logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                         }
                     }
+                    self.reported_frontiers
+                        .remove(name)
+                        .expect("Dropped view with no frontier");
                 }
             }
 
@@ -388,6 +414,7 @@ where
                 tx,
                 finishing,
             } => {
+                // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace = self
                     .traces
                     .get_all_keyed(&name)
@@ -398,29 +425,34 @@ where
                     .clone();
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
-                let pending_peek = PendingPeek {
+                // Prepare a description of the peek work to do.
+                let mut peek = PendingPeek {
                     name,
                     conn_id,
                     tx,
                     timestamp,
                     finishing,
+                    trace,
                 };
+                // Log the receipt of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
-                    logger.log(MaterializedEvent::Peek(
-                        crate::logging::materialized::Peek::new(
-                            &pending_peek.name,
-                            pending_peek.timestamp,
-                            pending_peek.conn_id,
-                        ),
-                        true,
-                    ));
+                    logger.log(MaterializedEvent::Peek(peek.as_log_event(), true));
                 }
-                self.pending_peeks.push((pending_peek, trace));
+                // Attempt to fulfill the peek.
+                let fulfilled = peek.seek_fulfillment(&mut Antichain::new());
+                if !fulfilled {
+                    self.pending_peeks.push(peek);
+                } else {
+                    // Log the fulfillment of the peek.
+                    if let Some(logger) = self.materialized_logger.as_mut() {
+                        logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
+                    }
+                }
             }
 
             SequencedCommand::CancelPeek { conn_id } => {
                 let logger = &mut self.materialized_logger;
-                self.pending_peeks.retain(|(peek, _trace)| {
+                self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
                         peek.tx
                             .connect()
@@ -431,14 +463,7 @@ where
                             .unwrap();
 
                         if let Some(logger) = logger {
-                            logger.log(MaterializedEvent::Peek(
-                                crate::logging::materialized::Peek::new(
-                                    &peek.name,
-                                    peek.timestamp,
-                                    peek.conn_id,
-                                ),
-                                false,
-                            ));
+                            logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                         }
 
                         false // don't retain
@@ -495,54 +520,89 @@ where
 
     /// Scan pending peeks and attempt to retire each.
     fn process_peeks(&mut self) {
-        // See if time has advanced enough to handle any of our pending
-        // peeks.
-        let mut pending_peeks = mem::replace(&mut self.pending_peeks, Vec::new());
-        pending_peeks.retain(|(peek, trace)| {
-            let mut upper = timely::progress::frontier::Antichain::new();
-            let mut trace = trace.clone();
-            trace.read_upper(&mut upper);
-
-            // To produce output at `peek.timestamp`, we must be certain that
-            // it is no longer changing. A trace guarantees that all future
-            // changes will be greater than or equal to an element of `upper`.
-            //
-            // If an element of `upper` is less or equal to `peek.timestamp`,
-            // then there can be further updates that would change the output.
-            // If no element of `upper` is less or equal to `peek.timestamp`,
-            // then for any time `t` less or equal to `peek.timestamp` it is
-            // not the case that `upper` is less or equal to that timestamp,
-            // and so the result cannot further evolve.
-            if upper.less_equal(&peek.timestamp) {
-                return true; // retain
+        let mut upper = Antichain::new();
+        let pending_peeks_len = self.pending_peeks.len();
+        let mut pending_peeks = std::mem::replace(
+            &mut self.pending_peeks,
+            Vec::with_capacity(pending_peeks_len),
+        );
+        for mut peek in pending_peeks.drain(..) {
+            let success = peek.seek_fulfillment(&mut upper);
+            if !success {
+                self.pending_peeks.push(peek);
+            } else {
+                // Log the fulfillment of the peek.
+                if let Some(logger) = self.materialized_logger.as_mut() {
+                    logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
+                }
             }
+        }
+    }
+}
 
-            let rows = Self::collect_finished_data(peek, &mut trace);
+pub(crate) struct LocalInput {
+    pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
+    pub capability: ActivateCapability<Timestamp>,
+}
 
-            peek.tx
+/// An in-progress peek, and data to eventually fulfill it.
+#[derive(Clone)]
+struct PendingPeek {
+    /// The name of the dataflow to peek.
+    name: String,
+    /// The ID of the connection that submitted the peek. For logging only.
+    conn_id: u32,
+    /// A transmitter connected to the intended recipient of the peek.
+    tx: comm::mpsc::Sender<PeekResponse>,
+    /// Time at which the collection should be materialized.
+    timestamp: Timestamp,
+    /// Finishing operations to perform on the peek, like an ordering and a
+    /// limit.
+    finishing: RowSetFinishing,
+    /// The data from which the trace derives.
+    trace: WithDrop<KeysValsHandle>,
+}
+
+impl PendingPeek {
+    /// Produces a corresponding log event.
+    pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
+        crate::logging::materialized::Peek::new(&self.name, self.timestamp, self.conn_id)
+    }
+
+    /// Attempts to fulfill the peek and reports success.
+    ///
+    /// To produce output at `peek.timestamp`, we must be certain that
+    /// it is no longer changing. A trace guarantees that all future
+    /// changes will be greater than or equal to an element of `upper`.
+    ///
+    /// If an element of `upper` is less or equal to `peek.timestamp`,
+    /// then there can be further updates that would change the output.
+    /// If no element of `upper` is less or equal to `peek.timestamp`,
+    /// then for any time `t` less or equal to `peek.timestamp` it is
+    /// not the case that `upper` is less or equal to that timestamp,
+    /// and so the result cannot further evolve.
+    fn seek_fulfillment(&mut self, upper: &mut Antichain<Timestamp>) -> bool {
+        self.trace.read_upper(upper);
+        if !upper.less_equal(&self.timestamp) {
+            let rows = self.collect_finished_data();
+
+            self.tx
                 .connect()
                 .wait()
                 .unwrap()
                 .send(PeekResponse::Rows(rows))
                 .wait()
                 .unwrap();
-            if let Some(logger) = self.materialized_logger.as_mut() {
-                logger.log(MaterializedEvent::Peek(
-                    crate::logging::materialized::Peek::new(
-                        &peek.name,
-                        peek.timestamp,
-                        peek.conn_id,
-                    ),
-                    false,
-                ));
-            }
-            false // don't retain
-        });
-        mem::replace(&mut self.pending_peeks, pending_peeks);
+
+            true
+        } else {
+            false
+        }
     }
 
-    fn collect_finished_data(peek: &PendingPeek, trace: &mut WithDrop<KeysValsHandle>) -> Vec<Row> {
-        let (mut cur, storage) = trace.cursor();
+    /// Collects data for a known-complete peek.
+    fn collect_finished_data(&mut self) -> Vec<Row> {
+        let (mut cur, storage) = self.trace.cursor();
         let mut results = Vec::new();
         let mut unpacker = RowUnpacker::new();
         let mut left_unpacker = RowUnpacker::new();
@@ -552,16 +612,20 @@ where
                 let datums = unpacker.unpack(row);
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
-                if peek
+                if self
                     .finishing
                     .filter
                     .iter()
                     .all(|predicate| predicate.eval(&datums) == Datum::True)
                 {
+                    // Differential dataflow represents collections with binary counts,
+                    // but our output representation is unary (as many rows as reported
+                    // by the count). We should determine this count, and especially if
+                    // it is non-zero, before producing any output data.
                     let mut copies = 0;
                     cur.map_times(&storage, |time, diff| {
                         use timely::order::PartialOrder;
-                        if time.less_equal(&peek.timestamp) {
+                        if time.less_equal(&self.timestamp) {
                             copies += diff;
                         }
                     });
@@ -570,7 +634,7 @@ where
                         "Negative multiplicity: {} for {:?} in view {}",
                         copies,
                         row.unpack(),
-                        peek.name
+                        self.name
                     );
 
                     for _ in 0..copies {
@@ -582,12 +646,12 @@ where
             cur.step_key(&storage)
         }
 
-        if let Some(limit) = peek.finishing.limit {
-            let offset_plus_limit = limit + peek.finishing.offset;
+        if let Some(limit) = self.finishing.limit {
+            let offset_plus_limit = limit + self.finishing.offset;
             if results.len() > offset_plus_limit {
                 pdqselect::select_by(&mut results, offset_plus_limit, |left, right| {
                     compare_columns(
-                        &peek.finishing.order_by,
+                        &self.finishing.order_by,
                         &left_unpacker.unpack(left.iter()),
                         &right_unpacker.unpack(right.iter()),
                     )
@@ -598,9 +662,4 @@ where
 
         results.iter().map(|row| (*row).clone()).collect()
     }
-}
-
-pub(crate) struct LocalInput {
-    pub handle: UnorderedHandle<Timestamp, (Row, Timestamp, Diff)>,
-    pub capability: ActivateCapability<Timestamp>,
 }
