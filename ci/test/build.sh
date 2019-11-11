@@ -5,7 +5,7 @@
 # This file is part of Materialize. Materialize may not be used or
 # distributed without the express permission of Materialize, Inc.
 #
-# build.host.sh — packages test binaries into Docker images in CI.
+# build.sh — packages test binaries into Docker images in CI.
 
 set -euo pipefail
 
