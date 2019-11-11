@@ -66,7 +66,8 @@ impl JoinElision {
 
             match inputs.len() {
                 0 => {
-                    *relation = RelationExpr::constant(vec![], RelationType::empty());
+                    // The identity for join is the collection containing a single 0-ary row.
+                    *relation = RelationExpr::constant(vec![vec![]], RelationType::empty());
                 }
                 1 => {
                     // if there are constraints, they probably should have
