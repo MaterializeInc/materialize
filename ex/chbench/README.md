@@ -173,28 +173,41 @@ brew install terraform
 
 You'll also need to ensure the VM that gets created on your behalf will have
 access to clone the Materialize repository and download the Materialize Docker
-images. These credentials are pulled from your host machine with your
-cooperation:
+images. These credentials are pulled from your host machine once you've
+performed the folowing steps:
 
-  * Log in to Docker (via `docker login`) on your host machine.
-    These credentials will be automatically propagated to the VM.
+  1. Log in to Docker (via `docker login`) on your host machine. These
+     credentials will be automatically propagated to the VM.
 
-  * Ensure your SSH agent has an SSH key installed that can be used to clone
-    the Materialize repository. Usually `ssh-add` is sufficient, but if you
-    don't have an SSH agent running, you'll need to run `$(eval ssh-agent)`
-    first. SSH agent forwarding will be used to clone the repository on the VM.
+  2. Ensure your SSH agent has an SSH key installed that can be used to clone
+     the Materialize repository. Usually `ssh-add` is sufficient, but if you
+     don't have an SSH agent running, you'll need to run `$(eval ssh-agent)`
+     first. SSH agent forwarding will be used to clone the repository on the VM.
 
-  * Make your membership in the MaterializeInc GitHub organization public.
-    See ["Publicizing or hiding organization membership"][org-membership] for
-    details. All public GitHub keys associated with the MaterializeInc GitHub
-    organization will have permission to log in to the VM. If your membership
-    isn't public, you won't be able to SSH into the VM!
+  3. Make your membership in the MaterializeInc GitHub organization public. See
+     ["Publicizing or hiding organization membership"][org-membership] for
+     details. All public GitHub keys associated with the MaterializeInc GitHub
+     organization will have permission to log in to the VM. If your membership
+     isn't public, you won't be able to SSH into the VM!
+
+  4. Store your AWS credentials in `~/.aws/credentials`. Refer to the [AWS
+     documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html)
+     for instructions on how to manage and retrieve your AWS credentials. Your
+     `credentials` file should look like this:
+
+     ```ini
+     [default]
+     aws_access_key_id=[access key ID goes here]
+     aws_secret_access_key=[secret access key goes here]
+     region=us-east-2
+     ```
 
 Finally, we're ready to go change into the `terraform` directory and run
 `terraform apply`:
 
 ```shell
 cd ex/chbench/terraform
+terraform init # this is only needed the first time
 terraform apply
 ```
 
@@ -224,12 +237,12 @@ Welcome to Ubuntu 18.04.3 LTS (GNU/Linux 4.15.0-1051-aws x86_64)
 ---- 8< ----
 ```
 
-If you get a permission denied error, you probably forgot the step about making
-public your membership in the MaterializeInc GitHub organization. Toggle that
-bit and wait a few minutes, and you should have access to the VM. (The VM
-automatically updates the list of authorized users every two minutes.) You
-should also check that your GitHub account lists the public half of the SSH key
-on your machine.
+If you get a permission denied error or SSH timeout, you probably forgot the
+step about making public your membership in the MaterializeInc GitHub
+organization. Toggle that bit and wait a few minutes, and you should have access
+to the VM. (The VM automatically updates the list of authorized users every two
+minutes.) You should also check that your GitHub account lists the public half
+of the SSH key on your machine.
 
 Once logged in, you can use `dc.sh` or `docker-compose` as described above to
 run chbench.
