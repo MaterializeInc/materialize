@@ -281,7 +281,17 @@ where
         let uuid = Uuid::new_v4();
         let addr = self.0.nodes[self.0.id].clone();
         let tx = mpsc::Sender::new(addr, uuid);
-        let rx = mpsc::Receiver::new(self.new_rx(uuid).take(max_producers), self.clone());
+        let sb = self.clone();
+        let rx = mpsc::Receiver::new(
+            self.new_rx(uuid).take(max_producers),
+            self.clone(),
+            Some(Box::new(move || {
+                sb.0.channel_table
+                    .lock()
+                    .expect("lock poisoned")
+                    .remove_dest(uuid)
+            })),
+        );
         (tx, rx)
     }
 

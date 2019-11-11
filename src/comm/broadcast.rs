@@ -203,7 +203,7 @@ where
     where
         C: protocol::Connection,
     {
-        Receiver(mpsc::Receiver::new(conn_rx, switchboard))
+        Receiver(mpsc::Receiver::new(conn_rx, switchboard, None))
     }
 
     /// Arranges to split the receiver into multiple receivers, e.g., so that

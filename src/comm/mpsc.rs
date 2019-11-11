@@ -88,23 +88,30 @@ impl<D> Sender<D> {
 ///
 /// See the [`futures::Stream`] documentation for details about the API for
 /// receiving messages from a stream.
-pub struct Receiver<D>(Box<dyn Stream<Item = D, Error = bincode::Error> + Send>);
+pub struct Receiver<D>(
+    Box<dyn Stream<Item = D, Error = bincode::Error> + Send>,
+    Option<Box<dyn FnOnce() + Send>>,
+);
 
 impl<D> Receiver<D> {
     pub(crate) fn new<C>(
         conn_rx: impl Stream<Item = protocol::Framed<C>, Error = ()> + Send + 'static,
         switchboard: Switchboard<C>,
+        on_drop: Option<Box<dyn FnOnce() + Send>>,
     ) -> Receiver<D>
     where
         C: protocol::Connection,
         D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
     {
-        Receiver(Box::new(
-            conn_rx
-                .map_err(|_| -> bincode::Error { unreachable!() })
-                .map(move |conn| protocol::decoder(conn, switchboard.clone()))
-                .select_flatten(),
-        ))
+        Receiver(
+            Box::new(
+                conn_rx
+                    .map_err(|_| -> bincode::Error { unreachable!() })
+                    .map(move |conn| protocol::decoder(conn, switchboard.clone()))
+                    .select_flatten(),
+            ),
+            on_drop,
+        )
     }
 }
 
@@ -120,5 +127,13 @@ impl<D> Stream for Receiver<D> {
 impl<D> fmt::Debug for Receiver<D> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("mpsc receiver")
+    }
+}
+
+impl<D> Drop for Receiver<D> {
+    fn drop(&mut self) {
+        if let Some(f) = self.1.take() {
+            f();
+        }
     }
 }
