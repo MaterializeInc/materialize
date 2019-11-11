@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+fetch-ssh-keys github --organization MaterializeInc > ~/.ssh/auto_authorized_keys

@@ -1,0 +1,31 @@
+{
+    "builders": [{
+        "type": "amazon-ebs",
+        "instance_type": "r5ad.4xlarge",
+        "source_ami": "ami-0d5d9d301c853a04a",
+        "source_ami_filter": {
+            "filters": {
+              "virtualization-type": "hvm",
+              "name": "ubuntu/images/*ubuntu-bionic-18.04-amd64-server-*",
+              "root-device-type": "ebs"
+            },
+            "owners": ["099720109477"],
+            "most_recent": true
+        },
+        "ssh_username": "ubuntu",
+        "ami_name": "chbench-{{timestamp}}",
+        "ami_groups": ["all"]
+    }],
+    "provisioners": [
+        {
+            "type": "file",
+            "source": "packer",
+            "destination": "/tmp"
+        },
+        {
+            "type": "shell",
+            "script": "packer/setup.sh",
+            "execute_command": "chmod +x {{ .Path }}; sudo env {{ .Vars }} {{ .Path }}"
+        }
+    ]
+}

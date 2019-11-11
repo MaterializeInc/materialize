@@ -158,3 +158,115 @@ http://localhost:3000/login the username/password is admin/admin.
 If you don't save the dashboard then **reloading the page will destroy your edits**.
 Click the save floppy disk icon and copy the resulting JSON into
 `grafana/dashboards/materialize.json`.
+
+## Running on AWS EC2
+
+chbench can be run semi-automatically on AWS EC2 with the help of [Terraform],
+a tool which manages cloud infrastructure. If you're unfamiliar with Terraform,
+you may want to read the [Introduction to Terraform] first.
+
+To install Terraform with Homebrew on macOS:
+
+```shell
+brew install terraform
+```
+
+You'll also need to ensure the VM that gets created on your behalf will have
+access to clone the Materialize repository and download the Materialize Docker
+images. These credentials are pulled from your host machine with your
+cooperation:
+
+  * Log in to Docker (via `docker login`) on your host machine.
+    These credentials will be automatically propagated to the VM.
+
+  * Ensure your SSH agent has an SSH key installed that can be used to clone
+    the Materialize repository. Usually `ssh-add` is sufficient, but if you
+    don't have an SSH agent running, you'll need to run `$(eval ssh-agent)`
+    first. SSH agent forwarding will be used to clone the repository on the VM.
+
+  * Make your membership in the MaterializeInc GitHub organization public.
+    See ["Publicizing or hiding organization membership"][org-membership] for
+    details. All public GitHub keys associated with the MaterializeInc GitHub
+    organization will have permission to log in to the VM. If your membership
+    isn't public, you won't be able to SSH into the VM!
+
+Finally, we're ready to go change into the `terraform` directory and run
+`terraform apply`:
+
+```shell
+cd ex/chbench/terraform
+terraform apply
+```
+
+If all goes well, you'll see output like this:
+
+```
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+instance_id = i-0a825833f82835dd6
+instance_ip = 18.222.150.159
+instance_username = ubuntu
+ssh_command = ssh ubuntu@18.222.150.159
+```
+
+You should now be able to run the displayed SSH command to access your instance:
+
+```
+$ ssh ubuntu@18.222.150.159
+Welcome to Ubuntu 18.04.3 LTS (GNU/Linux 4.15.0-1051-aws x86_64)
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+---- 8< ----
+```
+
+If you get a permission denied error, you probably forgot the step about making
+public your membership in the MaterializeInc GitHub organization. Toggle that
+bit and wait a few minutes, and you should have access to the VM. (The VM
+automatically updates the list of authorized users every two minutes.) You
+should also check that your GitHub account lists the public half of the SSH key
+on your machine.
+
+Once logged in, you can use `dc.sh` or `docker-compose` as described above to
+run chbench.
+
+[Terraform]: https://www.terraform.io
+[Introduction to Terraform]: https://www.terraform.io/intro/index.html
+[org-membership]: https://help.github.com/en/github/setting-up-and-managing-your-github-user-account/publicizing-or-hiding-organization-membership
+
+
+## Updating the EC2 AMI
+
+The EC2 provisioning relies on a custom AMI (Amazon Machine Image) that has
+Docker and Docker Compose pre-installed, as well as a swapdisk configured.
+This AMI can be built automatically via [Packer].
+
+To install Packer with Homebrew on macOS:
+
+```shell
+brew install packer
+```
+
+Then, from this directory, run Packer:
+
+```shell
+cd ex/chbench
+packer build packer.json
+```
+
+The output will include the ID of the new AMI. If you'd like to switch the
+Terraform configuration to use this new AMI, update the `ami` line in
+[terraform/main.tf](terraform/main.tf) appropriately. If the AMI is unusable,
+you should deregister it, via the online AWS console, to avoid being billed for
+storage.
+
+**Note**: the generated AMI will be public! Do not include anything sensitive in
+the AMI itself. Use an additional Terraform provisioning step to download or
+install sensitive information, like we do with the Docker credentials and the
+Materialize repository.
+
+[Packer]: https://www.packer.io
