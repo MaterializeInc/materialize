@@ -129,7 +129,7 @@ pub fn handle_statement(
     catalog: &Catalog,
     session: &Session,
     stmt: Statement,
-    portal_name: String,
+    portal_name: Option<String>,
 ) -> Result<Plan, failure::Error> {
     match stmt {
         Statement::Peek { name, immediate } => handle_peek(catalog, name, immediate),
@@ -137,11 +137,17 @@ pub fn handle_statement(
         Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
-        | Statement::CreateSources { .. } => {
-            handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
-        }
+        | Statement::CreateSources { .. } => match portal_name {
+            Some(portal_name) => {
+                handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
+            }
+            None => bail!("tried to create a dataflow without a portal"),
+        },
         Statement::Drop { .. } => handle_drop_dataflow(catalog, stmt),
-        Statement::Query(query) => handle_select(catalog, *query, session.get_portal(&portal_name)),
+        Statement::Query(query) => match portal_name {
+            Some(portal_name) => handle_select(catalog, *query, session.get_portal(&portal_name)),
+            None => bail!("tried to query without a portal"),
+        },
         Statement::SetVariable {
             local,
             variable,
@@ -156,9 +162,12 @@ pub fn handle_statement(
             filter,
         } => handle_show_columns(catalog, extended, full, &table_name, filter.as_ref()),
         Statement::ShowCreateView { view_name } => handle_show_create_view(catalog, view_name),
-        Statement::Explain { stage, query } => {
-            handle_explain(catalog, stage, *query, session.get_portal(&portal_name))
-        }
+        Statement::Explain { stage, query } => match portal_name {
+            Some(portal_name) => {
+                handle_explain(catalog, stage, *query, session.get_portal(&portal_name))
+            }
+            None => bail!("tried to explain without a portal"),
+        },
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     }
@@ -534,40 +543,39 @@ fn handle_query(
 ) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
     if let Some(portal) = portal {
-        let parameter_datum = portal.row.unpack();
-        if !parameter_datum.is_empty() {
-            expr.visit_mut(&mut |e| {
-                dbg!(&e);
-                match e {
-                    sqlexpr::RelationExpr::Map { scalars, .. } => {
-                        for scalar in scalars {
-                            replace_parameter_with_datum(scalar, &parameter_datum);
-                        }
-                    }
-                    sqlexpr::RelationExpr::Filter { predicates, .. } => {
-                        for scalar in predicates {
-                            replace_parameter_with_datum(scalar, &parameter_datum);
-                        }
-                    }
-                    sqlexpr::RelationExpr::Join { on, .. } => {
-                        replace_parameter_with_datum(on, &parameter_datum);
-                    }
-                    _ => (),
-                }
-            });
+        let parameter_data = portal.row.unpack();
+        if !parameter_data.is_empty() {
+            bind_parameters(&mut expr, parameter_data)
         }
     }
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
-fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_datum: &Vec<Datum>) {
+fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: Vec<Datum>) {
+    expr.visit_mut(&mut |e| match e {
+        sqlexpr::RelationExpr::Map { scalars, .. } => {
+            for s in scalars {
+                replace_parameter_with_datum(s, &parameter_data);
+            }
+        }
+        sqlexpr::RelationExpr::Filter { predicates, .. } => {
+            for p in predicates {
+                replace_parameter_with_datum(p, &parameter_data);
+            }
+        }
+        sqlexpr::RelationExpr::Join { on, .. } => {
+            replace_parameter_with_datum(on, &parameter_data);
+        }
+        _ => (),
+    });
+}
+
+fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data: &[Datum]) {
     let replacement_scalar = if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
-        // there is no .take() for sqlexpr::RelationExpr...
-        let datum = parameter_datum[*position - 1];
-        let column_type = ColumnType::new(datum.scalar_type());
+        let datum = parameter_data[*position - 1];
         Some(sqlexpr::ScalarExpr::Literal(
             Row::pack(vec![datum]),
-            column_type,
+            ColumnType::new(datum.scalar_type()),
         ))
     } else {
         None

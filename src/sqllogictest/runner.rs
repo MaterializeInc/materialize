@@ -666,8 +666,12 @@ impl State {
             .expect("unnamed prepared statement missing")
             .desc()
             .cloned();
-        self.session
-            .set_portal(portal_name.clone(), statement_name, Row::pack(&[]), vec![])?;
+        self.session.set_portal(
+            portal_name.clone(),
+            statement_name,
+            Row::new_empty_row(),
+            vec![],
+        )?;
 
         // Execute.
         {

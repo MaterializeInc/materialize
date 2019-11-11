@@ -78,7 +78,7 @@ pub fn plan(
     catalog: &Catalog,
     session: &Session,
     stmt: Statement,
-    portal_name: String,
+    portal_name: Option<String>,
 ) -> Result<Plan, failure::Error> {
     statement::handle_statement(catalog, session, stmt, portal_name)
 }

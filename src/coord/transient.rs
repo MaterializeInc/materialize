@@ -66,7 +66,7 @@ where
                 &mut catalog,
                 &mut session,
                 stmt,
-                String::new(), // yuck
+                None,
                 conn_id,
             )?;
         }
@@ -185,7 +185,7 @@ fn handle_statement<C>(
     catalog: &mut Catalog,
     session: &mut Session,
     stmt: sql::Statement,
-    portal_name: String,
+    portal_name: Option<String>,
     conn_id: u32,
 ) -> Result<ExecuteResponse, failure::Error>
 where
@@ -239,7 +239,7 @@ where
                 catalog,
                 session,
                 stmt,
-                portal_name,
+                Some(portal_name),
                 conn_id,
             )
         }

@@ -492,7 +492,7 @@ impl PreparedStatement {
 #[derive(Debug)]
 pub struct Portal {
     pub statement_name: String,
-    /// A Row of Datum of parameter values to be used in the query.
+    /// Row containing parameter values to be bound.
     pub row: Row,
     /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
     pub return_field_formats: Vec<bool>,
