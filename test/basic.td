@@ -72,6 +72,22 @@ Field Nullable Type
 b     NO       int8
 sum   YES      int8
 
+> SHOW TABLES;
+data
+logs_addresses
+logs_arrangement
+logs_channels
+logs_dataflow_dependency
+logs_dataflows
+logs_elapsed
+logs_frontiers
+logs_histogram
+logs_operates
+logs_parks
+logs_peek_durations
+logs_peeks
+logs_sharing
+
 > SHOW TABLES LIKE '%peeks%';
 logs_peeks
 
