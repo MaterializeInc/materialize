@@ -543,15 +543,17 @@ fn handle_query(
 ) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
     if let Some(portal) = portal {
-        let parameter_data = portal.row.unpack();
-        if !parameter_data.is_empty() {
-            bind_parameters(&mut expr, parameter_data)
+        if let Some(row) = &portal.parameters {
+            let parameter_data = row.unpack();
+            if !parameter_data.is_empty() {
+                bind_parameters(&mut expr, parameter_data.as_ref())
+            }
         }
     }
     Ok((expr.decorrelate()?, desc, finishing))
 }
 
-fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: Vec<Datum>) {
+fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: &[Datum]) {
     expr.visit_mut(&mut |e| match e {
         sqlexpr::RelationExpr::Map { scalars, .. } => {
             for s in scalars {
@@ -571,18 +573,16 @@ fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: Vec<Datum>)
 }
 
 fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data: &[Datum]) {
-    let replacement_scalar = if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
+    if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
         let datum = parameter_data[*position - 1];
-        Some(sqlexpr::ScalarExpr::Literal(
-            Row::pack(vec![datum]),
-            ColumnType::new(datum.scalar_type()),
-        ))
-    } else {
-        None
+        std::mem::replace(
+            scalar,
+            sqlexpr::ScalarExpr::Literal(
+                Row::pack(vec![datum]),
+                ColumnType::new(datum.scalar_type()),
+            ),
+        );
     };
-    if let Some(replacement_scalar) = replacement_scalar {
-        std::mem::replace(scalar, replacement_scalar);
-    }
 }
 
 fn build_source(

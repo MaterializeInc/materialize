@@ -279,7 +279,7 @@ impl Session {
         &mut self,
         portal_name: String,
         statement_name: String,
-        row: Row,
+        row: Option<Row>,
         return_field_formats: Vec<bool>,
     ) -> Result<(), failure::Error> {
         if self.prepared_statements.contains_key(&statement_name) {
@@ -287,7 +287,7 @@ impl Session {
                 portal_name,
                 Portal {
                     statement_name,
-                    row,
+                    parameters: row,
                     return_field_formats,
                 },
             );
@@ -493,7 +493,7 @@ impl PreparedStatement {
 pub struct Portal {
     pub statement_name: String,
     /// Row containing parameter values to be bound.
-    pub row: Row,
+    pub parameters: Option<Row>,
     /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
     pub return_field_formats: Vec<bool>,
 }

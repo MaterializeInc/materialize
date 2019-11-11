@@ -12,16 +12,16 @@
 
 use std::borrow::Cow;
 use std::convert::TryFrom;
+use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::message::{
-    BackendMessage, FieldFormat, FrontendMessage, RawParameterBytes, VERSION_CANCEL,
-};
+use crate::message::{BackendMessage, FieldFormat, FrontendMessage, VERSION_CANCEL};
 use ore::netio;
+use repr::{Datum, Row, ScalarType};
 
 #[derive(Debug)]
 enum CodecError {
@@ -567,6 +567,61 @@ impl<'a> Cursor<'a> {
     /// Advances the cursor by `n` bytes.
     fn advance(&mut self, n: usize) {
         self.buf = &self.buf[n..]
+    }
+}
+
+/// Stores raw bytes passed from Postgres to
+/// bind to prepared statements.
+#[derive(Debug)]
+pub struct RawParameterBytes {
+    parameters: Vec<Option<Vec<u8>>>,
+    parameter_format_codes: Vec<FieldFormat>,
+}
+
+impl RawParameterBytes {
+    pub fn new(
+        parameters: Vec<Option<Vec<u8>>>,
+        parameter_format_codes: Vec<FieldFormat>,
+    ) -> RawParameterBytes {
+        RawParameterBytes {
+            parameters,
+            parameter_format_codes,
+        }
+    }
+
+    pub fn decode_parameters(&self, typs: &[ScalarType]) -> Result<Row, failure::Error> {
+        let mut datums: Vec<Datum> = Vec::new();
+        for i in 0..self.parameters.len() {
+            datums.push(match &self.parameters[i] {
+                Some(bytes) => match self.parameter_format_codes[i] {
+                    FieldFormat::Binary => {
+                        RawParameterBytes::generate_datum_from_bytes(bytes.as_ref(), typs[i])?
+                    }
+                    FieldFormat::Text => failure::bail!("Can't currently decode text parameters."),
+                },
+                None => Datum::Null,
+            });
+        }
+        Ok(Row::pack(datums))
+    }
+
+    fn generate_datum_from_bytes(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {
+        Ok(match typ {
+            ScalarType::Null => Datum::Null,
+            ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(bytes)),
+            ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(bytes)),
+            ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(bytes).into()),
+            ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(bytes).into()),
+            ScalarType::Bytes => Datum::Bytes(bytes),
+            ScalarType::String => Datum::String(str::from_utf8(bytes)?),
+            _ => {
+                // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
+                failure::bail!(
+                    "Generating datum not implemented for ScalarType: {:#?}",
+                    typ
+                )
+            }
+        })
     }
 }
 

@@ -517,7 +517,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let param_types = stmt.param_types();
                 match raw_parameter_bytes.decode_parameters(param_types) {
                     Ok(row) => {
-                        session.set_portal(portal_name, statement_name, row, fmts)?;
+                        session.set_portal(portal_name, statement_name, Some(row), fmts)?;
                         transition!(SendBindComplete {
                             send: conn.send(BackendMessage::BindComplete),
                             session,
@@ -901,12 +901,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     let portal_name = String::from("");
                     let fmts = vec![];
                     session
-                        .set_portal(
-                            portal_name.clone(),
-                            statement_name,
-                            Row::new_empty_row(),
-                            fmts,
-                        )
+                        .set_portal(portal_name.clone(), statement_name, None, fmts)
                         .expect("unnamed statement to be present during simple query flow");
                     let (tx, rx) = futures::sync::oneshot::channel();
                     cx.cmdq_tx.unbounded_send(coord::Command::Execute {

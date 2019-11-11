@@ -123,11 +123,6 @@ enum Tag {
 }
 
 impl Row {
-    /// Create and return an empty `Row` object.
-    pub fn new_empty_row() -> Row {
-        Row::pack(&[])
-    }
-
     /// Take some `Datum`s and pack them into a `Row`.
     ///
     /// This function can cause a surprising number of allocations. In performance-sensitive code, use `RowPacker::pack` instead to reuse intermediate storage.
