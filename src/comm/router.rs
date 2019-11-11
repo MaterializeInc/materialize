@@ -31,6 +31,10 @@ where
         }
     }
 
+    pub fn remove_dest(&mut self, key: K) {
+        self.0.remove(&key);
+    }
+
     pub fn add_dest(&mut self, key: K) -> futures::sync::mpsc::UnboundedReceiver<C> {
         let (conn_tx, conn_rx) = futures::sync::mpsc::unbounded();
         match self.0.entry(key) {
