@@ -379,7 +379,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         transition!(SendReadyForQuery {
-            send: conn.send(BackendMessage::ReadyForQuery),
+            send: conn.send(BackendMessage::ReadyForQuery(
+                state.session.transaction().into()
+            )),
             session: state.session,
         })
     }
@@ -566,7 +568,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 })
             }
             FrontendMessage::Sync => transition!(SendReadyForQuery {
-                send: conn.send(BackendMessage::ReadyForQuery),
+                send: conn.send(BackendMessage::ReadyForQuery(
+                    state.session.transaction().into()
+                )),
                 session: state.session,
             }),
             FrontendMessage::Terminate => transition!(Done(())),
@@ -683,6 +687,15 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             command_complete!("SET", "set")
                         }
                     }
+                    ExecuteResponse::StartTransaction => {
+                        command_complete!("START TRANSACTION", "transaction_start")
+                    }
+                    ExecuteResponse::Commit => {
+                        command_complete!("COMMIT TRANSACTION", "transaction_commit")
+                    }
+                    ExecuteResponse::Rollback => {
+                        command_complete!("ROLLBACK TRANSACTION", "transaction_rollback")
+                    }
                     ExecuteResponse::Tailing { rx } => transition!(StartCopyOut {
                         send: state.conn.send(BackendMessage::CopyOutResponse),
                         session,
@@ -786,7 +799,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 trace!("cid={} update stream finished", cx.conn_id);
                 let state = state.take();
                 transition!(SendReadyForQuery {
-                    send: state.conn.send(BackendMessage::ReadyForQuery),
+                    send: state.conn.send(BackendMessage::ReadyForQuery(
+                        state.session.transaction().into()
+                    )),
                     session: state.session,
                 })
             }
@@ -854,10 +869,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         let extended = state.extended;
+        let in_transaction = state.session.transaction();
         trace!(
-            "cid={} send command complete extended={}",
+            "cid={} send command complete extended={} transaction={:?}",
             cx.conn_id,
-            extended
+            extended,
+            in_transaction,
         );
         if cx.gather_metrics {
             RESPONSES_SENT_COUNTER
@@ -871,7 +888,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             })
         } else {
             transition!(SendReadyForQuery {
-                send: conn.send(BackendMessage::ReadyForQuery),
+                send: conn.send(BackendMessage::ReadyForQuery(
+                    state.session.transaction().into()
+                )),
                 session: state.session,
             })
         }
@@ -978,7 +997,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::Sync => {
                 let state = state.take();
                 transition!(SendReadyForQuery {
-                    send: conn.send(BackendMessage::ReadyForQuery),
+                    send: conn.send(BackendMessage::ReadyForQuery(
+                        state.session.transaction().into()
+                    )),
                     session: state.session,
                 })
             }
@@ -1012,7 +1033,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendError<A>, failure::Error> {
         trace!("cid={} send error kind={:?}", cx.conn_id, state.kind);
         let conn = try_ready!(state.send.poll());
-        let state = state.take();
+        let mut state = state.take();
+        state.session.fail_transaction();
         if cx.gather_metrics {
             RESPONSES_SENT_COUNTER
                 .with_label_values(&["error", ""])
@@ -1020,7 +1042,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         }
         match state.kind {
             ErrorKind::Standard => transition!(SendReadyForQuery {
-                send: conn.send(BackendMessage::ReadyForQuery),
+                send: conn.send(BackendMessage::ReadyForQuery(
+                    state.session.transaction().into()
+                )),
                 session: state.session,
             }),
             ErrorKind::Extended => transition!(DrainUntilSync {

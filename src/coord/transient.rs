@@ -170,6 +170,8 @@ fn apply_plan(
             }
         }
         Plan::SetVariable { name, value } => session.set(name, value)?,
+        Plan::StartTransaction => session.start_transaction(),
+        Plan::Commit | Plan::Rollback => session.end_transaction(),
         _ => (),
     }
     Ok(())

@@ -16,10 +16,13 @@ use std::str;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
+use log::trace;
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::message::{BackendMessage, FieldFormat, FrontendMessage, VERSION_CANCEL};
+use crate::message::{
+    BackendMessage, FieldFormat, FrontendMessage, TransactionStatus, VERSION_CANCEL,
+};
 use ore::netio;
 use repr::{Datum, Row, ScalarType};
 
@@ -83,13 +86,13 @@ impl Encoder for Codec {
         let mut buf = Vec::new();
 
         // Write type byte.
-        buf.put(match msg {
+        let byte = match msg {
             BackendMessage::AuthenticationOk => b'R',
             BackendMessage::RowDescription(_) => b'T',
             BackendMessage::DataRow(_, _) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
-            BackendMessage::ReadyForQuery => b'Z',
+            BackendMessage::ReadyForQuery(_) => b'Z',
             BackendMessage::NoData => b'n',
             BackendMessage::ParameterStatus(_, _) => b'S',
             BackendMessage::BackendKeyData { .. } => b'K',
@@ -99,7 +102,9 @@ impl Encoder for Codec {
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse => b'H',
             BackendMessage::CopyData(_) => b'd',
-        });
+        };
+        trace!("begin send message '{}'", char::from(byte));
+        buf.put(byte);
 
         // Write message length placeholder. The true length is filled in later.
         let start_len = buf.len();
@@ -162,8 +167,12 @@ impl Encoder for Codec {
             BackendMessage::ParseComplete => (),
             BackendMessage::BindComplete => (),
             BackendMessage::EmptyQueryResponse => (),
-            BackendMessage::ReadyForQuery => {
-                buf.put(b'I'); // transaction indicator
+            BackendMessage::ReadyForQuery(status) => {
+                buf.put(match status {
+                    TransactionStatus::Idle => b'I',
+                    TransactionStatus::InTransaction => b'T',
+                    TransactionStatus::Failed => b'E',
+                });
             }
             BackendMessage::ParameterStatus(name, value) => {
                 buf.put_string(name);

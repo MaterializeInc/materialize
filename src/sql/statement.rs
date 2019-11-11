@@ -42,6 +42,9 @@ pub fn describe_statement(
         | Statement::CreateView { .. }
         | Statement::Drop { .. }
         | Statement::SetVariable { .. }
+        | Statement::StartTransaction { .. }
+        | Statement::Rollback { .. }
+        | Statement::Commit { .. }
         | Statement::Tail { .. } => (None, vec![]),
 
         Statement::CreateSources { .. } => (
@@ -134,6 +137,9 @@ pub fn handle_statement(
     match stmt {
         Statement::Peek { name, immediate } => handle_peek(catalog, name, immediate),
         Statement::Tail { name } => handle_tail(catalog, name),
+        Statement::StartTransaction { .. } => handle_start_transaction(),
+        Statement::Commit { .. } => handle_commit_transaction(),
+        Statement::Rollback { .. } => handle_rollback_transaction(),
         Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
@@ -226,6 +232,18 @@ fn handle_tail(catalog: &Catalog, from: ObjectName) -> Result<Plan, failure::Err
     let from = extract_sql_object_name(&from)?;
     let dataflow = catalog.get(&from)?;
     Ok(Plan::Tail(dataflow.clone()))
+}
+
+fn handle_start_transaction() -> Result<Plan, failure::Error> {
+    Ok(Plan::StartTransaction)
+}
+
+fn handle_commit_transaction() -> Result<Plan, failure::Error> {
+    Ok(Plan::Commit)
+}
+
+fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
+    Ok(Plan::Rollback)
 }
 
 fn handle_show_objects(

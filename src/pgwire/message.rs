@@ -15,6 +15,7 @@ use super::types::PgType;
 use crate::codec::RawParameterBytes;
 use repr::decimal::Decimal;
 use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
+use sql::TransactionStatus as SqlTransactionStatus;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -184,7 +185,7 @@ pub enum BackendMessage {
         tag: String,
     },
     EmptyQueryResponse,
-    ReadyForQuery,
+    ReadyForQuery(TransactionStatus),
     RowDescription(Vec<FieldDescription>),
     DataRow(Vec<Option<FieldValue>>, FieldFormatIter),
     ParameterStatus(&'static str, String),
@@ -204,6 +205,35 @@ pub enum BackendMessage {
     },
     CopyOutResponse,
     CopyData(Vec<u8>),
+}
+
+/// A local representation of [`SqlTransactionStatus`]
+#[derive(Debug, Clone, Copy)]
+pub enum TransactionStatus {
+    /// Not currently in a transaction
+    Idle,
+    /// Currently in a transaction
+    InTransaction,
+    /// Currently in a transaction block which is failed
+    Failed,
+}
+
+impl From<SqlTransactionStatus> for TransactionStatus {
+    /// Convert from the Session's version
+    fn from(status: SqlTransactionStatus) -> TransactionStatus {
+        match status {
+            SqlTransactionStatus::Idle => TransactionStatus::Idle,
+            SqlTransactionStatus::InTransaction => TransactionStatus::InTransaction,
+            SqlTransactionStatus::Failed => TransactionStatus::Failed,
+        }
+    }
+}
+
+impl From<&SqlTransactionStatus> for TransactionStatus {
+    /// Convert from the Session's version
+    fn from(status: &SqlTransactionStatus) -> TransactionStatus {
+        TransactionStatus::from(*status)
+    }
 }
 
 #[derive(Debug)]
