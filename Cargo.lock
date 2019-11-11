@@ -1453,9 +1453,9 @@ checksum = "79c56d6a0b07f9e19282511c83fc5b086364cbae4ba8c7d5f190c3d9b0425a48"
 
 [[package]]
 name = "md5"
-version = "0.6.1"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6bcd6433cff03a4bfc3d9834d504467db1f1cf6d0ea765d37d330249ed629d"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"
@@ -2857,7 +2857,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
- "byteorder 0.5.3",
+ "byteorder 1.3.2",
  "chrono",
  "comm",
  "coord",
@@ -2868,7 +2868,7 @@ dependencies = [
  "getopts",
  "itertools",
  "lazy_static",
- "md5 0.6.1",
+ "md5 0.7.0",
  "ordered-float",
  "ore",
  "regex",
