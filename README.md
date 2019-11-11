@@ -12,8 +12,9 @@ Materialize provides streaming SQL materialized views on top of
 High level documentation is stored in the [doc](doc) folder of this
 repository. Table of contents:
 
-  * [Architecture overview](doc/architecture.md)
-  * [Developer guide](doc/develop.md)
-  * [Demo instructions](doc/demo.md)
+  * [Architecture overview](doc/user/content/overview/what-is-materialize.md)
+  * [Architecture overview](doc/user/content/overview/architecture.md)
+  * [Developer guide](doc/deverloper/develop.md)
+  * [Demo instructions](doc/developer/demo.md)
 
 API documentation is hosted at <https://mtrlz.dev/api/>.

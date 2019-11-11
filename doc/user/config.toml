@@ -6,6 +6,11 @@ pygmentsStyle = "xcode"
 
 [menu]
     [[menu.main]]
-    name = "SQL"
+    identifier = "overview"
+    name = "Overview"
     weight = 1
+
+    [[menu.main]]
     identifier = "sql"
+    name = "SQL"
+    weight = 2

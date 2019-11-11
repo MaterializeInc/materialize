@@ -66,7 +66,7 @@ stream update indicates the new average.
 
 ## Architecture
 
-This content can now be found in the `/docs` Hugo site at `<Hugo site URL>/docs/architecture`.
+This content can now be found in the `/docs` Hugo site at `<Hugo site URL>/docs/overview/architecture`.
 
 ## What's next?
 

@@ -26,7 +26,7 @@ _underline_
 code block
 ```
 
-[link](./)
+[link](#)
 
 - ul1
 - ul2
