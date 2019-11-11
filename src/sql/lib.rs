@@ -74,8 +74,13 @@ pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
 }
 
 /// Produces a [`Plan`] from a [`Statement`].
-pub fn plan(catalog: &Catalog, session: &Session, stmt: Statement) -> Result<Plan, failure::Error> {
-    statement::handle_statement(catalog, session, stmt)
+pub fn plan(
+    catalog: &Catalog,
+    session: &Session,
+    stmt: Statement,
+    portal_name: Option<String>,
+) -> Result<Plan, failure::Error> {
+    statement::handle_statement(catalog, session, stmt, portal_name)
 }
 
 /// Determines the type of the rows that will be returned by `stmt` and the type

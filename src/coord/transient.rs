@@ -66,6 +66,7 @@ where
                 &mut catalog,
                 &mut session,
                 stmt,
+                None,
                 conn_id,
             )?;
         }
@@ -180,12 +181,13 @@ fn handle_statement<C>(
     catalog: &mut Catalog,
     session: &mut Session,
     stmt: sql::Statement,
+    portal_name: Option<String>,
     conn_id: u32,
 ) -> Result<ExecuteResponse, failure::Error>
 where
     C: comm::Connection,
 {
-    sql::plan(catalog, session, stmt.clone())
+    sql::plan(catalog, session, stmt.clone(), portal_name)
         .or_else(|err| {
             // Executing the query failed. If we're running in symbiosis with
             // Postgres, see if Postgres can handle it.
@@ -227,7 +229,15 @@ where
     match prepared.sql() {
         Some(stmt) => {
             let stmt = stmt.clone();
-            handle_statement(coord, postgres, catalog, session, stmt, conn_id)
+            handle_statement(
+                coord,
+                postgres,
+                catalog,
+                session,
+                stmt,
+                Some(portal_name),
+                conn_id,
+            )
         }
         None => Ok(ExecuteResponse::EmptyQuery),
     }

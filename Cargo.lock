@@ -1440,8 +1440,10 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgwire",
+ "postgres",
  "pretty_assertions",
  "prometheus",
+ "rand 0.7.2",
  "tokio",
 ]
 

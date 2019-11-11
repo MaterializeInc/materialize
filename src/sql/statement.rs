@@ -17,19 +17,20 @@ use sqlparser::ast::{
 };
 use url::Url;
 
+use crate::expr as sqlexpr;
 use crate::expr::like::build_like_regex_from_string;
 use crate::query;
-use crate::session::Session;
+use crate::session::{Portal, Session};
 use crate::store::{Catalog, CatalogItem, RemoveMode};
 use crate::Plan;
 use dataflow_types::{
     KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink, SinkConnector,
     Source, SourceConnector, View,
 };
-use expr::{ColumnOrder, RelationExpr};
+use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{Datum, RelationDesc, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -128,6 +129,7 @@ pub fn handle_statement(
     catalog: &Catalog,
     session: &Session,
     stmt: Statement,
+    portal_name: Option<String>,
 ) -> Result<Plan, failure::Error> {
     match stmt {
         Statement::Peek { name, immediate } => handle_peek(catalog, name, immediate),
@@ -135,9 +137,17 @@ pub fn handle_statement(
         Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
-        | Statement::CreateSources { .. } => handle_create_dataflow(catalog, stmt),
+        | Statement::CreateSources { .. } => match portal_name {
+            Some(portal_name) => {
+                handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
+            }
+            None => bail!("tried to create a dataflow without a portal"),
+        },
         Statement::Drop { .. } => handle_drop_dataflow(catalog, stmt),
-        Statement::Query(query) => handle_select(catalog, *query),
+        Statement::Query(query) => match portal_name {
+            Some(portal_name) => handle_select(catalog, *query, session.get_portal(&portal_name)),
+            None => bail!("tried to query without a portal"),
+        },
         Statement::SetVariable {
             local,
             variable,
@@ -155,7 +165,12 @@ pub fn handle_statement(
             filter,
         } => handle_show_columns(catalog, extended, full, &table_name, filter.as_ref()),
         Statement::ShowCreateView { view_name } => handle_show_create_view(catalog, view_name),
-        Statement::Explain { stage, query } => handle_explain(catalog, stage, *query),
+        Statement::Explain { stage, query } => match portal_name {
+            Some(portal_name) => {
+                handle_explain(catalog, stage, *query, session.get_portal(&portal_name))
+            }
+            None => bail!("tried to explain without a portal"),
+        },
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     }
@@ -277,7 +292,11 @@ fn handle_show_create_view(
     ])]))
 }
 
-fn handle_create_dataflow(catalog: &Catalog, mut stmt: Statement) -> Result<Plan, failure::Error> {
+fn handle_create_dataflow(
+    catalog: &Catalog,
+    mut stmt: Statement,
+    portal: Option<&Portal>,
+) -> Result<Plan, failure::Error> {
     match &mut stmt {
         Statement::CreateView {
             name,
@@ -289,11 +308,12 @@ fn handle_create_dataflow(catalog: &Catalog, mut stmt: Statement) -> Result<Plan
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            let (mut relation_expr, mut desc, finishing) = handle_query(catalog, *query.clone())?;
+            let (mut relation_expr, mut desc, finishing) =
+                handle_query(catalog, *query.clone(), portal)?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
-                relation_expr = RelationExpr::Project {
-                    input: Box::new(RelationExpr::TopK {
+                relation_expr = relationexpr::RelationExpr::Project {
+                    input: Box::new(relationexpr::RelationExpr::TopK {
                         input: Box::new(relation_expr),
                         group_key: vec![],
                         order_key: finishing.order_by,
@@ -467,7 +487,7 @@ fn handle_peek(
     let dataflow = catalog.get(&name)?.clone();
     let typ = dataflow.typ();
     Ok(Plan::Peek {
-        source: ::expr::RelationExpr::Get {
+        source: relationexpr::RelationExpr::Get {
             name: dataflow.name().to_owned(),
             typ: typ.clone(),
         },
@@ -481,7 +501,7 @@ fn handle_peek(
             offset: 0,
             limit: None,
             order_by: (0..typ.column_types.len())
-                .map(|column| ColumnOrder {
+                .map(|column| relationexpr::ColumnOrder {
                     column,
                     desc: false,
                 })
@@ -491,8 +511,12 @@ fn handle_peek(
     })
 }
 
-pub fn handle_select(catalog: &Catalog, query: Query) -> Result<Plan, failure::Error> {
-    let (relation_expr, _, finishing) = handle_query(catalog, query)?;
+pub fn handle_select(
+    catalog: &Catalog,
+    query: Query,
+    portal: Option<&Portal>,
+) -> Result<Plan, failure::Error> {
+    let (relation_expr, _, finishing) = handle_query(catalog, query, portal)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
@@ -504,8 +528,9 @@ pub fn handle_explain(
     catalog: &Catalog,
     stage: Stage,
     query: Query,
+    portal: Option<&Portal>,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) = handle_query(catalog, query)?;
+    let (relation_expr, _desc, _finishing) = handle_query(catalog, query, portal)?;
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
@@ -522,9 +547,50 @@ pub fn handle_explain(
 fn handle_query(
     catalog: &Catalog,
     query: Query,
-) -> Result<(RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
-    let (expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
+    portal: Option<&Portal>,
+) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
+    let (mut expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
+    if let Some(portal) = portal {
+        if let Some(row) = &portal.parameters {
+            let parameter_data = row.unpack();
+            if !parameter_data.is_empty() {
+                bind_parameters(&mut expr, parameter_data.as_ref())
+            }
+        }
+    }
     Ok((expr.decorrelate()?, desc, finishing))
+}
+
+fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: &[Datum]) {
+    expr.visit_mut(&mut |e| match e {
+        sqlexpr::RelationExpr::Map { scalars, .. } => {
+            for s in scalars {
+                replace_parameter_with_datum(s, &parameter_data);
+            }
+        }
+        sqlexpr::RelationExpr::Filter { predicates, .. } => {
+            for p in predicates {
+                replace_parameter_with_datum(p, &parameter_data);
+            }
+        }
+        sqlexpr::RelationExpr::Join { on, .. } => {
+            replace_parameter_with_datum(on, &parameter_data);
+        }
+        _ => (),
+    });
+}
+
+fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data: &[Datum]) {
+    if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
+        let datum = parameter_data[*position - 1];
+        std::mem::replace(
+            scalar,
+            sqlexpr::ScalarExpr::Literal(
+                Row::pack(vec![datum]),
+                ColumnType::new(datum.scalar_type()),
+            ),
+        );
+    };
 }
 
 fn build_source(
