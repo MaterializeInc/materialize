@@ -251,7 +251,7 @@ fn parse_query<'a>(
                 if sort == Sort::Row {
                     rows.sort();
                 }
-                vals = rows.into_iter().flat_map(|row| row).collect();
+                vals = rows.into_iter().flatten().collect();
                 if sort == Sort::Value {
                     vals.sort();
                 }
