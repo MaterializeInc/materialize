@@ -445,7 +445,7 @@ where
         for source in sources.iter() {
             if let Some(rename) = &self.sources.get(&source.name).unwrap().1 {
                 dataflows.push(
-                    DataflowDesc::new(None)
+                    DataflowDesc::new()
                         .add_view(View {
                             name: rename.clone(),
                             relation_expr: RelationExpr::Get {

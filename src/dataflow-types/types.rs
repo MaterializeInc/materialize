@@ -106,7 +106,7 @@ impl RowSetFinishing {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
     /// Named sources used by the dataflow.
     pub sources: Vec<Source>,
@@ -122,13 +122,8 @@ pub struct DataflowDesc {
 }
 
 impl DataflowDesc {
-    pub fn new(as_of: Option<Vec<Timestamp>>) -> Self {
-        Self {
-            sources: Vec::new(),
-            views: Vec::new(),
-            sinks: Vec::new(),
-            as_of,
-        }
+    pub fn new() -> Self {
+        Default::default()
     }
 
     /// Collects the names of the dataflows that this dataflow depends upon.
@@ -162,19 +157,19 @@ impl DataflowDesc {
 
 impl From<Source> for DataflowDesc {
     fn from(s: Source) -> Self {
-        DataflowDesc::new(None).add_source(s)
+        DataflowDesc::new().add_source(s)
     }
 }
 
 impl From<View> for DataflowDesc {
     fn from(v: View) -> Self {
-        DataflowDesc::new(None).add_view(v)
+        DataflowDesc::new().add_view(v)
     }
 }
 
 impl From<Sink> for DataflowDesc {
     fn from(s: Sink) -> Self {
-        DataflowDesc::new(None).add_sink(s)
+        DataflowDesc::new().add_sink(s)
     }
 }
 
@@ -255,7 +250,7 @@ mod tests {
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = DataflowDesc::new(None).add_view(View {
+        let dataflow = DataflowDesc::new().add_view(View {
             name: "report".into(),
             raw_sql: "<none>".into(),
             relation_expr: RelationExpr::Project {
