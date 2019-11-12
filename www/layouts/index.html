@@ -1,0 +1,235 @@
+{{ define "body" }}
+<section id="index-intro">
+  <div class="container">
+    <div class="grid-section">
+      <div class="grid-6x3">
+        <h1 class="h1-callout">
+          The Streaming SQL
+          <span class="inline-block">Materialized View Engine</span>
+        </h1>
+        <h3>Powered by Timely Dataflow</h3>
+      </div>
+
+      <div class="grid-spacer grid-1x2">&nbsp;</div>
+
+      <div class="grid-4x2 overflow-visible">
+        <h2 class="chev">
+          Real-time materialized views over your
+          <span class="inline-block">streaming data</span>
+        </h2>
+        <p>Write complex SQL queries.</p>
+        <p>Add data from a message bus like Kafka.</p>
+        <p>Your SQL views stay incrementally updated within milliseconds.</p>
+        <p>At millions of updates per second.</p>
+      </div>
+
+      <div class="grid-spacer grid-1x2">&nbsp;</div>
+      <div class="grid-spacer grid-1x2"></div>
+
+      <div class="grid-4x2 mailing-list">
+        <div id="mc_embed_signup">
+          <form action="https://materialize.us20.list-manage.com/subscribe/post?u=2a9d35bb5a29d3f5f21b42b4d&amp;id=150f529342" method="post" id="mc-embedded-subscribe-form" name="mc-embedded-subscribe-form" class="validate" target="_blank" novalidate>
+            <div id="mc_embed_signup_scroll">
+              <h2>Sign up to get early access!</h2>
+              <div class="mc-field-group">
+                <input type="email" value="" name="EMAIL" class="required email" id="mce-EMAIL" placeholder="Email Address*">
+              </div>
+              <div class="mc-field-group">
+                <input type="text" value="" name="NAME" class="" id="mce-NAME" placeholder="Name">
+              </div>
+              <div id="mce-responses" class="clear">
+                <div class="response" id="mce-error-response" style="display:none"></div>
+                <div class="response" id="mce-success-response" style="display:none"></div>
+              </div>
+              <div style="position: absolute; left: -5000px;" aria-hidden="true"><input type="text" name="b_2a9d35bb5a29d3f5f21b42b4d_150f529342" tabindex="-1" value=""></div>
+              <div class="clear"><input type="submit" value="Subscribe" name="subscribe" id="mc-embedded-subscribe" class="button"></div>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="grid-spacer grid-1x2">&nbsp;</div>
+    </div>
+  </div>
+
+  <div class="illustration-landscape"> <img src="{{ "images/landscape@2x.png" | relURL }}"></div>
+</section>
+
+<section id="features">
+  <div class="container">
+    <div class="grid-section">
+      <div class="grid-6x2 features-intro">
+        <img class="brand-symbol" src="{{ "images/materialize-symbol.png" | relURL }}" alt="Materialize">
+        <h2><span>Materialize Features</span></h2>
+      </div>
+
+      <div class="grid-spacer grid-1x1">&nbsp;</div>
+
+      <div class="grid-4x2 overflow-visible">
+        <h1 class="h1-callout">Write SQL Queries. Stream your data.</h1>
+        <p>No manually glueing streams. No writing imperative code.</p>
+        <p>Declare what you want in SQL. Materialize keeps it up to date. Within milliseconds.</p>
+        <div class="feature-item">
+          <h2 class="chev">ANSI Standard SQL. Including joins.</h2>
+          <p>
+            No "inspired by SQL" half-broken query languages.
+            Materialize supports ANSI Standard SQL 92.
+            Use a SQL shell or your favorite database adapter.
+          </p>
+        </div>
+
+        <div class="illustration-sql-joins">
+          <img src="{{ "images/illustration-sql-joins.svg" | relURL }}">
+        </div>
+
+        <div class="feature-item">
+          <h2 class="chev">Correct answers.</h2>
+          <p>
+            No page-long caveats about eventual consistency and out-of-order execution.
+            Materialize results are always consistent and always up-to-date.
+            Pretend that we reran every query every message.
+          </p>
+        </div>
+
+        <div class="feature-item">
+          <h2 class="chev">Distributed. Fault tolerant. Replicated.</h2>
+          <p>
+            Materialize is built on top of Timely Dataflow, which is distributed.
+            Materialize also adds active-active cluster replication for fault tolerance, and autoscalingorchestration.
+          </p>
+        </div>
+
+        <div class="feature-item">
+          <h2 class="chev">Scales up... and down.</h2>
+          <p>
+            Scale up: process millions of messages per second on a single-digit number of machines.
+            Scale down: run Materialize on your laptop with a single binary on a single core.
+            It's not just fast, it's also lean.
+          </p>
+        </div>
+
+        <div class="feature-item">
+          <h2 class="chev">Powered by Timely Dataflow.</h2>
+          <p>
+            Materialize is built on top of a powerful stream processing engine:
+            <a href="http://timelydataflow.com">Timely Dataflow</a>.
+            Inspired by the award-winning
+            <a href="https://www.usenix.org/conference/atc14/technical-sessions/presentation/naiad-timely-dataflow-system" target="_blank">Naiad</a>
+            project, Timely Dataflow has been in open-source development
+            for 4 years and runs in production deployments at scale.
+          </p>
+        </div>
+      </div>
+
+      <div class="grid-spacer grid-1x1">&nbsp;</div>
+    </div>
+  </div>
+</section>
+
+<section id="team">
+  <div class="container">
+    <div class="grid-section">
+      <div class="grid-6x2">
+        <h1>Our Team</h1>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://www.linkedin.com/in/arjunravinarayan/" target="_blank"><img src="{{ "images/people/arjun.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Arjun Narayan"></a>
+        <h3>Arjun Narayan / <span class="person-title">CEO</span></h3>
+        <p>Arjun was an engineer on the SQL team at Cockroach Labs, where he worked on performance and benchmarking. He has a <a href="https://ristret.com/arjun">blog</a>.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://github.com/frankmcsherry" target="_blank"><img src="{{ "images/people/mcsherry.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Frank McSherry"></a>
+        <h3>Frank McSherry / <span class="person-title">Chief Scientist</span></h3>
+        <p>Frank was at Microsoft Research Silicon Valley where he led the Naiad project and co-invented Differential Privacy. He has a GitHub repository named <a href="https://github.com/frankmcsherry/blog">blog</a>.
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://www.linkedin.com/in/cuong-do-5331/" target="_blank"><img src="{{ "images/people/cdo.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Cuong Do"></a>
+        <h3>Cuong Do / <span class="person-title">Head of Engineering</span></h3>
+        <p>Cuong was the third engineer at YouTube, the founding head of Dropbox's first remote office in New York City, and an engineering manager at Cockroach Labs.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://github.com/benesch" target="_blank"><img src="{{ "images/people/benesch.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Nikhil Benesch"></a>
+        <h3>Nikhil Benesch / <span class="person-title">Engineer</span></h3>
+        <p>Nikhil specializes in distributed systems, SQL databases, and build systems. He was previously an engineer on the core team at Cockroach Labs, where he worked on the replication engine.
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://github.com/jamii" target="_blank"><img src="{{ "images/people/jamii.png" | relURL }}" alt="Jamie Brandon"></a>
+        <h3>Jamie Brandon / <span class="person-title">Engineer</span></h3>
+        <p>Jamie was a researcher at Relational AI, and was the CTO at <a href="http://witheve.com" targe="_blank"><span class="inline-block">Eve</span></a>. Jamie also has a <a href="http://scattered-thoughts.net/writing">blog</a> like all the other cool kids.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://github.com/umanwizard" target="_blank"><img src="{{ "images/people/brennan.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Brennan Vincent"></a>
+        <h3>Brennan Vincent / <span class="person-title">Engineer</span></h3>
+        <p>Brennan was a software engineer at Facebook before joining Materialize, working on everything from mobile app battery efficiency to deep learning frameworks.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://github.com/quodlibetor" target="_blank"><img src="{{ "images/people/brandon.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Brandon Maister"></a>
+        <h3>Brandon Maister / <span class="person-title">Engineer</span></h3>
+        <p>Brandon is a software engineer who likes the full stack. He was previously an engineer at Knewton where he worked hard to make things reliable no matter what users or engineers threw at them.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <a href="https://github.com/jldlaughlin" target="_blank"><img src="{{ "images/people/jessica.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Jessica Laughlin"></a>
+        <h3>Jessica Laughlin / <span class="person-title">Engineer</span></h3>
+        <p>Jessica, previously an engineer at Bluecore, has a passion for well-implemented infrastructure and hand drawn software diagrams.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <img src="{{ "images/people/venus.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Venus Jorgia">
+        <h3>Venus Jorgia / <span class="person-title">Operations</span></h3>
+        <p>Venus is a London-born New Yorker dedicated to cultivating a unique working environment and has a creative, intuitive approach to Office & Operations Management.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <img src="{{ "images/people/walid.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Walid Al Shaibani">
+        <h3>Walid Al Shaibani / <span class="person-title">Business Development</span></h3>
+        <p>Walid has been following the tech space very closely since his days as an investment broker. After co-founding his own business in the Middle East, he is combining his entrepreneurial nature with his passion for technology as Materialize's first sales hire.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <img src="{{ "images/people/andi.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Andi Wang">
+        <h3>Andi Wang / <span class="person-title">Engineer</span></h3>
+        <p>Andi is enthusiastic about Big Data and about building technologies that will make everyone else excited about it too. Previously at Oracle, she worked on the RDBMS and a proprietary NoSQL database.</p>
+      </div>
+
+      <div class="grid-2x3 person-card">
+        <img src="{{ "images/people/sean.jpg?nf_resize=smartcrop&w=250&h=250" | relURL }}" alt="Sean Loiselle">
+        <h3>Sean Loiselle / <span class="person-title">Principal Technical Writer</span></h3>
+        <p>Sean writes docs and code. He's previously done documentation at a web host and Cockroach Labs, and is now pursuing a master's degree in systems engineering.</p>
+      </div>
+    </div>
+
+    <div class="grid-section">
+      <div class="grid-spacer grid-2x2">&nbsp;</div>
+      <div class="grid-4x2 overflow-visible">
+        <h2 class="chev"><a href="https://jobs.lever.co/materialize">Join us</a>. We are hiring.</h2>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="board-and-investors">
+  <div class="container">
+    <div class="grid-section">
+      <div class="grid-6x2" id="investors-lightspeed">
+        <a href="https://lsvp.com/" target="_blank">
+          <img src="{{ "images/lightspeed-logo.svg" | relURL }}" style="width: 343px">
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer">
+    <div class="container">
+        &copy;{{ now.Format "2006" }} Materialize / <a href="mailto:contact@materialize.io">Contact Us</a>
+    </div>
+</footer>
+{{ end }}

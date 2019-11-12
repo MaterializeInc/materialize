@@ -3,7 +3,7 @@
 
 {{ $toggle := resources.Get "js/menutoggle.js" -}}
 {{ $js := slice $toggle | resources.Concat "js/bundle.js" | resources.Minify }}
-<script src="{{ $js.Permalink }}" {{ printf "integrity=%q" $js.Data.Integrity | safeHTMLAttr }}></script>
+<script src="{{ $js.Permalink }}"></script>
 
 {{/*  Sass processing here  */}}
 {{ $style := resources.Get "sass/main.scss" | resources.ExecuteAsTemplate "main.css" . | toCSS }}

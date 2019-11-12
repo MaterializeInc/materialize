@@ -12,4 +12,5 @@
 target
 /.cargo
 .mtrlz.log
-*.rs.bk
+**/*.rs.bk
+.netlify
