@@ -29,8 +29,13 @@ impl crate::transform::Transform for Demand {
 
 impl Demand {
     pub fn transform(&self, relation: &mut RelationExpr) {
-        self.action(relation, HashSet::new(), &mut HashMap::new());
+        self.action(
+            relation,
+            (0..relation.typ().column_types.len()).collect(),
+            &mut HashMap::new(),
+        );
     }
+
     /// Columns be produced.
     pub fn action(
         &self,
@@ -89,11 +94,8 @@ impl Demand {
             RelationExpr::Join {
                 inputs,
                 variables,
-                projection,
+                demand,
             } => {
-                // Record column demands as an optional projection.
-                *projection = Some(columns.iter().cloned().collect());
-
                 let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
                 let input_arities = input_types
                     .iter()
@@ -113,15 +115,40 @@ impl Demand {
                     .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
                     .collect::<Vec<_>>();
 
-                // We certainly need each required column from its input.
-                let mut new_columns = vec![HashSet::new(); inputs.len()];
-                for column in columns {
-                    let input = input_relation[column];
-                    new_columns[input].insert(column - prior_arities[input]);
+                //we want to keep only one key from its equivalence class and project
+                //duplicate keys to their equivalent
+                let mut projection: Vec<usize> = (0..input_arities.iter().sum()).collect();
+                // assumes the same column does not appear in the two different equivalence classes
+                // TODO: can it be assumed that variables/variable are all sorted/in canonical form?
+                for variable in variables.iter() {
+                    let (min_rel, min_col) = variable.iter().min().unwrap();
+                    for (rel, col) in variable {
+                        projection[prior_arities[*rel] + col] = prior_arities[*min_rel] + *min_col;
+                    }
                 }
 
-                // We also need any columns that participate in constraints.
-                for variable in variables {
+                //what the upstream relation demands from the join
+                //organized by the input from which the demand will be fulfilled
+                let mut demand_vec = vec![Vec::new(); inputs.len()];
+                //what the join demands from each input
+                let mut new_columns = vec![HashSet::new(); inputs.len()];
+
+                // Project each required column to its new location
+                // and record it as demanded of both the input and the join
+                for column in columns {
+                    let projected_column = projection[column];
+                    let rel = input_relation[projected_column];
+                    let col = projected_column - prior_arities[rel];
+                    demand_vec[rel].push(col);
+                    new_columns[rel].insert(col);
+                }
+
+                // Record column demands as an optional projection.
+                *demand = Some(demand_vec);
+
+                // The join also demands from each input any columns that
+                // participate in constraints.
+                for variable in variables.iter() {
                     for (rel, col) in variable {
                         new_columns[*rel].insert(*col);
                     }
@@ -131,6 +158,8 @@ impl Demand {
                 for (input, columns) in inputs.iter_mut().zip(new_columns) {
                     self.action(input, columns, gets);
                 }
+
+                *relation = relation.take_dangerous().project(projection);
             }
             RelationExpr::Reduce {
                 input,

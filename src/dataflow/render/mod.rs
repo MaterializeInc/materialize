@@ -424,7 +424,9 @@ where
 
     fn render_join(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
         if let RelationExpr::Join {
-            inputs, variables, ..
+            inputs,
+            variables,
+            demand,
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most
@@ -444,6 +446,12 @@ where
             }
 
             let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+            let mut offset = 0;
+            let mut prior_arities = Vec::new();
+            for input in 0..inputs.len() {
+                prior_arities.push(offset);
+                offset += arities[input];
+            }
 
             // The relation_expr is to implement join as a `fold` over `inputs`.
             let mut input_iter = inputs.iter().enumerate();
@@ -468,6 +476,8 @@ where
                     let mut old_keys = Vec::new();
                     let mut new_keys = Vec::new();
 
+                    let mut future_join_keys = Vec::new();
+
                     for sets in variables.iter() {
                         let new_pos = sets
                             .iter()
@@ -480,8 +490,35 @@ where
                         if let (Some(new_pos), Some(old_pos)) = (new_pos, old_pos) {
                             old_keys.push(old_pos);
                             new_keys.push(new_pos);
+                        } else if let Some(new_pos) = new_pos {
+                            future_join_keys.push(new_pos);
                         }
                     }
+
+                    //TODO: continue to support demand.is_none() case?
+                    //find the positions of the non-keys to be retained
+                    //retain all non-key columns from old
+                    let old_outputs: Vec<usize> = (0..columns.len())
+                        .filter(|i| !old_keys.contains(i))
+                        .collect();
+                    //keep non-key columns in new only if they are demanded
+                    //or necessary for the next stages of the join.
+                    let new_outputs: Vec<usize> = if let Some(demand) = demand {
+                        (0..arities[index])
+                            .filter(|i| demand[index].contains(i) || future_join_keys.contains(i))
+                            .collect()
+                    } else {
+                        (0..arities[index])
+                            .filter(|i| !new_keys.contains(i))
+                            .collect()
+                    };
+                    //list the locations of the new columns
+                    columns = old_keys
+                        .iter()
+                        .map(|i| columns[*i])
+                        .chain(old_outputs.iter().map(|i| columns[*i]))
+                        .chain(new_outputs.iter().map(|i| (index, *i)))
+                        .collect();
 
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
@@ -514,23 +551,80 @@ where
                         self.set_local(&input, &new_keys[..], new_keyed);
                     }
 
+                    let mut old_unpacker = RowUnpacker::new();
+                    let mut new_unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
-                    joined = match self.arrangement(&input, &new_keys[..]) {
-                        Some(ArrangementFlavor::Local(local)) => old_keyed
-                            .join_core(&local, move |_keys, old, new| {
-                                Some(packer.pack(old.iter().chain(new.iter())))
-                            }),
-                        Some(ArrangementFlavor::Trace(trace)) => old_keyed
-                            .join_core(&trace, move |_keys, old, new| {
-                                Some(packer.pack(old.iter().chain(new.iter())))
-                            }),
-                        None => {
-                            panic!("Arrangement alarmingly absent!");
-                        }
-                    };
-                    columns.extend((0..arities[index]).map(|c| (index, c)));
+                    joined =
+                        match self.arrangement(&input, &new_keys[..]) {
+                            Some(ArrangementFlavor::Local(local)) => {
+                                old_keyed.join_core(&local, move |keys, old, new| {
+                                    let old_datums = old_unpacker.unpack(old);
+                                    let new_datums = new_unpacker.unpack(new);
+                                    Some(
+                                        packer.pack(
+                                            keys.iter().chain(
+                                                old_outputs.iter().map(|i| old_datums[*i]).chain(
+                                                    new_outputs.iter().map(|i| new_datums[*i]),
+                                                ),
+                                            ),
+                                        ),
+                                    )
+                                })
+                            }
+                            Some(ArrangementFlavor::Trace(trace)) => {
+                                old_keyed.join_core(&trace, move |keys, old, new| {
+                                    let old_datums = old_unpacker.unpack(old);
+                                    let new_datums = new_unpacker.unpack(new);
+                                    Some(
+                                        packer.pack(
+                                            keys.iter().chain(
+                                                old_outputs.iter().map(|i| old_datums[*i]).chain(
+                                                    new_outputs.iter().map(|i| new_datums[*i]),
+                                                ),
+                                            ),
+                                        ),
+                                    )
+                                })
+                            }
+                            None => {
+                                panic!("Arrangement alarmingly absent!");
+                            }
+                        };
                 }
 
+                //permute back to the original positions
+                let mut inverse_columns: Vec<(usize, usize)> = columns
+                    .iter()
+                    .map(|(input, col)| prior_arities[*input] + *col)
+                    .enumerate()
+                    .map(|(new_col, original_col)| (original_col, new_col))
+                    .collect();
+                inverse_columns.sort();
+                let mut inverse_columns_iter = inverse_columns.iter().peekable();
+                let mut outputs = Vec::new();
+                for i in 0..arities.iter().sum() {
+                    if let Some((original_col, new_col)) = inverse_columns_iter.peek() {
+                        if i == *original_col {
+                            outputs.push(Some(*new_col));
+                            inverse_columns_iter.next();
+                            continue;
+                        }
+                    }
+                    outputs.push(None);
+                }
+                let mut unpacker = RowUnpacker::new();
+                let mut packer = RowPacker::new();
+                joined = joined.map(move |row| {
+                    let datums = unpacker.unpack(&row);
+                    packer.pack(outputs.iter().map(|i| {
+                        if let Some(new_col) = i {
+                            datums[*new_col]
+                        } else {
+                            //regenerate any columns ignored during join with dummy data
+                            Datum::Null
+                        }
+                    }))
+                });
                 self.collections.insert(relation_expr.clone(), joined);
             } else {
                 panic!("Empty join; why?");

@@ -321,7 +321,7 @@ ORDER BY revenue DESC, o_entry_d
 Project {
   outputs: [0 .. 2, 4, 3],
   Reduce {
-    group_key: [0, 2, 1, 17],
+    group_key: [10, 23, 22, 17],
     aggregates: [sum(#8)],
     Join {
       variables: [
@@ -834,7 +834,10 @@ Reduce {
     group_key: [0],
     aggregates: [count(#22)],
     Union {
-      Project { outputs: [8 .. 29, 0 .. 7], Get { id-1 } },
+      Project {
+        outputs: [8 .. 29, 0, 9, 10, 8, 4 .. 7],
+        Get { id-1 }
+      },
       Map {
         scalars: [null, null, null, null, null, null, null, null],
         Union {
@@ -1089,7 +1092,7 @@ Project {
   Filter {
     predicates: [#7 > 20000dec],
     Reduce {
-      group_key: [10, 12, 11, 18, 23, 14, 16],
+      group_key: [10, 20, 19, 18, 23, 14, 16],
       aggregates: [sum(#8)],
       Join {
         variables: [

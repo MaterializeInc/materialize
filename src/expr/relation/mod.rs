@@ -83,12 +83,12 @@ pub enum RelationExpr {
         /// Each element of the sequence is a set of pairs, where the values described by each pair must
         /// be equal to all other values in the same set.
         variables: Vec<Vec<(usize, usize)>>,
-        /// This optional field is a hint for which columns are actually used
-        /// by operators that use this collection. Although the join does not
-        /// have permission to change the schema, it can introduce dummy values
-        /// at the end of its computation, avoiding the maintenance of values
+        /// This optional field is a hint for which columns from each input are
+        /// actually used by operators that use this collection. Although the
+        /// join does not have permission to change the schema, it can introduce
+        /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
-        projection: Option<Vec<usize>>,
+        demand: Option<Vec<Vec<usize>>>,
     },
     /// Group a dataflow by some columns and aggregate over each group
     Reduce {
@@ -401,7 +401,7 @@ impl RelationExpr {
         RelationExpr::Join {
             inputs,
             variables,
-            projection: None,
+            demand: None,
         }
     }
 
