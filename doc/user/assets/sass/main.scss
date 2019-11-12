@@ -17,31 +17,31 @@
 
 @font-face {
   font-family: "graphik";
-  src: url("/docs/font/graphik-regular-web.eot");
-  src: url("/docs/font/graphik-regular-web.eot?#iefix") format("embedded-opentype"),
-    url("/docs/font/graphik-regular-web.woff") format("woff");
+  src: url("{{ "font/graphik-regular-web.eot" | relURL }}");
+  src: url("{{ "font/graphik-regular-web.eot?#iefix" | relURL }}") format("embedded-opentype"),
+    url("{{ "font/graphik-regular-web.woff" | relURL }}") format("woff");
 }
 @font-face {
   font-family: "graphik-semibold";
   font-weight: 600;
   font-style: normal;
-  src: url("/docs/font/graphik-semibold-web.eot");
-  src: url("/docs/font/graphik-semibold-web.eot?#iefix") format("embedded-opentype"),
-    url("/docs/font/graphik-semibold-web.woff") format("woff");
+  src: url("{{ "font/graphik-semibold-web.eot" | relURL }}");
+  src: url("{{ "font/graphik-semibold-web.eot?#iefix" | relURL }}") format("embedded-opentype"),
+    url("{{ "font/graphik-semibold-web.woff" | relURL }}") format("woff");
 }
 @font-face {
   font-family: "graphik-bold";
   font-weight: bold;
   font-style: normal;
-  src: url("/docs/font/graphic-bold-web.eot");
-  src: url("/docs/font/graphik-bold-web.eot?#iefix") format("embedded-opentype"),
-    url("/docs/font/graphik-bold-web.woff") format("woff");
+  src: url("{{ "font/graphic-bold-web.eot" | relURL }}");
+  src: url("{{ "font/graphik-bold-web.eot?#iefix" | relURL }}") format("embedded-opentype"),
+    url("{{ "font/graphik-bold-web.woff" | relURL }}") format("woff");
 }
 
 @font-face {
   font-family: "hkgrotesk-italic";
   font-style: italic;
-  src: url("/docs/font/hkgrotesk-italic.eot");
-  src: url("/docs/font/hkgrotesk-italic.eot?#iefix") format("embedded-opentype"),
-    url("/docs/font/hkgrotesk-italic.woff") format("woff");
+  src: url("{{ "font/hkgrotesk-italic.eot" | relURL }}");
+  src: url("{{ "font/hkgrotesk-italic.eot?#iefix" | relURL }}") format("embedded-opentype"),
+    url("{{ "font/hkgrotesk-italic.woff" | relURL }}") format("woff");
 }

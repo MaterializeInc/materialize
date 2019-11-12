@@ -1,0 +1,4 @@
+[build]
+base = "doc/user"
+publish = "public"
+command = "hugo --gc --minify --baseURL $DEPLOY_PRIME_URL"

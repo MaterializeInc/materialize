@@ -87,14 +87,14 @@ In this table:
 Inner joins return all tuples from both tables where the join condition is
 valid.
 
-![inner join diagram](/docs/images/join-inner.png)
+![inner join diagram](/images/join-inner.png)
 
 ```sql
-SELECT 
-  employees."name" AS employee, 
-  managers."name" AS manager 
-FROM employees 
-INNER JOIN managers 
+SELECT
+  employees."name" AS employee,
+  managers."name" AS manager
+FROM employees
+INNER JOIN managers
   ON employees.id = managers.manages;
 ```
 
@@ -113,14 +113,14 @@ the join condition. Tuples on from the left-hand table that are not joined with
 a tuple from the right-hand table contain `NULL` wherever the right-hand table
 is referenced.
 
-![left outer join diagram](/docs/images/join-left-outer.png)
+![left outer join diagram](/images/join-left-outer.png)
 
 ```sql
-SELECT 
-  employees."name" AS employee, 
-  managers."name" AS manager 
-FROM employees 
-LEFT OUTER JOIN managers 
+SELECT
+  employees."name" AS employee,
+  managers."name" AS manager
+FROM employees
+LEFT OUTER JOIN managers
   ON employees.id = managers.manages;
 ```
 
@@ -143,14 +143,14 @@ tuples from the left-hand-side table that match the join condition. Tuples on
 from the right-hand table that are not joined with a tuple from the left-hand
 table contain `NULL` wherever the left-hand table is referenced.
 
-![right outer join diagram](/docs/images/join-right-outer.png)
+![right outer join diagram](/images/join-right-outer.png)
 
 ```sql
-SELECT 
-  employees."name" AS employee, 
-  managers."name" AS manager 
-FROM employees 
-RIGHT OUTER JOIN managers 
+SELECT
+  employees."name" AS employee,
+  managers."name" AS manager
+FROM employees
+RIGHT OUTER JOIN managers
   ON employees.id = managers.manages;
 ```
 
@@ -171,14 +171,14 @@ conditions are met.
 Tuples that are not joined with the other table contain `NULL` wherever the
 other table is referenced.
 
-![full outer join diagram](/docs/images/join-full-outer.png)
+![full outer join diagram](/images/join-full-outer.png)
 
 ```sql
-SELECT 
-  employees."name" AS employee, 
-  managers."name" AS manager 
-FROM employees 
-FULL OUTER JOIN managers 
+SELECT
+  employees."name" AS employee,
+  managers."name" AS manager
+FROM employees
+FULL OUTER JOIN managers
   ON employees.id = managers.manages;
 ```
 
@@ -199,7 +199,7 @@ product](https://en.wikipedia.org/wiki/Cartesian_product) of the two tables,
 i.e. all combinations of tuples from the left-hand table combined with tuples
 from the right-hand table.
 
-![cross join diagram](/docs/images/join-cross.png)
+![cross join diagram](/images/join-cross.png)
 
 Our example dataset doesn't have a meaningful cross-join query, but the above
 diagram shows how cross joins form the Cartesian product.

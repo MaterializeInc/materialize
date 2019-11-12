@@ -1,8 +1,9 @@
-baseURL = "http://materialize.io/docs"
+baseURL = "https://materialize.io/docs"
 languageCode = "en-us"
 title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsStyle = "xcode"
+canonicalizeURLs = true
 
 [menu]
     [[menu.main]]
