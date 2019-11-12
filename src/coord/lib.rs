@@ -12,9 +12,9 @@
 //! statements"), which can be more efficient when the same query is executed
 //! multiple times.
 //!
-//! These commands are derived directly from the commands that [`pgwire`]
-//! produces, though they can, in theory, be provided by something other than a
-//! pgwire server.
+//! These commands are derived directly from the commands that
+//! [`pgwire`](../pgwire/index.html) produces, though they can, in theory, be
+//! provided by something other than a pgwire server.
 
 use dataflow_types::{PeekResponse, Update};
 use futures::Future;

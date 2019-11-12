@@ -73,8 +73,8 @@ fn run() -> Result<(), failure::Error> {
     );
     opts.optopt(
         "s",
-        "startup",
-        "file with SQL queries to execute at startup",
+        "bootstrap",
+        "file with SQL queries to execute when bootstrapping",
         "FILE",
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
@@ -116,9 +116,9 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
-    let sql = match popts.opt_str("startup") {
+    let bootstrap_sql = match popts.opt_str("bootstrap") {
         None => "".to_string(),
-        Some(startup_file) => read_to_string(&startup_file)?,
+        Some(bootstrap_file) => read_to_string(&bootstrap_file)?,
     };
 
     let _server = materialized::serve(materialized::Config {
@@ -127,7 +127,7 @@ fn run() -> Result<(), failure::Error> {
         threads,
         process,
         addresses,
-        sql,
+        bootstrap_sql,
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
     })?;

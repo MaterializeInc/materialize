@@ -6,7 +6,7 @@
 //! Encoding/decoding of messages in pgwire. See "[Frontend/Backend Protocol:
 //! Message Formats][1]" in the PostgreSQL reference for the specification.
 //!
-//! See the parent [`pgwire`] module docs for higher level concerns.
+//! See the [crate docs](crate) for higher level concerns.
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 

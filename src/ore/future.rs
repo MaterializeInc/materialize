@@ -379,7 +379,7 @@ pub fn dev_null<T, E>() -> DevNull<T, E> {
 /// A sink that consumes its input and sends it nowhere.
 ///
 /// Primarily useful as a base sink when folding multiple sinks into one using
-/// [`futures::Stream::fanout`].
+/// [`futures::Sink::fanout`].
 #[derive(Debug)]
 pub struct DevNull<T, E>(PhantomData<T>, PhantomData<E>);
 

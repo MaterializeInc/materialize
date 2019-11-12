@@ -35,20 +35,34 @@ use ore::tokio::net::TcpStreamExt;
 
 mod http;
 
+/// Configuration for a `materialized` server.
 pub struct Config {
+    /// The interval at which the internal Timely cluster should publish updates
+    /// about its state.
     pub logging_granularity: Option<Duration>,
-    /// The version of materialized.
+    /// The version of `materialized to report in informational messages.
     pub version: String,
+    /// The number of Timely worker threads that this process should host.
     pub threads: usize,
+    /// The ID of this process in the cluster. IDs must be contiguously
+    /// allocated, starting at zero.
     pub process: usize,
+    /// The addresses of each process in the cluster, including this node,
+    /// in order of process ID.
     pub addresses: Vec<String>,
-    pub sql: String,
+    /// SQL to run if bootstrapping a new cluster.
+    pub bootstrap_sql: String,
+    /// An optional symbiosis endpoint. See the
+    /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
+    /// Whether to collect metrics. If enabled, metrics can be collected by
+    /// e.g. Prometheus via the `/metrics` HTTP endpoint.
     pub gather_metrics: bool,
 }
 
 impl Config {
-    /// The number of timely workers described the by the configuration.
+    /// The total number of timely workers, across all processes, described the
+    /// by the configuration.
     pub fn num_timely_workers(&self) -> usize {
         self.threads * self.addresses.len()
     }
@@ -91,7 +105,7 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
     io::write_all(a, "unknown protocol\n").discard()
 }
 
-/// Start the materialized server.
+/// Start a `materialized` server.
 pub fn serve(config: Config) -> Result<Server, failure::Error> {
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
@@ -194,7 +208,7 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
             num_timely_workers,
             config.symbiosis_url.mz_as_deref(),
             logging_config.as_ref(),
-            config.sql,
+            config.bootstrap_sql,
             cmdq_rx,
         )?)
     } else {

@@ -18,9 +18,6 @@ use self::decimal::Significand;
 use crate::ColumnType;
 
 /// A literal value.
-///
-/// Note that datums may be scalar, like [`Datum::Int32`], or composite, like
-/// [`Datum::Tuple`], but they are always constant.
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum Datum<'a> {
@@ -404,7 +401,7 @@ impl<'a> From<Datum<'a>> for Doc<'static, BoxDoc<'static, ()>> {
 pub enum ScalarType {
     /// The type of a datum that can only be null.
     ///
-    /// This is uncommon. Most [`Datum:Null`]s appear with a different type.
+    /// This is uncommon. Most [`Datum::Null`]s appear with a non-null type.
     Null,
     Bool,
     Int32,

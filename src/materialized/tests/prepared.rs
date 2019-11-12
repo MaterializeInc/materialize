@@ -22,7 +22,7 @@ fn test_prepared_statements() -> Result<(), Box<dyn Error>> {
         threads: 1,
         process: 0,
         addresses: vec![format!("127.0.0.1:{}", rand_port).into()],
-        sql: "".into(),
+        bootstrap_sql: "".into(),
         symbiosis_url: None,
         gather_metrics: false,
     })?;

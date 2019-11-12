@@ -10,7 +10,7 @@ use ore::option::OptionExt;
 
 use crate::ScalarType;
 
-/// The type of a [`Datum`].
+/// The type of a [`Datum`](crate::Datum).
 ///
 /// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
 /// Int32 or String) with additional attributes, like its nullability.

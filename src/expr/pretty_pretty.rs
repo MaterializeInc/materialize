@@ -59,15 +59,15 @@ impl<'a> From<&'a Box<RelationExpr>> for Doc<'a, BoxDoc<'a, ()>, ()> {
 ///     by 2 spaces, otherwise.
 ///
 /// For example:
-/// ```ignore
+/// ```text
 /// to_braced_doc("Distinct {", "665", "}")
 /// ```
 /// results in
-/// ```ignore
+/// ```text
 /// Distinct { 665 }
 /// ```
 /// when fitting on a single line and in
-/// ```ignore
+/// ```text
 /// Distinct {
 ///   665
 /// }
@@ -90,15 +90,15 @@ where
 ///     by 2 spaces, otherwise.
 ///
 /// For example:
-/// ```ignore
+/// ```text
 /// to_tightly_braced_doc("[", "v665", "]")
 /// ```
 /// results in
-/// ```ignore
+/// ```text
 /// [v665]
 /// ```
 /// when fitting on a single line and in
-/// ```ignore
+/// ```text
 /// [
 ///   v665
 /// ]

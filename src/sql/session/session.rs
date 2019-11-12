@@ -5,12 +5,12 @@
 
 //! All the state that is associated with a specific session.
 //!
-//! The primary docs for this module are in the parent [`sql::session`] module docs, this
-//! just exists to make the top level more clear in terms of what is actually exported vs
-//! required internally.
+//! The primary docs for this module are in the parent [`sql::session`](super)
+//! module docs. This module exists to make the top level more clear in terms of
+//! what is actually exported vs. required internally.
 //!
-//! Client connections each get a new [`Session`], which is composed of [`Var`]s and the
-//! elements of prepared statements.
+//! Client connections each get a new [`Session`], which is composed of
+//! [`Var`](var::Var)s and the elements of prepared statements.
 
 use std::collections::HashMap;
 use std::fmt;
