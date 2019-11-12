@@ -9,12 +9,13 @@ steps:
   - id: build
     label: ":docker: build"
     command: ci/test/build.sh
+    if: $CHANGED_RUST || $CHANGED_SLT || $CHANGED_TESTDRIVE || build.branch == "master"
     timeout_in_minutes: 30
     agents:
       queue: builder
 
   - id: lint-fast
-    label: ":bath: lint and rustfmt"
+    label: Fast linters
     command: ci/test/lint-fast.sh
     timeout_in_minutes: 10
     plugins:
@@ -28,8 +29,9 @@ steps:
           - CARGO_HOME=/cargo
 
   - id: lint-slow
-    label: ":paperclip: clippy and doctests"
+    label: ":japanese_ogre: Lint and Format"
     command: ci/test/lint-slow.sh
+    if: $CHANGED_RUST
     timeout_in_minutes: 30
     plugins:
       - docker#v3.1.0:
@@ -52,6 +54,7 @@ steps:
       - docker-compose#v3.0.3:
           config: ci/test/cargo-test.compose.yml
           run: app
+    if: $CHANGED_RUST
 
   - id: testdrive
     label: ":racing_car: testdrive"
@@ -62,6 +65,7 @@ steps:
       - docker-compose#v3.0.3:
           config: ci/test/testdrive.compose.yml
           run: testdrive
+    if: $CHANGED_RUST || $CHANGED_TESTDRIVE
 
   - id: short-sqllogictest
     label: ":bulb: Short SQL logic tests"
@@ -75,6 +79,7 @@ steps:
       - docker-compose#v3.0.3:
           config: ci/slt/docker-compose.yml
           run: sqllogictest
+    if: $CHANGED_RUST || $CHANGED_SLT
 
   - id: full-sqllogictest
     label: ":bulb: :bulb: Full SQL logic tests"
