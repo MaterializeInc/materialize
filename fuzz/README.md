@@ -4,18 +4,6 @@ WIP [fuzz testing]. Not super useful yet.
 
 ## Installing `cargo-fuzz`
 
-Until [rust-fuzz/cargo-fuzz#176] lands, you'll need to compile Nikhil's
-fork from source:
-
-```shell
-git clone git@github.com:benesch/cargo-fuzz.git
-cd cargo-fuzz
-git checkout manifest-detection
-cargo install --path .
-```
-
-Once that PR lands, these installation instructions can be shortened to:
-
 ```
 cargo install cargo-fuzz
 ```
