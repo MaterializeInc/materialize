@@ -3,11 +3,11 @@
 
 {{ $toggle := resources.Get "js/menutoggle.js" -}}
 {{ $js := slice $toggle | resources.Concat "js/bundle.js" | resources.Minify }}
-<script src="{{ $js.Permalink }}"></script>
+<script src="{{ $js.RelPermalink }}"></script>
 
 {{/*  Sass processing here  */}}
 {{ $style := resources.Get "sass/main.scss" | resources.ExecuteAsTemplate "main.css" . | toCSS }}
-<link rel="stylesheet" href="{{ $style.Permalink }}">
+<link rel="stylesheet" href="{{ $style.RelPermalink }}">
 
 {{/* Linked fonts here  */}}
 <link href="https://fonts.googleapis.com/css?family=Roboto+Mono&display=swap" rel="stylesheet">
