@@ -47,8 +47,9 @@ empty_tree=$(git hash-object -t tree /dev/null)
 files=$(git diff --ignore-submodules=all --name-only "$empty_tree")
 
 copyright_files=$(grep -vE \
-    -e '.(git|vscode)ignore' \
-    -e '.gitmodules' \
+    -e '(^|/)\.(git|vscode)ignore$' \
+    -e '(^|/)\.git(modules|attributes)$' \
+    -e '(^|/).lfsconfig$' \
     -e '(^|/)Cargo\.toml$' \
     -e '^Cargo\.lock$' \
     -e '^netlify.toml$' \
@@ -62,14 +63,15 @@ copyright_files=$(grep -vE \
     -e '\.png$' \
     -e '\.jpe?g$' \
     -e '\/go\.sum$' \
-    -e 'doc/user/' \
+    -e '^www/' \
     <<< "$files"
 )
 
 newline_files=$(grep -vE \
     -e '\.png$' \
     -e '\.jpe?g$' \
-    -e 'doc/user/static/font' \
+    -e 'www/static/font' \
+    -e '^www/content/docs$' \
     <<< "$files"
 )
 
