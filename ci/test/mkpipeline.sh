@@ -32,7 +32,7 @@ CHANGED_SLT=$(changes_matching "test/*.slt" "test/**/*.slt")
 CHANGED_TESTDRIVE=$(changes_matching "test/*.td" "test/**/*.td")
 export CHANGED_DOC_USER CHANGED_RUST CHANGED_SLT CHANGED_TESTDRIVE
 
-run git diff --stat origin/master...
+GIT_PAGER="" run git diff --stat origin/master...
 env | grep CHANGED
 
 buildkite-agent pipeline upload ci/test/pipeline.yml
