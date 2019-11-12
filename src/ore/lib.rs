@@ -21,6 +21,7 @@ pub mod netio;
 pub mod option;
 pub mod panic;
 pub mod sync;
+pub mod thread;
 pub mod tokio;
 
 /// Logs a message to stderr and crashes the process.
