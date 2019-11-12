@@ -30,8 +30,8 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, PeekResponse, PeekWhen, RowSetFinishing, Sink, SinkConnector,
-    Source, SourceConnector, TailSinkConnector, Timestamp, Update, View,
+    compare_columns, DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source,
+    SourceConnector, TailSinkConnector, Timestamp, Update, View,
 };
 use expr::RelationExpr;
 use ore::future::FutureExt;
@@ -200,7 +200,7 @@ where
             Plan::Peek {
                 mut source,
                 when,
-                mut finishing,
+                finishing,
             } => {
                 // Peeks describe a source of data and a timestamp at which to view its contents.
                 //
@@ -217,9 +217,7 @@ where
                 // need to block on the arrival of further input data.
                 let timestamp = self.determine_timestamp(&source, when);
 
-                // For straight-forward dataflow pipelines, use finishing instructions instead of
-                // dataflow operators.
-                Self::maybe_use_finishing(&mut source, &mut finishing);
+                let (project, filter) = Self::plan_peek(&mut source);
 
                 // Create a transient view if the peek is not of a base relation.
                 if let RelationExpr::Get { name, typ: _ } = source {
@@ -240,6 +238,8 @@ where
                             tx: rows_tx,
                             timestamp,
                             finishing: finishing.clone(),
+                            project,
+                            filter,
                         },
                     );
                 } else {
@@ -276,6 +276,8 @@ where
                             tx: rows_tx,
                             timestamp,
                             finishing: finishing.clone(),
+                            project: None,
+                            filter: Vec::new(),
                         },
                     );
                     broadcast(
@@ -479,58 +481,6 @@ where
         }
     }
 
-    /// Maybe use finishing instructions instead of relation expressions. This
-    /// method may replace top-level dataflow operators in the given dataflow
-    /// graph with semantically equivalent finishing instructions.
-    ///
-    /// This makes sense for short-lived queries that do not need to shuffle
-    /// data between workers and is the case for basic
-    /// `SELECT ... FROM ... WHERE ...` queries. They translate to
-    /// straight-forward dataflow pipelines that start with a `Get` on a
-    /// built-in view or a source and then process the resulting records with
-    /// `Project`, `Map`, `Filter`, `Negate`, `Threshold`, and possibly `Union`.
-    /// By executing finishing instructions instead of installing full dataflow
-    /// graphs, such queries can avoid view generation altogether and execute
-    /// faster. That is particularly valuable for introspective queries, e.g.,
-    /// when performance monitoring. It is, however, exactly the wrong thing to
-    /// do when a query needs to install a view, since `Project`, `Filter`, and
-    /// `Threshold` may reduce the size of that view.
-    fn maybe_use_finishing(expr: &mut RelationExpr, finishing: &mut RowSetFinishing) {
-        // Check whether the relation expression is a simple pipeline.
-        fn is_simple(expr: &RelationExpr) -> bool {
-            match expr {
-                RelationExpr::Filter { input, .. } => is_simple(input),
-                RelationExpr::Get { .. } => true,
-                _ => false,
-            }
-        }
-
-        if !is_simple(expr) {
-            return;
-        }
-
-        // Replace operators with finishing instructions.
-        fn use_finishing(expr: &mut RelationExpr, finishing: &mut RowSetFinishing) {
-            if let RelationExpr::Get { .. } = expr {
-                return;
-            }
-
-            match expr.take_dangerous() {
-                RelationExpr::Filter {
-                    mut input,
-                    mut predicates,
-                } => {
-                    use_finishing(&mut input, finishing);
-                    *expr = *input;
-                    finishing.filter.append(&mut predicates);
-                }
-                _ => unreachable!(),
-            }
-        }
-
-        use_finishing(expr, finishing);
-    }
-
     pub fn create_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) {
         for dataflow in dataflows.iter_mut() {
             // Check for sources before optimization, to provide a consistent
@@ -615,6 +565,39 @@ where
                     Vec::new(),
                 )),
             );
+        }
+    }
+
+    /// Extracts an optional projection around an optional filter.
+    ///
+    /// This extraction is done to allow workers to process a larger class of queries
+    /// without building explicit dataflows, avoiding latency, allocation and general
+    /// load on the system. The worker performs the filter and projection in place.
+    fn plan_peek(expr: &mut RelationExpr) -> (Option<Vec<usize>>, Vec<expr::ScalarExpr>) {
+        let mut outputs_plan = None;
+        if let RelationExpr::Project { input, outputs } = expr {
+            outputs_plan = Some(outputs.clone());
+            *expr = input.take_dangerous();
+        }
+        let mut predicates_plan = Vec::new();
+        if let RelationExpr::Filter { input, predicates } = expr {
+            predicates_plan.extend(predicates.iter().cloned());
+            *expr = input.take_dangerous();
+        }
+
+        // We only apply this transformation if the result is a `Get`.
+        // It is harmful to apply it otherwise, as we materialize more data than
+        // we would have if we applied the filter and projection beforehand.
+        if let RelationExpr::Get { .. } = expr {
+            (outputs_plan, predicates_plan)
+        } else {
+            if !predicates_plan.is_empty() {
+                *expr = expr.take_dangerous().filter(predicates_plan);
+            }
+            if let Some(outputs) = outputs_plan {
+                *expr = expr.take_dangerous().project(outputs);
+            }
+            (None, Vec::new())
         }
     }
 
