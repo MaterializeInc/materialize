@@ -12,7 +12,7 @@
 // Clippy doesn't understand `as_of` and complains.
 #![allow(clippy::wrong_self_convention)]
 
-use expr::{ColumnOrder, RelationExpr, ScalarExpr};
+use expr::{ColumnOrder, RelationExpr};
 use repr::{Datum, RelationDesc, Row};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -87,8 +87,6 @@ pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -
 /// trivial peeks.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RowSetFinishing {
-    /// Include only rows matching all predicates.
-    pub filter: Vec<ScalarExpr>,
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
     /// Include only as many rows (after offset).

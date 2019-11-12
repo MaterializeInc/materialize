@@ -21,7 +21,7 @@ use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
-use repr::{Datum, Row, RowUnpacker};
+use repr::{Datum, Row, RowPacker, RowUnpacker};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
@@ -75,6 +75,8 @@ pub enum SequencedCommand {
         tx: comm::mpsc::Sender<PeekResponse>,
         timestamp: Timestamp,
         finishing: RowSetFinishing,
+        project: Option<Vec<usize>>,
+        filter: Vec<expr::ScalarExpr>,
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
@@ -413,6 +415,8 @@ where
                 conn_id,
                 tx,
                 finishing,
+                project,
+                filter,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let mut trace = self
@@ -433,6 +437,8 @@ where
                     timestamp,
                     finishing,
                     trace,
+                    project,
+                    filter,
                 };
                 // Log the receipt of the peek.
                 if let Some(logger) = self.materialized_logger.as_mut() {
@@ -559,6 +565,8 @@ struct PendingPeek {
     /// Finishing operations to perform on the peek, like an ordering and a
     /// limit.
     finishing: RowSetFinishing,
+    project: Option<Vec<usize>>,
+    filter: Vec<expr::ScalarExpr>,
     /// The data from which the trace derives.
     trace: WithDrop<KeysValsHandle>,
 }
@@ -613,7 +621,6 @@ impl PendingPeek {
                 // Before (expensively) determining how many copies of a row
                 // we have, let's eliminate rows that we don't care about.
                 if self
-                    .finishing
                     .filter
                     .iter()
                     .all(|predicate| predicate.eval(&datums) == Datum::True)
@@ -637,6 +644,7 @@ impl PendingPeek {
                         self.name
                     );
 
+                    // TODO: We could push a count here, as we create owned output later.
                     for _ in 0..copies {
                         results.push(row);
                     }
@@ -646,6 +654,14 @@ impl PendingPeek {
             cur.step_key(&storage)
         }
 
+        // If we have extracted a projection, we should re-write the order_by columns.
+        if let Some(columns) = &self.project {
+            for key in self.finishing.order_by.iter_mut() {
+                key.column = columns[key.column];
+            }
+        }
+
+        // TODO: We could sort here in any case, as it allows a merge sort at the coordinator.
         if let Some(limit) = self.finishing.limit {
             let offset_plus_limit = limit + self.finishing.offset;
             if results.len() > offset_plus_limit {
@@ -660,6 +676,20 @@ impl PendingPeek {
             }
         }
 
-        results.iter().map(|row| (*row).clone()).collect()
+        if let Some(columns) = &self.project {
+            results
+                .iter()
+                .map({
+                    let mut unpacker = RowUnpacker::new();
+                    let mut packer = RowPacker::new();
+                    move |row| {
+                        let datums = unpacker.unpack(*row);
+                        packer.pack(columns.iter().map(|i| datums[*i]))
+                    }
+                })
+                .collect()
+        } else {
+            results.iter().map(|row| (*row).clone()).collect()
+        }
     }
 }

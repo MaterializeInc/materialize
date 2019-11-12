@@ -165,7 +165,6 @@ fn plan_query(
     }
 
     let finishing = RowSetFinishing {
-        filter: vec![],
         order_by,
         limit,
         project: (0..output_typ.column_types.len()).collect(),
