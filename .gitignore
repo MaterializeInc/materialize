@@ -6,3 +6,4 @@ target
 .envrc
 doc/user/public
 doc/user/resources
+doc/user/util/rr-diagram-gen/rr-diagram-gen
