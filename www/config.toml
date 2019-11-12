@@ -3,7 +3,6 @@ languageCode = "en-us"
 title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsStyle = "xcode"
-canonicalizeURLs = true
 
 [menu]
     [[menu.main]]
