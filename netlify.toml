@@ -1,4 +1,10 @@
 [build]
 base = "doc/user"
 publish = "public"
+command = "hugo --gc --minify --baseURL $URL"
+
+[context.deploy-preview]
+command = "hugo --gc --minify --baseURL $DEPLOY_PRIME_URL"
+
+[context.branch-deploy]
 command = "hugo --gc --minify --baseURL $DEPLOY_PRIME_URL"
