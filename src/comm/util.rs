@@ -14,8 +14,8 @@ use tokio::timer::{Delay, Timeout};
 
 use crate::protocol;
 
-/// A future that resolves once a connection to [`SocketAddr`] can be
-/// established or a timeout elapses.
+/// A future that resolves once a connection can be established or a timeout
+/// elapses.
 ///
 /// Under the hood, the future repeatedly opens new TCP connections, with
 /// exponential backoff between each attempt, until a TCP connection succeeds.

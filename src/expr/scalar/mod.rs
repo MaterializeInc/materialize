@@ -403,7 +403,8 @@ impl ScalarExpr {
     }
 
     /// Converts this [`ScalarExpr`] to a [`Doc`] or document for pretty
-    /// printing. See [`RelationExpr::to_doc`] for details on the approach.
+    /// printing. See [`RelationExpr::to_doc`](crate::RelationExpr::to_doc)
+    /// for details on the approach.
     pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
         use ScalarExpr::*;
 

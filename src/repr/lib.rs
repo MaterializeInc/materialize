@@ -10,15 +10,7 @@
 //! individual layers may use different representations internally, but they all
 //! agree to use this representation at their boundaries.
 //!
-//! The core type is the [`Datum`] enum, which represents a literal value. The
-//! most interesting variant is the composite type [`Datum::Tuple`], which is a
-//! datum that contains arbitrary other datums. Perhaps surprisingly, this
-//! simple composite type is sufficient to represent all composite types that an
-//! external data interchange format might provide, like records, unions, and
-//! maps.
-//!
-//! [`Datum`]: repr::Datum
-//! [`Datum::Tuple`]: repr::Datum::Tuple
+//! The core type is the [`Datum`] enum, which represents a literal value.
 
 #![deny(missing_debug_implementations)]
 

@@ -154,11 +154,11 @@ where
 /// All known address types for [`Connection`]s.
 ///
 /// The existence of this type is a bit unfortunate. It exists so that
-/// [`mpsc::Sender`] does not need to be generic over [`Connection`], as
-/// MPSC transmitters are meant to be lightweight and easy to stash in places
-/// where a generic parameter might be a hassle. Ideally we'd make an `Addr`
-/// trait and store a `Box<dyn Addr>`, but Rust does not currently permit
-/// serializing and deserializing trait objects.
+/// [`mpsc::Sender`](crate::mpsc::Sender) does not need to be generic over
+/// [`Connection`], as MPSC transmitters are meant to be lightweight and easy to
+/// stash in places where a generic parameter might be a hassle. Ideally we'd
+/// make an `Addr` trait and store a `Box<dyn Addr>`, but Rust does not
+/// currently permit serializing and deserializing trait objects.
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug)]
 pub enum Addr {
     /// The address type for [`TcpStream`].
