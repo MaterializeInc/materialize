@@ -122,12 +122,12 @@ pub struct DataflowDesc {
 }
 
 impl DataflowDesc {
-    pub fn new(as_of: Option<Vec<Timestamp>>) -> Self {
+    pub fn new() -> Self {
         Self {
             sources: Vec::new(),
             views: Vec::new(),
             sinks: Vec::new(),
-            as_of,
+            as_of: None,
         }
     }
 
@@ -162,19 +162,19 @@ impl DataflowDesc {
 
 impl From<Source> for DataflowDesc {
     fn from(s: Source) -> Self {
-        DataflowDesc::new(None).add_source(s)
+        DataflowDesc::new().add_source(s)
     }
 }
 
 impl From<View> for DataflowDesc {
     fn from(v: View) -> Self {
-        DataflowDesc::new(None).add_view(v)
+        DataflowDesc::new().add_view(v)
     }
 }
 
 impl From<Sink> for DataflowDesc {
     fn from(s: Sink) -> Self {
-        DataflowDesc::new(None).add_sink(s)
+        DataflowDesc::new().add_sink(s)
     }
 }
 
@@ -255,7 +255,7 @@ mod tests {
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = DataflowDesc::new(None).add_view(View {
+        let dataflow = DataflowDesc::new().add_view(View {
             name: "report".into(),
             raw_sql: "<none>".into(),
             relation_expr: RelationExpr::Project {
