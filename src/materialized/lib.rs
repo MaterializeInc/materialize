@@ -19,7 +19,6 @@ use log::error;
 use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 use tokio::io::{self, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
@@ -31,6 +30,7 @@ use ore::future::FutureExt;
 use ore::netio;
 use ore::netio::{SniffedStream, SniffingStream};
 use ore::option::OptionExt;
+use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use ore::tokio::net::TcpStreamExt;
 
 mod http;
@@ -203,14 +203,17 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
 
     // Initialize command queue and sql planner, but only on the primary.
     let coord_thread = if is_primary {
-        Some(coord::transient::serve(
-            switchboard.clone(),
-            num_timely_workers,
-            config.symbiosis_url.mz_as_deref(),
-            logging_config.as_ref(),
-            config.bootstrap_sql,
-            cmdq_rx,
-        )?)
+        Some(
+            coord::transient::serve(
+                switchboard.clone(),
+                num_timely_workers,
+                config.symbiosis_url.mz_as_deref(),
+                logging_config.as_ref(),
+                config.bootstrap_sql,
+                cmdq_rx,
+            )?
+            .join_on_drop(),
+        )
     } else {
         None
     };
@@ -227,27 +230,18 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
     .map_err(|s| format_err!("{}", s))?;
 
     Ok(Server {
-        cmdq_tx: Some(cmdq_tx),
-        dataflow_guard: Some(Box::new(dataflow_guard)),
-        coord_thread,
+        _cmdq_tx: cmdq_tx,
+        _dataflow_guard: Box::new(dataflow_guard),
+        _coord_thread: coord_thread,
         _runtime: runtime,
     })
 }
 
 /// A running `materialized` server.
 pub struct Server {
-    cmdq_tx: Option<Arc<mpsc::UnboundedSender<coord::Command>>>,
-    dataflow_guard: Option<Box<dyn Any>>,
-    coord_thread: Option<thread::JoinHandle<()>>,
+    // Drop order matters for these fields.
+    _cmdq_tx: Arc<mpsc::UnboundedSender<coord::Command>>,
+    _dataflow_guard: Box<dyn Any>,
+    _coord_thread: Option<JoinOnDropHandle<()>>,
     _runtime: Runtime,
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.cmdq_tx.take();
-        self.dataflow_guard.take();
-        if let Some(coord_thread) = self.coord_thread.take() {
-            coord_thread.join().unwrap();
-        }
-    }
 }

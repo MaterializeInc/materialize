@@ -28,7 +28,6 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem;
 use std::ops;
 use std::path::Path;
-use std::thread::JoinHandle;
 
 use failure::{bail, ResultExt};
 use futures::Future;
@@ -39,6 +38,7 @@ use regex::Regex;
 use coord::ExecuteResponse;
 use dataflow;
 use ore::option::OptionExt;
+use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnType, Datum, RelationDesc, Row};
 use sql::{Session, Statement};
 use sqlparser::dialect::AnsiDialect;
@@ -257,10 +257,12 @@ fn write_err(kind: &str, error: &impl failure::AsFail, f: &mut fmt::Formatter) -
 const NUM_TIMELY_WORKERS: usize = 3;
 
 pub(crate) struct State {
-    dataflow_workers: Box<dyn Drop>,
-    runtime: tokio::runtime::Runtime,
-    coord_thread: JoinHandle<()>,
+    // Drop order matters for these fields.
     cmd_tx: futures::sync::mpsc::UnboundedSender<coord::Command>,
+    _dataflow_workers: Box<dyn Drop>,
+    _coord_thread: JoinOnDropHandle<()>,
+    _runtime: tokio::runtime::Runtime,
+
     session: Session,
     conn_id: u32,
 }
@@ -362,10 +364,10 @@ impl State {
         .unwrap();
 
         Ok(State {
-            runtime,
-            dataflow_workers: Box::new(dataflow_workers),
-            coord_thread,
             cmd_tx,
+            _dataflow_workers: Box::new(dataflow_workers),
+            _coord_thread: coord_thread.join_on_drop(),
+            _runtime: runtime,
             session: Session::default(),
             conn_id: 1,
         })
@@ -682,13 +684,6 @@ impl State {
             Ok((desc, resp.result?))
         }
     }
-
-    fn shutdown(self) {
-        drop(self.cmd_tx);
-        drop(self.dataflow_workers);
-        self.coord_thread.join().unwrap();
-        drop(self.runtime);
-    }
 }
 
 fn print_record(record: &Record) {
@@ -740,7 +735,6 @@ pub fn run_string(source: &str, input: &str, verbosity: usize) -> Outcomes {
             break;
         }
     }
-    state.shutdown();
     outcomes
 }
 
