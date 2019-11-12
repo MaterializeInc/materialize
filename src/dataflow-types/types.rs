@@ -106,7 +106,7 @@ impl RowSetFinishing {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
     /// Named sources used by the dataflow.
     pub sources: Vec<Source>,
@@ -123,12 +123,7 @@ pub struct DataflowDesc {
 
 impl DataflowDesc {
     pub fn new() -> Self {
-        Self {
-            sources: Vec::new(),
-            views: Vec::new(),
-            sinks: Vec::new(),
-            as_of: None,
-        }
+        Default::default()
     }
 
     /// Collects the names of the dataflows that this dataflow depends upon.
