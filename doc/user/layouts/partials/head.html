@@ -6,8 +6,8 @@
 <script src="{{ $js.Permalink }}" {{ printf "integrity=%q" $js.Data.Integrity | safeHTMLAttr }}></script>
 
 {{/*  Sass processing here  */}}
-{{ $style := resources.Get "sass/main.scss" | toCSS }}
-<link rel="stylesheet" href="{{ $style.RelPermalink }}">
+{{ $style := resources.Get "sass/main.scss" | resources.ExecuteAsTemplate "main.css" . | toCSS }}
+<link rel="stylesheet" href="{{ $style.Permalink }}">
 
 {{/* Linked fonts here  */}}
 <link href="https://fonts.googleapis.com/css?family=Roboto+Mono&display=swap" rel="stylesheet">

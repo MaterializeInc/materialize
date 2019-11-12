@@ -1,7 +1,7 @@
 {{ $currentPage := . }}
 <nav role="navigation" class="hg-left">
     <ul>
-        <li class="nav-top-level"><a href="/docs">Home</a></li>
+        <li class="nav-top-level"><a href="{{ .Site.BaseURL }}">Home</a></li>
         {{ range .Site.Menus.main.ByName }}
         <li class="nav-top-level">
             <a href="{{ if .HasChildren }}javascript:void(0){{ else }}{{ .URL }}{{ end }}"

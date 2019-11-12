@@ -1,5 +1,5 @@
 ---
-title: "Architecture" 
+title: "Architecture"
 description: "Understand Materialize's architecture."
 menu:
   main:
@@ -17,13 +17,13 @@ the outside world by interfacing with:
 
 ## Diagrams
 
-![Materialize deployment diagram](/docs/images/architecture_deployment.png)
+![Materialize deployment diagram](/images/architecture_deployment.png)
 
-_Above: Materialize deployed with multiple Kafka feeds._ 
+_Above: Materialize deployed with multiple Kafka feeds._
 
 _Below: Zooming in on Materialize's internal structure in the above deployment._
 
-![Materialize internal diagram](/docs/images/architecture_internals.png)
+![Materialize internal diagram](/images/architecture_internals.png)
 
 ## SQL shell: interacting with clients
 
@@ -90,7 +90,7 @@ already-up-to-date view. No substantive processing necessary.
 **Reading data vs. creating views**
 
 As a quick summary: the difference between simply reading data and creating a
-view is in terms of how long the generated dataflow persists. 
+view is in terms of how long the generated dataflow persists.
 
 - In the case of performing an ad hoc `SELECT`, the dataflow only sticks around
   long enough to generate an answer once before being terminated.
