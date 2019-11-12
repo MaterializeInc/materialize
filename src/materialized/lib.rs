@@ -71,7 +71,7 @@ impl Config {
 fn handle_connection(
     conn: TcpStream,
     switchboard: Switchboard<SniffedStream<TcpStream>>,
-    cmdq_tx: UnboundedSender<coord::Command>,
+    cmd_tx: UnboundedSender<coord::Command>,
     gather_metrics: bool,
 ) -> impl Future<Item = (), Error = ()> {
     // Sniff out what protocol we've received. Choosing how many bytes to sniff
@@ -86,7 +86,7 @@ fn handle_connection(
         .and_then(move |(ss, buf, nread)| {
             let buf = &buf[..nread];
             if pgwire::match_handshake(buf) {
-                pgwire::serve(ss.into_sniffed(), cmdq_tx, gather_metrics).boxed()
+                pgwire::serve(ss.into_sniffed(), cmd_tx, gather_metrics).boxed()
             } else if http::match_handshake(buf) {
                 http::handle_connection(ss.into_sniffed(), gather_metrics).boxed()
             } else if comm::protocol::match_handshake(buf) {
@@ -109,8 +109,8 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 pub fn serve(config: Config) -> Result<Server, failure::Error> {
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
-    let (cmdq_tx, cmdq_rx) = mpsc::unbounded::<coord::Command>();
-    let cmdq_tx = Arc::new(cmdq_tx);
+    let (cmd_tx, cmd_rx) = mpsc::unbounded::<coord::Command>();
+    let cmd_tx = Arc::new(cmd_tx);
 
     // Extract timely dataflow parameters.
     let is_primary = config.process == 0;
@@ -150,7 +150,7 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
     let gather_metrics = config.gather_metrics;
     runtime.spawn({
         let switchboard = switchboard.clone();
-        let cmdq_tx = Arc::downgrade(&cmdq_tx);
+        let cmd_tx = Arc::downgrade(&cmd_tx);
         listener
             .incoming()
             .for_each(move |conn| {
@@ -167,11 +167,11 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
                 // [0]: https://news.ycombinator.com/item?id=10608356
                 conn.set_nodelay(true).expect("set_nodelay failed");
                 if is_primary {
-                    if let Some(cmdq_tx) = cmdq_tx.upgrade() {
+                    if let Some(cmd_tx) = cmd_tx.upgrade() {
                         tokio::spawn(handle_connection(
                             conn,
                             switchboard.clone(),
-                            (*cmdq_tx).clone(),
+                            (*cmd_tx).clone(),
                             gather_metrics,
                         ));
                         return Ok(());
@@ -204,14 +204,14 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
     // Initialize command queue and sql planner, but only on the primary.
     let coord_thread = if is_primary {
         Some(
-            coord::transient::serve(
-                switchboard.clone(),
+            coord::transient::serve(coord::transient::Config {
+                switchboard: switchboard.clone(),
                 num_timely_workers,
-                config.symbiosis_url.mz_as_deref(),
-                logging_config.as_ref(),
-                config.bootstrap_sql,
-                cmdq_rx,
-            )?
+                symbiosis_url: config.symbiosis_url.mz_as_deref(),
+                logging: logging_config.as_ref(),
+                bootstrap_sql: config.bootstrap_sql,
+                cmd_rx,
+            })?
             .join_on_drop(),
         )
     } else {
@@ -230,7 +230,7 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
     .map_err(|s| format_err!("{}", s))?;
 
     Ok(Server {
-        _cmdq_tx: cmdq_tx,
+        _cmd_tx: cmd_tx,
         _dataflow_guard: Box::new(dataflow_guard),
         _coord_thread: coord_thread,
         _runtime: runtime,
@@ -240,7 +240,7 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
 /// A running `materialized` server.
 pub struct Server {
     // Drop order matters for these fields.
-    _cmdq_tx: Arc<mpsc::UnboundedSender<coord::Command>>,
+    _cmd_tx: Arc<mpsc::UnboundedSender<coord::Command>>,
     _dataflow_guard: Box<dyn Any>,
     _coord_thread: Option<JoinOnDropHandle<()>>,
     _runtime: Runtime,

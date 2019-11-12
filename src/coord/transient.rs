@@ -27,27 +27,32 @@ enum Message {
     Shutdown,
 }
 
-pub fn serve<C>(
-    switchboard: comm::Switchboard<C>,
-    num_timely_workers: usize,
-    symbiosis_url: Option<&str>,
-    logging_config: Option<&LoggingConfig>,
-    startup_sql: String,
-    cmd_rx: UnboundedReceiver<Command>,
-) -> Result<JoinHandle<()>, failure::Error>
+pub struct Config<'a, C>
+where
+    C: comm::Connection,
+{
+    pub switchboard: comm::Switchboard<C>,
+    pub num_timely_workers: usize,
+    pub symbiosis_url: Option<&'a str>,
+    pub logging: Option<&'a LoggingConfig>,
+    pub bootstrap_sql: String,
+    pub cmd_rx: UnboundedReceiver<Command>,
+}
+
+pub fn serve<'a, C>(config: Config<'a, C>) -> Result<JoinHandle<()>, failure::Error>
 where
     C: comm::Connection,
 {
     let mut coord = Coordinator::new(
-        switchboard.clone(),
-        num_timely_workers,
-        logging_config,
-        symbiosis_url.is_some(),
+        config.switchboard.clone(),
+        config.num_timely_workers,
+        config.logging,
+        config.symbiosis_url.is_some(),
     );
 
-    let mut catalog = sql::store::Catalog::new(logging_config);
+    let mut catalog = sql::store::Catalog::new(config.logging);
 
-    let mut postgres = if let Some(symbiosis_url) = symbiosis_url {
+    let mut postgres = if let Some(symbiosis_url) = config.symbiosis_url {
         Some(symbiosis::Postgres::open_and_erase(symbiosis_url)?)
     } else {
         None
@@ -59,7 +64,7 @@ where
         // 0 is safe to use here.
         let conn_id = 0;
         let mut session = sql::Session::default();
-        for stmt in sql::parse(startup_sql)? {
+        for stmt in sql::parse(config.bootstrap_sql)? {
             handle_statement(
                 &mut coord,
                 postgres.as_mut(),
@@ -76,7 +81,8 @@ where
     // NOTE: returning an error from this point on (i.e., after calling
     // `coord.enable_feedback()`) will be fatal, as dropping `feedback_rx` will
     // cause the worker threads to panic.
-    let messages = cmd_rx
+    let messages = config
+        .cmd_rx
         .map(Message::Command)
         .map_err(|()| unreachable!())
         .chain(stream::once(Ok(Message::Shutdown)))

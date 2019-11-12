@@ -338,20 +338,18 @@ impl State {
     pub fn start() -> Result<Self, failure::Error> {
         let logging_config = None;
         let process_id = 0;
-        let symbiosis_url = Some("postgres://");
-        let startup_sql = "";
 
         let (switchboard, runtime) = comm::Switchboard::local()?;
 
         let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
-        let coord_thread = coord::transient::serve(
-            switchboard.clone(),
-            NUM_TIMELY_WORKERS,
-            symbiosis_url,
-            logging_config.as_ref(),
-            startup_sql.into(),
+        let coord_thread = coord::transient::serve(coord::transient::Config {
+            switchboard: switchboard.clone(),
+            num_timely_workers: NUM_TIMELY_WORKERS,
+            symbiosis_url: Some("postgres://"),
+            logging: logging_config.as_ref(),
+            bootstrap_sql: "".into(),
             cmd_rx,
-        )?;
+        })?;
 
         let dataflow_workers = dataflow::serve(
             vec![None],
