@@ -72,8 +72,8 @@ fn run() -> Result<(), failure::Error> {
         "FILE",
     );
     opts.optopt(
-        "s",
-        "bootstrap",
+        "b",
+        "bootstrap-sql",
         "file with SQL queries to execute when bootstrapping",
         "FILE",
     );
@@ -116,7 +116,7 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
-    let bootstrap_sql = match popts.opt_str("bootstrap") {
+    let bootstrap_sql = match popts.opt_str("bootstrap-sql") {
         None => "".to_string(),
         Some(bootstrap_file) => read_to_string(&bootstrap_file)?,
     };
