@@ -77,7 +77,7 @@ pub fn describe_statement(
             Some(
                 RelationDesc::empty()
                     .add_column("Source", ScalarType::String)
-                    .add_column("Create Source", ScalarType::String),
+                    .add_column("Source URL", ScalarType::String),
             ),
             vec![],
         ),
@@ -343,15 +343,10 @@ fn handle_show_create_source(
     let name = object_name.to_string();
     let source_url = if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)? {
         match connector {
-            SourceConnector::Local => String::from("local source"), // what should this actually be?
-            SourceConnector::Kafka(KafkaSourceConnector {
-                schema_registry_url,
-                ..
-            }) => match schema_registry_url {
-                Some(url) => format!("{}", url),
-                //                None => bail!("source {} does not have a url", name),
-                None => String::from("tester"),
-            },
+            SourceConnector::Local => String::from("local://"),
+            SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
+                format!("kafka://{}/{}", addr, topic)
+            }
         }
     } else {
         bail!("{} is not a source", name);
