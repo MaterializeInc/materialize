@@ -262,9 +262,7 @@ fn handle_show_objects(
         Some(ShowStatementFilter::Like(like_string)) => {
             build_like_regex_from_string(like_string.as_ref())?
         }
-        Some(ShowStatementFilter::Where(where_epr)) => {
-            bail!("SHOW COLUMNS ... { LIKE | WHERE } is not supported")
-        }
+        Some(ShowStatementFilter::Where(_where_epr)) => bail!("SHOW ... WHERE is not supported"),
         None => build_like_regex_from_string(&String::from("%"))?,
     };
 
