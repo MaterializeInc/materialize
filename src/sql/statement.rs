@@ -169,8 +169,8 @@ pub fn handle_statement(
         Statement::ShowVariable { variable } => handle_show_variable(catalog, session, variable),
         Statement::ShowObjects {
             object_type: ot,
-            like,
-        } => handle_show_objects(catalog, ot, like),
+            filter,
+        } => handle_show_objects(catalog, ot, filter.as_ref()),
         Statement::ShowColumns {
             extended,
             full,
@@ -256,9 +256,13 @@ fn handle_rollback_transaction() -> Result<Plan, failure::Error> {
 fn handle_show_objects(
     catalog: &Catalog,
     object_type: ObjectType,
-    like: Option<String>,
+    filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
-    let like_regex = build_like_regex_from_string(like.as_ref().unwrap_or(&String::from("%")))?;
+    let like_regex = match filter {
+        Some(ShowStatementFilter::Like(like_string)) => build_like_regex_from_string(like_string.as_ref())?,
+        _ => build_like_regex_from_string(&String::from("%"))? // matches ShowStatementFilter::Where and None
+    };
+
     let mut rows: Vec<Row> = catalog
         .iter()
         .filter(|(name, ci)| object_type_matches(object_type, ci) && like_regex.is_match(name))
