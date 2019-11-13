@@ -271,7 +271,7 @@ fn handle_show_objects(
         .filter(|(name, ci)| object_type_matches(object_type, ci) && like_regex.is_match(name))
         .map(|(name, _ci)| Row::pack(&[Datum::from(name)]))
         .collect();
-    rows.sort_unstable();
+    rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
     Ok(Plan::SendRows(rows))
 }
 
