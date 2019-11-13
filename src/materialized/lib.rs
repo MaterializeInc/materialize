@@ -207,7 +207,7 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
     // Initialize command queue and sql planner, but only on the primary.
     let coord_thread = if is_primary {
         Some(
-            coord::transient::serve(coord::transient::Config {
+            coord::serve(coord::Config {
                 switchboard: switchboard.clone(),
                 num_timely_workers,
                 symbiosis_url: config.symbiosis_url.mz_as_deref(),
