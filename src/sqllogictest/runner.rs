@@ -342,7 +342,7 @@ impl State {
         let (switchboard, runtime) = comm::Switchboard::local()?;
 
         let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
-        let coord_thread = coord::transient::serve(coord::transient::Config {
+        let coord_thread = coord::serve(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
