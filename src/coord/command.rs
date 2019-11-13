@@ -24,18 +24,6 @@ pub enum Command {
         tx: futures::sync::oneshot::Sender<Response<()>>,
     },
 
-    /// Bind a prepared statement to a portal, filling in any placeholders
-    /// in the prepared statement.
-    ///
-    /// Not currently enabled. Since we don't support placeholders yet,
-    /// parameter "binding" takes place entirely in the pgwire crate.
-    ///
-    // Bind {
-    //     statement_name: String,
-    //     portal_name: String,
-    //     parameter_values: Vec<Datum>,
-    // }
-
     /// Execute a bound portal.
     Execute {
         portal_name: String,
