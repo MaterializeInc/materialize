@@ -13,11 +13,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-
-run() {
-    echo "$@"
-    "$@"
-}
+source misc/shlib/shlib.bash
 
 # Add lints to this list freely, but please add a comment with justification
 # along with the lint. The goal is to ever-so-slightly increase the barrier to
@@ -151,8 +147,8 @@ extra_lints=(
 # splitting below. It's substantially clearer than doing things "properly,"
 # and the inputs to this script are trusted.
 
-pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,-p \1,p' Cargo.toml)
+pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,src/\1/lib.rs,p' Cargo.toml)
 # shellcheck disable=SC2086
-run cargo clean $pkgspec
+runv touch $pkgspec
 # shellcheck disable=SC2046
-run cargo clippy -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")
+runv cargo clippy -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")
