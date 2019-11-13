@@ -21,6 +21,7 @@ use std::fs::{read_to_string, File};
 use std::io::{BufRead, BufReader};
 use std::panic;
 use std::panic::PanicInfo;
+use std::path::PathBuf;
 use std::process;
 use std::sync::Mutex;
 use std::thread;
@@ -72,10 +73,16 @@ fn run() -> Result<(), failure::Error> {
         "FILE",
     );
     opts.optopt(
-        "s",
-        "bootstrap",
+        "b",
+        "bootstrap-sql",
         "file with SQL queries to execute when bootstrapping",
         "FILE",
+    );
+    opts.optopt(
+        "D",
+        "data-directory",
+        "where materialized will store metadata (default mzdata)",
+        "PATH",
     );
     opts.optopt("", "symbiosis", "(internal use only)", "URL");
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
@@ -116,10 +123,12 @@ fn run() -> Result<(), failure::Error> {
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
 
-    let bootstrap_sql = match popts.opt_str("bootstrap") {
+    let bootstrap_sql = match popts.opt_str("bootstrap-sql") {
         None => "".to_string(),
         Some(bootstrap_file) => read_to_string(&bootstrap_file)?,
     };
+
+    let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
@@ -128,6 +137,7 @@ fn run() -> Result<(), failure::Error> {
         process,
         addresses,
         bootstrap_sql,
+        data_directory: Some(data_directory),
         symbiosis_url: popts.opt_str("symbiosis"),
         gather_metrics,
     })?;

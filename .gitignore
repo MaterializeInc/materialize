@@ -14,3 +14,4 @@ target
 .mtrlz.log
 **/*.rs.bk
 .netlify
+mzdata
