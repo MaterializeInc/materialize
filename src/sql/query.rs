@@ -137,6 +137,7 @@ fn plan_query(
                     scope: &scope,
                     relation_type: &output_typ,
                     allow_aggregates: true,
+                    allow_subqueries: true,
                 };
                 let expr = plan_expr(catalog, ecx, other, Some(ScalarType::String))?;
                 // If the expression is a reference to an existing column,
@@ -283,6 +284,7 @@ fn plan_set_expr(
                 scope: &Scope::empty(Some(qcx.outer_scope.clone())),
                 relation_type: &RelationType::empty(),
                 allow_aggregates: false,
+                allow_subqueries: true,
             };
             let mut expr: Option<RelationExpr> = None;
             let mut types: Option<Vec<ColumnType>> = None;
@@ -376,6 +378,7 @@ fn plan_view_select(
             scope: &from_scope,
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: false,
+            allow_subqueries: true,
         };
         let expr = plan_expr(catalog, ecx, &selection, Some(ScalarType::Bool))?;
         let typ = ecx.column_type(&expr);
@@ -397,6 +400,7 @@ fn plan_view_select(
             scope: &from_scope,
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: false,
+            allow_subqueries: true,
         };
         let mut group_key = vec![];
         let mut group_exprs = vec![];
@@ -441,6 +445,7 @@ fn plan_view_select(
             scope: &from_scope,
             relation_type: &qcx.relation_type(&relation_expr.clone().map(group_exprs.clone())),
             allow_aggregates: false,
+            allow_subqueries: true,
         };
         let mut aggregates = vec![];
         for sql_function in aggregate_visitor.into_result()? {
@@ -476,6 +481,7 @@ fn plan_view_select(
             scope: &group_scope,
             relation_type: &qcx.relation_type(&relation_expr),
             allow_aggregates: true,
+            allow_subqueries: true,
         };
         let expr = plan_expr(catalog, ecx, having, Some(ScalarType::Bool))?;
         let typ = ecx.column_type(&expr);
@@ -500,6 +506,7 @@ fn plan_view_select(
                 scope: &group_scope,
                 relation_type: &qcx.relation_type(&relation_expr),
                 allow_aggregates: true,
+                allow_subqueries: true,
             };
             for (expr, scope_item) in
                 plan_select_item(catalog, ecx, p, &from_scope, &select_all_mapping)?
@@ -519,6 +526,45 @@ fn plan_view_select(
     }
 
     Ok((relation_expr, project_scope))
+}
+
+pub fn plan_index(
+    catalog: &Catalog,
+    on_name: &str,
+    key_parts: &[Expr],
+) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
+    let desc = catalog.get_desc(&on_name)?;
+
+    let scope = Scope::from_source(Some(&on_name), desc.iter_names(), Some(Scope::empty(None)));
+    let qcx = &QueryContext {
+        outer_scope: &Scope::empty(None),
+        outer_relation_type: &RelationType::empty(),
+        param_types: Rc::new(RefCell::new(BTreeMap::new())),
+    };
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "CREATE INDEX",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+    };
+
+    let mut map_exprs = vec![];
+    let mut arrange_cols = vec![];
+    let mut func_count = key_parts.len();
+
+    for key_part in key_parts {
+        let expr = plan_expr(catalog, ecx, key_part, Some(ScalarType::String))?;
+        if let ScalarExpr::Column(ColumnRef::Inner(i)) = &expr {
+            arrange_cols.push(*i);
+        } else {
+            map_exprs.push(expr);
+            arrange_cols.push(func_count);
+            func_count += 1;
+        }
+    }
+    Ok((desc.typ().clone(), arrange_cols, map_exprs))
 }
 
 fn plan_table_with_joins<'a>(
@@ -771,6 +817,7 @@ fn plan_join_constraint<'a>(
                         .collect(),
                 ),
                 allow_aggregates: false,
+                allow_subqueries: true,
             };
             let on = plan_expr(catalog, ecx, expr, Some(ScalarType::Bool))?;
             for (l, r) in find_trivial_column_equivalences(&on) {
@@ -963,6 +1010,9 @@ fn plan_expr<'a>(
                 bail!("wildcard in invalid position")
             }
             Expr::Parameter(n) => {
+                if !ecx.allow_subqueries {
+                    bail!("{} does not allow subqueries", ecx.name)
+                }
                 if *n == 0 || *n > 65536 {
                     bail!("there is no parameter ${}", n);
                 }
@@ -1004,6 +1054,9 @@ fn plan_expr<'a>(
             Expr::Cast { expr, data_type } => plan_cast(catalog, ecx, expr, data_type),
             Expr::Function(func) => plan_function(catalog, ecx, func),
             Expr::Exists(query) => {
+                if !ecx.allow_subqueries {
+                    bail!("{} does not allow subqueries", ecx.name)
+                }
                 let qcx = QueryContext {
                     outer_scope: &ecx.scope,
                     outer_relation_type: &RelationType::new(
@@ -1021,6 +1074,9 @@ fn plan_expr<'a>(
                 Ok(expr.exists())
             }
             Expr::Subquery(query) => {
+                if !ecx.allow_subqueries {
+                    bail!("{} does not allow subqueries", ecx.name)
+                }
                 let qcx = QueryContext {
                     outer_scope: &ecx.scope,
                     outer_relation_type: &RelationType::new(
@@ -1058,6 +1114,9 @@ fn plan_expr<'a>(
                 subquery,
                 negated,
             } => {
+                if !ecx.allow_subqueries {
+                    bail!("{} does not allow subqueries", ecx.name)
+                }
                 use BinaryOperator::{Eq, NotEq};
                 if *negated {
                     // `<expr> NOT IN (<subquery>)` is equivalent to
@@ -1183,6 +1242,9 @@ fn plan_any_or_all<'a>(
     right: &'a Query,
     func: AggregateFunc,
 ) -> Result<ScalarExpr, failure::Error> {
+    if !ecx.allow_subqueries {
+        bail!("{} does not allow subqueries", ecx.name)
+    }
     let qcx = QueryContext {
         outer_scope: &ecx.scope,
         outer_relation_type: &RelationType::new(
@@ -1224,6 +1286,7 @@ fn plan_any_or_all<'a>(
         scope: &scope,
         relation_type: &qcx.relation_type(&right),
         allow_aggregates: false,
+        allow_subqueries: true,
     };
     let op_expr = plan_binary_op(
         catalog,
@@ -2452,6 +2515,8 @@ struct ExprContext<'a> {
     relation_type: &'a RelationType,
     /// Are aggregate functions allowed in this context
     allow_aggregates: bool,
+    /// Are subqueries allowed in this context
+    allow_subqueries: bool,
 }
 
 impl<'a> ExprContext<'a> {

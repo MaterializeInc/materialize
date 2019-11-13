@@ -50,6 +50,10 @@ where
     views: HashMap<String, ViewState>,
     /// Each source name maps to a source and re-written name (for auto-created views).
     sources: HashMap<String, (dataflow_types::Source, Option<String>)>,
+    /// Maps user-defined indexes by collection + key and how many aliases it has
+    indexes: HashMap<(String, Vec<usize>), usize>,
+    /// Maps user-defined index names to their collection + key
+    index_aliases: HashMap<String, (String, Vec<usize>)>,
     since_updates: Vec<(String, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
@@ -79,6 +83,8 @@ where
             optimizer: Default::default(),
             views: HashMap::new(),
             sources: HashMap::new(),
+            indexes: HashMap::new(),
+            index_aliases: HashMap::new(),
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
             local_input_time: 1,
@@ -157,9 +163,15 @@ where
                 ExecuteResponse::CreatedView
             }
 
+            Plan::CreateIndex(index) => {
+                self.create_index(index);
+                ExecuteResponse::CreatedIndex
+            }
+
             Plan::DropItems(names, item_type) => {
                 let mut sources_to_drop = Vec::new();
                 let mut views_to_drop = Vec::new();
+                let mut indexes_to_drop = Vec::new();
                 for name in names {
                     // TODO: Test if a name was installed and error if not?
                     if let Some((_source, new_name)) = self.sources.remove(&name) {
@@ -169,23 +181,33 @@ where
                         } else {
                             panic!("Attempting to drop an uninstalled source: {}", name);
                         }
-                    }
-                    if self.views.contains_key(&name) {
+                    } else if self.views.contains_key(&name) {
                         views_to_drop.push(name);
+                    } else {
+                        indexes_to_drop.push(name);
                     }
                 }
-                if sources_to_drop.is_empty() {
+                if !sources_to_drop.is_empty() {
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::DropSources(sources_to_drop),
-                    )
+                    );
                 }
-                self.drop_views(views_to_drop);
+
+                if !views_to_drop.is_empty() {
+                    self.drop_views(views_to_drop);
+                }
+
+                if !indexes_to_drop.is_empty() {
+                    self.drop_indexes(indexes_to_drop, item_type != ObjectType::Index);
+                }
+
                 match item_type {
                     ObjectType::Source => ExecuteResponse::DroppedSource,
                     ObjectType::View => ExecuteResponse::DroppedView,
                     ObjectType::Table => ExecuteResponse::DroppedTable,
-                    ObjectType::Sink | ObjectType::Index => unreachable!(),
+                    ObjectType::Index => ExecuteResponse::DroppedIndex,
+                    ObjectType::Sink => unreachable!(),
                 }
             }
 
@@ -481,6 +503,35 @@ where
         }
     }
 
+    fn create_index(&mut self, mut idx: dataflow_types::Index) {
+        // Rewrite the source used.
+        if let Some((_source, new_name)) = self.sources.get(&idx.on_name) {
+            // If the source has a corresponding view, use its name instead.
+            if let Some(new_name) = new_name {
+                idx.on_name = new_name.to_string();
+            } else {
+                panic!("create_index called on bare source");
+            }
+        }
+        let trace_key = (idx.on_name.clone(), idx.keys.clone());
+        self.index_aliases
+            .insert(idx.name.clone(), trace_key.clone());
+
+        if let Some(count) = self.indexes.get_mut(&trace_key) {
+            // just increment the count. no need to build a duplicate index
+            *count += 1;
+            return;
+        }
+        self.indexes.insert(trace_key, 1);
+
+        let dataflows = vec![DataflowDesc::from(idx)];
+
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CreateDataflows(dataflows),
+        );
+    }
+
     pub fn create_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) {
         for dataflow in dataflows.iter_mut() {
             // Check for sources before optimization, to provide a consistent
@@ -539,6 +590,33 @@ where
             &mut self.broadcast_tx,
             SequencedCommand::DropSinks(dataflow_names),
         )
+    }
+
+    pub fn drop_indexes(&mut self, dataflow_names: Vec<String>, cascaded: bool) {
+        let mut trace_keys = Vec::new();
+        for name in dataflow_names {
+            if let Some(trace_key) = self.index_aliases.remove(&name) {
+                if cascaded {
+                    // the underlying indexes will be removed when the dependent
+                    // view is removed. No need to signal the server
+                    self.indexes.remove(&trace_key);
+                } else {
+                    let count = self.indexes.get_mut(&trace_key).unwrap();
+                    if count == &1 {
+                        self.indexes.remove(&trace_key);
+                        trace_keys.push(trace_key);
+                    } else {
+                        *count -= 1;
+                    }
+                }
+            }
+        }
+        if !trace_keys.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropIndexes(trace_keys),
+            )
+        }
     }
 
     pub fn enable_feedback(&mut self) -> comm::mpsc::Receiver<WorkerFeedbackWithMeta> {

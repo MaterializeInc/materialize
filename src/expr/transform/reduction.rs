@@ -228,6 +228,11 @@ impl FoldConstants {
                     }
                 }
             }
+            RelationExpr::ArrangeBy { input, .. } => {
+                if let RelationExpr::Constant { .. } = &**input {
+                    *relation = input.take_dangerous();
+                }
+            }
         }
 
         // This transformation maintains the invariant that all constant nodes

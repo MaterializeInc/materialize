@@ -171,6 +171,10 @@ impl Demand {
                 self.action(left, columns.clone(), gets);
                 self.action(right, columns, gets);
             }
+            RelationExpr::ArrangeBy { input, keys } => {
+                columns.extend(keys.iter().cloned());
+                self.action(input, columns, gets);
+            }
         }
     }
 }

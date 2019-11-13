@@ -68,6 +68,8 @@ pub enum SequencedCommand {
     DropViews(Vec<String>),
     /// Drop the sinks bound to these names.
     DropSinks(Vec<String>),
+    /// Drop the indexes bound to these names.
+    DropIndexes(Vec<(String, Vec<usize>)>),
     /// Peek at a materialized view.
     Peek {
         name: String,
@@ -324,9 +326,9 @@ where
             let mut progress = Vec::new();
             let names = self.traces.traces.keys().cloned().collect::<Vec<_>>();
             for name in names {
-                if let Some(mut traces) = self.traces.get_all_keyed(&name) {
+                if let Some(trace) = self.traces.get_default(&name) {
                     // Read the upper frontier and compare to what we've reported.
-                    traces.next().unwrap().1.clone().read_upper(&mut upper);
+                    trace.clone().read_upper(&mut upper);
                     let lower = self
                         .reported_frontiers
                         .get_mut(&name)
@@ -392,7 +394,7 @@ where
 
             SequencedCommand::DropViews(names) => {
                 for name in &names {
-                    if self.traces.del_trace(name).is_some() {
+                    if self.traces.del_collection_traces(name).is_some() {
                         if let Some(logger) = self.materialized_logger.as_mut() {
                             logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
                         }
@@ -409,6 +411,12 @@ where
                 }
             }
 
+            SequencedCommand::DropIndexes(trace_keys) => {
+                for (collection_name, keys) in &trace_keys {
+                    self.traces.del_user_trace(collection_name, keys);
+                }
+            }
+
             SequencedCommand::Peek {
                 name,
                 timestamp,
@@ -419,14 +427,7 @@ where
                 filter,
             } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
-                let mut trace = self
-                    .traces
-                    .get_all_keyed(&name)
-                    .unwrap()
-                    .next()
-                    .unwrap()
-                    .1
-                    .clone();
+                let mut trace = self.traces.get_default(&name).unwrap().clone();
                 trace.advance_by(&[timestamp]);
                 trace.distinguish_since(&[]);
                 // Prepare a description of the peek work to do.

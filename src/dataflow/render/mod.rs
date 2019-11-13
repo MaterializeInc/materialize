@@ -25,8 +25,7 @@ use repr::{Datum, Row, RowPacker, RowUnpacker};
 
 use super::sink;
 use super::source;
-use crate::arrangement::manager::KeysValsSpine;
-use crate::arrangement::{manager::WithDrop, TraceManager};
+use crate::arrangement::manager::{KeysValsSpine, TraceManager, WithDrop};
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::server::LocalInput;
 
@@ -45,6 +44,10 @@ pub(crate) fn build_dataflow<A: Allocate>(
     let worker_peers = worker.peers();
 
     worker.dataflow::<Timestamp, _, _>(|scope| {
+        // The scope.clone() occurs to allow import in the region.
+        // We build a region here to establish a pattern of a scope inside the dataflow,
+        // so that other similar uses (e.g. with iterative scopes) do not require weird
+        // alternate type signatures.
         scope.clone().region(|region| {
             let mut context = Context::<_, _, _, Timestamp>::new();
 
@@ -90,11 +93,6 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     .map(|x| x.to_vec())
                     .unwrap_or_else(|| vec![0]);
 
-                // The scope.clone() occurs to allow import in the region.
-                // We build a region here to establish a pattern of a scope inside the dataflow,
-                // so that other similar uses (e.g. with iterative scopes) do not require weird
-                // alternate type signatures.
-
                 view.relation_expr.visit(&mut |e| {
                     // Some `Get` expressions are for let bindings, and should not be loaded.
                     // We might want explicitly enumerate assets to import.
@@ -110,7 +108,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                     as_of.clone(),
                                 );
                                 let arranged = arranged.enter(region);
-                                context.set_trace(e, key, arranged);
+                                context.set_trace(&e, &key, arranged);
                                 tokens.push((button.press_on_drop(), token));
                             }
 
@@ -172,6 +170,61 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         );
                     }
                 }
+            }
+
+            for idx in dataflow.indexes {
+                let mut tokens = Vec::new();
+                let get_expr = RelationExpr::Get {
+                    name: idx.on_name.clone(),
+                    typ: idx.relation_type.clone(),
+                };
+                // TODO (wangandi) for the function-based column case,
+                // think about checking if there is another index
+                // with the function pre-rendered
+                let (key, trace) = manager.get_default_with_key(&idx.on_name).unwrap();
+                let token = trace.to_drop().clone();
+                let (arranged, button) = trace.import_frontier_core(
+                    scope,
+                    &format!("View({}, {:?})", &idx.on_name, key),
+                    vec![0],
+                );
+                let arranged = arranged.enter(region);
+                context.set_trace(&get_expr, &key, arranged);
+                tokens.push((button.press_on_drop(), token));
+
+                // Capture both the tokens of imported traces and those of sources.
+                let tokens = Rc::new((tokens, source_tokens.clone()));
+
+                let to_arrange = if idx.funcs.is_empty() {
+                    get_expr
+                } else {
+                    RelationExpr::Map {
+                        input: Box::new(get_expr),
+                        scalars: idx.funcs.clone(),
+                    }
+                };
+                context.ensure_rendered(
+                    &to_arrange.clone().arrange_by(&idx.keys),
+                    region,
+                    worker_index,
+                );
+
+                match context.arrangement(&to_arrange, &idx.keys) {
+                    Some(ArrangementFlavor::Local(local)) => {
+                        manager.set_user_created(
+                            idx.on_name,
+                            &idx.keys,
+                            WithDrop::new(local.trace.clone(), tokens.clone()),
+                        );
+                    }
+                    Some(ArrangementFlavor::Trace(_)) => {
+                        // do nothing. there already exists an system
+                        // index on the same keys
+                    }
+                    None => {
+                        panic!("Arrangement alarmingly absent!");
+                    }
+                };
             }
 
             for sink in dataflow.sinks {
@@ -345,6 +398,25 @@ where
 
                     self.collections
                         .insert(relation_expr.clone(), input1.concat(&input2));
+                }
+
+                RelationExpr::ArrangeBy { input, keys } => {
+                    if self.arrangement(&input, &keys[..]).is_none() {
+                        self.ensure_rendered(input, scope, worker_index);
+                        let built = self.collection(input).unwrap();
+                        let keys2 = keys.clone();
+                        let mut unpacker = RowUnpacker::new();
+                        let mut packer = RowPacker::new();
+                        let keyed = built
+                            .map(move |row| {
+                                let datums = unpacker.unpack(&row);
+                                let key_row = packer.pack(keys2.iter().map(|i| datums[*i]));
+                                drop(datums);
+                                (key_row, row)
+                            })
+                            .arrange_by_key();
+                        self.set_local(&input, &keys[..], keyed);
+                    }
                 }
             };
         }

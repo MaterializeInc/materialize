@@ -231,6 +231,22 @@ impl ProjectionLifting {
                     }
                 }
             }
+            RelationExpr::ArrangeBy { input, keys } => {
+                self.action(input, gets);
+                if let RelationExpr::Project {
+                    input: inner,
+                    outputs,
+                } = &mut **input
+                {
+                    for key in keys.iter_mut() {
+                        *key = outputs[*key];
+                    }
+                    *relation = inner
+                        .take_dangerous()
+                        .arrange_by(keys)
+                        .project(outputs.clone());
+                }
+            }
         }
     }
 }

@@ -12,8 +12,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 
 use failure::{bail, ResultExt};
 use sqlparser::ast::{
-    Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
-    Stage, Statement, Value,
+    Expr, Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
+    SourceSchema, Stage, Statement, Value,
 };
 use url::Url;
 
@@ -24,20 +24,21 @@ use crate::session::{Portal, Session};
 use crate::store::{Catalog, CatalogItem, RemoveMode};
 use crate::Plan;
 use dataflow_types::{
-    KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink, SinkConnector,
-    Source, SourceConnector, View,
+    Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
+    SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum, RelationDesc, Row, ScalarType};
+use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
 
 pub fn describe_statement(
     catalog: &Catalog,
     stmt: Statement,
 ) -> Result<(Option<RelationDesc>, Vec<ScalarType>), failure::Error> {
     Ok(match stmt {
-        Statement::CreateSource { .. }
+        Statement::CreateIndex { .. }
+        | Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::Drop { .. }
@@ -110,7 +111,12 @@ pub fn describe_statement(
         }
 
         Statement::Peek { name, .. } => {
-            (Some(catalog.get(&name.to_string())?.desc().clone()), vec![])
+            let sql_object = catalog.get(&name.to_string())?;
+            match sql_object {
+                CatalogItem::Index(_) => bail!("unsupported SQL statement: PEEK index"),
+                CatalogItem::Sink(_) => bail!("unsupported SQL statement: PEEK sink"),
+                _ => (Some(sql_object.desc().clone()), vec![]),
+            }
         }
 
         Statement::Query(query) => {
@@ -143,7 +149,8 @@ pub fn handle_statement(
         Statement::CreateSource { .. }
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
-        | Statement::CreateSources { .. } => match portal_name {
+        | Statement::CreateSources { .. }
+        | Statement::CreateIndex { .. } => match portal_name {
             Some(portal_name) => {
                 handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
             }
@@ -452,6 +459,26 @@ fn handle_create_dataflow(
             };
             Ok(Plan::CreateSink(sink))
         }
+        Statement::CreateIndex {
+            name,
+            on_name,
+            key_parts,
+        } => {
+            let on_name = extract_sql_object_name(on_name)?;
+            let (relation_type, keys, funcs) = handle_create_index(catalog, &on_name, &key_parts)?;
+            // TODO (andiwang) remove this when trace manager supports ScalarExpr keys
+            if !funcs.is_empty() {
+                bail!("function-based indexes are not supported yet");
+            }
+            let index = Index {
+                name: name.to_string(),
+                on_name: on_name.to_string(),
+                relation_type,
+                keys,
+                funcs,
+            };
+            Ok(Plan::CreateIndex(index))
+        }
         other => bail!("Unsupported statement: {:?}", other),
     }
 }
@@ -492,6 +519,7 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     Ok(match object_type {
         ObjectType::Source => Plan::DropItems(to_remove, ObjectType::Source),
         ObjectType::View => Plan::DropItems(to_remove, ObjectType::View),
+        ObjectType::Index => Plan::DropItems(to_remove, ObjectType::Index),
         _ => bail!("unsupported SQL statement: DROP {}", object_type),
     })
 }
@@ -608,6 +636,22 @@ fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data
             ),
         );
     };
+}
+
+fn handle_create_index(
+    catalog: &Catalog,
+    on_name: &str,
+    key_parts: &[Expr],
+) -> Result<(RelationType, Vec<usize>, Vec<relationexpr::ScalarExpr>), failure::Error> {
+    let (relation_type, keys, map_exprs) = query::plan_index(catalog, on_name, key_parts)?;
+    Ok((
+        relation_type,
+        keys,
+        map_exprs
+            .into_iter()
+            .map(move |x| x.lower_uncorrelated())
+            .collect(),
+    ))
 }
 
 fn build_source(
@@ -730,6 +774,7 @@ fn object_type_matches(object_type: ObjectType, item: &CatalogItem) -> bool {
         }
         CatalogItem::Sink { .. } => object_type == ObjectType::Sink,
         CatalogItem::View { .. } => object_type == ObjectType::View,
+        CatalogItem::Index { .. } => object_type == ObjectType::Index,
     }
 }
 

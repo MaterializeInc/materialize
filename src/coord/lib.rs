@@ -74,6 +74,7 @@ pub type RowsFuture = Box<dyn Future<Item = PeekResponse, Error = failure::Error
 pub enum ExecuteResponse {
     /// The current session has been taken out of transaction mode by COMMIT
     Commit,
+    CreatedIndex,
     CreatedSink,
     CreatedSource,
     CreatedTable,
@@ -82,6 +83,7 @@ pub enum ExecuteResponse {
     DroppedSource,
     DroppedTable,
     DroppedView,
+    DroppedIndex,
     EmptyQuery,
     Inserted(usize),
     /// The current session has been taken out of transaction mode by ROLLBACK
@@ -101,11 +103,13 @@ pub enum ExecuteResponse {
 impl fmt::Debug for ExecuteResponse {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            ExecuteResponse::CreatedIndex => f.write_str("ExecuteResponse::CreatedIndex"),
             ExecuteResponse::CreatedSink => f.write_str("ExecuteResponse::CreatedSink"),
             ExecuteResponse::CreatedSource => f.write_str("ExecuteResponse::CreatedSource"),
             ExecuteResponse::CreatedTable => f.write_str("ExecuteResponse::CreatedTable"),
             ExecuteResponse::CreatedView => f.write_str("ExecuteResponse::CreatedView"),
             ExecuteResponse::Deleted(n) => write!(f, "ExecuteResponse::Deleted({})", n),
+            ExecuteResponse::DroppedIndex => f.write_str("ExecuteResponse::DroppedIndex"),
             ExecuteResponse::DroppedSource => f.write_str("ExecuteResponse::DroppedSource"),
             ExecuteResponse::DroppedTable => f.write_str("ExecuteResponse::DroppedTable"),
             ExecuteResponse::DroppedView => f.write_str("ExecuteResponse::DroppedView"),

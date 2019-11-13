@@ -770,6 +770,42 @@ impl ScalarExpr {
             },
         )
     }
+
+    /// Rewrite `self` into a `dataflow_expr::ScalarExpr`.
+    /// Assumes there are no subqueries in need of decorrelating
+    pub fn lower_uncorrelated(self) -> dataflow_expr::ScalarExpr {
+        use self::ScalarExpr::*;
+        use dataflow_expr::ScalarExpr as SS;
+
+        match self {
+            Column(ColumnRef::Inner(column)) => SS::Column(column),
+            Literal(datum, typ) => SS::Literal(datum, typ),
+            CallUnary { func, expr } => SS::CallUnary {
+                func,
+                expr: Box::new(expr.lower_uncorrelated()),
+            },
+            CallBinary { func, expr1, expr2 } => SS::CallBinary {
+                func,
+                expr1: Box::new(expr1.lower_uncorrelated()),
+                expr2: Box::new(expr2.lower_uncorrelated()),
+            },
+            CallVariadic { func, exprs } => SS::CallVariadic {
+                func,
+                exprs: exprs
+                    .into_iter()
+                    .map(|expr| expr.lower_uncorrelated())
+                    .collect(),
+            },
+            If { cond, then, els } => SS::If {
+                cond: Box::new(cond.lower_uncorrelated()),
+                then: Box::new(then.lower_uncorrelated()),
+                els: Box::new(els.lower_uncorrelated()),
+            },
+            Select { .. } | Exists { .. } | Parameter(..) | Column(ColumnRef::Outer(..)) => {
+                panic!("unexpected ScalarExpr in index plan: {:?}", self)
+            }
+        }
+    }
 }
 
 /// Prepare to apply `inner` to `outer`. Note that `inner` is a correlated (SQL)

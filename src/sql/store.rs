@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::iter::{self, FromIterator};
 
 use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Sink, Source, SourceConnector, View};
+use dataflow_types::{Index, Sink, Source, SourceConnector, View};
 use repr::{RelationDesc, RelationType};
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -29,6 +29,7 @@ pub enum CatalogItem {
     Source(Source),
     View(View),
     Sink(Sink),
+    Index(Index),
 }
 
 impl CatalogItem {
@@ -38,6 +39,7 @@ impl CatalogItem {
             CatalogItem::Source(src) => &src.name,
             CatalogItem::Sink(sink) => &sink.name,
             CatalogItem::View(view) => &view.name,
+            CatalogItem::Index(idx) => &idx.name,
         }
     }
 
@@ -50,6 +52,10 @@ impl CatalogItem {
                  but sinks don't have a type"
             ),
             CatalogItem::View(view) => &view.desc,
+            CatalogItem::Index(_) => panic!(
+                "programming error: CatalogItem.typ called on Index variant, \
+                 but indexes don't have a type"
+            ),
         }
     }
 
@@ -58,10 +64,14 @@ impl CatalogItem {
         match self {
             CatalogItem::Source(src) => src.desc.typ(),
             CatalogItem::Sink(_) => panic!(
-                "programming error: Dataflow.typ called on Sink variant, \
+                "programming error: CatalogItem.typ called on Sink variant, \
                  but sinks don't have a type"
             ),
             CatalogItem::View(view) => view.desc.typ(),
+            CatalogItem::Index(_) => panic!(
+                "programming error: CatalogItem.typ called on Index variant, \
+                 but indexes don't have a type"
+            ),
         }
     }
     /// Collects the names of the dataflows that this dataflow depends upon.
@@ -72,6 +82,11 @@ impl CatalogItem {
             CatalogItem::View(view) => {
                 let mut out = Vec::new();
                 view.relation_expr.unbound_uses(&mut out);
+                out
+            }
+            CatalogItem::Index(idx) => {
+                let mut out = Vec::new();
+                out.push(&idx.on_name[..]);
                 out
             }
         }
@@ -122,6 +137,10 @@ impl Catalog {
         match self.get(name)? {
             CatalogItem::Sink { .. } => bail!(
                 "catalog item {} is a sink and cannot be depended upon",
+                name
+            ),
+            CatalogItem::Index { .. } => bail!(
+                "catalog item {} is an index and cannot be depended upon",
                 name
             ),
             item => Ok(item.desc()),

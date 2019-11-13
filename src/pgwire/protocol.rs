@@ -616,6 +616,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 }
 
                 match response {
+                    ExecuteResponse::CreatedIndex => {
+                        command_complete!("CREATE INDEX", "create_index")
+                    }
                     ExecuteResponse::CreatedSource => {
                         command_complete!("CREATE SOURCE", "create_source")
                     }
@@ -630,6 +633,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     ExecuteResponse::DroppedSource => {
                         command_complete!("DROP SOURCE", "drop_source")
                     }
+                    ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX", "drop_index"),
                     ExecuteResponse::DroppedTable => command_complete!("DROP TABLE", "drop_table"),
                     ExecuteResponse::DroppedView => command_complete!("DROP VIEW", "drop_view"),
                     ExecuteResponse::EmptyQuery => transition!(SendCommandComplete {

@@ -12,8 +12,8 @@
 // Clippy doesn't understand `as_of` and complains.
 #![allow(clippy::wrong_self_convention)]
 
-use expr::{ColumnOrder, RelationExpr};
-use repr::{Datum, RelationDesc, Row};
+use expr::{ColumnOrder, RelationExpr, ScalarExpr};
+use repr::{Datum, RelationDesc, RelationType, Row};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use url::Url;
@@ -112,6 +112,8 @@ pub struct DataflowDesc {
     pub views: Vec<View>,
     /// Named sinks internal to the dataflow.
     pub sinks: Vec<Sink>,
+    /// Named indexes used by the dataflow.
+    pub indexes: Vec<Index>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// This is logically equivalent to a timely dataflow `Antichain`,
@@ -130,6 +132,9 @@ impl DataflowDesc {
         for view in self.views.iter() {
             view.relation_expr.unbound_uses(&mut out);
         }
+        for index in self.indexes.iter() {
+            out.push(&index.on_name);
+        }
         out.sort();
         out.dedup();
         out
@@ -145,6 +150,10 @@ impl DataflowDesc {
     }
     pub fn add_sink(mut self, sink: Sink) -> Self {
         self.sinks.push(sink);
+        self
+    }
+    pub fn add_index(mut self, index: Index) -> Self {
+        self.indexes.push(index);
         self
     }
     pub fn as_of(mut self, as_of: Option<Vec<Timestamp>>) -> Self {
@@ -168,6 +177,12 @@ impl From<View> for DataflowDesc {
 impl From<Sink> for DataflowDesc {
     fn from(s: Sink) -> Self {
         DataflowDesc::new().add_sink(s)
+    }
+}
+
+impl From<Index> for DataflowDesc {
+    fn from(i: Index) -> Self {
+        DataflowDesc::new().add_index(i)
     }
 }
 
@@ -235,6 +250,23 @@ pub struct KafkaSinkConnector {
 pub struct TailSinkConnector {
     pub tx: comm::mpsc::Sender<Vec<Update>>,
     pub since: Timestamp,
+}
+
+/// An index is an arrangement of a dataflow
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Index {
+    /// Name of Index
+    pub name: String,
+    /// Name of collection the index is on
+    pub on_name: String,
+    /// Types of the columns of the `on_name` collection
+    pub relation_type: RelationType,
+    /// Numbers of the columns to be arranged, in order of decreasing primacy
+    /// Includes the numbers of extra columns defined in `fxns`
+    pub keys: Vec<usize>,
+    /// Functions of the columns to evaluate and arrange on
+    pub funcs: Vec<ScalarExpr>,
 }
 
 #[cfg(test)]
