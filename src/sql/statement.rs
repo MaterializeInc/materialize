@@ -259,8 +259,13 @@ fn handle_show_objects(
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
     let like_regex = match filter {
-        Some(ShowStatementFilter::Like(like_string)) => build_like_regex_from_string(like_string.as_ref())?,
-        _ => build_like_regex_from_string(&String::from("%"))? // matches ShowStatementFilter::Where and None
+        Some(ShowStatementFilter::Like(like_string)) => {
+            build_like_regex_from_string(like_string.as_ref())?
+        }
+        Some(ShowStatementFilter::Where(where_epr)) => {
+            bail!("SHOW COLUMNS ... { LIKE | WHERE } is not supported")
+        }
+        None => build_like_regex_from_string(&String::from("%"))?,
     };
 
     let mut rows: Vec<Row> = catalog
