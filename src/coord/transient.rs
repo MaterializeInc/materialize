@@ -15,6 +15,7 @@ use ore::collections::CollectionExt;
 use sql::store::{Catalog, CatalogItem};
 use sql::PreparedStatement;
 use sql::{Plan, Session};
+use std::path::Path;
 use std::thread;
 use std::thread::JoinHandle;
 use symbiosis::Postgres;
@@ -36,6 +37,7 @@ where
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<&'a LoggingConfig>,
     pub bootstrap_sql: String,
+    pub data_directory: Option<&'a Path>,
     pub cmd_rx: UnboundedReceiver<Command>,
 }
 

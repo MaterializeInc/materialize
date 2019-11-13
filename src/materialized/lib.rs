@@ -18,6 +18,7 @@ use futures::{Future, Stream};
 use log::error;
 use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{self, AsyncWrite};
@@ -52,6 +53,8 @@ pub struct Config {
     pub addresses: Vec<String>,
     /// SQL to run if bootstrapping a new cluster.
     pub bootstrap_sql: String,
+    /// The directory in which `materialized` should store its own metadata.
+    pub data_directory: Option<PathBuf>,
     /// An optional symbiosis endpoint. See the
     /// [`symbiosis`](../symbiosis/index.html) crate for details.
     pub symbiosis_url: Option<String>,
@@ -210,6 +213,7 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
                 symbiosis_url: config.symbiosis_url.mz_as_deref(),
                 logging: logging_config.as_ref(),
                 bootstrap_sql: config.bootstrap_sql,
+                data_directory: config.data_directory.mz_as_deref(),
                 cmd_rx,
             })?
             .join_on_drop(),

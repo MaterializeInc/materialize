@@ -348,6 +348,7 @@ impl State {
             symbiosis_url: Some("postgres://"),
             logging: logging_config.as_ref(),
             bootstrap_sql: "".into(),
+            data_directory: None,
             cmd_rx,
         })?;
 
