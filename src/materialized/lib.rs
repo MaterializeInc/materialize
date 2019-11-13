@@ -20,6 +20,7 @@ use std::any::Any;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use tokio::io::{self, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
@@ -206,18 +207,15 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
 
     // Initialize command queue and sql planner, but only on the primary.
     let coord_thread = if is_primary {
-        Some(
-            coord::serve(coord::Config {
-                switchboard: switchboard.clone(),
-                num_timely_workers,
-                symbiosis_url: config.symbiosis_url.mz_as_deref(),
-                logging: logging_config.as_ref(),
-                bootstrap_sql: config.bootstrap_sql,
-                data_directory: config.data_directory.mz_as_deref(),
-                cmd_rx,
-            })?
-            .join_on_drop(),
-        )
+        let mut coord = coord::Coordinator::new(coord::Config {
+            switchboard: switchboard.clone(),
+            num_timely_workers,
+            symbiosis_url: config.symbiosis_url.mz_as_deref(),
+            logging: logging_config.as_ref(),
+            bootstrap_sql: config.bootstrap_sql,
+            data_directory: config.data_directory.mz_as_deref(),
+        })?;
+        Some(thread::spawn(move || coord.serve(cmd_rx)).join_on_drop())
     } else {
         None
     };

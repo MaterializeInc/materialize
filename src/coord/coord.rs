@@ -20,7 +20,6 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::iter;
 use std::path::Path;
-use std::thread::{self, JoinHandle};
 
 use failure::bail;
 use futures::{sink, stream, Future, Sink as FuturesSink, Stream};
@@ -62,119 +61,6 @@ where
     pub logging: Option<&'a LoggingConfig>,
     pub bootstrap_sql: String,
     pub data_directory: Option<&'a Path>,
-    pub cmd_rx: futures::sync::mpsc::UnboundedReceiver<Command>,
-}
-
-pub fn serve<'a, C>(config: Config<'a, C>) -> Result<JoinHandle<()>, failure::Error>
-where
-    C: comm::Connection,
-{
-    let mut coord = Coordinator::new(
-        config.switchboard.clone(),
-        config.num_timely_workers,
-        config.logging,
-        config.symbiosis_url.is_some(),
-    );
-
-    let mut catalog = sql::store::Catalog::new(config.logging);
-
-    let mut postgres = if let Some(symbiosis_url) = config.symbiosis_url {
-        Some(symbiosis::Postgres::open_and_erase(symbiosis_url)?)
-    } else {
-        None
-    };
-
-    {
-        // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
-        // the first connection ID used is 1. As long as that remains the case,
-        // 0 is safe to use here.
-        let conn_id = 0;
-        let mut session = sql::Session::default();
-        for stmt in sql::parse(config.bootstrap_sql)? {
-            handle_statement(
-                &mut coord,
-                postgres.as_mut(),
-                &mut catalog,
-                &mut session,
-                stmt,
-                None,
-                conn_id,
-            )?;
-        }
-    }
-
-    let feedback_rx = coord.enable_feedback();
-    // NOTE: returning an error from this point on (i.e., after calling
-    // `coord.enable_feedback()`) will be fatal, as dropping `feedback_rx` will
-    // cause the worker threads to panic.
-    let messages = config
-        .cmd_rx
-        .map(Message::Command)
-        .map_err(|()| unreachable!())
-        .chain(stream::once(Ok(Message::Shutdown)))
-        .select(feedback_rx.map(Message::Worker));
-
-    Ok(thread::spawn(move || {
-        let mut messages = messages.wait();
-        for msg in messages.by_ref() {
-            match msg.expect("coordinator message receiver failed") {
-                Message::Command(Command::Execute {
-                    portal_name,
-                    mut session,
-                    conn_id,
-                    tx,
-                }) => {
-                    let result = handle_execute(
-                        &mut coord,
-                        postgres.as_mut(),
-                        &mut catalog,
-                        &mut session,
-                        portal_name,
-                        conn_id,
-                    );
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::Parse {
-                    name,
-                    sql,
-                    mut session,
-                    tx,
-                }) => {
-                    let result = handle_parse(postgres.as_mut(), &catalog, &mut session, name, sql);
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::CancelRequest { conn_id }) => {
-                    coord.sequence_cancel(conn_id);
-                }
-
-                Message::Shutdown => {
-                    coord.shutdown();
-                    break;
-                }
-
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::FrontierUppers(updates),
-                }) => {
-                    for (name, changes) in updates {
-                        coord.update_upper(&name, changes);
-                    }
-                    coord.maintenance();
-                }
-            }
-        }
-
-        // Cleanly drain any pending messages from the worker before shutting
-        // down.
-        for msg in messages {
-            match msg.expect("coordinator message receiver failed") {
-                Message::Command(_) | Message::Shutdown => unreachable!(),
-                Message::Worker(_) => (),
-            }
-        }
-    }))
 }
 
 fn apply_plan(
@@ -212,8 +98,6 @@ fn apply_plan(
 
 fn handle_statement<C>(
     coord: &mut Coordinator<C>,
-    mut postgres: Option<&mut Postgres>,
-    catalog: &mut Catalog,
     session: &mut Session,
     stmt: sql::Statement,
     portal_name: Option<String>,
@@ -222,17 +106,17 @@ fn handle_statement<C>(
 where
     C: comm::Connection,
 {
-    sql::plan(catalog, session, stmt.clone(), portal_name)
+    sql::plan(&coord.catalog, session, stmt.clone(), portal_name)
         .or_else(|err| {
             // Executing the query failed. If we're running in symbiosis with
             // Postgres, see if Postgres can handle it.
-            match postgres {
+            match coord.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => postgres.execute(&stmt),
                 _ => Err(err),
             }
         })
         .and_then(|plan| {
-            apply_plan(catalog, session, &plan)?;
+            apply_plan(&mut coord.catalog, session, &plan)?;
             Ok(plan)
         })
         .map(|plan| coord.sequence_plan(plan, conn_id))
@@ -240,8 +124,6 @@ where
 
 fn handle_execute<C>(
     coord: &mut Coordinator<C>,
-    postgres: Option<&mut Postgres>,
-    catalog: &mut Catalog,
     session: &mut Session,
     portal_name: String,
     conn_id: u32,
@@ -264,15 +146,7 @@ where
     match prepared.sql() {
         Some(stmt) => {
             let stmt = stmt.clone();
-            handle_statement(
-                coord,
-                postgres,
-                catalog,
-                session,
-                stmt,
-                Some(portal_name),
-                conn_id,
-            )
+            handle_statement(coord, session, stmt, Some(portal_name), conn_id)
         }
         None => Ok(ExecuteResponse::EmptyQuery),
     }
@@ -318,6 +192,8 @@ where
     broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
     num_timely_workers: u64,
     optimizer: expr::transform::Optimizer,
+    catalog: Catalog,
+    symbiosis: Option<symbiosis::Postgres>,
     views: HashMap<String, ViewState>,
     /// Each source name maps to a source and re-written name (for auto-created views).
     sources: HashMap<String, (dataflow_types::Source, Option<String>)>,
@@ -332,26 +208,31 @@ where
     active_tails: HashMap<u32, String>,
     local_input_time: Timestamp,
     log: bool,
-    symbiosis: bool,
 }
 
 impl<C> Coordinator<C>
 where
     C: comm::Connection,
 {
-    pub fn new(
-        switchboard: comm::Switchboard<C>,
-        num_timely_workers: usize,
-        logging_config: Option<&LoggingConfig>,
-        symbiosis: bool,
-    ) -> Self {
-        let broadcast_tx = switchboard.broadcast_tx(dataflow::BroadcastToken).wait();
+    pub fn new(config: Config<C>) -> Result<Self, failure::Error> {
+        let broadcast_tx = config
+            .switchboard
+            .broadcast_tx(dataflow::BroadcastToken)
+            .wait();
+
+        let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
+            Some(symbiosis::Postgres::open_and_erase(symbiosis_url)?)
+        } else {
+            None
+        };
 
         let mut coordinator = Self {
-            switchboard,
+            switchboard: config.switchboard,
             broadcast_tx,
-            num_timely_workers: u64::try_from(num_timely_workers).unwrap(),
+            num_timely_workers: u64::try_from(config.num_timely_workers).unwrap(),
             optimizer: Default::default(),
+            catalog: Catalog::new(config.logging),
+            symbiosis,
             views: HashMap::new(),
             sources: HashMap::new(),
             indexes: HashMap::new(),
@@ -359,18 +240,95 @@ where
             since_updates: Vec::new(),
             active_tails: HashMap::new(),
             local_input_time: 1,
-            log: logging_config.is_some(),
-            symbiosis,
+            log: config.logging.is_some(),
         };
 
-        if let Some(logging_config) = logging_config {
+        if let Some(logging_config) = config.logging {
             for log in logging_config.active_logs().iter() {
                 // Insert with 1 second compaction latency.
                 coordinator.insert_source(log.name(), 1_000);
             }
         }
 
-        coordinator
+        {
+            // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
+            // the first connection ID used is 1. As long as that remains the case,
+            // 0 is safe to use here.
+            let conn_id = 0;
+            let mut session = sql::Session::default();
+            for stmt in sql::parse(config.bootstrap_sql)? {
+                handle_statement(&mut coordinator, &mut session, stmt, None, conn_id)?;
+            }
+        }
+
+        Ok(coordinator)
+    }
+
+    pub fn serve(&mut self, cmd_rx: futures::sync::mpsc::UnboundedReceiver<Command>) {
+        let feedback_rx = self.enable_feedback();
+        let messages = cmd_rx
+            .map(Message::Command)
+            .map_err(|()| unreachable!())
+            .chain(stream::once(Ok(Message::Shutdown)))
+            .select(feedback_rx.map(Message::Worker));
+        let mut messages = messages.wait();
+        for msg in messages.by_ref() {
+            match msg.expect("coordinator message receiver failed") {
+                Message::Command(Command::Execute {
+                    portal_name,
+                    mut session,
+                    conn_id,
+                    tx,
+                }) => {
+                    let result = handle_execute(self, &mut session, portal_name, conn_id);
+                    let _ = tx.send(Response { result, session });
+                }
+
+                Message::Command(Command::Parse {
+                    name,
+                    sql,
+                    mut session,
+                    tx,
+                }) => {
+                    let result = handle_parse(
+                        self.symbiosis.as_mut(),
+                        &self.catalog,
+                        &mut session,
+                        name,
+                        sql,
+                    );
+                    let _ = tx.send(Response { result, session });
+                }
+
+                Message::Command(Command::CancelRequest { conn_id }) => {
+                    self.sequence_cancel(conn_id);
+                }
+
+                Message::Shutdown => {
+                    self.shutdown();
+                    break;
+                }
+
+                Message::Worker(WorkerFeedbackWithMeta {
+                    worker_id: _,
+                    message: WorkerFeedback::FrontierUppers(updates),
+                }) => {
+                    for (name, changes) in updates {
+                        self.update_upper(&name, changes);
+                    }
+                    self.maintenance();
+                }
+            }
+        }
+
+        // Cleanly drain any pending messages from the worker before shutting
+        // down.
+        for msg in messages {
+            match msg.expect("coordinator message receiver failed") {
+                Message::Command(_) | Message::Shutdown => unreachable!(),
+                Message::Worker(_) => (),
+            }
+        }
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
@@ -952,7 +910,7 @@ where
 
     /// A policy for determining the timestamp for a peek.
     fn determine_timestamp(&mut self, source: &RelationExpr, when: PeekWhen) -> Timestamp {
-        if self.symbiosis {
+        if self.symbiosis.is_some() {
             // In symbiosis mode, we enforce serializability by forcing all
             // PEEKs to peek at the latest input time.
             return self.local_input_time - 1;

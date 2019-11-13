@@ -20,4 +20,4 @@ mod command;
 mod coord;
 
 pub use command::{Command, ExecuteResponse, Response, RowsFuture};
-pub use coord::{serve, Config};
+pub use coord::{Config, Coordinator};
