@@ -308,6 +308,9 @@ fn format_row(
                     (*string).to_owned()
                 }
             }
+            (Type::Text, Datum::Int32(chr)) => std::char::from_u32(chr as u32)
+                .map(|chr| format!("{}", chr))
+                .unwrap_or_else(|| format!("Invalid utf8 character: {}", chr)),
             (Type::Bool, Datum::False) => "false".to_owned(),
             (Type::Bool, Datum::True) => "true".to_owned(),
 
