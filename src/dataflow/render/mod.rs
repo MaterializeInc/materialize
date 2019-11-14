@@ -446,7 +446,10 @@ where
             }
 
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
-            let arities = types.iter().map(|t| t.column_types.len()).collect::<Vec<_>>();
+            let arities = types
+                .iter()
+                .map(|t| t.column_types.len())
+                .collect::<Vec<_>>();
             let mut offset = 0;
             let mut prior_arities = Vec::new();
             for input in 0..inputs.len() {
@@ -613,24 +616,33 @@ where
                     }
                     outputs.push(None);
                 }
-                let dummy_data = types.iter().flat_map(|t| &t.column_types).map(|t| if t.nullable {
-                    Datum::Null
-                } else {
-                    t.scalar_type.dummy_datum()
-                }).collect::<Vec<_>>();
+                let dummy_data = types
+                    .iter()
+                    .flat_map(|t| &t.column_types)
+                    .map(|t| {
+                        if t.nullable {
+                            Datum::Null
+                        } else {
+                            t.scalar_type.dummy_datum()
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 let mut unpacker = RowUnpacker::new();
                 let mut packer = RowPacker::new();
-                joined = joined.map(move |row| {
-                    let datums = unpacker.unpack(&row);
-                    packer.pack(outputs.iter().zip(dummy_data.iter()).map(|(new_col, dummy)| {
-                        if let Some(new_col) = new_col {
-                            &datums[*new_col]
-                        } else {
-                            //regenerate any columns ignored during join with dummy data
-                            dummy
-                        }
-                    }))
-                });
+                joined =
+                    joined.map(move |row| {
+                        let datums = unpacker.unpack(&row);
+                        packer.pack(outputs.iter().zip(dummy_data.iter()).map(
+                            |(new_col, dummy)| {
+                                if let Some(new_col) = new_col {
+                                    &datums[*new_col]
+                                } else {
+                                    //regenerate any columns ignored during join with dummy data
+                                    dummy
+                                }
+                            },
+                        ))
+                    });
                 self.collections.insert(relation_expr.clone(), joined);
             } else {
                 panic!("Empty join; why?");

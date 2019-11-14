@@ -491,7 +491,7 @@ impl<'a> ScalarType {
         }
     }
 
-    pub fn dummy_datum(&self) -> Datum<'a> {
+    pub fn dummy_datum(self) -> Datum<'a> {
         match self {
             ScalarType::Null => Datum::Null,
             ScalarType::Bool => Datum::False,
@@ -500,7 +500,7 @@ impl<'a> ScalarType {
             ScalarType::Float32 => Datum::Float32(OrderedFloat(0.0)),
             ScalarType::Float64 => Datum::Float64(OrderedFloat(0.0)),
             ScalarType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
-            ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1,1,1)),
+            ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
             ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
