@@ -14,6 +14,7 @@
 use std::cmp::Ordering;
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use url::Url;
 
 use expr::{ColumnOrder, GlobalId, RelationExpr, ScalarExpr};
@@ -120,6 +121,7 @@ pub struct DataflowDesc {
     /// This is logically equivalent to a timely dataflow `Antichain`,
     /// which should probably be used here instead.
     pub as_of: Option<Vec<Timestamp>>,
+    pub dont_compact: bool,
 }
 
 impl DataflowDesc {
@@ -165,6 +167,11 @@ impl DataflowDesc {
         self.as_of = as_of;
         self
     }
+
+    pub fn dont_compact(mut self) -> Self {
+        self.dont_compact = true;
+        self
+    }
 }
 
 /// A source of updates for a relational collection.
@@ -200,6 +207,7 @@ pub struct View {
 pub enum SourceConnector {
     Local,
     Kafka(KafkaSourceConnector),
+    File(FileSourceConnector),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -209,6 +217,17 @@ pub struct KafkaSourceConnector {
     pub raw_schema: String,
     #[serde(with = "url_serde")]
     pub schema_registry_url: Option<Url>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FileSourceConnector {
+    pub path: PathBuf,
+    pub format: FileFormat,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum FileFormat {
+    CSV(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

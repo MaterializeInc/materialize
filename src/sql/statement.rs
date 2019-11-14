@@ -18,23 +18,23 @@ use sqlparser::ast::{
 };
 use url::Url;
 
+use crate::expr as sqlexpr;
+use crate::expr::like::build_like_regex_from_string;
+use crate::query;
+use crate::session::{Portal, Session};
+use crate::Plan;
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
-    Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
-    SinkConnector, Source, SourceConnector, View,
+    FileFormat, FileSourceConnector, Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
+    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
 use relationexpr::Id;
-use repr::{ColumnType, Datum, QualName, RelationDesc, Row, ScalarType};
+use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
-use crate::expr as sqlexpr;
-use crate::expr::like::build_like_regex_from_string;
 use crate::names;
-use crate::query;
-use crate::session::{Portal, Session};
-use crate::Plan;
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -51,6 +51,11 @@ pub fn describe_statement(
         | Statement::Rollback { .. }
         | Statement::Commit { .. }
         | Statement::Tail { .. } => (None, vec![]),
+
+        Statement::ReadCsv { .. } => (
+            Some(RelationDesc::empty().add_column("Source", ScalarType::String)),
+            vec![],
+        ),
 
         Statement::CreateSources { .. } => (
             Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
@@ -159,7 +164,8 @@ pub fn handle_statement(
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::CreateSources { .. }
-        | Statement::CreateIndex { .. } => match portal_name {
+        | Statement::CreateIndex { .. }
+        | Statement::ReadCsv { .. } => match portal_name {
             Some(portal_name) => {
                 handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
             }
@@ -360,11 +366,16 @@ fn handle_show_create_source(
                 SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
                     format!("kafka://{}/{}", addr, topic)
                 }
+                SourceConnector::File(c) => {
+                    let format_str = match c.format {
+                        FileFormat::CSV(_) => "csv",
+                    };
+                    format!("{}+file://{}", format_str, c.path.to_string_lossy())
+                }
             }
         } else {
             bail!("{} is not a source", name);
         };
-
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::cow_from_str(&name.to_string()),
         Datum::cow_from_str(&source_url),
@@ -538,6 +549,21 @@ fn handle_create_dataflow(
                     .collect(),
             };
             Ok(Plan::CreateIndex(name, index))
+        }
+        Statement::ReadCsv { name, path, n_cols } => {
+            let name = name.try_into()?;
+            let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                .take(*n_cols)
+                .collect();
+            let names = (1..=*n_cols).map(|i| Some(format!("column{}", i)));
+            let source = Source {
+                connector: SourceConnector::File(FileSourceConnector {
+                    path: path.clone().try_into()?,
+                    format: FileFormat::CSV(*n_cols),
+                }),
+                desc: RelationDesc::new(RelationType::new(cols), names),
+            };
+            Ok(Plan::CreateSources(vec![(name, source)]))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }

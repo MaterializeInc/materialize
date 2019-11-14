@@ -658,7 +658,7 @@ where
                 let view_id = self.catalog.allocate_id();
                 self.sources
                     .insert(source_id, (source.clone(), Some(view_id)));
-                DataflowDesc::new()
+                let mut desc = DataflowDesc::new()
                     .add_view(
                         view_id,
                         View {
@@ -670,7 +670,11 @@ where
                             desc: source.desc.clone(),
                         },
                     )
-                    .add_source(source_id, source.clone())
+                    .add_source(source_id, source.clone());
+                if let SourceConnector::File(_) = source.connector {
+                    desc = desc.dont_compact();
+                }
+                desc
             })
             .collect();
         broadcast(
@@ -1040,6 +1044,9 @@ where
         for (view_id, view) in dataflow.views.iter() {
             self.remove_view(view_id);
             let mut viewstate = ViewState::from_view(view, self.num_timely_workers);
+            if dataflow.dont_compact {
+                viewstate.set_compaction_latency(None);
+            }
             viewstate.depends_on_source = contains_sources;
             if self.log {
                 for time in viewstate.upper.frontier().iter() {

@@ -11,6 +11,7 @@ path = "lib.rs"
 [dependencies]
 bincode = "1.2.0"
 comm = { path = "../comm" }
+csv = "1.1.1"
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
@@ -26,6 +27,7 @@ rdkafka = { version = "0.21", features = ["cmake_build"] }
 repr = { path = "../repr" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.42"
+stringreader = "0.1.1"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
 tokio = "0.1"
 url = "1.7.2"
