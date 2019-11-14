@@ -9,10 +9,10 @@
 
 use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
+use catalog::{Catalog, CatalogItem};
 use repr::{RelationDesc, Row, ScalarType};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
-use store::{Catalog, CatalogItem};
 
 pub use session::{PreparedStatement, Session, TransactionStatus};
 pub use sqlparser::ast::{ObjectType, Statement};
@@ -22,7 +22,6 @@ mod query;
 mod scope;
 mod session;
 mod statement;
-pub mod store;
 mod transform;
 
 // this is used by sqllogictest to turn sql values into `Datum`

@@ -27,6 +27,7 @@ use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 use uuid::Uuid;
 
+use catalog::{Catalog, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
@@ -38,7 +39,6 @@ use expr::RelationExpr;
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use repr::{Datum, RelationDesc, Row, RowPacker, RowUnpacker};
-use sql::store::{Catalog, CatalogItem};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
 use symbiosis::Postgres;

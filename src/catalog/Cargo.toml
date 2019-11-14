@@ -1,0 +1,14 @@
+[package]
+name = "catalog"
+description = "Metadata storage."
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+dataflow-types = { path = "../dataflow-types" }
+failure = "0.1.6"
+repr = { path = "../repr" }

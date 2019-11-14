@@ -17,12 +17,7 @@ use sqlparser::ast::{
 };
 use url::Url;
 
-use crate::expr as sqlexpr;
-use crate::expr::like::build_like_regex_from_string;
-use crate::query;
-use crate::session::{Portal, Session};
-use crate::store::{Catalog, CatalogItem, RemoveMode};
-use crate::Plan;
+use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
     Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
     SinkConnector, Source, SourceConnector, View,
@@ -31,6 +26,12 @@ use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+
+use crate::expr as sqlexpr;
+use crate::expr::like::build_like_regex_from_string;
+use crate::query;
+use crate::session::{Portal, Session};
+use crate::Plan;
 
 pub fn describe_statement(
     catalog: &Catalog,
