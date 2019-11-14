@@ -3465,9 +3465,9 @@ dependencies = [
 
 [[package]]
 name = "typed-arena"
-version = "1.5.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f70f5c346cc11bc044ae427ab2feae213350dca9e2d637047797d5ff316a646"
+checksum = "a9b2228007eba4120145f785df0f6c92ea538f5a3635a612ecf4e334c8c1446d"
 
 [[package]]
 name = "typenum"
