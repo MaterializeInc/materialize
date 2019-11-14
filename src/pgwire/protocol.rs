@@ -692,7 +692,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         }
                     }
                     ExecuteResponse::StartTransaction => {
-                        command_complete!("START TRANSACTION", "transaction_start")
+                        // PgJDBC expects "BEGIN", not "START TRANSACTION".
+                        // The two actions are equivalent in PostgreSQL.
+                        command_complete!("BEGIN", "transaction_start")
                     }
                     ExecuteResponse::Commit => {
                         command_complete!("COMMIT TRANSACTION", "transaction_commit")
