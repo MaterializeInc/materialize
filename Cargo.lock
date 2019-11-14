@@ -2902,7 +2902,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#27c424883f970d5dee8979c0223b4cde0f518ac5"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#d8ae0f0ce834f83d238844cf0b4b2f07d20ebfbf"
 dependencies = [
  "log 0.4.8",
 ]
@@ -3069,13 +3069,13 @@ checksum = "f764005d11ee5f36500a149ace24e00e3da98b0158b3e2d53a7495660d3f4d60"
 
 [[package]]
 name = "tempfile"
-version = "3.0.8"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dc4738f2e68ed2855de5ac9cdbe05c9216773ecde4739b2f095002ab03a13ef"
+checksum = "7a6e24d9338a0a5be79593e2fa15a648add6138caa803e2d5bc782c371732ca9"
 dependencies = [
  "cfg-if",
  "libc",
- "rand 0.6.5",
+ "rand 0.7.2",
  "redox_syscall",
  "remove_dir_all",
  "winapi 0.3.7",
