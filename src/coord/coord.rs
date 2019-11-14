@@ -41,7 +41,6 @@ use ore::future::FutureExt;
 use repr::{Datum, LiteralName, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
-use symbiosis::Postgres;
 
 use crate::{Command, ExecuteResponse, Response};
 
@@ -61,126 +60,6 @@ where
     pub logging: Option<&'a LoggingConfig>,
     pub bootstrap_sql: String,
     pub data_directory: Option<&'a Path>,
-}
-
-fn apply_plan(
-    catalog: &mut Catalog,
-    session: &mut Session,
-    plan: &Plan,
-) -> Result<(), failure::Error> {
-    match plan {
-        Plan::CreateView(view) => catalog.insert(CatalogItem::View(view.clone()))?,
-        Plan::CreateTable { name, desc } => catalog.insert(CatalogItem::Source(Source {
-            name: name.clone(),
-            connector: SourceConnector::Local,
-            desc: desc.clone(),
-        }))?,
-        Plan::CreateSource(source) => catalog.insert(CatalogItem::Source(source.clone()))?,
-        Plan::CreateSources(sources) => {
-            for source in sources {
-                catalog.insert(CatalogItem::Source(source.clone()))?
-            }
-        }
-        Plan::CreateSink(sink) => catalog.insert(CatalogItem::Sink(sink.clone()))?,
-        Plan::CreateIndex(index) => catalog.insert(CatalogItem::Index(index.clone()))?,
-        Plan::DropItems(names, _item_type) => {
-            for name in names {
-                catalog.remove(name);
-            }
-        }
-        Plan::SetVariable { name, value } => session.set(name, value)?,
-        Plan::StartTransaction => session.start_transaction(),
-        Plan::Commit | Plan::Rollback => session.end_transaction(),
-        _ => (),
-    }
-    Ok(())
-}
-
-fn handle_statement<C>(
-    coord: &mut Coordinator<C>,
-    session: &mut Session,
-    stmt: sql::Statement,
-    portal_name: Option<String>,
-    conn_id: u32,
-) -> Result<ExecuteResponse, failure::Error>
-where
-    C: comm::Connection,
-{
-    sql::plan(&coord.catalog, session, stmt.clone(), portal_name)
-        .or_else(|err| {
-            // Executing the query failed. If we're running in symbiosis with
-            // Postgres, see if Postgres can handle it.
-            match coord.symbiosis {
-                Some(ref mut postgres) if postgres.can_handle(&stmt) => postgres.execute(&stmt),
-                _ => Err(err),
-            }
-        })
-        .and_then(|plan| {
-            apply_plan(&mut coord.catalog, session, &plan)?;
-            Ok(plan)
-        })
-        .map(|plan| coord.sequence_plan(plan, conn_id))
-}
-
-fn handle_execute<C>(
-    coord: &mut Coordinator<C>,
-    session: &mut Session,
-    portal_name: String,
-    conn_id: u32,
-) -> Result<ExecuteResponse, failure::Error>
-where
-    C: comm::Connection,
-{
-    let portal = session
-        .get_portal(&portal_name)
-        .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
-    let prepared = session
-        .get_prepared_statement(&portal.statement_name)
-        .ok_or_else(|| {
-            failure::format_err!(
-                "statement for portal does not exist portal={:?} statement={:?}",
-                portal_name,
-                portal.statement_name
-            )
-        })?;
-    match prepared.sql() {
-        Some(stmt) => {
-            let stmt = stmt.clone();
-            handle_statement(coord, session, stmt, Some(portal_name), conn_id)
-        }
-        None => Ok(ExecuteResponse::EmptyQuery),
-    }
-}
-
-fn handle_parse(
-    postgres: Option<&mut Postgres>,
-    catalog: &Catalog,
-    session: &mut Session,
-    name: String,
-    sql: String,
-) -> Result<(), failure::Error> {
-    let stmts = sql::parse(sql)?;
-    let (stmt, desc, param_types) = match stmts.len() {
-        0 => (None, None, vec![]),
-        1 => {
-            let stmt = stmts.into_element();
-            let (desc, param_types) = match sql::describe(catalog, stmt.clone()) {
-                Ok((desc, param_types)) => (desc, param_types),
-                // Describing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it. Note that Postgres
-                // only handles commands that do not return rows, so the
-                // `RelationDesc` is always `None`.
-                Err(err) => match postgres {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
-                    _ => return Err(err),
-                },
-            };
-            (Some(stmt), desc, param_types)
-        }
-        n => bail!("expected no more than one query, got {}", n),
-    };
-    session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
-    Ok(())
 }
 
 /// Glues the external world to the Timely workers.
@@ -257,7 +136,7 @@ where
             let conn_id = 0;
             let mut session = sql::Session::default();
             for stmt in sql::parse(config.bootstrap_sql)? {
-                handle_statement(&mut coordinator, &mut session, stmt, None, conn_id)?;
+                coordinator.handle_statement(&mut session, stmt, None, conn_id)?;
             }
         }
 
@@ -280,7 +159,7 @@ where
                     conn_id,
                     tx,
                 }) => {
-                    let result = handle_execute(self, &mut session, portal_name, conn_id);
+                    let result = self.handle_execute(&mut session, portal_name, conn_id);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -290,9 +169,7 @@ where
                     mut session,
                     tx,
                 }) => {
-                    let result = handle_parse(
-                        self.symbiosis.as_mut(),
-                        &self.catalog,
+                    let result = self.handle_parse(
                         &mut session,
                         name,
                         sql,
@@ -1131,6 +1008,119 @@ where
                 }
             }
         }
+    }
+
+    fn apply_plan(
+        &mut self,
+        session: &mut Session,
+        plan: &Plan,
+    ) -> Result<(), failure::Error> {
+        match plan {
+            Plan::CreateView(view) => self.catalog.insert(CatalogItem::View(view.clone()))?,
+            Plan::CreateTable { name, desc } => self.catalog.insert(CatalogItem::Source(Source {
+                name: name.clone(),
+                connector: SourceConnector::Local,
+                desc: desc.clone(),
+            }))?,
+            Plan::CreateSource(source) => self.catalog.insert(CatalogItem::Source(source.clone()))?,
+            Plan::CreateSources(sources) => {
+                for source in sources {
+                    self.catalog.insert(CatalogItem::Source(source.clone()))?
+                }
+            }
+            Plan::CreateSink(sink) => self.catalog.insert(CatalogItem::Sink(sink.clone()))?,
+            Plan::CreateIndex(index) => self.catalog.insert(CatalogItem::Index(index.clone()))?,
+            Plan::DropItems(names, _item_type) => {
+                for name in names {
+                    self.catalog.remove(name);
+                }
+            }
+            Plan::SetVariable { name, value } => session.set(name, value)?,
+            Plan::StartTransaction => session.start_transaction(),
+            Plan::Commit | Plan::Rollback => session.end_transaction(),
+            _ => (),
+        }
+        Ok(())
+    }
+
+    fn handle_statement(
+        &mut self,
+        session: &mut Session,
+        stmt: sql::Statement,
+        portal_name: Option<String>,
+        conn_id: u32,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        sql::plan(&self.catalog, session, stmt.clone(), portal_name)
+            .or_else(|err| {
+                // Executing the query failed. If we're running in symbiosis with
+                // Postgres, see if Postgres can handle it.
+                match self.symbiosis {
+                    Some(ref mut postgres) if postgres.can_handle(&stmt) => postgres.execute(&stmt),
+                    _ => Err(err),
+                }
+            })
+            .and_then(|plan| {
+                self.apply_plan(session, &plan)?;
+                Ok(plan)
+            })
+            .map(|plan| self.sequence_plan(plan, conn_id))
+    }
+
+    fn handle_execute(
+        &mut self,
+        session: &mut Session,
+        portal_name: String,
+        conn_id: u32,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let portal = session
+            .get_portal(&portal_name)
+            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
+        let prepared = session
+            .get_prepared_statement(&portal.statement_name)
+            .ok_or_else(|| {
+                failure::format_err!(
+                    "statement for portal does not exist portal={:?} statement={:?}",
+                    portal_name,
+                    portal.statement_name
+                )
+            })?;
+        match prepared.sql() {
+            Some(stmt) => {
+                let stmt = stmt.clone();
+                self.handle_statement(session, stmt, Some(portal_name), conn_id)
+            }
+            None => Ok(ExecuteResponse::EmptyQuery),
+        }
+    }
+
+    fn handle_parse(
+        &self,
+        session: &mut Session,
+        name: String,
+        sql: String,
+    ) -> Result<(), failure::Error> {
+        let stmts = sql::parse(sql)?;
+        let (stmt, desc, param_types) = match stmts.len() {
+            0 => (None, None, vec![]),
+            1 => {
+                let stmt = stmts.into_element();
+                let (desc, param_types) = match sql::describe(&self.catalog, stmt.clone()) {
+                    Ok((desc, param_types)) => (desc, param_types),
+                    // Describing the query failed. If we're running in symbiosis with
+                    // Postgres, see if Postgres can handle it. Note that Postgres
+                    // only handles commands that do not return rows, so the
+                    // `RelationDesc` is always `None`.
+                    Err(err) => match self.symbiosis {
+                        Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                        _ => return Err(err),
+                    },
+                };
+                (Some(stmt), desc, param_types)
+            }
+            n => bail!("expected no more than one query, got {}", n),
+        };
+        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
+        Ok(())
     }
 }
 
