@@ -93,9 +93,8 @@ where
 
         move |cap, output| {
             if let Some(consumer) = consumer.as_mut() {
-                // Repeatedly interrogate Kafka for messages. Cease only when
-                // Kafka stops returning new data. We could cease earlier, if we
-                // had a better policy.
+                // Repeatedly interrogate Kafka for messages. Cease when
+                // Kafka stops returning new data, or after 10 milliseconds.
                 let timer = std::time::Instant::now();
 
                 while let Some(result) = consumer.poll(Duration::from_millis(0)) {
