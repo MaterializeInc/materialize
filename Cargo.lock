@@ -2902,7 +2902,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#27c424883f970d5dee8979c0223b4cde0f518ac5"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#d8ae0f0ce834f83d238844cf0b4b2f07d20ebfbf"
 dependencies = [
  "log 0.4.8",
 ]
@@ -3435,9 +3435,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.5.3"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7aabe75941d914b72bf3e5d3932ed92ce0664d49d8432305a8b547c37227724"
+checksum = "01d1404644c8b12b16bfcffa4322403a91a451584daaaa7c28d3152e6cbc98cf"
 dependencies = [
  "serde",
 ]
