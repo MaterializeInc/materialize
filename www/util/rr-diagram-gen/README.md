@@ -4,7 +4,7 @@ Materialize's SQL API documentation relies on a "railroad diagram" to express a 
 
 ## Usage
 
-With Golang installed, run:
+With Golang v1.13+ installed, run:
 
 ```shell
 make run
