@@ -40,40 +40,32 @@ fi
 # This Git incantation lists the source files in this repository. If you change
 # it, please preserve the following properties:
 #
-#     1. files matched by a gitignore rule are excluded, and
-#     2. deleted but unstaged files are excluded.
+#     1. files matched by a gitignore rule are excluded,
+#     2. deleted but unstaged files are excluded,
+#     3. symlinks are excluded.
 #
 empty_tree=$(git hash-object -t tree /dev/null)
-files=$(git diff --ignore-submodules=all --name-only "$empty_tree")
+files=$(git diff --ignore-submodules=all --raw "$empty_tree" \
+    | awk '$2 != 120000 {print $6}')
 
 copyright_files=$(grep -vE \
+    -e '(^|/)LICENSE$' \
     -e '(^|/)\.(git|vscode)ignore$' \
     -e '(^|/)\.git(modules|attributes)$' \
     -e '(^|/).lfsconfig$' \
+    -e '(^|/)go\.sum$' \
     -e '(^|/)Cargo\.toml$' \
     -e '^Cargo\.lock$' \
     -e '^netlify.toml$' \
-    -e '(^|/)LICENSE$' \
     -e '^rust-toolchain$' \
     -e '^rustfmt.toml$' \
-    -e '\.md$' \
-    -e '\.json$' \
+    -e '\.(md|json|asc|png|jpe?g|svg|eot|ttf|woff2?)$' \
+    -e '^www/.*(\.html|\.scss|\.bnf|\.toml)$' \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \
-    -e '\.asc$' \
-    -e '\.png$' \
-    -e '\.jpe?g$' \
-    -e '\/go\.sum$' \
-    -e '^www/' \
     <<< "$files"
 )
 
-newline_files=$(grep -vE \
-    -e '\.png$' \
-    -e '\.jpe?g$' \
-    -e 'www/static/font' \
-    -e '^www/content/docs$' \
-    <<< "$files"
-)
+newline_files=$(grep -vE '\.(png|jpe?g|eot|ttf|woff2?)$' <<< "$files")
 
 shell_files=$(sort -u <(git ls-files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.md'))
 
