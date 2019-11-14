@@ -7,6 +7,7 @@ use lazy_static::lazy_static;
 use rand::Rng;
 use regex::{Captures, Regex};
 use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::time::Duration;
 
 use crate::error::{Error, InputError};
@@ -49,6 +50,16 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Inp
     let mut out = Vec::new();
     let mut vars = HashMap::new();
     vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
+    vars.insert(
+        "testdrive.kafka-addr-resolved".into(),
+        state
+            .kafka_addr
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+            .map(|addr| addr.to_string())
+            .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
+    );
     vars.insert(
         "testdrive.schema-registry-url".into(),
         state.schema_registry_url.clone(),

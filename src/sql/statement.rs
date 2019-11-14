@@ -73,6 +73,15 @@ pub fn describe_statement(
             vec![],
         ),
 
+        Statement::ShowCreateSource { .. } => (
+            Some(
+                RelationDesc::empty()
+                    .add_column("Source", ScalarType::String)
+                    .add_column("Source URL", ScalarType::String),
+            ),
+            vec![],
+        ),
+
         Statement::ShowColumns { .. } => (
             Some(
                 RelationDesc::empty()
@@ -178,6 +187,9 @@ pub fn handle_statement(
             filter,
         } => handle_show_columns(catalog, extended, full, &table_name, filter.as_ref()),
         Statement::ShowCreateView { view_name } => handle_show_create_view(catalog, view_name),
+        Statement::ShowCreateSource { source_name } => {
+            handle_show_create_source(catalog, source_name)
+        }
         Statement::Explain { stage, query } => match portal_name {
             Some(portal_name) => {
                 handle_explain(catalog, stage, *query, session.get_portal(&portal_name))
@@ -321,6 +333,28 @@ fn handle_show_create_view(
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name),
         Datum::String(&raw_sql),
+    ])]))
+}
+
+fn handle_show_create_source(
+    catalog: &Catalog,
+    object_name: ObjectName,
+) -> Result<Plan, failure::Error> {
+    let name = object_name.to_string();
+    let source_url = if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)? {
+        match connector {
+            SourceConnector::Local => String::from("local://"),
+            SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
+                format!("kafka://{}/{}", addr, topic)
+            }
+        }
+    } else {
+        bail!("{} is not a source", name);
+    };
+
+    Ok(Plan::SendRows(vec![Row::pack(&[
+        Datum::String(&name),
+        Datum::String(&source_url),
     ])]))
 }
 
