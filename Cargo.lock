@@ -2540,6 +2540,7 @@ dependencies = [
  "chrono",
  "criterion",
  "failure",
+ "itertools",
  "ordered-float",
  "ore",
  "pretty",

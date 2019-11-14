@@ -9,10 +9,11 @@ use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
 use std::str::FromStr;
 
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use sqlparser::ast::{Ident, ObjectName};
 
-use crate::errors::Result;
+use crate::errors::{Error as ReprError, Result};
 
 /// A generalized name that may be qualified
 ///
@@ -159,7 +160,7 @@ impl QualName {
     /// ```
     pub fn name_equals(lhs: ObjectName, rhs: &'static str) -> bool {
         QualName::try_from(lhs)
-            .map(|qn| qn.to_string() == rhs)
+            .map(|qn| &qn == rhs)
             .unwrap_or(false)
     }
 
@@ -212,7 +213,7 @@ impl From<&QualName> for QualName {
 }
 
 impl TryFrom<ObjectName> for QualName {
-    type Error = failure::Error;
+    type Error = ReprError;
 
     fn try_from(other: ObjectName) -> Result<QualName> {
         QualName::new_normalized(other.0)
@@ -220,7 +221,7 @@ impl TryFrom<ObjectName> for QualName {
 }
 
 impl TryFrom<&ObjectName> for QualName {
-    type Error = failure::Error;
+    type Error = ReprError;
 
     fn try_from(other: &ObjectName) -> Result<QualName> {
         QualName::new_normalized(other.0.iter().cloned())
@@ -228,7 +229,7 @@ impl TryFrom<&ObjectName> for QualName {
 }
 
 impl TryFrom<&mut ObjectName> for QualName {
-    type Error = failure::Error;
+    type Error = ReprError;
 
     fn try_from(other: &mut ObjectName) -> Result<QualName> {
         QualName::new_normalized(other.0.iter().cloned())
@@ -236,14 +237,14 @@ impl TryFrom<&mut ObjectName> for QualName {
 }
 
 impl TryFrom<Ident> for QualName {
-    type Error = failure::Error;
+    type Error = ReprError;
     fn try_from(other: Ident) -> Result<QualName> {
         QualName::new_normalized(vec![other])
     }
 }
 
 impl TryFrom<&Ident> for QualName {
-    type Error = failure::Error;
+    type Error = ReprError;
     /// TODO: a version that takes a borrowed ident
     fn try_from(other: &Ident) -> Result<QualName> {
         QualName::new_normalized(vec![other.clone()])
@@ -251,14 +252,15 @@ impl TryFrom<&Ident> for QualName {
 }
 
 impl TryFrom<&str> for QualName {
-    type Error = failure::Error;
+    type Error = ReprError;
+    /// An alias for [`FromStr`] for use in a generic context
     fn try_from(s: &str) -> Result<QualName> {
         s.parse()
     }
 }
 
 impl TryFrom<QualName> for Ident {
-    type Error = failure::Error;
+    type Error = ReprError;
     fn try_from(other: QualName) -> Result<Ident> {
         if other.0.len() == 1 {
             let ident = other.0.into_iter().next().unwrap();
@@ -295,11 +297,60 @@ impl Hash for QualName {
 }
 
 impl PartialEq<str> for QualName {
+    /// Compare QualName to a slice
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use repr::QualName;
+    /// let qn: &QualName = &"one.TWO".parse().unwrap();
+    ///
+    /// assert_eq!(qn, "one.\"two\"");
+    /// assert!(qn != "one.twoo");
+    ///
+    /// // there is one known limitation:
+    /// let qn: &QualName = &"one.two.three".parse().unwrap();
+    /// let s = "one.\"two.three\"";
+    /// assert_eq!(qn, s);
+    /// ```
     fn eq(&self, rhs: &str) -> bool {
-        if self.0.len() != 1 {
-            return false;
+        let mut in_quote = false;
+        let mut left_chars = self
+            .0
+            .iter()
+            .map(|ident| ident.value.as_ref())
+            .intersperse(".")
+            .flat_map(|val| val.chars());
+        let mut right_chars = rhs.chars();
+        loop {
+            match (left_chars.next(), right_chars.next()) {
+                (Some(left), Some(mut right)) => {
+                    if right == '"' {
+                        in_quote = !in_quote;
+                        match right_chars.next() {
+                            Some(chr) => right = chr,
+                            // there is no right char after the final left
+                            None => return false,
+                        }
+                    }
+
+                    if in_quote {
+                        if left != right {
+                            return false;
+                        }
+                    } else {
+                        for part in right.to_lowercase() {
+                            if left != part {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                (None, None) => return true,
+                (None, Some('"')) if in_quote => in_quote = !in_quote,
+                _ => return false,
+            }
         }
-        self.0[0].value == rhs
     }
 }
 
@@ -339,7 +390,7 @@ impl PartialEq for Identifier {
 }
 
 impl TryFrom<Ident> for Identifier {
-    type Error = failure::Error;
+    type Error = ReprError;
 
     /// Construct a valid identifier
     ///
