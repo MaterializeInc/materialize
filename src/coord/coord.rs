@@ -169,11 +169,7 @@ where
                     mut session,
                     tx,
                 }) => {
-                    let result = self.handle_parse(
-                        &mut session,
-                        name,
-                        sql,
-                    );
+                    let result = self.handle_parse(&mut session, name, sql);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -232,9 +228,19 @@ where
         }
     }
 
-    pub fn sequence_plan(&mut self, plan: Plan, conn_id: u32) -> ExecuteResponse {
-        match plan {
+    pub fn sequence_plan(
+        &mut self,
+        session: &mut Session,
+        plan: Plan,
+        conn_id: u32,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        Ok(match plan {
             Plan::CreateTable { name, desc } => {
+                self.catalog.insert(CatalogItem::Source(Source {
+                    name: name.clone(),
+                    connector: SourceConnector::Local,
+                    desc: desc.clone(),
+                }))?;
                 self.create_sources(vec![Source {
                     name,
                     connector: SourceConnector::Local,
@@ -244,12 +250,16 @@ where
             }
 
             Plan::CreateSource(source) => {
+                self.catalog.insert(CatalogItem::Source(source.clone()))?;
                 let sources = vec![source];
                 self.create_sources(sources);
                 ExecuteResponse::CreatedSource
             }
 
             Plan::CreateSources(sources) => {
+                for source in &sources {
+                    self.catalog.insert(CatalogItem::Source(source.clone()))?;
+                }
                 self.create_sources(sources.clone());
                 send_immediate_rows(
                     sources
@@ -260,21 +270,27 @@ where
             }
 
             Plan::CreateSink(sink) => {
+                self.catalog.insert(CatalogItem::Sink(sink.clone()))?;
                 self.create_dataflows(vec![DataflowDesc::from(sink)]);
                 ExecuteResponse::CreatedSink
             }
 
             Plan::CreateView(view) => {
+                self.catalog.insert(CatalogItem::View(view.clone()))?;
                 self.create_dataflows(vec![DataflowDesc::from(view)]);
                 ExecuteResponse::CreatedView
             }
 
             Plan::CreateIndex(index) => {
+                self.catalog.insert(CatalogItem::Index(index.clone()))?;
                 self.create_index(index);
                 ExecuteResponse::CreatedIndex
             }
 
             Plan::DropItems(names, item_type) => {
+                for name in &names {
+                    self.catalog.remove(&name);
+                }
                 let mut sources_to_drop = Vec::new();
                 let mut views_to_drop: Vec<QualName> = Vec::new();
                 let mut indexes_to_drop = Vec::new();
@@ -319,11 +335,25 @@ where
 
             Plan::EmptyQuery => ExecuteResponse::EmptyQuery,
 
-            Plan::SetVariable { name, .. } => ExecuteResponse::SetVariable { name },
+            Plan::SetVariable { name, value } => {
+                session.set(&name, &value)?;
+                ExecuteResponse::SetVariable { name }
+            }
 
-            Plan::StartTransaction => ExecuteResponse::StartTransaction,
-            Plan::Commit => ExecuteResponse::Commit,
-            Plan::Rollback => ExecuteResponse::Rollback,
+            Plan::StartTransaction => {
+                session.start_transaction();
+                ExecuteResponse::StartTransaction
+            }
+
+            Plan::Commit => {
+                session.end_transaction();
+                ExecuteResponse::Commit
+            }
+
+            Plan::Rollback => {
+                session.end_transaction();
+                ExecuteResponse::Rollback
+            }
 
             Plan::Peek {
                 mut source,
@@ -557,7 +587,7 @@ where
                     MutationKind::Update => ExecuteResponse::Updated(affected_rows),
                 }
             }
-        }
+        })
     }
 
     /// Create sources as described by `sources`.
@@ -1010,39 +1040,6 @@ where
         }
     }
 
-    fn apply_plan(
-        &mut self,
-        session: &mut Session,
-        plan: &Plan,
-    ) -> Result<(), failure::Error> {
-        match plan {
-            Plan::CreateView(view) => self.catalog.insert(CatalogItem::View(view.clone()))?,
-            Plan::CreateTable { name, desc } => self.catalog.insert(CatalogItem::Source(Source {
-                name: name.clone(),
-                connector: SourceConnector::Local,
-                desc: desc.clone(),
-            }))?,
-            Plan::CreateSource(source) => self.catalog.insert(CatalogItem::Source(source.clone()))?,
-            Plan::CreateSources(sources) => {
-                for source in sources {
-                    self.catalog.insert(CatalogItem::Source(source.clone()))?
-                }
-            }
-            Plan::CreateSink(sink) => self.catalog.insert(CatalogItem::Sink(sink.clone()))?,
-            Plan::CreateIndex(index) => self.catalog.insert(CatalogItem::Index(index.clone()))?,
-            Plan::DropItems(names, _item_type) => {
-                for name in names {
-                    self.catalog.remove(name);
-                }
-            }
-            Plan::SetVariable { name, value } => session.set(name, value)?,
-            Plan::StartTransaction => session.start_transaction(),
-            Plan::Commit | Plan::Rollback => session.end_transaction(),
-            _ => (),
-        }
-        Ok(())
-    }
-
     fn handle_statement(
         &mut self,
         session: &mut Session,
@@ -1059,11 +1056,7 @@ where
                     _ => Err(err),
                 }
             })
-            .and_then(|plan| {
-                self.apply_plan(session, &plan)?;
-                Ok(plan)
-            })
-            .map(|plan| self.sequence_plan(plan, conn_id))
+            .and_then(|plan| self.sequence_plan(session, plan, conn_id))
     }
 
     fn handle_execute(
