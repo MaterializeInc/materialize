@@ -28,6 +28,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::mem;
 use std::ops;
 use std::path::Path;
+use std::thread;
 
 use failure::{bail, ResultExt};
 use futures::Future;
@@ -342,15 +343,15 @@ impl State {
         let (switchboard, runtime) = comm::Switchboard::local()?;
 
         let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
-        let coord_thread = coord::serve(coord::Config {
+        let mut coord = coord::Coordinator::new(coord::Config {
             switchboard: switchboard.clone(),
             num_timely_workers: NUM_TIMELY_WORKERS,
             symbiosis_url: Some("postgres://"),
             logging: logging_config.as_ref(),
             bootstrap_sql: "".into(),
             data_directory: None,
-            cmd_rx,
         })?;
+        let coord_thread = thread::spawn(move || coord.serve(cmd_rx));
 
         let dataflow_workers = dataflow::serve(
             vec![None],
