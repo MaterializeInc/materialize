@@ -186,10 +186,20 @@ run_clippy() {
     # splitting below. It's substantially clearer than doing things "properly,"
     # and the inputs to this script are trusted.
 
-    pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,src/\1/lib.rs,p' Cargo.toml)
     # shellcheck disable=SC2086
     if [[ $MZ_CHECK_FORCE_BUILD == y ]]; then
-        runv touch $pkgspec
+        pkgspec=$(sed -nE 's,.*"src/([^"]+)".*,src/\1,p' Cargo.toml)
+        echo -n "run> touch"
+        for pkg in $pkgspec; do
+            for fname in lib.rs main.rs; do
+                path="$pkg/$fname"
+                if [[ -f "$path"  ]]; then
+                    touch "$path"
+                    echo -n " $path"
+                fi
+            done
+        done
+        echo
     fi
     # shellcheck disable=SC2046
     runv cargo clippy -- -D warnings $(printf -- "-D %s " "${extra_lints[@]}") $(printf -- "-A %s " "${disabled_lints[@]}")
