@@ -110,7 +110,7 @@ where
             broadcast_tx,
             num_timely_workers: u64::try_from(config.num_timely_workers).unwrap(),
             optimizer: Default::default(),
-            catalog: Catalog::new(config.logging),
+            catalog: Catalog::default(),
             symbiosis,
             views: HashMap::new(),
             sources: HashMap::new(),
@@ -124,6 +124,11 @@ where
 
         if let Some(logging_config) = config.logging {
             for log in logging_config.active_logs().iter() {
+                coordinator.catalog.insert(CatalogItem::Source(Source {
+                    name: log.name(),
+                    connector: SourceConnector::Local,
+                    desc: log.schema(),
+                }))?;
                 // Insert with 1 second compaction latency.
                 coordinator.insert_source(log.name(), 1_000);
             }

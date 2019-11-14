@@ -7,10 +7,8 @@ use failure::bail;
 use repr::QualName;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::iter::{self, FromIterator};
 
-use dataflow_types::logging::LoggingConfig;
-use dataflow_types::{Index, Sink, Source, SourceConnector, View};
+use dataflow_types::{Index, Sink, Source, View};
 use repr::{RelationDesc, RelationType};
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
@@ -100,23 +98,15 @@ struct CatalogItemAndMetadata {
     used_by: Vec<QualName>,
 }
 
-impl Catalog {
-    /// Constructs a new `Catalog`.
-    pub fn new(logging_config: Option<&LoggingConfig>) -> Catalog {
-        match logging_config {
-            Some(logging_config) => {
-                Catalog::from_iter(logging_config.active_logs().iter().map(|log| {
-                    CatalogItem::Source(Source {
-                        name: log.name().clone(),
-                        connector: SourceConnector::Local,
-                        desc: log.schema(),
-                    })
-                }))
-            }
-            None => Catalog::from_iter(iter::empty()),
+impl Default for Catalog {
+    fn default() -> Catalog {
+        Catalog {
+            inner: HashMap::new(),
         }
     }
+}
 
+impl Catalog {
     /// Returns the named catalog item, if it exists.
     ///
     /// See also [`Catalog::get`].
@@ -251,18 +241,6 @@ impl Catalog {
 
     pub fn iter(&self) -> impl Iterator<Item = (&QualName, &CatalogItem)> {
         self.inner.iter().map(|(k, v)| (k, &v.inner))
-    }
-}
-
-impl FromIterator<CatalogItem> for Catalog {
-    fn from_iter<I: IntoIterator<Item = CatalogItem>>(iter: I) -> Self {
-        let mut store = Catalog {
-            inner: std::collections::HashMap::new(),
-        };
-        for item in iter {
-            store.insert(item).unwrap();
-        }
-        store
     }
 }
 
