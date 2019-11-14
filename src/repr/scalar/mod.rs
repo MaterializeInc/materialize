@@ -483,11 +483,29 @@ pub enum ScalarType {
     String,
 }
 
-impl ScalarType {
+impl<'a> ScalarType {
     pub fn unwrap_decimal_parts(self) -> (u8, u8) {
         match self {
             ScalarType::Decimal(p, s) => (p, s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
+        }
+    }
+
+    pub fn dummy_datum(&self) -> Datum<'a> {
+        match self {
+            ScalarType::Null => Datum::Null,
+            ScalarType::Bool => Datum::False,
+            ScalarType::Int32 => Datum::Int32(0),
+            ScalarType::Int64 => Datum::Int64(0),
+            ScalarType::Float32 => Datum::Float32(OrderedFloat(0.0)),
+            ScalarType::Float64 => Datum::Float64(OrderedFloat(0.0)),
+            ScalarType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
+            ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1,1,1)),
+            ScalarType::Time => unimplemented!("TIME is not implemented"),
+            ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
+            ScalarType::Interval => Datum::Interval(Interval::Months(0)),
+            ScalarType::Bytes => Datum::Bytes(&[]),
+            ScalarType::String => Datum::String(""),
         }
     }
 }

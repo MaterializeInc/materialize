@@ -167,11 +167,11 @@ impl Demand {
                 aggregates,
             } => {
                 let mut new_columns = HashSet::new();
+                // Group keys determine aggregation granularity and are
+                // each crucial in determining aggregates and even the
+                // multiplicities of other keys.
+                new_columns.extend(group_key.iter().cloned());
                 for column in columns {
-                    // Group keys determine aggregation granularity and are
-                    // each crucial in determining aggregates and even the
-                    // multiplicities of other keys.
-                    new_columns.extend(group_key.iter().cloned());
                     // No obvious requirements on aggregate columns.
                     // A "non-empty" requirement, I guess?
                     if column >= group_key.len() {
