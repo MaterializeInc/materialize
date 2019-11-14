@@ -5,9 +5,9 @@
 
 use std::error::Error;
 
+use catalog::Catalog;
 use ore::collections::CollectionExt;
 use repr::ScalarType;
-use sql::store::Catalog;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {

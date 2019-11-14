@@ -15,24 +15,6 @@
 //! In `RelationExpr`, aggregates can only be applied immediately at the time of grouping.
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
-use super::expr::{
-    AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
-    ScalarExpr, UnaryFunc, VariadicFunc,
-};
-use super::scope::{Scope, ScopeItem, ScopeItemName};
-use super::statement::extract_sql_object_name;
-use super::store::Catalog;
-use dataflow_types::RowSetFinishing;
-use failure::{bail, ensure, format_err, ResultExt};
-use ore::iter::{FallibleIteratorExt, IteratorExt};
-use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, ScalarType};
-use sqlparser::ast::visit::{self, Visit};
-use sqlparser::ast::{
-    BinaryOperator, DataType, DateTimeField, Expr, Function, Ident, JoinConstraint, JoinOperator,
-    ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
-    TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
-};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{btree_map, BTreeMap, HashSet};
@@ -41,7 +23,28 @@ use std::fmt;
 use std::iter;
 use std::mem;
 use std::rc::Rc;
+
+use failure::{bail, ensure, format_err, ResultExt};
+use sqlparser::ast::visit::{self, Visit};
+use sqlparser::ast::{
+    BinaryOperator, DataType, DateTimeField, Expr, Function, Ident, JoinConstraint, JoinOperator,
+    ObjectName, ParsedDate, ParsedTimestamp, Query, Select, SelectItem, SetExpr, SetOperator,
+    TableAlias, TableFactor, TableWithJoins, UnaryOperator, Value, Values,
+};
 use uuid::Uuid;
+
+use catalog::Catalog;
+use dataflow_types::RowSetFinishing;
+use ore::iter::{FallibleIteratorExt, IteratorExt};
+use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::{ColumnType, Datum, RelationDesc, RelationType, ScalarType};
+
+use super::expr::{
+    AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
+    ScalarExpr, UnaryFunc, VariadicFunc,
+};
+use super::scope::{Scope, ScopeItem, ScopeItemName};
+use super::statement::extract_sql_object_name;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a

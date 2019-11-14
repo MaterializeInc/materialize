@@ -308,6 +308,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 
 [[package]]
+name = "catalog"
+version = "0.1.0"
+dependencies = [
+ "dataflow-types",
+ "failure",
+ "repr",
+]
+
+[[package]]
 name = "cc"
 version = "1.0.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -459,6 +468,7 @@ dependencies = [
  "bincode",
  "byteorder 1.3.2",
  "bytes",
+ "catalog",
  "ccsr",
  "chrono",
  "comm",
@@ -2856,6 +2866,7 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 name = "sql"
 version = "0.1.0"
 dependencies = [
+ "catalog",
  "ccsr",
  "dataflow-types",
  "expr",

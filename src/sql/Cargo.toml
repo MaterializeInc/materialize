@@ -9,6 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+catalog = { path = "../catalog" }
 ccsr = { path = "../ccsr" }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
