@@ -1485,9 +1485,9 @@ dependencies = [
 
 [[package]]
 name = "memoffset"
-version = "0.5.1"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce6075db033bbbb7ee5a0bbd3a3186bbae616f57fb001c485c7ff77955f8177f"
+checksum = "75189eb85871ea5c2e2c15abbdd541185f63b408415e5051f5cac122d8c774b9"
 dependencies = [
  "rustc_version 0.2.3",
 ]
@@ -2902,7 +2902,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#27c424883f970d5dee8979c0223b4cde0f518ac5"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#d8ae0f0ce834f83d238844cf0b4b2f07d20ebfbf"
 dependencies = [
  "log 0.4.8",
 ]
