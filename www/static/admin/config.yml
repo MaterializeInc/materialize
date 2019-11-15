@@ -9,7 +9,8 @@ public_folder: /images/uploads
 collections:
 - name: team
   label: Team Member
-  folder: data/team
+  folder: www/data/team
+  extension: yml
   create: true
   identifier_field: name
   slug: "{{handle}}"
@@ -21,3 +22,4 @@ collections:
   - { label: Headshot, name: headshot, widget: image }
   - { label: Order, name: order, widget: number, valueType: int }
   - { label: Homepage, name: homepage, widget: string, required: false }
+  editor: { preview: false }
