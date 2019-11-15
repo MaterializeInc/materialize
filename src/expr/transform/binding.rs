@@ -58,17 +58,17 @@
 
 use crate::RelationExpr;
 use indexmap::IndexMap;
-use repr::RelationType;
+use repr::{LiteralName, QualName, RelationType};
 use std::collections::HashMap;
 
 // -----------------------------------------------------------------------------
 
 /// For now, an identifier is just a string,
-type Identifier = String;
+type Identifier = QualName;
 
 /// Create a fresh identifier that is guaranteed not to be bound.
 pub fn fresh_id() -> Identifier {
-    format!("bdg-{}", uuid::Uuid::new_v4())
+    format!("bdg-{}", uuid::Uuid::new_v4()).lit()
 }
 
 /// Determine whether the expression is bindable, i.e., does not produce a
@@ -100,7 +100,7 @@ where
 #[derive(Debug)]
 pub struct LocalBinding<'a> {
     env: &'a mut Environment,
-    name: String,
+    name: QualName,
     prior: Option<RelationExpr>,
 }
 
@@ -108,7 +108,7 @@ impl Drop for LocalBinding<'_> {
     /// Drop this local binding by restoring the environment to its prior state.
     fn drop(&mut self) {
         if let Some(value) = self.prior.take() {
-            let name = std::mem::replace(&mut self.name, String::new());
+            let name = std::mem::replace(&mut self.name, QualName::invalid());
             self.env.bindings.insert(name, value);
         } else {
             self.env.bindings.pop();
@@ -481,12 +481,16 @@ impl Normalize {
         let mut count: usize = 0;
         let mut names = HashMap::new();
 
-        fn rename(expr: &mut RelationExpr, count: &mut usize, names: &mut HashMap<String, String>) {
+        fn rename(
+            expr: &mut RelationExpr,
+            count: &mut usize,
+            names: &mut HashMap<QualName, QualName>,
+        ) {
             if let RelationExpr::Let { name, value, body } = expr {
                 rename(value, count, names);
 
                 *count += 1;
-                let stale = std::mem::replace(name, format!("id-{}", count));
+                let stale = std::mem::replace(name, format!("id-{}", count).lit());
                 names.insert(stale, name.clone());
 
                 rename(body, count, names);
@@ -514,6 +518,8 @@ impl super::Transform for Normalize {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::TryInto;
+
     use super::*;
     use repr::{ColumnType, Datum, ScalarType};
 
@@ -536,17 +542,26 @@ mod tests {
 
     fn r<N>(n: N, t: RelationType) -> RelationExpr
     where
-        N: Into<String>,
+        N: TryInto<QualName>,
+        N::Error: std::fmt::Debug,
     {
         RelationExpr::Get {
-            name: n.into(),
+            name: n.try_into().unwrap(),
             typ: t,
         }
     }
 
+    pub fn force_bind<N>(name: N, value: RelationExpr, body: RelationExpr) -> RelationExpr
+    where
+        N: TryInto<QualName>,
+        N::Error: std::fmt::Debug,
+    {
+        bind_local(name.try_into().unwrap(), value, body)
+    }
+
     #[test]
     fn test_hoist() {
-        let b = bind_local;
+        let b = force_bind;
         let mut expr = b(
             "h",
             b(
@@ -601,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_unbind() {
-        let b = bind_local;
+        let b = force_bind;
         let a = b("b", n(1), r("b", n(1).typ()).union(r("b", n(1).typ())));
         let mut expr = b(
             "a",
@@ -616,7 +631,7 @@ mod tests {
         assert_eq!(expr, n(1).union(n(1)).union(n(2)))
     }
 
-    fn extract_names(expr: &RelationExpr) -> (String, RelationType, String, RelationType) {
+    fn extract_names(expr: &RelationExpr) -> (QualName, RelationType, QualName, RelationType) {
         if let RelationExpr::Let { name, value, body } = expr {
             let n1 = name.clone();
             let t1 = value.typ();
@@ -644,7 +659,7 @@ mod tests {
         Deduplicate::deduplicate(&mut expr);
         trace("OUT deduplicate", &expr);
 
-        let b = bind_local;
+        let b = force_bind;
         let (n1, t1, n2, t2) = extract_names(&expr);
 
         let expected = r(n2.clone(), t2.clone()).union(n(5).distinct()).threshold();
@@ -673,7 +688,7 @@ mod tests {
         Normalize::normalize(&mut expr);
         trace("OUT normalize", &expr);
 
-        let b = bind_local;
+        let b = force_bind;
         let e1 = n(3).negate().union(n(4));
         let t1 = e1.typ();
         let e2 = n(1).negate().union(n(2)).union(r("id-1", t1.clone()));

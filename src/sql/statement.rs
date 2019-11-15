@@ -7,7 +7,8 @@
 //!
 //! This module turns SQL `Statement`s into `Plan`s - commands which will drive the dataflow layer
 
-use std::iter::FromIterator;
+use std::convert::{TryFrom, TryInto};
+use std::iter;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use failure::{bail, ResultExt};
@@ -25,7 +26,7 @@ use dataflow_types::{
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnType, Datum, LiteralName, QualName, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr as sqlexpr;
 use crate::expr::like::build_like_regex_from_string;
@@ -50,15 +51,15 @@ pub fn describe_statement(
         | Statement::Tail { .. } => (None, vec![]),
 
         Statement::CreateSources { .. } => (
-            Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
+            Some(RelationDesc::empty().add_column("Topic".lit(), ScalarType::String)),
             vec![],
         ),
 
         Statement::Explain { stage, .. } => (
             Some(RelationDesc::empty().add_column(
                 match stage {
-                    Stage::Dataflow => "Dataflow",
-                    Stage::Plan => "Plan",
+                    Stage::Dataflow => "Dataflow".lit(),
+                    Stage::Plan => "Plan".lit(),
                 },
                 ScalarType::String,
             )),
@@ -68,8 +69,8 @@ pub fn describe_statement(
         Statement::ShowCreateView { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("View", ScalarType::String)
-                    .add_column("Create View", ScalarType::String),
+                    .add_column("View".lit(), ScalarType::String)
+                    .add_column("Create View".lit(), ScalarType::String),
             ),
             vec![],
         ),
@@ -77,8 +78,8 @@ pub fn describe_statement(
         Statement::ShowCreateSource { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("Source", ScalarType::String)
-                    .add_column("Source URL", ScalarType::String),
+                    .add_column("Source".lit(), ScalarType::String)
+                    .add_column("Source URL".lit(), ScalarType::String),
             ),
             vec![],
         ),
@@ -86,18 +87,18 @@ pub fn describe_statement(
         Statement::ShowColumns { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("Field", ScalarType::String)
-                    .add_column("Nullable", ScalarType::String)
-                    .add_column("Type", ScalarType::String),
+                    .add_column("Field".lit(), ScalarType::String)
+                    .add_column("Nullable".lit(), ScalarType::String)
+                    .add_column("Type".lit(), ScalarType::String),
             ),
             vec![],
         ),
 
         Statement::ShowObjects { object_type, .. } => (
-            Some(
-                RelationDesc::empty()
-                    .add_column(object_type_as_plural_str(object_type), ScalarType::String),
-            ),
+            Some(RelationDesc::empty().add_column(
+                object_type_as_plural_str(object_type).parse()?,
+                ScalarType::String,
+            )),
             vec![],
         ),
 
@@ -106,22 +107,25 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .add_column("name", ScalarType::String)
-                            .add_column("setting", ScalarType::String)
-                            .add_column("description", ScalarType::String),
+                            .add_column("name".lit(), ScalarType::String)
+                            .add_column("setting".lit(), ScalarType::String)
+                            .add_column("description".lit(), ScalarType::String),
                     ),
                     vec![],
                 )
             } else {
                 (
-                    Some(RelationDesc::empty().add_column(variable.value, ScalarType::String)),
+                    Some(
+                        RelationDesc::empty()
+                            .add_column(variable.value.parse()?, ScalarType::String),
+                    ),
                     vec![],
                 )
             }
         }
 
         Statement::Peek { name, .. } => {
-            let sql_object = catalog.get(&name.to_string())?;
+            let sql_object = catalog.get(&name.try_into()?)?;
             match sql_object {
                 CatalogItem::Index(_) => bail!("unsupported SQL statement: PEEK index"),
                 CatalogItem::Sink(_) => bail!("unsupported SQL statement: PEEK sink"),
@@ -151,8 +155,8 @@ pub fn handle_statement(
     portal_name: Option<String>,
 ) -> Result<Plan, failure::Error> {
     match stmt {
-        Statement::Peek { name, immediate } => handle_peek(catalog, name, immediate),
-        Statement::Tail { name } => handle_tail(catalog, name),
+        Statement::Peek { name, immediate } => handle_peek(catalog, name.try_into()?, immediate),
+        Statement::Tail { name } => handle_tail(catalog, &name.try_into()?),
         Statement::StartTransaction { .. } => handle_start_transaction(),
         Statement::Commit { .. } => handle_commit_transaction(),
         Statement::Rollback { .. } => handle_rollback_transaction(),
@@ -186,8 +190,16 @@ pub fn handle_statement(
             full,
             table_name,
             filter,
-        } => handle_show_columns(catalog, extended, full, &table_name, filter.as_ref()),
-        Statement::ShowCreateView { view_name } => handle_show_create_view(catalog, view_name),
+        } => handle_show_columns(
+            catalog,
+            extended,
+            full,
+            &table_name.try_into()?,
+            filter.as_ref(),
+        ),
+        Statement::ShowCreateView { view_name } => {
+            handle_show_create_view(catalog, view_name.try_into()?)
+        }
         Statement::ShowCreateSource { source_name } => {
             handle_show_create_source(catalog, source_name)
         }
@@ -212,7 +224,7 @@ fn handle_set_variable(
         bail!("SET LOCAL ... is not supported");
     }
     Ok(Plan::SetVariable {
-        name: variable.value,
+        name: variable.to_string(),
         value: match value {
             SetVariableValue::Literal(Value::SingleQuotedString(s)) => s,
             SetVariableValue::Literal(lit) => lit.to_string(),
@@ -248,8 +260,7 @@ fn handle_show_variable(
     }
 }
 
-fn handle_tail(catalog: &Catalog, from: ObjectName) -> Result<Plan, failure::Error> {
-    let from = extract_sql_object_name(&from)?;
+fn handle_tail(catalog: &Catalog, from: &QualName) -> Result<Plan, failure::Error> {
     let dataflow = catalog.get(&from)?;
     Ok(Plan::Tail(dataflow.clone()))
 }
@@ -281,8 +292,10 @@ fn handle_show_objects(
 
     let mut rows: Vec<Row> = catalog
         .iter()
-        .filter(|(name, ci)| object_type_matches(object_type, ci) && like_regex.is_match(name))
-        .map(|(name, _ci)| Row::pack(&[Datum::from(name)]))
+        .filter(|(name, ci)| {
+            object_type_matches(object_type, ci) && like_regex.is_match(&name.to_string())
+        })
+        .map(|(name, _ci)| Row::pack(&[Datum::from(&*name.to_string())]))
         .collect();
     rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
     Ok(Plan::SendRows(rows))
@@ -293,7 +306,7 @@ fn handle_show_columns(
     catalog: &Catalog,
     extended: bool,
     full: bool,
-    table_name: &ObjectName,
+    table_name: &QualName,
     filter: Option<&ShowStatementFilter>,
 ) -> Result<Plan, failure::Error> {
     if extended {
@@ -307,9 +320,10 @@ fn handle_show_columns(
     }
 
     let column_descriptions: Vec<_> = catalog
-        .get_desc(&table_name.to_string())?
+        .get_desc(&table_name.try_into()?)?
         .iter()
         .map(|(name, typ)| {
+            let name = name.map(|n| n.to_string());
             Row::pack(&[
                 Datum::String(name.mz_as_deref().unwrap_or("?")),
                 Datum::String(if typ.nullable { "YES" } else { "NO" }),
@@ -323,16 +337,16 @@ fn handle_show_columns(
 
 fn handle_show_create_view(
     catalog: &Catalog,
-    object_name: ObjectName,
+    object_name: QualName,
 ) -> Result<Plan, failure::Error> {
-    let name = object_name.to_string();
+    let name = object_name.try_into()?;
     let raw_sql = if let CatalogItem::View(view) = catalog.get(&name)? {
         &view.raw_sql
     } else {
-        bail!("{} is not a view", name);
+        bail!("'{}' is not a view", name);
     };
     Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&name),
+        Datum::String(&*name.to_string()),
         Datum::String(&raw_sql),
     ])]))
 }
@@ -341,7 +355,7 @@ fn handle_show_create_source(
     catalog: &Catalog,
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
-    let name = object_name.to_string();
+    let name = object_name.try_into()?;
     let source_url = if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)? {
         match connector {
             SourceConnector::Local => String::from("local://"),
@@ -354,7 +368,7 @@ fn handle_show_create_source(
     };
 
     Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&name),
+        Datum::String(&name.to_string()),
         Datum::String(&source_url),
     ])]))
 }
@@ -401,11 +415,11 @@ fn handle_create_dataflow(
                     )
                 }
                 for (i, name) in columns.iter().enumerate() {
-                    desc.set_name(i, Some(name.value.to_owned()));
+                    desc.set_name(i, Some(QualName::try_from(name)?));
                 }
             }
             let view = View {
-                name: extract_sql_object_name(name)?,
+                name: QualName::try_from(&*name)?,
                 raw_sql: stmt.to_string(),
                 relation_expr,
                 desc,
@@ -421,7 +435,7 @@ fn handle_create_dataflow(
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            let name = extract_sql_object_name(name)?;
+            let name = (&*name).try_into()?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
             let source = build_source(schema, addr, name, topic)?;
             Ok(Plan::CreateSource(source))
@@ -451,7 +465,9 @@ fn handle_create_dataflow(
                     let parts: Vec<&str> = s.rsplitn(2, '-').collect();
                     if parts.len() == 2 && parts[0] == "value" {
                         let topic_name = parts[1];
-                        let sql_name = sanitize_kafka_topic_name(parts[1]);
+                        let sql_name = sanitize_kafka_topic_name(parts[1])
+                            .parse()
+                            .expect("sanitized kafka topic names should always be valid qualnames");
                         Some((topic_name, sql_name))
                     } else {
                         None
@@ -486,8 +502,8 @@ fn handle_create_dataflow(
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            let name = extract_sql_object_name(name)?;
-            let from = extract_sql_object_name(from)?;
+            let name = name.try_into()?;
+            let from = from.try_into()?;
             let dataflow = catalog.get(&from)?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
             let sink = Sink {
@@ -506,15 +522,15 @@ fn handle_create_dataflow(
             on_name,
             key_parts,
         } => {
-            let on_name = extract_sql_object_name(on_name)?;
+            let on_name = on_name.try_into()?;
             let (relation_type, keys, funcs) = handle_create_index(catalog, &on_name, &key_parts)?;
             // TODO (andiwang) remove this when trace manager supports ScalarExpr keys
             if !funcs.is_empty() {
                 bail!("function-based indexes are not supported yet");
             }
             let index = Index {
-                name: name.to_string(),
-                on_name: on_name.to_string(),
+                name: QualName::new_normalized(iter::once(name.clone()))?,
+                on_name,
                 relation_type,
                 keys,
                 funcs,
@@ -535,9 +551,9 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
         } => (object_type, if_exists, names, cascade),
         _ => unreachable!(),
     };
-    let names: Vec<String> = Result::from_iter(names.iter().map(extract_sql_object_name))?;
+    //let names: Vec<String> = names.iter().map(QualName::try_into).?collect();
     for name in &names {
-        match catalog.get(name) {
+        match catalog.get(&name.try_into()?) {
             Ok(dataflow) => {
                 if !object_type_matches(object_type, dataflow) {
                     bail!("{} is not of type {}", name, object_type);
@@ -554,7 +570,7 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     let mode = RemoveMode::from_cascade(cascade);
     let mut to_remove = vec![];
     for name in &names {
-        catalog.plan_remove(name, mode, &mut to_remove)?;
+        catalog.plan_remove(&name.try_into()?, mode, &mut to_remove)?;
     }
     to_remove.sort();
     to_remove.dedup();
@@ -566,12 +582,8 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     })
 }
 
-fn handle_peek(
-    catalog: &Catalog,
-    name: ObjectName,
-    immediate: bool,
-) -> Result<Plan, failure::Error> {
-    let name = name.to_string();
+fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Plan, failure::Error> {
+    let name = name.try_into()?;
     let dataflow = catalog.get(&name)?.clone();
     let typ = dataflow.typ();
     Ok(Plan::Peek {
@@ -682,7 +694,7 @@ fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data
 
 fn handle_create_index(
     catalog: &Catalog,
-    on_name: &str,
+    on_name: &QualName,
     key_parts: &[Expr],
 ) -> Result<(RelationType, Vec<usize>, Vec<relationexpr::ScalarExpr>), failure::Error> {
     let (relation_type, keys, map_exprs) = query::plan_index(catalog, on_name, key_parts)?;
@@ -699,7 +711,7 @@ fn handle_create_index(
 fn build_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
-    name: String,
+    name: QualName,
     topic: String,
 ) -> Result<Source, failure::Error> {
     let (key_schema, value_schema, schema_registry_url) = match schema {
@@ -828,13 +840,6 @@ fn object_type_as_plural_str(object_type: ObjectType) -> &'static str {
         ObjectType::Source => "SOURCES",
         ObjectType::Sink => "SINKS",
     }
-}
-
-pub(crate) fn extract_sql_object_name(n: &ObjectName) -> Result<String, failure::Error> {
-    if n.0.len() != 1 {
-        bail!("qualified names are not yet supported: {}", n.to_string())
-    }
-    Ok(n.to_string())
 }
 
 /// Returns the name that PostgreSQL would use for this `ScalarType`. Note that

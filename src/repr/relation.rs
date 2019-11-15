@@ -6,9 +6,7 @@
 use failure::bail;
 use serde::{Deserialize, Serialize};
 
-use ore::option::OptionExt;
-
-use crate::ScalarType;
+use crate::{QualName, ScalarType};
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -111,7 +109,7 @@ impl RelationType {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationDesc {
     typ: RelationType,
-    names: Vec<Option<String>>,
+    names: Vec<Option<QualName>>,
 }
 
 impl RelationDesc {
@@ -126,20 +124,15 @@ impl RelationDesc {
 
     /// Constructs a new `RelationDesc` from a `RelationType` and a list of
     /// column names.
-    pub fn new<I, S>(typ: RelationType, names: I) -> RelationDesc
-    where
-        I: IntoIterator<Item = Option<S>>,
-        S: Into<String>,
-    {
-        let names: Vec<_> = names.into_iter().map(|n| n.map(Into::into)).collect();
+    pub fn new(typ: RelationType, names: Vec<Option<QualName>>) -> RelationDesc {
         assert_eq!(typ.column_types.len(), names.len());
         RelationDesc { typ, names }
     }
 
     /// Adds a new named, nonnullable column with the specified type.
-    pub fn add_column(mut self, name: impl Into<String>, scalar_type: ScalarType) -> Self {
+    pub fn add_column(mut self, name: QualName, scalar_type: ScalarType) -> Self {
         self.typ.column_types.push(ColumnType::new(scalar_type));
-        self.names.push(Some(name.into()));
+        self.names.push(Some(name));
         self
     }
 
@@ -156,7 +149,7 @@ impl RelationDesc {
         &self.typ
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (Option<&str>, &ColumnType)> {
+    pub fn iter(&self) -> impl Iterator<Item = (Option<&QualName>, &ColumnType)> {
         self.iter_names().zip(self.iter_types())
     }
 
@@ -164,17 +157,17 @@ impl RelationDesc {
         self.typ.column_types.iter()
     }
 
-    pub fn iter_names(&self) -> impl Iterator<Item = Option<&str>> {
-        self.names.iter().map(|n| n.mz_as_deref())
+    pub fn iter_names(&self) -> impl Iterator<Item = Option<&QualName>> {
+        self.names.iter().map(|n| n.as_ref())
     }
 
-    pub fn get_by_name(&self, name: &str) -> Option<(usize, &ColumnType)> {
+    pub fn get_by_name(&self, name: &QualName) -> Option<(usize, &ColumnType)> {
         self.iter_names()
             .position(|n| n == Some(name))
             .map(|i| (i, &self.typ.column_types[i]))
     }
 
-    pub fn set_name(&mut self, i: usize, name: Option<String>) {
+    pub fn set_name(&mut self, i: usize, name: Option<QualName>) {
         self.names[i] = name
     }
 }

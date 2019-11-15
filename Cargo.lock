@@ -1045,8 +1045,8 @@ checksum = "3dcaa9ae7725d12cdb85b3ad99a434db70b468c09ded17e012d86b5c1010f7a7"
 
 [[package]]
 name = "futures"
-version = "0.1.28"
-source = "git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1#29d0d2af30620039b79f77441a82f6dbf8e0cf66"
+version = "0.1.29"
+source = "git+ssh://git@github.com/MaterializeInc/futures-rs.git?branch=0.1#d5f8d7dc0d4c8da97ea1805e350ced269699684b"
 
 [[package]]
 name = "futures-cpupool"
@@ -2540,6 +2540,7 @@ dependencies = [
  "chrono",
  "criterion",
  "failure",
+ "itertools",
  "ordered-float",
  "ore",
  "pretty",
@@ -3017,6 +3018,7 @@ dependencies = [
  "chrono",
  "dataflow-types",
  "failure",
+ "log 0.4.8",
  "ore",
  "pg_interval",
  "postgres",

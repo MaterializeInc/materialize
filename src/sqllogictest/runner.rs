@@ -40,7 +40,7 @@ use coord::ExecuteResponse;
 use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::{ColumnType, Datum, RelationDesc, Row};
+use repr::{ColumnType, Datum, LiteralName, QualName, RelationDesc, Row};
 use sql::{Session, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -72,8 +72,8 @@ pub enum Outcome<'a> {
         message: String,
     },
     WrongColumnNames {
-        expected_column_names: &'a Vec<&'a str>,
-        inferred_column_names: Vec<String>,
+        expected_column_names: &'a Vec<QualName>,
+        inferred_column_names: Vec<QualName>,
     },
     OutputFailure {
         expected_output: &'a Output,
@@ -166,9 +166,17 @@ impl fmt::Display for Outcome<'_> {
                 f,
                 "Wrong Column Names:{}expected column names: {}{}inferred column names: {}",
                 INDENT,
-                expected_column_names.join(" "),
+                expected_column_names
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
                 INDENT,
-                inferred_column_names.join(" ")
+                inferred_column_names
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
             ),
             OutputFailure {
                 expected_output,
@@ -300,6 +308,9 @@ fn format_row(
                     (*string).to_owned()
                 }
             }
+            (Type::Text, Datum::Int32(chr)) => std::char::from_u32(chr as u32)
+                .map(|chr| format!("{}", chr))
+                .unwrap_or_else(|| format!("Invalid utf8 character: {}", chr)),
             (Type::Bool, Datum::False) => "false".to_owned(),
             (Type::Bool, Datum::True) => "true".to_owned(),
 
@@ -569,13 +580,9 @@ impl State {
         if let Some(expected_column_names) = expected_column_names {
             let inferred_column_names = desc
                 .iter_names()
-                .map(|t| t.owned().unwrap_or_else(|| "?column?".into()))
+                .map(|t| t.owned().unwrap_or_else(|| "?column?".lit()))
                 .collect::<Vec<_>>();
-            let inferred_as_strs = &inferred_column_names
-                .iter()
-                .map(|n| n.as_str())
-                .collect::<Vec<_>>();
-            if expected_column_names != inferred_as_strs {
+            if expected_column_names != &inferred_column_names {
                 return Ok(Outcome::WrongColumnNames {
                     expected_column_names,
                     inferred_column_names,

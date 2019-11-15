@@ -3,23 +3,25 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::fmt;
+
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
-use std::fmt;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
+use repr::QualName;
 
-pub fn kafka<G, B, K, V>(stream: &Stream<G, B>, name: &str, _connector: KafkaSinkConnector)
+pub fn kafka<G, B, K, V>(stream: &Stream<G, B>, name: &QualName, _connector: KafkaSinkConnector)
 where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<K, V, Timestamp, Diff>,
     K: fmt::Debug,
 {
-    stream.sink(Pipeline, name, move |input| {
+    stream.sink(Pipeline, &*name.to_string(), move |input| {
         input.for_each(|_, batches| {
             for batch in batches.iter() {
                 let mut cur = batch.cursor();

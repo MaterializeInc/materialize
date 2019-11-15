@@ -12,6 +12,8 @@
 use sqlparser::ast::visit_mut::{self, VisitMut};
 use sqlparser::ast::{BinaryOperator, Expr, Function, ObjectName, Query};
 
+use repr::QualName;
+
 pub fn transform(query: &mut Query) {
     AvgFuncRewriter.visit_query(query);
 }
@@ -26,7 +28,7 @@ impl<'ast> VisitMut<'ast> for AvgFuncRewriter {
     fn visit_expr(&mut self, expr: &'ast mut Expr) {
         visit_mut::visit_expr(self, expr);
         if let Expr::Function(func) = expr {
-            if func.name.to_string().to_lowercase() == "avg" {
+            if QualName::name_equals(func.name.clone(), "avg") {
                 let args = func.args.clone();
                 let sum = Expr::Function(Function {
                     name: ObjectName(vec!["sum".into()]),

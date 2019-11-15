@@ -21,7 +21,7 @@
 //! extremely slow and inefficient on large data sets.
 
 use std::collections::HashMap;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::env;
 
 use ::postgres::rows::Row as PostgresRow;
@@ -36,14 +36,14 @@ use sqlparser::ast::{DataType, ObjectType, Statement};
 use ore::option::OptionExt;
 use repr::decimal::Significand;
 use repr::{
-    ColumnType, Datum, Interval, PackableRow, RelationDesc, RelationType, Row, RowPacker,
+    ColumnType, Datum, Interval, PackableRow, QualName, RelationDesc, RelationType, Row, RowPacker,
     ScalarType,
 };
 use sql::{scalar_type_from_sql, MutationKind, Plan};
 
 pub struct Postgres {
     conn: Connection,
-    table_types: HashMap<String, (Vec<DataType>, RelationDesc)>,
+    table_types: HashMap<QualName, (Vec<DataType>, RelationDesc)>,
     packer: RowPacker,
 }
 
@@ -150,8 +150,6 @@ END $$;
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
                 );
-                let names = columns.iter().map(|column| Some(column.name.value.clone()));
-
                 for constraint in constraints {
                     use sqlparser::ast::TableConstraint;
                     if let TableConstraint::Unique {
@@ -179,11 +177,17 @@ END $$;
                     }
                 }
 
+                let names = columns
+                    .iter()
+                    .cloned()
+                    .map(|column| QualName::try_from(column.name).map(Some))
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 let desc = RelationDesc::new(typ, names);
                 self.table_types
-                    .insert(name.to_string(), (sql_types, desc.clone()));
+                    .insert(name.try_into()?, (sql_types, desc.clone()));
                 Plan::CreateTable {
-                    name: name.to_string(),
+                    name: name.try_into()?,
                     desc,
                 }
             }
@@ -194,13 +198,21 @@ END $$;
             } => {
                 self.conn.execute(&stmt.to_string(), &[])?;
                 Plan::DropItems(
-                    names.iter().map(|name| name.to_string()).collect(),
+                    names
+                        .iter()
+                        .map(|name| match name.try_into() {
+                            Ok(val) => Ok(val),
+                            Err(e) => {
+                                failure::bail!("unable to drop invalid name {}: {}", name, e);
+                            }
+                        })
+                        .collect::<Result<_, _>>()?,
                     ObjectType::Table,
                 )
             }
             Statement::Delete { table_name, .. } => {
                 let mut updates = vec![];
-                let table_name = table_name.to_string();
+                let table_name = QualName::try_from(table_name)?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(&table_name, sql)? {
                     updates.push((row, -1));
@@ -215,7 +227,7 @@ END $$;
             }
             Statement::Insert { table_name, .. } => {
                 let mut updates = vec![];
-                let table_name = table_name.to_string();
+                let table_name = table_name.try_into()?;
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(&table_name, sql)? {
                     updates.push((row, 1));
@@ -234,7 +246,7 @@ END $$;
                 ..
             } => {
                 let mut updates = vec![];
-                let table_name = table_name.to_string();
+                let table_name = QualName::try_from(table_name)?;
                 let mut sql = format!("SELECT * FROM {}", table_name);
                 if let Some(selection) = selection {
                     sql += &format!(" WHERE {}", selection);
@@ -249,7 +261,7 @@ END $$;
                 }
                 assert_eq!(affected_rows * 2, updates.len());
                 Plan::SendDiffs {
-                    name: table_name,
+                    name: table_name.try_into()?,
                     updates,
                     affected_rows,
                     kind: MutationKind::Update,
@@ -259,7 +271,11 @@ END $$;
         })
     }
 
-    fn run_query(&mut self, table_name: &str, query: String) -> Result<Vec<Row>, failure::Error> {
+    fn run_query(
+        &mut self,
+        table_name: &QualName,
+        query: String,
+    ) -> Result<Vec<Row>, failure::Error> {
         let (sql_types, desc) = self
             .table_types
             .get(table_name)
@@ -300,7 +316,7 @@ fn push_column(
             let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
             row.push(bool.into());
         }
-        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => {
+        DataType::Custom(name) if QualName::name_equals(name.clone(), "bool") => {
             let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
             row.push(bool.into());
         }
@@ -308,7 +324,7 @@ fn push_column(
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
             row.push(string.mz_as_deref().into());
         }
-        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => {
+        DataType::Custom(name) if QualName::name_equals(name.clone(), "string") => {
             let string = get_column_inner::<String>(postgres_row, i, nullable)?;
             row.push(string.mz_as_deref().into());
         }

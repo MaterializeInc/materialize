@@ -14,10 +14,13 @@
 
 #![deny(missing_debug_implementations)]
 
+mod errors;
+mod qualname;
 mod relation;
 mod row;
 mod scalar;
 
+pub use qualname::{LiteralName, QualName};
 pub use relation::{ColumnType, RelationDesc, RelationType};
 pub use row::{PackableRow, Row, RowPacker, RowUnpacker, UnpackedRow};
 pub use scalar::decimal;

@@ -38,7 +38,7 @@ use dataflow_types::{
 use expr::RelationExpr;
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
-use repr::{Datum, RelationDesc, Row, RowPacker, RowUnpacker};
+use repr::{Datum, LiteralName, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
 use symbiosis::Postgres;
@@ -194,18 +194,18 @@ where
     optimizer: expr::transform::Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    views: HashMap<String, ViewState>,
+    views: HashMap<QualName, ViewState>,
     /// Each source name maps to a source and re-written name (for auto-created views).
-    sources: HashMap<String, (dataflow_types::Source, Option<String>)>,
+    sources: HashMap<QualName, (dataflow_types::Source, Option<QualName>)>,
     /// Maps user-defined indexes by collection + key and how many aliases it has
-    indexes: HashMap<(String, Vec<usize>), usize>,
+    indexes: HashMap<(QualName, Vec<usize>), usize>,
     /// Maps user-defined index names to their collection + key
-    index_aliases: HashMap<String, (String, Vec<usize>)>,
-    since_updates: Vec<(String, Vec<Timestamp>)>,
+    index_aliases: HashMap<QualName, (QualName, Vec<usize>)>,
+    since_updates: Vec<(QualName, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
-    active_tails: HashMap<u32, String>,
+    active_tails: HashMap<u32, QualName>,
     local_input_time: Timestamp,
     log: bool,
 }
@@ -377,7 +377,7 @@ where
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::pack(&[Datum::String(&s.name)]))
+                        .map(|s| Row::pack(&[Datum::String(&s.name.to_string())]))
                         .collect(),
                 )
             }
@@ -399,7 +399,7 @@ where
 
             Plan::DropItems(names, item_type) => {
                 let mut sources_to_drop = Vec::new();
-                let mut views_to_drop = Vec::new();
+                let mut views_to_drop: Vec<QualName> = Vec::new();
                 let mut indexes_to_drop = Vec::new();
                 for name in names {
                     // TODO: Test if a name was installed and error if not?
@@ -497,7 +497,7 @@ where
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
                     // peek completes.
-                    let name = format!("<peek_{}>", Uuid::new_v4());
+                    let name = format!("<peek_{}>", Uuid::new_v4()).lit();
                     let typ = source.typ();
                     let ncols = typ.column_types.len();
                     // Cheat a little bit here to get a relation description. A
@@ -508,8 +508,10 @@ where
                     // will ultimately be correctly transmitted to the client
                     // because they are safely stashed in the connection's
                     // session.
-                    let desc =
-                        RelationDesc::new(typ, iter::repeat::<Option<String>>(None).take(ncols));
+                    let desc = RelationDesc::new(
+                        typ,
+                        iter::repeat::<Option<QualName>>(None).take(ncols).collect(),
+                    );
                     let dataflow = DataflowDesc::from(View {
                         name: name.clone(),
                         raw_sql: "<none>".into(),
@@ -595,14 +597,14 @@ where
             }
 
             Plan::Tail(source) => {
-                let mut source_name = source.name().to_string();
+                let mut source_name = source.name().clone();
                 if let Some((_source, rename)) = self.sources.get(&source_name) {
                     if let Some(rename) = rename {
                         source_name = rename.clone();
                     }
                 }
 
-                let name = format!("<tail_{}>", Uuid::new_v4());
+                let name = format!("<tail_{}>", Uuid::new_v4()).lit();
                 self.active_tails.insert(conn_id, name.clone());
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 let since = self
@@ -658,7 +660,7 @@ where
                     .sources
                     .iter()
                     .filter_map(|(name, (src, _view))| match src.connector {
-                        SourceConnector::Local => Some(name.as_str()),
+                        SourceConnector::Local => Some(name),
                         _ => None,
                     });
 
@@ -737,7 +739,7 @@ where
         if let Some((_source, new_name)) = self.sources.get(&idx.on_name) {
             // If the source has a corresponding view, use its name instead.
             if let Some(new_name) = new_name {
-                idx.on_name = new_name.to_string();
+                idx.on_name = new_name.clone();
             } else {
                 panic!("create_index called on bare source");
             }
@@ -776,7 +778,7 @@ where
                             if let Some(new_name) = new_name {
                                 *name = new_name.clone();
                             } else {
-                                sources.push(name.to_string());
+                                sources.push(name.clone());
                             }
                         }
                     }
@@ -804,7 +806,7 @@ where
         }
     }
 
-    pub fn drop_views(&mut self, dataflow_names: Vec<String>) {
+    pub fn drop_views(&mut self, dataflow_names: Vec<QualName>) {
         for name in dataflow_names.iter() {
             self.remove_view(name);
         }
@@ -814,14 +816,14 @@ where
         )
     }
 
-    pub fn drop_sinks(&mut self, dataflow_names: Vec<String>) {
+    pub fn drop_sinks(&mut self, dataflow_names: Vec<QualName>) {
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::DropSinks(dataflow_names),
         )
     }
 
-    pub fn drop_indexes(&mut self, dataflow_names: Vec<String>, cascaded: bool) {
+    pub fn drop_indexes(&mut self, dataflow_names: Vec<QualName>, cascaded: bool) {
         let mut trace_keys = Vec::new();
         for name in dataflow_names {
             if let Some(trace_key) = self.index_aliases.remove(&name) {
@@ -978,9 +980,9 @@ where
     /// The `reached` input allows us to deduplicate views, and avoid e.g. recursion.
     fn sources_frontier(
         &self,
-        name: &str,
+        name: &QualName,
         bound: &mut Antichain<Timestamp>,
-        reached: &mut HashSet<String>,
+        reached: &mut HashSet<QualName>,
     ) {
         if let Some((_source, rename)) = self.sources.get(name) {
             if let Some(rename) = rename {
@@ -989,7 +991,7 @@ where
                 panic!("sources_frontier called on bare source");
             }
         } else {
-            reached.insert(name.to_string());
+            reached.insert(name.clone());
             if let Some(view) = self.views.get(name) {
                 if view.depends_on_source {
                     // Views that depend on a source should propose their own frontiers,
@@ -1009,7 +1011,7 @@ where
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(&mut self, name: &str, mut changes: ChangeBatch<Timestamp>) {
+    pub fn update_upper(&mut self, name: &QualName, mut changes: ChangeBatch<Timestamp>) {
         if let Some(entry) = self.views.get_mut(name) {
             let changes: Vec<_> = entry.upper.update_iter(changes.drain()).collect();
             if !changes.is_empty() {
@@ -1018,7 +1020,7 @@ where
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                name.to_string(),
+                                name.clone(),
                                 time,
                                 change,
                             )),
@@ -1033,13 +1035,13 @@ where
                     since.insert(time.saturating_sub(entry.compaction_latency_ms));
                 }
                 self.since_updates
-                    .push((name.to_string(), since.elements().to_vec()));
+                    .push((name.clone(), since.elements().to_vec()));
             }
         }
     }
 
     /// The upper frontier of a maintained view, if it exists.
-    fn upper_of(&self, name: &str) -> Option<AntichainRef<Timestamp>> {
+    fn upper_of(&self, name: &QualName) -> Option<AntichainRef<Timestamp>> {
         self.views.get(name).map(|v| v.upper.frontier())
     }
 
@@ -1050,7 +1052,7 @@ where
     /// or equal to some element of the since frontier the accumulation will be correct,
     /// and for other times no such guarantee holds.
     #[allow(dead_code)]
-    fn update_since(&mut self, name: &str, since: &[Timestamp]) {
+    fn update_since(&mut self, name: &QualName, since: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             entry.since.clear();
             entry.since.extend(since.iter().cloned());
@@ -1059,7 +1061,7 @@ where
 
     /// The since frontier of a maintained view, if it exists.
     #[allow(dead_code)]
-    fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
+    fn since_of(&self, name: &QualName) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.since)
     }
 
@@ -1092,15 +1094,15 @@ where
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
-        self.remove_view(name);
+    fn insert_source(&mut self, name: QualName, compaction_ms: Timestamp) {
+        self.remove_view(&name);
         let mut viewstate = ViewState::new(self.num_timely_workers);
         if self.log {
             for time in viewstate.upper.frontier().iter() {
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                        name.to_string(),
+                        name.clone(),
                         time.clone(),
                         1,
                     )),
@@ -1108,20 +1110,20 @@ where
             }
         }
         viewstate.set_compaction_latency(compaction_ms);
-        self.views.insert(name.to_string(), viewstate);
+        self.views.insert(name, viewstate);
     }
 
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    fn remove_view(&mut self, name: &str) {
+    fn remove_view(&mut self, name: &QualName) {
         if let Some(state) = self.views.remove(name) {
             if self.log {
                 for time in state.upper.frontier().iter() {
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.to_string(),
+                            name.clone(),
                             time.clone(),
                             -1,
                         )),
@@ -1155,7 +1157,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 /// Per-view state.
 pub struct ViewState {
     /// Names of views on which this view depends.
-    uses: Vec<String>,
+    uses: Vec<QualName>,
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     upper: MutableAntichain<Timestamp>,
@@ -1197,7 +1199,7 @@ impl ViewState {
         view.relation_expr.unbound_uses(&mut out);
         out.sort();
         out.dedup();
-        view_state.uses = out.iter().map(|x| x.to_string()).collect();
+        view_state.uses = out.into_iter().cloned().collect();
         view_state
     }
 
@@ -1208,6 +1210,6 @@ impl ViewState {
 }
 
 /// Creates an internal name for sources that are unlikely to clash with view names.
-fn create_internal_source_name(name: &str) -> String {
-    format!("{}-VIEW", name)
+fn create_internal_source_name(name: &QualName) -> QualName {
+    name.with_trailing_string("-VIEW")
 }

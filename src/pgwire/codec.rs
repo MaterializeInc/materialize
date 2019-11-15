@@ -133,7 +133,7 @@ impl Encoder for Codec {
             BackendMessage::RowDescription(fields) => {
                 buf.put_u16_be(fields.len() as u16);
                 for f in &fields {
-                    buf.put_string(&f.name);
+                    buf.put_string(&f.name.to_string());
                     buf.put_u32_be(f.table_id);
                     buf.put_u16_be(f.column_id);
                     buf.put_u32_be(f.type_oid);

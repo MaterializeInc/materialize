@@ -6,8 +6,10 @@
 // Prefering higher-order methods to equivalent lower complexity methods is wrong.
 #![allow(clippy::or_fun_call)]
 
-use crate::RelationExpr;
 use std::collections::{HashMap, HashSet};
+
+use crate::RelationExpr;
+use repr::QualName;
 
 /// Drive demand from the root through operators.
 ///
@@ -34,25 +36,25 @@ impl Demand {
         &self,
         relation: &mut RelationExpr,
         mut columns: HashSet<usize>,
-        gets: &mut HashMap<String, HashSet<usize>>,
+        gets: &mut HashMap<QualName, HashSet<usize>>,
     ) {
         match relation {
             RelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
             }
             RelationExpr::Get { name, .. } => {
-                gets.entry(name.to_string())
+                gets.entry(name.clone())
                     .or_insert(HashSet::new())
                     .extend(columns);
             }
             RelationExpr::Let { name, value, body } => {
                 // Let harvests any requirements of get from its body,
                 // and pushes the union of the requirements at its value.
-                let prior = gets.insert(name.to_string(), HashSet::new());
+                let prior = gets.insert(name.clone(), HashSet::new());
                 self.action(body, columns, gets);
                 let needs = gets.remove(name).unwrap();
                 if let Some(prior) = prior {
-                    gets.insert(name.to_string(), prior);
+                    gets.insert(name.clone(), prior);
                 }
 
                 self.action(value, needs, gets);

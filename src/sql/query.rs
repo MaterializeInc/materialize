@@ -18,7 +18,7 @@
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{btree_map, BTreeMap, HashSet};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::mem;
@@ -37,14 +37,13 @@ use catalog::Catalog;
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::{ColumnType, Datum, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnType, Datum, LiteralName, QualName, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
     ScalarExpr, UnaryFunc, VariadicFunc,
 };
 use super::scope::{Scope, ScopeItem, ScopeItemName};
-use super::statement::extract_sql_object_name;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -73,7 +72,8 @@ pub fn plan_root_query(
             .map(|i| typ.column_types[*i])
             .collect(),
     );
-    let desc = RelationDesc::new(typ, scope.column_names());
+
+    let desc = RelationDesc::new(typ, scope.column_names().map(|o| o.cloned()).collect());
     let mut param_types = vec![];
     for (i, (n, typ)) in qcx.unwrap_param_types().into_iter().enumerate() {
         if n != i + 1 {
@@ -266,9 +266,9 @@ fn plan_set_expr(
                     }
                 }
             };
-
+            let tn: Option<QualName> = None;
             let scope = Scope::from_source(
-                None,
+                tn,
                 // Column names are taken from the left, as in Postgres.
                 left_scope.column_names(),
                 Some(qcx.outer_scope.clone()),
@@ -327,7 +327,7 @@ fn plan_set_expr(
             }
             let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
             for i in 0..types.unwrap().len() {
-                let name = Some(format!("column{}", i + 1));
+                let name = Some(format!("column{}", i + 1).lit());
                 scope.items.push(ScopeItem::from_column_name(name));
             }
             Ok((expr.unwrap(), scope))
@@ -363,11 +363,12 @@ fn plan_view_select(
         })
         .unwrap_or_else(|| {
             let typ = RelationType::new(vec![]);
+            let tn: Option<QualName> = None;
             Ok((
                 RelationExpr::constant(vec![vec![]], typ.clone()),
                 Scope::from_source(
-                    None,
-                    iter::empty::<Option<String>>(),
+                    tn,
+                    iter::empty::<Option<QualName>>(),
                     Some(qcx.outer_scope.clone()),
                 ),
             ))
@@ -456,7 +457,7 @@ fn plan_view_select(
             group_scope.items.push(ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: None,
-                    column_name: Some(sql_function.name.to_string().to_lowercase()),
+                    column_name: Some(QualName::try_from(sql_function.name.clone())?),
                 }],
                 expr: Some(Expr::Function(sql_function.clone())),
             });
@@ -533,12 +534,12 @@ fn plan_view_select(
 
 pub fn plan_index(
     catalog: &Catalog,
-    on_name: &str,
+    on_name: &QualName,
     key_parts: &[Expr],
 ) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
-    let desc = catalog.get_desc(&on_name)?;
+    let desc = catalog.get_desc(on_name)?;
 
-    let scope = Scope::from_source(Some(&on_name), desc.iter_names(), Some(Scope::empty(None)));
+    let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext {
         outer_scope: &Scope::empty(None),
         outer_relation_type: &RelationType::empty(),
@@ -611,17 +612,17 @@ fn plan_table_factor<'a>(
             if !with_hints.is_empty() {
                 bail!("WITH hints are not supported");
             }
-            let name = extract_sql_object_name(name)?;
+            let name = QualName::try_from(name.clone())?;
             let desc = catalog.get_desc(&name)?;
             let expr = RelationExpr::Get {
                 name: name.clone(),
                 typ: desc.typ().clone(),
             };
-            let alias = if let Some(TableAlias { name, columns }) = alias {
+            let alias: QualName = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
                 }
-                name.value.to_owned()
+                name.clone().try_into()?
             } else {
                 name
             };
@@ -641,11 +642,12 @@ fn plan_table_factor<'a>(
                 bail!("LATERAL derived tables are not yet supported");
             }
             let (expr, scope) = plan_subquery(catalog, &qcx, &subquery)?;
-            let alias = if let Some(TableAlias { name, columns }) = alias {
+            let alias: Option<QualName> = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
                     bail!("aliasing columns is not yet supported");
                 }
-                Some(name.value.as_str())
+                let qn: QualName = name.try_into()?;
+                Some(qn)
             } else {
                 None
             };
@@ -691,7 +693,7 @@ fn plan_select_item<'a>(
                 0,
                 ScopeItemName {
                     table_name: None,
-                    column_name: Some(alias.value.clone()),
+                    column_name: Some(alias.try_into()?),
                 },
             );
             scope_item.expr = Some(sql_expr.clone());
@@ -711,7 +713,7 @@ fn plan_select_item<'a>(
             })
             .collect::<Result<Vec<_>, _>>(),
         SelectItem::QualifiedWildcard(table_name) => {
-            let table_name = Some(extract_sql_object_name(table_name)?);
+            let table_name = Some(QualName::try_from(table_name)?);
             select_all_scope
                 .items
                 .iter()
@@ -852,8 +854,8 @@ fn plan_join_constraint<'a>(
             catalog,
             &column_names
                 .iter()
-                .map(|ident| ident.value.to_owned())
-                .collect::<Vec<_>>(),
+                .map(|ident| QualName::try_from(ident))
+                .collect::<Result<Vec<_>, _>>()?,
             left,
             left_scope,
             right,
@@ -892,7 +894,7 @@ fn plan_join_constraint<'a>(
 #[allow(clippy::too_many_arguments)]
 fn plan_using_constraint(
     _: &Catalog,
-    column_names: &[String],
+    column_names: &[QualName],
     left: RelationExpr,
     left_scope: Scope,
     right: RelationExpr,
@@ -992,14 +994,14 @@ fn plan_expr<'a>(
     } else {
         match e {
             Expr::Identifier(name) => {
-                let (i, _) = ecx.scope.resolve_column(&name.value)?;
+                let (i, _) = ecx.scope.resolve_column(&QualName::try_from(name)?)?;
                 Ok(ScalarExpr::Column(i))
             }
             Expr::CompoundIdentifier(names) => {
                 if names.len() == 2 {
                     let (i, _) = ecx
                         .scope
-                        .resolve_table_column(&names[0].value, &names[1].value)?;
+                        .resolve_table_column(&(&names[0]).try_into()?, &(&names[1]).try_into()?)?;
                     Ok(ScalarExpr::Column(i))
                 } else {
                     bail!(
@@ -1275,7 +1277,7 @@ fn plan_any_or_all<'a>(
     // plan left and op
     // this is a bit of a hack - we want to plan `op` as if the original expr was `(SELECT ANY/ALL(left op right[1]) FROM right)`
     let mut scope = Scope::empty(Some(ecx.scope.clone()));
-    let right_name = format!("right_{}", Uuid::new_v4());
+    let right_name = format!("right_{}", Uuid::new_v4()).lit();
     scope.items.push(ScopeItem {
         names: vec![ScopeItemName {
             table_name: Some(right_name.clone()),
@@ -1296,7 +1298,7 @@ fn plan_any_or_all<'a>(
         &any_ecx,
         op,
         left,
-        &Expr::Identifier(Ident::new(right_name)),
+        &Expr::Identifier(Ident::try_from(right_name)?),
     )?;
 
     // plan subquery
@@ -1329,8 +1331,9 @@ fn plan_aggregate(
     ecx: &ExprContext,
     sql_func: &Function,
 ) -> Result<AggregateExpr, failure::Error> {
-    let ident = sql_func.name.to_string().to_lowercase();
-    assert!(is_aggregate_func(&ident));
+    let name = QualName::try_from(&sql_func.name)?;
+    let ident = name.as_ident_str()?;
+    assert!(is_aggregate_func(&name));
 
     if sql_func.over.is_some() {
         bail!("window functions are not yet supported");
@@ -1341,7 +1344,7 @@ fn plan_aggregate(
     }
 
     let arg = &sql_func.args[0];
-    let (expr, func) = match (&*ident, arg) {
+    let (expr, func) = match (ident, arg) {
         // COUNT(*) is a special case that doesn't compose well
         ("count", Expr::Wildcard) => (ScalarExpr::literal_null(), AggregateFunc::CountAll),
         _ => {
@@ -1366,8 +1369,9 @@ fn plan_function<'a>(
     ecx: &ExprContext,
     sql_func: &'a Function,
 ) -> Result<ScalarExpr, failure::Error> {
-    let ident = sql_func.name.to_string().to_lowercase();
-    if is_aggregate_func(&ident) {
+    let name = QualName::try_from(&sql_func.name)?;
+    let ident = &*name.to_string();
+    if is_aggregate_func(&name) {
         if ecx.allow_aggregates {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
@@ -1378,7 +1382,7 @@ fn plan_function<'a>(
             bail!("aggregate functions are not allowed in {}", ecx.name);
         }
     } else {
-        match ident.as_str() {
+        match ident {
             "abs" => {
                 if sql_func.args.len() != 1 {
                     bail!("abs expects one argument, got {}", sql_func.args.len());
@@ -2388,9 +2392,11 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
     // NOTE this needs to stay in sync with sqllogictest::postgres::get_column
     Ok(match data_type {
         DataType::Boolean => ScalarType::Bool,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "bool" => ScalarType::Bool,
+        DataType::Custom(name) if QualName::name_equals(name.clone(), "bool") => ScalarType::Bool,
+        DataType::Custom(name) if QualName::name_equals(name.clone(), "string") => {
+            ScalarType::String
+        }
         DataType::Char(_) | DataType::Varchar(_) | DataType::Text => ScalarType::String,
-        DataType::Custom(name) if name.to_string().to_lowercase() == "string" => ScalarType::String,
         DataType::SmallInt => ScalarType::Int32,
         DataType::Int | DataType::BigInt => ScalarType::Int64,
         DataType::Float(_) | DataType::Real | DataType::Double => ScalarType::Float64,
@@ -2463,15 +2469,16 @@ impl<'ast> AggregateFuncVisitor<'ast> {
 
 impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
     fn visit_function(&mut self, func: &'ast Function) {
-        let name_str = func.name.to_string().to_lowercase();
         let old_within_aggregate = self.within_aggregate;
-        if is_aggregate_func(&name_str) {
-            if self.within_aggregate {
-                self.err = Some(format_err!("nested aggregate functions are not allowed"));
-                return;
+        if let Ok(name) = QualName::try_from(func.name.clone()) {
+            if is_aggregate_func(&name) {
+                if self.within_aggregate {
+                    self.err = Some(format_err!("nested aggregate functions are not allowed"));
+                    return;
+                }
+                self.aggs.push(func);
+                self.within_aggregate = true;
             }
-            self.aggs.push(func);
-            self.within_aggregate = true;
         }
         visit::visit_function(self, func);
         self.within_aggregate = old_within_aggregate;
@@ -2532,10 +2539,10 @@ impl<'a> ExprContext<'a> {
     }
 }
 
-fn is_aggregate_func(name: &str) -> bool {
-    match name {
+fn is_aggregate_func(name: &QualName) -> bool {
+    match name.as_ident_str() {
         // avg is handled by transform::AvgFuncRewriter.
-        "max" | "min" | "sum" | "count" => true,
+        Ok("max") | Ok("min") | Ok("sum") | Ok("count") => true,
         _ => false,
     }
 }

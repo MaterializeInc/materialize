@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use crate::RelationExpr;
+use repr::QualName;
 
 #[derive(Debug)]
 pub struct InlineLet;
@@ -30,7 +31,7 @@ impl InlineLet {
     pub fn collect_lets(
         &self,
         relation: &mut RelationExpr,
-        lets: &mut Vec<(String, RelationExpr)>,
+        lets: &mut Vec<(QualName, RelationExpr)>,
     ) {
         if let RelationExpr::Let { name, value, body } = relation {
             self.collect_lets(value, lets);
