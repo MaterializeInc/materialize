@@ -1549,6 +1549,7 @@ dependencies = [
  "dataflow-types",
  "duct",
  "failure",
+ "fallible-iterator 0.1.6",
  "futures",
  "getopts",
  "hyper",

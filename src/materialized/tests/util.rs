@@ -11,7 +11,9 @@ use std::time::Duration;
 use postgres::params::{ConnectParams, Host};
 use postgres::{Connection, TlsMode};
 
+#[allow(dead_code)] // compilation of integration tests seems weird
 pub type TestResult = Result<(), Box<dyn Error>>;
+
 type TResult = Result<(materialized::Server, Connection), Box<dyn Error>>;
 
 pub fn start_server(data_directory: Option<PathBuf>) -> TResult {
@@ -31,7 +33,7 @@ pub fn start_symbiosis_server(data_directory: Option<PathBuf>) -> TResult {
 
 fn start_server_inner(data_directory: Option<PathBuf>, symbiosis_url: Option<String>) -> TResult {
     let server = materialized::serve(materialized::Config {
-        logging_granularity: Some(Duration::from_secs(1)),
+        logging_granularity: Some(Duration::from_millis(10)),
         threads: 1,
         process: 0,
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],

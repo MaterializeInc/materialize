@@ -95,10 +95,12 @@ impl Encoder for Codec {
             BackendMessage::ReadyForQuery(_) => b'Z',
             BackendMessage::NoData => b'n',
             BackendMessage::ParameterStatus(_, _) => b'S',
+            BackendMessage::PortalSuspended => b's',
             BackendMessage::BackendKeyData { .. } => b'K',
             BackendMessage::ParameterDescription(_) => b't',
             BackendMessage::ParseComplete => b'1',
             BackendMessage::BindComplete => b'2',
+            BackendMessage::CloseComplete => b'3',
             BackendMessage::ErrorResponse { .. } => b'E',
             BackendMessage::CopyOutResponse => b'H',
             BackendMessage::CopyData(_) => b'd',
@@ -166,6 +168,7 @@ impl Encoder for Codec {
             }
             BackendMessage::ParseComplete => (),
             BackendMessage::BindComplete => (),
+            BackendMessage::CloseComplete => (),
             BackendMessage::EmptyQueryResponse => (),
             BackendMessage::ReadyForQuery(status) => {
                 buf.put(match status {
@@ -178,6 +181,7 @@ impl Encoder for Codec {
                 buf.put_string(name);
                 buf.put_string(value);
             }
+            BackendMessage::PortalSuspended => (),
             BackendMessage::NoData => (),
             BackendMessage::BackendKeyData { conn_id, secret_key } => {
                 buf.put_u32_be(conn_id);
@@ -472,14 +476,10 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
 fn decode_execute(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let max_rows = buf.read_i32()?;
-    if max_rows > 0 {
-        log::warn!(
-            "Ignoring maximum_rows={} for portal={:?}",
-            max_rows,
-            portal_name
-        );
-    }
-    Ok(FrontendMessage::Execute { portal_name })
+    Ok(FrontendMessage::Execute {
+        portal_name,
+        max_rows,
+    })
 }
 
 fn decode_sync(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {

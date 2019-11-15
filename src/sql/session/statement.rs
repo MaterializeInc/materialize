@@ -85,4 +85,19 @@ pub struct Portal {
     pub parameters: Option<Row>,
     /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
     pub return_field_formats: Vec<bool>,
+    /// The number of rows to be returned in _this_ execute call
+    pub max_rows: Option<std::num::NonZeroU32>,
+
+    /// RemainingRows is caused by `max_rows` showing up in an Execute
+    pub remaining_rows: Option<Vec<Row>>,
+}
+
+impl Portal {
+    pub fn set_max_rows(&mut self, count: u32) {
+        self.max_rows = std::num::NonZeroU32::new(count);
+    }
+
+    pub fn set_remaining_rows(&mut self, rows: Vec<Row>) {
+        self.remaining_rows = Some(rows);
+    }
 }

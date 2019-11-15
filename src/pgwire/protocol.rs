@@ -3,6 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::convert::TryInto;
 use std::io::Write;
 use std::iter;
 use std::sync::Arc;
@@ -125,13 +126,13 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(
         HandleQuery,
         RecvQuery,
+        SendCommandComplete,
         SendError,
         SendFatalError,
-        SendParseComplete,
         SendReadyForQuery,
+        SendSimpleComplete,
         SendParameterDescription,
         SendDescribeResponse,
-        SendBindComplete,
         HandleParse,
         Error,
         Done
@@ -153,23 +154,28 @@ pub enum StateMachine<A: Conn + 'static> {
         field_formats: Option<Vec<FieldFormat>>,
         row_desc: Option<RelationDesc>,
         extended: bool,
+        max_rows: Option<i32>,
+        portal_name: String,
     },
 
-    #[state_machine_future(transitions(SendParseComplete, HandleQuery, SendError))]
+    #[state_machine_future(transitions(SendSimpleComplete, HandleQuery, SendError))]
     HandleParse {
         conn: A,
         rx: futures::sync::oneshot::Receiver<coord::Response<()>>,
         extended: bool,
     },
 
+    /// Wait for the dataflow layer to send us rows
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
     WaitForRows {
         conn: A,
         session: Session,
         row_desc: RelationDesc,
         rows_rx: coord::RowsFuture,
+        max_rows: Option<i32>,
         field_formats: Option<Vec<FieldFormat>>,
         extended: bool,
+        portal_name: String,
     },
 
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
@@ -178,8 +184,11 @@ pub enum StateMachine<A: Conn + 'static> {
         session: Session,
         row_desc: RelationDesc,
         rows_rx: coord::RowsFuture,
+        max_rows: Option<i32>,
+        portal_name: String,
     },
 
+    /// Send something to the client, and transition to `RecvQuery`
     #[state_machine_future(transitions(SendReadyForQuery, RecvQuery, Error))]
     SendCommandComplete {
         send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
@@ -190,11 +199,11 @@ pub enum StateMachine<A: Conn + 'static> {
     },
 
     // Extended-only query flow.
-    #[state_machine_future(transitions(RecvQuery, Error))]
-    SendParseComplete { send: SinkSend<A>, session: Session },
-
+    /// Send something simple to the client, and transition to `RecvQuery`
+    ///
+    /// e.g. `ParseComplete`, `BindComplete`, `CloseComplete`
     #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
-    SendBindComplete { send: SinkSend<A>, session: Session },
+    SendSimpleComplete { send: SinkSend<A>, session: Session },
 
     #[state_machine_future(transitions(RecvQuery, Error))]
     SendDescribeResponse { send: SinkSend<A>, session: Session },
@@ -378,7 +387,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterRecvQuery<A>, failure::Error> {
         let (msg, conn) = try_ready!(state.recv.poll());
         trace!("cid={} recv query: {:?}", cx.conn_id, msg);
-        let state = state.take();
+        let mut state = state.take();
         match msg {
             FrontendMessage::Query { sql } => {
                 debug!("query sql: {}", sql);
@@ -411,12 +420,20 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 })
             }
             FrontendMessage::CloseStatement { name } => {
-                let mut session = state.session;
-                session.remove_prepared_statement(&name);
-                transition!(recv_query(conn, session));
+                state.session.remove_prepared_statement(&name);
+                transition!(send_simple_complete(
+                    conn,
+                    state.session,
+                    BackendMessage::CloseComplete
+                ));
             }
-            FrontendMessage::ClosePortal { name: _ } => {
-                transition!(recv_query(conn, state.session));
+            FrontendMessage::ClosePortal { name } => {
+                state.session.remove_portal(&name);
+                transition!(send_simple_complete(
+                    conn,
+                    state.session,
+                    BackendMessage::CloseComplete
+                ));
             }
             FrontendMessage::DescribePortal { name } => Ok(Async::Ready(send_describe_response(
                 conn,
@@ -467,16 +484,17 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             return_field_formats
                         );
                         session.set_portal(portal_name, statement_name, Some(row), fmts)?;
-                        transition!(SendBindComplete {
-                            send: conn.send(BackendMessage::BindComplete),
+                        transition!(send_simple_complete(
+                            conn,
                             session,
-                        });
+                            BackendMessage::BindComplete
+                        ));
                     }
-                    Err(e) => {
+                    Err(err) => {
                         trace!(
                             "cid={} handle bind err={:?} statement={:?} portal={:?} return_field_formats={:?}",
                             cx.conn_id,
-                            e,
+                            err,
                             statement_name,
                             portal_name,
                             return_field_formats
@@ -485,35 +503,68 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     }
                 }
             }
-            FrontendMessage::Execute { portal_name } => {
+            FrontendMessage::Execute {
+                portal_name,
+                max_rows,
+            } => {
                 let (tx, rx) = futures::sync::oneshot::channel();
+                {
+                    let portal = state
+                        .session
+                        .get_portal_mut(&portal_name)
+                        .ok_or_else(|| format_err!("portal {:?} does not exist", portal_name))?;
+                    portal.set_max_rows(
+                        max_rows
+                            .try_into()
+                            .map_err(|e| format_err!("got invalid max_rows count: {}", e))?,
+                    );
+                }
+                let row_desc = state
+                    .session
+                    .get_prepared_statement_for_portal(&portal_name)
+                    .and_then(|stmt| stmt.desc().cloned());
                 let portal = state
                     .session
-                    .get_portal(&portal_name)
+                    .get_portal_mut(&portal_name)
                     .ok_or_else(|| format_err!("portal {:?} does not exist", portal_name))?;
-                let stmt = state
-                    .session
-                    .get_prepared_statement(&portal.statement_name)
-                    .unwrap();
-                let row_desc = stmt.desc().cloned();
-                let field_formats = portal
-                    .return_field_formats
-                    .iter()
-                    .map(FieldFormat::from)
-                    .collect();
-                cx.cmdq_tx.unbounded_send(coord::Command::Execute {
-                    portal_name,
-                    session: state.session,
-                    conn_id: cx.conn_id,
-                    tx,
-                })?;
-                transition!(HandleQuery {
-                    rx,
-                    conn,
-                    row_desc,
-                    field_formats: Some(field_formats),
-                    extended: true,
-                })
+                let field_formats: Option<Vec<_>> = Some(
+                    portal
+                        .return_field_formats
+                        .iter()
+                        .map(FieldFormat::from)
+                        .collect(),
+                );
+                if portal.remaining_rows.is_some() {
+                    // If the portal contains some rows then we return those instead of
+                    // requesting new ones from the dataflow layer
+                    let rows = portal.remaining_rows.take().unwrap();
+                    transition!(send_rows(
+                        conn,
+                        state.session,
+                        rows,
+                        row_desc.expect("portal should have a row description on resumption"),
+                        portal_name,
+                        field_formats,
+                        true,
+                        cx.conn_id,
+                    )?)
+                } else {
+                    cx.cmdq_tx.unbounded_send(coord::Command::Execute {
+                        portal_name: portal_name.clone(),
+                        session: state.session,
+                        conn_id: cx.conn_id,
+                        tx,
+                    })?;
+                    transition!(HandleQuery {
+                        rx,
+                        conn,
+                        row_desc,
+                        field_formats,
+                        extended: true,
+                        max_rows: Some(max_rows),
+                        portal_name,
+                    })
+                }
             }
             FrontendMessage::Sync => transition!(send_ready_for_query(conn, state.session)),
             FrontendMessage::Terminate => transition!(Done(())),
@@ -594,6 +645,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         let row_desc = state
                             .row_desc
                             .expect("missing row description during ExecuteResponse::SendRows");
+                        let portal_name = state.portal_name;
                         if state.extended {
                             trace!("cid={} handle extended: send rows", cx.conn_id);
                             transition!(WaitForRows {
@@ -601,6 +653,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                 conn: state.conn,
                                 row_desc,
                                 rows_rx: rx,
+                                max_rows: state.max_rows,
+                                portal_name,
                                 field_formats: state.field_formats,
                                 extended: true
                             })
@@ -611,6 +665,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                                 )),
                                 session,
                                 row_desc,
+                                max_rows: state.max_rows,
+                                portal_name,
                                 rows_rx: rx,
                             })
                         }
@@ -681,10 +737,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             } => {
                 let state = state.take();
                 if state.extended {
-                    transition!(SendParseComplete {
-                        send: state.conn.send(BackendMessage::ParseComplete),
+                    transition!(send_simple_complete(
+                        state.conn,
                         session,
-                    })
+                        BackendMessage::ParseComplete,
+                    ))
                 } else {
                     let statement_name = String::from("");
                     let stmt = session
@@ -698,7 +755,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         .expect("unnamed statement to be present during simple query flow");
                     let (tx, rx) = futures::sync::oneshot::channel();
                     cx.cmdq_tx.unbounded_send(coord::Command::Execute {
-                        portal_name,
+                        portal_name: portal_name.clone(),
                         session,
                         conn_id: cx.conn_id,
                         tx,
@@ -708,7 +765,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         rx,
                         field_formats: None,
                         row_desc,
+                        max_rows: None,
                         extended: false,
+                        portal_name,
                     })
                 }
             }
@@ -747,9 +806,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let state = state.take();
                 let extended = state.extended;
                 trace!(
-                    "cid={} wait for rows: count={} extended={}",
+                    "cid={} wait for rows: count={} max={:?} extended={}",
                     cx.conn_id,
                     rows.len(),
+                    state.max_rows,
                     extended
                 );
                 transition!(send_rows(
@@ -757,10 +817,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     state.session,
                     rows,
                     state.row_desc,
+                    state.portal_name,
                     state.field_formats.clone(),
                     state.extended,
                     cx.conn_id,
-                ));
+                )?)
             }
         }
     }
@@ -778,7 +839,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             row_desc: state.row_desc,
             rows_rx: state.rows_rx,
             field_formats: None,
-            extended: false
+            max_rows: state.max_rows,
+            extended: false,
+            portal_name: state.portal_name,
         })
     }
 
@@ -810,23 +873,14 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
 
     // Extended-only query flow.
 
-    fn poll_send_parse_complete<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendParseComplete<A>>,
+    fn poll_send_simple_complete<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendSimpleComplete<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendParseComplete<A>, failure::Error> {
-        trace!("cid={} send parse complete", cx.conn_id);
+    ) -> Poll<AfterSendSimpleComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
+        trace!("cid={} send cmd complete", cx.conn_id);
         let state = state.take();
         trace!("cid={} transition to recv extended", cx.conn_id);
-        transition!(recv_query(conn, state.session))
-    }
-
-    fn poll_send_bind_complete<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendBindComplete<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendBindComplete<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
         transition!(recv_query(conn, state.session))
     }
 
@@ -997,6 +1051,16 @@ where
     }
 }
 
+fn send_simple_complete<A>(conn: A, session: Session, cmd: BackendMessage) -> SendSimpleComplete<A>
+where
+    A: Conn + 'static,
+{
+    SendSimpleComplete {
+        send: conn.send(cmd),
+        session,
+    }
+}
+
 fn drain_until_sync<A>(conn: A, session: Session) -> DrainUntilSync<A>
 where
     A: Conn + 'static,
@@ -1021,37 +1085,79 @@ where
 #[allow(clippy::too_many_arguments)]
 fn send_rows<A>(
     conn: A,
-    session: Session,
-    rows: Vec<Row>,
+    mut session: Session,
+    mut rows: Vec<Row>,
     row_desc: RelationDesc,
+    portal_name: String,
     field_formats: Option<Vec<FieldFormat>>,
     extended: bool,
     conn_id: u32,
-) -> SendCommandComplete<A>
+) -> Result<SendCommandComplete<A>, failure::Error>
 where
     A: Conn + 'static,
 {
     trace!("cid={} send rows extended={}", conn_id, extended);
     let formats = FieldFormatIter::new(field_formats.map(Arc::new));
+    let portal = session
+        .get_portal(&portal_name)
+        .expect("valid portal name for send rows");
 
-    let rows = rows
-        .into_iter()
-        .map(move |row| {
-            BackendMessage::DataRow(
-                message::field_values_from_row(row, row_desc.typ()),
-                formats.fresh(),
+    // if we have more that u32's worth of rows I hope that there's a cap
+    let row_count: u32 = rows.len().try_into().unwrap_or(u32::max_value());
+    let (send, label): (
+        Box<dyn futures::Future<Item = _, Error = _> + std::marker::Send + 'static>,
+        _,
+    ) = match portal.max_rows {
+        Some(max_rows) if max_rows.get() < row_count => {
+            // TODO: once we get async/await this should be possible to do without the intermediate vec
+            let max_rows = max_rows.get() as usize;
+            let send: Vec<_> = rows.drain(..max_rows).collect();
+            session
+                .get_portal_mut(&portal_name)
+                .ok_or_else(|| {
+                    failure::format_err!("portal missing after partial send: {:?}", portal_name)
+                })?
+                .set_remaining_rows(rows);
+
+            let send = send
+                .into_iter()
+                .map(move |row| {
+                    BackendMessage::DataRow(
+                        message::field_values_from_row(row, row_desc.typ()),
+                        formats.fresh(),
+                    )
+                })
+                .chain(iter::once(BackendMessage::PortalSuspended));
+            (
+                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn)),
+                "select_partial",
             )
-        })
-        .chain(iter::once(BackendMessage::CommandComplete {
-            tag: "SELECT".into(),
-        }));
+        }
+        _ => {
+            let send = rows
+                .into_iter()
+                .map(move |row| {
+                    BackendMessage::DataRow(
+                        message::field_values_from_row(row, row_desc.typ()),
+                        formats.fresh(),
+                    )
+                })
+                .chain(iter::once(BackendMessage::CommandComplete {
+                    tag: "SELECT".into(),
+                }));
+            (
+                Box::new(stream::iter_ok(send).forward(conn).map(|(_, conn)| conn)),
+                "select",
+            )
+        }
+    };
 
-    SendCommandComplete {
-        send: Box::new(stream::iter_ok(rows).forward(conn).map(|(_, conn)| conn)),
+    Ok(SendCommandComplete {
+        send,
         session,
         extended,
-        label: "select",
-    }
+        label,
+    })
 }
 
 #[derive(Clone, Copy, Debug)]

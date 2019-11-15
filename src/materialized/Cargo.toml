@@ -36,6 +36,7 @@ tokio = "0.1"
 [dev-dependencies]
 chrono = "0.4"
 postgres = "0.15"
+fallible-iterator = "0.1.6"
 pretty_assertions = "0.6.1"
 
 [build-dependencies]
