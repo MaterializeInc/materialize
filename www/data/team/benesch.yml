@@ -3,8 +3,8 @@ handle: benesch
 title: Engineer
 blurb: >
   Nikhil specializes in distributed systems, SQL databases, and build systems.
-  He was previously an engineer on the core team at Cockroach Labs, where he
-  worked on the replication engine.
+  He was previously an engineer at Cockroach Labs, where he worked on the
+  replication engine.
 headshot: /images/uploads/team-benesch.jpg
 order: 4
-homepage: https://github.com/benesch
+homepage: 'https://github.com/benesch'
