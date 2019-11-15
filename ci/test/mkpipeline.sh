@@ -19,10 +19,12 @@ cd "$(dirname "$0")/../.."
 # matches GLOB. Note that this function always returns true if there were any
 # changes to the build configuration itself.
 changes_matching() {
-    if git diff --no-patch --quiet origin/master... -- "bin/*" "ci/*" "$@"; then
-        echo false
-    else
+    if [[ "${BUILDKITE_BRANCH:-}" = master ]] ||
+        ! git diff --no-patch --quiet origin/master... -- "bin/*" "ci/*" "$@"
+    then
         echo true
+    else
+        echo false
     fi
 }
 
