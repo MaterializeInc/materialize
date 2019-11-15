@@ -29,7 +29,7 @@ main() {
             else
                 dc_up "$@"
             fi ;;
-        down)
+        stop|down)
             if [[ $# -eq 0 ]]; then
                 shut_down
             else
