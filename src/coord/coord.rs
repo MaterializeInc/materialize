@@ -18,6 +18,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::fs;
 use std::iter;
 use std::path::Path;
 
@@ -37,6 +38,7 @@ use dataflow_types::{
 use expr::{GlobalId, Id, RelationExpr};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
+use ore::option::OptionExt;
 use repr::{ColumnName, Datum, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
@@ -104,12 +106,19 @@ where
             None
         };
 
-        let mut coordinator = Self {
+        let catalog_path = if let Some(data_directory) = config.data_directory {
+            fs::create_dir_all(data_directory)?;
+            Some(data_directory.join("catalog"))
+        } else {
+            None
+        };
+
+        let mut coord = Self {
             switchboard: config.switchboard,
             broadcast_tx,
             num_timely_workers: u64::try_from(config.num_timely_workers).unwrap(),
             optimizer: Default::default(),
-            catalog: Catalog::default(),
+            catalog: Catalog::open(catalog_path.mz_as_deref())?,
             symbiosis,
             views: HashMap::new(),
             sources: HashMap::new(),
@@ -121,18 +130,40 @@ where
             log: config.logging.is_some(),
         };
 
+        let catalog_entries: Vec<_> = coord
+            .catalog
+            .iter()
+            .map(|entry| (entry.id(), entry.item().clone()))
+            .collect();
+        for (id, item) in catalog_entries {
+            match item {
+                CatalogItem::Source(source) => {
+                    coord.create_sources_id(vec![(id, source)]);
+                }
+                CatalogItem::View(view) => {
+                    let dataflow = DataflowDesc::new().add_view(id, view.clone());
+                    coord.create_dataflows(vec![dataflow]);
+                }
+                CatalogItem::Sink(sink) => {
+                    let dataflow = DataflowDesc::new().add_sink(id, sink.clone());
+                    coord.create_dataflows(vec![dataflow]);
+                }
+                CatalogItem::Index(index) => coord.create_index(id, index),
+            }
+        }
+
         if let Some(logging_config) = config.logging {
             for log in logging_config.active_logs().iter() {
-                coordinator.catalog.insert_id(
-                    log.name(),
+                coord.catalog.insert_id(
                     log.id(),
+                    log.name(),
                     CatalogItem::Source(Source {
                         connector: SourceConnector::Local,
                         desc: log.schema(),
                     }),
                 )?;
                 // Insert with 1 second compaction latency.
-                coordinator.insert_source(log.id(), 1_000);
+                coord.insert_source(log.id(), 1_000);
             }
         }
 
@@ -143,11 +174,11 @@ where
             let conn_id = 0;
             let mut session = sql::Session::default();
             for stmt in sql::parse(config.bootstrap_sql)? {
-                coordinator.handle_statement(&mut session, stmt, None, conn_id)?;
+                coord.handle_statement(&mut session, stmt, None, conn_id)?;
             }
         }
 
-        Ok(coordinator)
+        Ok(coord)
     }
 
     pub fn serve(&mut self, cmd_rx: futures::sync::mpsc::UnboundedReceiver<Command>) {
@@ -281,9 +312,10 @@ where
             }
 
             Plan::CreateIndex(name, index) => {
-                self.catalog
+                let id = self
+                    .catalog
                     .insert(name, CatalogItem::Index(index.clone()))?;
-                self.create_index(index);
+                self.create_index(id, index);
                 ExecuteResponse::CreatedIndex
             }
 
@@ -605,14 +637,27 @@ where
         &mut self,
         sources: Vec<(QualName, dataflow_types::Source)>,
     ) -> Result<(), failure::Error> {
-        let mut dataflows = Vec::new();
-        for (name, source) in sources.iter() {
-            // Effecting policy, we mirror all sources with a view.
-            let source_id = self
+        let mut source_ids = Vec::with_capacity(sources.len());
+        for (name, source) in sources {
+            let id = self
                 .catalog
                 .insert(name.clone(), CatalogItem::Source(source.clone()))?;
-            let view_id = self.catalog.allocate_id();
-            dataflows.push(
+            source_ids.push((id, source));
+        }
+        self.create_sources_id(source_ids);
+        Ok(())
+    }
+
+    // Like `create_sources`, but for when the source IDs have already been
+    // assigned.
+    fn create_sources_id(&mut self, sources: Vec<(GlobalId, dataflow_types::Source)>) {
+        let dataflows: Vec<_> = sources
+            .into_iter()
+            .map(|(source_id, source)| {
+                // Effecting policy, we mirror all sources with a view.
+                let view_id = self.catalog.allocate_id();
+                self.sources
+                    .insert(source_id, (source.clone(), Some(view_id)));
                 DataflowDesc::new()
                     .add_view(
                         view_id,
@@ -625,11 +670,9 @@ where
                             desc: source.desc.clone(),
                         },
                     )
-                    .add_source(source_id, source.clone()),
-            );
-            self.sources
-                .insert(source_id, (source.clone(), Some(view_id)));
-        }
+                    .add_source(source_id, source.clone())
+            })
+            .collect();
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(dataflows.clone()),
@@ -648,11 +691,9 @@ where
             }
             self.insert_views(dataflow);
         }
-        Ok(())
     }
 
-    fn create_index(&mut self, mut idx: dataflow_types::Index) {
-        let idx_id = self.catalog.allocate_id();
+    fn create_index(&mut self, idx_id: GlobalId, mut idx: dataflow_types::Index) {
         // Rewrite the source used.
         if let Some((_source, new_id)) = self.sources.get(&idx.on_id) {
             // If the source has a corresponding view, use its name instead.

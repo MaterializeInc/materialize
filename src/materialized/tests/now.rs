@@ -12,7 +12,8 @@ mod util;
 fn test_now() -> Result<(), Box<dyn Error>> {
     ore::log::init();
 
-    let (_server, conn) = util::start_server()?;
+    let data_dir = None;
+    let (_server, conn) = util::start_server(data_dir)?;
 
     let rows = &conn.query("SELECT now()", &[])?;
     assert_eq!(1, rows.len());

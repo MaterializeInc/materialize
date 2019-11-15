@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
     Local(LocalId),
-    /// An identifier that returns to a global dataflow.
+    /// An identifier that refers to a global dataflow.
     Global(GlobalId),
 }
 

@@ -3,13 +3,22 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::collections::HashMap;
+use std::cmp;
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
-use dataflow_types::{Index, Sink, Source, View};
-use expr::{GlobalId, Id, IdHumanizer};
 use failure::bail;
+use rusqlite::params;
+use serde::{Deserialize, Serialize};
+
+use dataflow_types::{Index, Sink, Source, SourceConnector, View};
+use expr::{GlobalId, Id, IdHumanizer};
 use repr::QualName;
 use repr::RelationDesc;
+
+use crate::sql::SqlVal;
+
+mod sql;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
@@ -22,7 +31,8 @@ use repr::RelationDesc;
 pub struct Catalog {
     id: usize,
     by_name: HashMap<QualName, GlobalId>,
-    by_id: HashMap<GlobalId, CatalogEntry>,
+    by_id: BTreeMap<GlobalId, CatalogEntry>,
+    sqlite: rusqlite::Connection,
 }
 
 #[derive(Clone, Debug)]
@@ -33,7 +43,7 @@ pub struct CatalogEntry {
     name: QualName,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum CatalogItem {
     Source(Source),
     View(View),
@@ -93,13 +103,48 @@ impl CatalogEntry {
     }
 }
 
-impl Default for Catalog {
-    fn default() -> Catalog {
-        Catalog {
+impl Catalog {
+    /// Constructs a new `Catalog`.
+    pub fn open(path: Option<&Path>) -> Result<Catalog, failure::Error> {
+        let sqlite = match path {
+            Some(path) => rusqlite::Connection::open(path)?,
+            None => rusqlite::Connection::open_in_memory()?,
+        };
+        let mut catalog = Catalog {
             id: 0,
             by_name: HashMap::new(),
-            by_id: HashMap::new(),
+            by_id: BTreeMap::new(),
+            sqlite,
+        };
+
+        // Create the on-disk schema, if it doesn't already exist.
+        const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS catalog (
+            id   blob PRIMARY KEY,
+            name blob NOT NULL,
+            item blob NOT NULL
+        );";
+        catalog.sqlite.execute(&SCHEMA, params![])?;
+
+        // Load any existing catalog entries.
+        let rows: Vec<_> = catalog
+            .sqlite
+            .prepare("SELECT id, name, item FROM catalog ORDER BY rowid")?
+            .query_and_then(params![], |row| -> Result<_, failure::Error> {
+                let id: SqlVal<GlobalId> = row.get(0)?;
+                let name: SqlVal<QualName> = row.get(1)?;
+                let item: SqlVal<CatalogItem> = row.get(2)?;
+                Ok((id.0, name.0, item.0))
+            })?
+            .collect();
+        for row in rows {
+            let (id, name, item) = row?;
+            catalog.insert_id_core(id, name, item);
+            if let GlobalId::User(id) = id {
+                catalog.id = cmp::max(catalog.id, id);
+            }
         }
+
+        Ok(catalog)
     }
 }
 
@@ -135,40 +180,61 @@ impl Catalog {
         item: CatalogItem,
     ) -> Result<GlobalId, failure::Error> {
         let id = self.allocate_id();
-        self.insert_id(name, id, item)?;
+        self.insert_id(id, name, item)?;
         Ok(id)
     }
 
     pub fn insert_id(
         &mut self,
-        name: QualName,
         id: GlobalId,
+        name: QualName,
         item: CatalogItem,
     ) -> Result<(), failure::Error> {
-        let item = CatalogEntry {
+        // Validate that we can insert the item.
+        if self.by_name.contains_key(&name) {
+            bail!("catalog item '{}' already exists", name)
+        }
+        if self.by_id.contains_key(&id) {
+            bail!("catalog item with id {} already exists", id)
+        }
+
+        // Maybe update on-disk state.
+        if let CatalogItem::Source(Source {
+            connector: SourceConnector::Local,
+            ..
+        }) = item
+        {
+            // At the moment, local sources are always ephemeral.
+        } else {
+            let mut stmt = self
+                .sqlite
+                .prepare_cached("INSERT INTO catalog (id, name, item) VALUES (?, ?, ?)")?;
+            stmt.execute(params![SqlVal(&id), SqlVal(&name), SqlVal(&item)])?;
+        }
+
+        // Update in-memory state.
+        self.insert_id_core(id, name, item);
+        Ok(())
+    }
+
+    fn insert_id_core(&mut self, id: GlobalId, name: QualName, item: CatalogItem) {
+        let entry = CatalogEntry {
             inner: item,
             name,
             id,
             used_by: Vec::new(),
         };
-        if self.by_name.contains_key(&item.name) {
-            bail!("catalog item '{}' already exists", item.name)
-        }
-        if self.by_id.contains_key(&item.id) {
-            bail!("catalog item with id {} already exists", item.id)
-        }
-        for u in item.uses() {
+        for u in entry.uses() {
             match self.by_id.get_mut(&u) {
-                Some(metadata) => metadata.used_by.push(item.id),
+                Some(metadata) => metadata.used_by.push(entry.id),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
-                    u, item.name
+                    u, entry.name
                 ),
             }
         }
-        self.by_name.insert(item.name.clone(), item.id);
-        self.by_id.insert(item.id, item);
-        Ok(())
+        self.by_name.insert(entry.name.clone(), entry.id);
+        self.by_id.insert(entry.id, entry);
     }
 
     /// Determines whether it is feasible to remove the view named `name`
@@ -236,9 +302,16 @@ impl Catalog {
                 .remove(&metadata.name)
                 .expect("catalog out of sync");
         }
+        let mut stmt = self
+            .sqlite
+            .prepare_cached("DELETE FROM catalog WHERE id = ?")
+            .expect("catalog: sqlite failed");
+        stmt.execute(params![SqlVal(id)])
+            .expect("catalog: sqlite failed");
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&CatalogEntry)> {
+    /// Iterates over the items in the catalog in order of increasing ID.
+    pub fn iter(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.by_id.iter().map(|(_id, entry)| entry)
     }
 }
