@@ -69,7 +69,8 @@ Possible COMMANDs:
 
  Individual service commands:
 
-    `us run SERVICE \[ARGS..\]`     Equivalent of 'docker-compose run ..ARGS'
+    `us run SERVICE \[ARGS..\]`     Equivalent of 'docker-compose run ..ARGS' -- leaves the terminal
+                               connected and running
     `us restart \(SERVICE\|all\)`    Restart either SERVICE or all services. This preserves data in
                                volumes (kafka, debezium, etc)
     `us load-test`                Run a long-running load test, modify this file to change parameters
@@ -114,7 +115,7 @@ bring_up() {
 }
 
 dc_run() {
-    runv docker-compose run "$@"
+    runv docker-compose run --service-ports "$@"
 }
 
 shut_down() {
