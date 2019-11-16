@@ -26,10 +26,11 @@ use dataflow_types::{
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum, LiteralName, QualName, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::expr as sqlexpr;
 use crate::expr::like::build_like_regex_from_string;
+use crate::names;
 use crate::query;
 use crate::session::{Portal, Session};
 use crate::Plan;
@@ -51,15 +52,15 @@ pub fn describe_statement(
         | Statement::Tail { .. } => (None, vec![]),
 
         Statement::CreateSources { .. } => (
-            Some(RelationDesc::empty().add_column("Topic".lit(), ScalarType::String)),
+            Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
             vec![],
         ),
 
         Statement::Explain { stage, .. } => (
             Some(RelationDesc::empty().add_column(
                 match stage {
-                    Stage::Dataflow => "Dataflow".lit(),
-                    Stage::Plan => "Plan".lit(),
+                    Stage::Dataflow => "Dataflow",
+                    Stage::Plan => "Plan",
                 },
                 ScalarType::String,
             )),
@@ -69,8 +70,8 @@ pub fn describe_statement(
         Statement::ShowCreateView { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("View".lit(), ScalarType::String)
-                    .add_column("Create View".lit(), ScalarType::String),
+                    .add_column("View", ScalarType::String)
+                    .add_column("Create View", ScalarType::String),
             ),
             vec![],
         ),
@@ -78,8 +79,8 @@ pub fn describe_statement(
         Statement::ShowCreateSource { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("Source".lit(), ScalarType::String)
-                    .add_column("Source URL".lit(), ScalarType::String),
+                    .add_column("Source", ScalarType::String)
+                    .add_column("Source URL", ScalarType::String),
             ),
             vec![],
         ),
@@ -87,18 +88,18 @@ pub fn describe_statement(
         Statement::ShowColumns { .. } => (
             Some(
                 RelationDesc::empty()
-                    .add_column("Field".lit(), ScalarType::String)
-                    .add_column("Nullable".lit(), ScalarType::String)
-                    .add_column("Type".lit(), ScalarType::String),
+                    .add_column("Field", ScalarType::String)
+                    .add_column("Nullable", ScalarType::String)
+                    .add_column("Type", ScalarType::String),
             ),
             vec![],
         ),
 
         Statement::ShowObjects { object_type, .. } => (
-            Some(RelationDesc::empty().add_column(
-                object_type_as_plural_str(object_type).parse()?,
-                ScalarType::String,
-            )),
+            Some(
+                RelationDesc::empty()
+                    .add_column(object_type_as_plural_str(object_type), ScalarType::String),
+            ),
             vec![],
         ),
 
@@ -107,18 +108,15 @@ pub fn describe_statement(
                 (
                     Some(
                         RelationDesc::empty()
-                            .add_column("name".lit(), ScalarType::String)
-                            .add_column("setting".lit(), ScalarType::String)
-                            .add_column("description".lit(), ScalarType::String),
+                            .add_column("name", ScalarType::String)
+                            .add_column("setting", ScalarType::String)
+                            .add_column("description", ScalarType::String),
                     ),
                     vec![],
                 )
             } else {
                 (
-                    Some(
-                        RelationDesc::empty()
-                            .add_column(variable.value.parse()?, ScalarType::String),
-                    ),
+                    Some(RelationDesc::empty().add_column(variable.value, ScalarType::String)),
                     vec![],
                 )
             }
@@ -415,7 +413,7 @@ fn handle_create_dataflow(
                     )
                 }
                 for (i, name) in columns.iter().enumerate() {
-                    desc.set_name(i, Some(QualName::try_from(name)?));
+                    desc.set_name(i, Some(names::ident_to_col_name(name.clone())));
                 }
             }
             let view = View {

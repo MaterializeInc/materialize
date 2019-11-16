@@ -14,8 +14,7 @@ use lazy_static::lazy_static;
 use super::types::PgType;
 use crate::codec::RawParameterBytes;
 use repr::decimal::Decimal;
-use repr::{ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
-use repr::{LiteralName, QualName};
+use repr::{ColumnName, ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
 use sql::TransactionStatus as SqlTransactionStatus;
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
@@ -253,7 +252,7 @@ impl From<&ScalarType> for ParameterDescription {
 
 #[derive(Debug)]
 pub struct FieldDescription {
-    pub name: QualName,
+    pub name: ColumnName,
     pub table_id: u32,
     pub column_id: u16,
     pub type_oid: u32,
@@ -570,7 +569,7 @@ pub fn row_description_from_desc(desc: &RelationDesc) -> Vec<FieldDescription> {
         .map(|(name, typ)| {
             let pg_type: PgType = (&typ.scalar_type).into();
             FieldDescription {
-                name: name.cloned().unwrap_or_else(|| "?column?".lit()),
+                name: name.cloned().unwrap_or_else(|| "?column?".into()),
                 table_id: 0,
                 column_id: 0,
                 type_oid: pg_type.oid,

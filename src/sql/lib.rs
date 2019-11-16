@@ -17,6 +17,8 @@ use sqlparser::parser::Parser as SqlParser;
 pub use session::{PreparedStatement, Session, TransactionStatus};
 pub use sqlparser::ast::{ObjectType, Statement};
 
+pub mod names;
+
 mod expr;
 mod query;
 mod scope;

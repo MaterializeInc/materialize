@@ -108,7 +108,7 @@ impl Drop for LocalBinding<'_> {
     /// Drop this local binding by restoring the environment to its prior state.
     fn drop(&mut self) {
         if let Some(value) = self.prior.take() {
-            let name = std::mem::replace(&mut self.name, QualName::invalid());
+            let name = std::mem::replace(&mut self.name, QualName::trusted("$INVALID$"));
             self.env.bindings.insert(name, value);
         } else {
             self.env.bindings.pop();

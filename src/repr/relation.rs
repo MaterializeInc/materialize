@@ -3,10 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::fmt;
+
 use failure::bail;
 use serde::{Deserialize, Serialize};
 
-use crate::{QualName, ScalarType};
+use crate::ScalarType;
 
 /// The type of a [`Datum`](crate::Datum).
 ///
@@ -104,12 +106,47 @@ impl RelationType {
     }
 }
 
+/// The name of a column in a [`RelationDesc`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct ColumnName(String);
+
+impl ColumnName {
+    /// Returns this column name as a `str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ColumnName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for ColumnName {
+    fn from(s: String) -> ColumnName {
+        ColumnName(s)
+    }
+}
+
+impl From<&str> for ColumnName {
+    fn from(s: &str) -> ColumnName {
+        ColumnName(s.into())
+    }
+}
+
+impl From<&ColumnName> for ColumnName {
+    fn from(n: &ColumnName) -> ColumnName {
+        n.clone()
+    }
+}
+
 /// A complete relation description. Bundles together a `RelationType` with
 /// additional metadata, like the names of each column.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct RelationDesc {
     typ: RelationType,
-    names: Vec<Option<QualName>>,
+    names: Vec<Option<ColumnName>>,
 }
 
 impl RelationDesc {
@@ -124,15 +161,20 @@ impl RelationDesc {
 
     /// Constructs a new `RelationDesc` from a `RelationType` and a list of
     /// column names.
-    pub fn new(typ: RelationType, names: Vec<Option<QualName>>) -> RelationDesc {
+    pub fn new<I, N>(typ: RelationType, names: I) -> RelationDesc
+    where
+        I: IntoIterator<Item = Option<N>>,
+        N: Into<ColumnName>,
+    {
+        let names: Vec<_> = names.into_iter().map(|n| n.map(Into::into)).collect();
         assert_eq!(typ.column_types.len(), names.len());
         RelationDesc { typ, names }
     }
 
     /// Adds a new named, nonnullable column with the specified type.
-    pub fn add_column(mut self, name: QualName, scalar_type: ScalarType) -> Self {
+    pub fn add_column(mut self, name: impl Into<ColumnName>, scalar_type: ScalarType) -> Self {
         self.typ.column_types.push(ColumnType::new(scalar_type));
-        self.names.push(Some(name));
+        self.names.push(Some(name.into()));
         self
     }
 
@@ -149,7 +191,7 @@ impl RelationDesc {
         &self.typ
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (Option<&QualName>, &ColumnType)> {
+    pub fn iter(&self) -> impl Iterator<Item = (Option<&ColumnName>, &ColumnType)> {
         self.iter_names().zip(self.iter_types())
     }
 
@@ -157,17 +199,17 @@ impl RelationDesc {
         self.typ.column_types.iter()
     }
 
-    pub fn iter_names(&self) -> impl Iterator<Item = Option<&QualName>> {
+    pub fn iter_names(&self) -> impl Iterator<Item = Option<&ColumnName>> {
         self.names.iter().map(|n| n.as_ref())
     }
 
-    pub fn get_by_name(&self, name: &QualName) -> Option<(usize, &ColumnType)> {
+    pub fn get_by_name(&self, name: &ColumnName) -> Option<(usize, &ColumnType)> {
         self.iter_names()
             .position(|n| n == Some(name))
             .map(|i| (i, &self.typ.column_types[i]))
     }
 
-    pub fn set_name(&mut self, i: usize, name: Option<QualName>) {
+    pub fn set_name(&mut self, i: usize, name: Option<ColumnName>) {
         self.names[i] = name
     }
 }

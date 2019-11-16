@@ -150,6 +150,10 @@ END $$;
                         })
                         .collect::<Result<Vec<_>, failure::Error>>()?,
                 );
+                let names = columns
+                    .iter()
+                    .map(|c| Some(sql::names::ident_to_col_name(c.name.clone())));
+
                 for constraint in constraints {
                     use sqlparser::ast::TableConstraint;
                     if let TableConstraint::Unique {
@@ -176,12 +180,6 @@ END $$;
                         typ = typ.add_keys(keys);
                     }
                 }
-
-                let names = columns
-                    .iter()
-                    .cloned()
-                    .map(|column| QualName::try_from(column.name).map(Some))
-                    .collect::<Result<Vec<_>, _>>()?;
 
                 let desc = RelationDesc::new(typ, names);
                 self.table_types
