@@ -16,6 +16,9 @@ use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, Interval, ScalarType};
 
+use encoding::label::encoding_from_whatwg_label;
+use encoding::DecoderTrap;
+
 pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match (&a, &b) {
         (Datum::False, _) => Datum::False,
@@ -1164,10 +1167,50 @@ pub fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
+pub fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    if datums.iter().any(|d| d.is_null()) {
+        return Datum::Null;
+    }
+
+    let string = datums[0].unwrap_str();
+
+    if datums.len() == 2 {
+        // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
+        // which the encoding library uses[3].
+        // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
+        // [2]: https://encoding.spec.whatwg.org/
+        // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
+        let encoding_name = datums[1].unwrap_str().to_lowercase().replace("_", "-");
+
+        let enc = match encoding_from_whatwg_label(&encoding_name) {
+            Some(enc) => enc,
+            None => {
+                // TODO: Once we can return errors from functions, this should return:
+                // "ERROR:  invalid encoding name \"{}\"", encoding_name
+                return Datum::Null;
+            }
+        };
+
+        let decoded_string = match enc.decode(string.as_bytes(), DecoderTrap::Strict) {
+            Ok(s) => s,
+            Err(_) => {
+                // TODO: Once we can return errors from functions, this should return:
+                // "ERROR:  invalid byte sequence for encoding \"{}\": \"{}\"", encoding_name, errored_bytes
+                return Datum::Null;
+            }
+        };
+
+        Datum::from(decoded_string.chars().count() as i32)
+    } else {
+        Datum::from(string.chars().count() as i32)
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
     Substr,
+    Length,
 }
 
 impl VariadicFunc {
@@ -1175,6 +1218,7 @@ impl VariadicFunc {
         match self {
             VariadicFunc::Coalesce => coalesce,
             VariadicFunc::Substr => substr,
+            VariadicFunc::Length => length,
         }
     }
 
@@ -1191,6 +1235,7 @@ impl VariadicFunc {
                 ColumnType::new(ScalarType::Null)
             }
             Substr => ColumnType::new(ScalarType::String).nullable(true),
+            Length => ColumnType::new(ScalarType::Int32).nullable(true),
         }
     }
 }
@@ -1200,6 +1245,7 @@ impl fmt::Display for VariadicFunc {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
             VariadicFunc::Substr => f.write_str("substr"),
+            VariadicFunc::Length => f.write_str("length"),
         }
     }
 }

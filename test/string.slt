@@ -39,10 +39,10 @@ select ascii(substr('inside literal', 3, 4));
 ----
 115
 
+### substr ###
 statement ok
 CREATE TABLE substrtest (strcol CHAR(15), vccol VARCHAR(15), smicol SMALLINT, intcol INT)
 
-### substr ###
 statement ok
 INSERT INTO substrtest VALUES ('Mg', 'Mn', 1, 1), ('magnesium', 'manganese', 3, null),
     (null, null, 0, 0), ('24.31', '54.94', 2, 3), ('长久不见', '爱不释手', null, 2),
@@ -338,3 +338,75 @@ select substr('subexpression test', ascii(''), 3);
 su
 
 #TODO: materialize#606 Add tests for the alternate syntax if it is enabled
+
+### length ###
+statement ok
+create table lengthtest(strcol CHAR(15), vccol VARCHAR(15));
+
+statement ok
+insert into lengthtest values ('str', 'str'), (' str', ' str'), ('str ', 'str '), ('你好', '你好'), ('今日は', '今日は'), ('हेलो', 'हेलो'), (null, null), ('','');
+
+#invalid input
+statement error
+select length(99)
+
+statement error
+select length('str', 99)
+
+#standard tests
+query I rowsort
+select length(strcol) from lengthtest;
+----
+15
+15
+15
+15
+15
+15
+15
+NULL
+
+query I rowsort
+select length(vccol) from lengthtest;
+----
+0
+2
+3
+3
+4
+4
+4
+NULL
+
+query I
+select length('你好', 'big5');
+----
+3
+
+query I
+select length('你好', 'iso-8859-5');
+----
+6
+
+#encoding name conversion from pg to WHATWG
+query I
+select length('你好', 'ISO_8859_5');
+----
+6
+
+#invalid encoding name
+query I
+select length('你好', 'iso-123');
+----
+NULL
+
+#null inputs
+query I
+select length(null);
+----
+NULL
+
+query I
+select length('str', null);
+----
+NULL
