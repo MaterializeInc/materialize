@@ -33,10 +33,12 @@ fn test_prepared_statements() -> Result<(), Box<dyn Error>> {
         TlsMode::None,
     )?;
 
-    for row in &conn.query("SELECT $1", &[&String::from("42")])? {
-        let val: String = row.get(0);
-        assert_eq!(val, "42");
-    }
+    let rows: Vec<String> = conn
+        .query("SELECT $1", &[&String::from("42")])?
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(rows, &["42"]);
 
     Ok(())
 }
