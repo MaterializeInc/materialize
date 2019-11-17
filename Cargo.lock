@@ -312,6 +312,7 @@ name = "catalog"
 version = "0.1.0"
 dependencies = [
  "dataflow-types",
+ "expr",
  "failure",
  "repr",
 ]
@@ -3119,6 +3120,7 @@ checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
 name = "symbiosis"
 version = "0.1.0"
 dependencies = [
+ "catalog",
  "chrono",
  "dataflow-types",
  "failure",

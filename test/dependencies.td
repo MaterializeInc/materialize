@@ -110,7 +110,7 @@ catalog item 'test4' does not exist
 > CREATE SINK s1 FROM v1 INTO 'kafka://${testdrive.kafka-addr}/v'
 
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
-catalog item s1 is a sink and cannot be depended upon
+catalog item 's1' is a sink and so cannot be depended upon
 
 # Test that dependent indexes prevent view deletion when restrict is specified
 
@@ -133,7 +133,7 @@ cannot delete s: still depended upon by catalog item 'i2'
 # Test that indexes cannot be depended upon
 
 ! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
-catalog item i1 is an index and cannot be depended upon
+catalog item 'i1' is an index and so cannot be depended upon
 
 # Test cascade delete associated indexes
 > DROP VIEW v2 CASCADE;

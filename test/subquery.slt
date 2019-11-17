@@ -198,8 +198,8 @@ Project {
     scalars: [true],
     Join {
       variables: [],
-      Get { t1 },
-      Distinct { group_key: [], Get { t2 } }
+      Get { t1 (u26) },
+      Distinct { group_key: [], Get { t2 (u28) } }
     }
   }
 }
@@ -211,10 +211,10 @@ Project {
   outputs: [0, 0, 2],
   Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { t1 },
-    Get { t3 },
+    Get { t1 (u26) },
+    Get { t3 (u30) },
     Constant [[true]],
-    Distinct { group_key: [], Get { t2 } }
+    Distinct { group_key: [], Get { t2 (u28) } }
   }
 }
 
@@ -222,10 +222,10 @@ query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2 WHERE t3.b = t2.b)
 ----
 Let {
-  id-1 = Join {
+  l0 = Join {
     variables: [[(0, 0), (1, 0)]],
-    Get { t1 },
-    Get { t3 }
+    Get { t1 (u26) },
+    Get { t3 (u30) }
   }
 } in
 Project {
@@ -234,13 +234,13 @@ Project {
     scalars: [true],
     Join {
       variables: [[(0, 2), (1, 0)]],
-      Get { id-1 },
+      Get { l0 },
       Distinct {
         group_key: [1],
         Join {
           variables: [[(0, 0), (1, 0)]],
-          Get { t2 },
-          Distinct { group_key: [2], Get { id-1 } }
+          Get { t2 (u28) },
+          Distinct { group_key: [2], Get { l0 } }
         }
       }
     }

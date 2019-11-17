@@ -145,4 +145,4 @@ b  c
 > CREATE INDEX idx1 ON test5(c)
 
 ! PEEK idx1
-unsupported SQL statement: PEEK index
+catalog item 'idx1' is an index and so cannot be depended upon

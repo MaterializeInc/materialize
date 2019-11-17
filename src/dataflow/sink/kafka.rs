@@ -13,15 +13,15 @@ use timely::dataflow::{Scope, Stream};
 use timely::Data;
 
 use dataflow_types::{Diff, KafkaSinkConnector, Timestamp};
-use repr::QualName;
+use expr::GlobalId;
 
-pub fn kafka<G, B, K, V>(stream: &Stream<G, B>, name: &QualName, _connector: KafkaSinkConnector)
+pub fn kafka<G, B, K, V>(stream: &Stream<G, B>, id: GlobalId, _connector: KafkaSinkConnector)
 where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<K, V, Timestamp, Diff>,
     K: fmt::Debug,
 {
-    stream.sink(Pipeline, &*name.to_string(), move |input| {
+    stream.sink(Pipeline, &format!("kafka-{}", id), move |input| {
         input.for_each(|_, batches| {
             for batch in batches.iter() {
                 let mut cur = batch.cursor();

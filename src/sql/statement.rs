@@ -13,8 +13,8 @@ use std::net::{SocketAddr, ToSocketAddrs};
 
 use failure::{bail, ResultExt};
 use sqlparser::ast::{
-    Expr, Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter,
-    SourceSchema, Stage, Statement, Value,
+    Ident, ObjectName, ObjectType, Query, SetVariableValue, ShowStatementFilter, SourceSchema,
+    Stage, Statement, Value,
 };
 use url::Url;
 
@@ -26,7 +26,8 @@ use dataflow_types::{
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
-use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
+use relationexpr::Id;
+use repr::{ColumnType, Datum, QualName, RelationDesc, Row, ScalarType};
 
 use crate::expr as sqlexpr;
 use crate::expr::like::build_like_regex_from_string;
@@ -124,11 +125,7 @@ pub fn describe_statement(
 
         Statement::Peek { name, .. } => {
             let sql_object = catalog.get(&name.try_into()?)?;
-            match sql_object {
-                CatalogItem::Index(_) => bail!("unsupported SQL statement: PEEK index"),
-                CatalogItem::Sink(_) => bail!("unsupported SQL statement: PEEK sink"),
-                _ => (Some(sql_object.desc().clone()), vec![]),
-            }
+            (Some(sql_object.desc()?.clone()), vec![])
         }
 
         Statement::Query(query) => {
@@ -259,8 +256,8 @@ fn handle_show_variable(
 }
 
 fn handle_tail(catalog: &Catalog, from: &QualName) -> Result<Plan, failure::Error> {
-    let dataflow = catalog.get(&from)?;
-    Ok(Plan::Tail(dataflow.clone()))
+    let entry = catalog.get(&from)?;
+    Ok(Plan::Tail(entry.clone()))
 }
 
 fn handle_start_transaction() -> Result<Plan, failure::Error> {
@@ -290,10 +287,11 @@ fn handle_show_objects(
 
     let mut rows: Vec<Row> = catalog
         .iter()
-        .filter(|(name, ci)| {
-            object_type_matches(object_type, ci) && like_regex.is_match(&name.to_string())
+        .filter(|entry| {
+            object_type_matches(object_type, entry.item())
+                && like_regex.is_match(&entry.name().to_string())
         })
-        .map(|(name, _ci)| Row::pack(&[Datum::from(&*name.to_string())]))
+        .map(|entry| Row::pack(&[Datum::from(&*entry.name().to_string())]))
         .collect();
     rows.sort_unstable_by(move |a, b| a.unpack_first().cmp(&b.unpack_first()));
     Ok(Plan::SendRows(rows))
@@ -318,7 +316,8 @@ fn handle_show_columns(
     }
 
     let column_descriptions: Vec<_> = catalog
-        .get_desc(&table_name.try_into()?)?
+        .get(&table_name.try_into()?)?
+        .desc()?
         .iter()
         .map(|(name, typ)| {
             let name = name.map(|n| n.to_string());
@@ -338,7 +337,7 @@ fn handle_show_create_view(
     object_name: QualName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let raw_sql = if let CatalogItem::View(view) = catalog.get(&name)? {
+    let raw_sql = if let CatalogItem::View(view) = catalog.get(&name)?.item() {
         &view.raw_sql
     } else {
         bail!("'{}' is not a view", name);
@@ -354,16 +353,17 @@ fn handle_show_create_source(
     object_name: ObjectName,
 ) -> Result<Plan, failure::Error> {
     let name = object_name.try_into()?;
-    let source_url = if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)? {
-        match connector {
-            SourceConnector::Local => String::from("local://"),
-            SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
-                format!("kafka://{}/{}", addr, topic)
+    let source_url =
+        if let CatalogItem::Source(Source { connector, .. }) = catalog.get(&name)?.item() {
+            match connector {
+                SourceConnector::Local => String::from("local://"),
+                SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
+                    format!("kafka://{}/{}", addr, topic)
+                }
             }
-        }
-    } else {
-        bail!("{} is not a source", name);
-    };
+        } else {
+            bail!("{} is not a source", name);
+        };
 
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::String(&name.to_string()),
@@ -416,13 +416,13 @@ fn handle_create_dataflow(
                     desc.set_name(i, Some(names::ident_to_col_name(name.clone())));
                 }
             }
+            let name = QualName::try_from(&*name)?;
             let view = View {
-                name: QualName::try_from(&*name)?,
                 raw_sql: stmt.to_string(),
                 relation_expr,
                 desc,
             };
-            Ok(Plan::CreateView(view))
+            Ok(Plan::CreateView(name, view))
         }
         Statement::CreateSource {
             name,
@@ -433,10 +433,10 @@ fn handle_create_dataflow(
             if !with_options.is_empty() {
                 bail!("WITH options are not yet supported");
             }
-            let name = (&*name).try_into()?;
+            let name: QualName = (&*name).try_into()?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
-            let source = build_source(schema, addr, name, topic)?;
-            Ok(Plan::CreateSource(source))
+            let source = build_source(schema, addr, topic)?;
+            Ok(Plan::CreateSource(name, source))
         }
         Statement::CreateSources {
             like,
@@ -481,12 +481,14 @@ fn handle_create_dataflow(
             }
             let sources = names
                 .map(|(topic_name, sql_name)| {
-                    Ok(build_source(
-                        &SourceSchema::Registry(schema_registry.to_owned()),
-                        addr,
+                    Ok((
                         sql_name,
-                        topic_name.to_owned(),
-                    )?)
+                        build_source(
+                            &SourceSchema::Registry(schema_registry.to_owned()),
+                            addr,
+                            topic_name.to_owned(),
+                        )?,
+                    ))
                 })
                 .collect::<Result<Vec<_>, failure::Error>>()?;
             Ok(Plan::CreateSources(sources))
@@ -502,18 +504,17 @@ fn handle_create_dataflow(
             }
             let name = name.try_into()?;
             let from = from.try_into()?;
-            let dataflow = catalog.get(&from)?;
+            let catalog_entry = catalog.get(&from)?;
             let (addr, topic) = parse_kafka_topic_url(url)?;
             let sink = Sink {
-                name,
-                from: (from, dataflow.desc().clone()),
+                from: (catalog_entry.id(), catalog_entry.desc()?.clone()),
                 connector: SinkConnector::Kafka(KafkaSinkConnector {
                     addr,
                     topic,
                     schema_id: 0,
                 }),
             };
-            Ok(Plan::CreateSink(sink))
+            Ok(Plan::CreateSink(name, sink))
         }
         Statement::CreateIndex {
             name,
@@ -521,19 +522,22 @@ fn handle_create_dataflow(
             key_parts,
         } => {
             let on_name = on_name.try_into()?;
-            let (relation_type, keys, funcs) = handle_create_index(catalog, &on_name, &key_parts)?;
+            let (catalog_entry, keys, map_exprs) = query::plan_index(catalog, &on_name, key_parts)?;
             // TODO (andiwang) remove this when trace manager supports ScalarExpr keys
-            if !funcs.is_empty() {
+            if !map_exprs.is_empty() {
                 bail!("function-based indexes are not supported yet");
             }
+            let name = QualName::new_normalized(iter::once(name.clone()))?;
             let index = Index {
-                name: QualName::new_normalized(iter::once(name.clone()))?,
-                on_name,
-                relation_type,
+                on_id: catalog_entry.id(),
+                relation_type: catalog_entry.desc()?.typ().clone(),
                 keys,
-                funcs,
+                funcs: map_exprs
+                    .into_iter()
+                    .map(|x| x.lower_uncorrelated())
+                    .collect(),
             };
-            Ok(Plan::CreateIndex(index))
+            Ok(Plan::CreateIndex(name, index))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -552,8 +556,8 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
     //let names: Vec<String> = names.iter().map(QualName::try_into).?collect();
     for name in &names {
         match catalog.get(&name.try_into()?) {
-            Ok(dataflow) => {
-                if !object_type_matches(object_type, dataflow) {
+            Ok(catalog_entry) => {
+                if !object_type_matches(object_type, catalog_entry.item()) {
                     bail!("{} is not of type {}", name, object_type);
                 }
             }
@@ -582,11 +586,11 @@ fn handle_drop_dataflow(catalog: &Catalog, stmt: Statement) -> Result<Plan, fail
 
 fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Plan, failure::Error> {
     let name = name.try_into()?;
-    let dataflow = catalog.get(&name)?.clone();
-    let typ = dataflow.typ();
+    let catalog_entry = catalog.get(&name)?.clone();
+    let typ = catalog_entry.desc()?.typ();
     Ok(Plan::Peek {
         source: relationexpr::RelationExpr::Get {
-            name: dataflow.name().to_owned(),
+            id: Id::Global(catalog_entry.id()),
             typ: typ.clone(),
         },
         when: if immediate {
@@ -632,7 +636,7 @@ pub fn handle_explain(
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
         Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            &relation_expr.pretty(),
+            &relation_expr.pretty(catalog),
         )])]))
     } else {
         Ok(Plan::ExplainPlan(relation_expr))
@@ -690,26 +694,9 @@ fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data
     };
 }
 
-fn handle_create_index(
-    catalog: &Catalog,
-    on_name: &QualName,
-    key_parts: &[Expr],
-) -> Result<(RelationType, Vec<usize>, Vec<relationexpr::ScalarExpr>), failure::Error> {
-    let (relation_type, keys, map_exprs) = query::plan_index(catalog, on_name, key_parts)?;
-    Ok((
-        relation_type,
-        keys,
-        map_exprs
-            .into_iter()
-            .map(move |x| x.lower_uncorrelated())
-            .collect(),
-    ))
-}
-
 fn build_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
-    name: QualName,
     topic: String,
 ) -> Result<Source, failure::Error> {
     let (key_schema, value_schema, schema_registry_url) = match schema {
@@ -746,7 +733,6 @@ fn build_source(
     }
 
     Ok(Source {
-        name,
         connector: SourceConnector::Kafka(KafkaSourceConnector {
             addr: kafka_addr,
             topic,

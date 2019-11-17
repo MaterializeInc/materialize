@@ -21,7 +21,7 @@ pub enum RelationExpr {
         typ: RelationType,
     },
     Get {
-        name: QualName,
+        id: dataflow_expr::Id,
         typ: RelationType,
     },
     // only needed for CTEs
@@ -251,7 +251,7 @@ impl RelationExpr {
                 rows: rows.into_iter().map(|row| (row, 1)).collect(),
                 typ,
             })),
-            Get { name, typ } => Ok(get_outer.product(SR::Get { name, typ })),
+            Get { id, typ } => Ok(get_outer.product(SR::Get { id, typ })),
             Project { input, outputs } => {
                 let input = input.applied_to(id_gen, get_outer.clone())?;
                 let outputs = (0..get_outer.arity())

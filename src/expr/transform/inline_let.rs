@@ -3,8 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::RelationExpr;
-use repr::QualName;
+use crate::{Id, LocalId, RelationExpr};
 
 #[derive(Debug)]
 pub struct InlineLet;
@@ -19,9 +18,9 @@ impl InlineLet {
     pub fn transform(&self, relation: &mut RelationExpr) {
         let mut lets = vec![];
         self.collect_lets(relation, &mut lets);
-        for (name, value) in lets.into_iter().rev() {
+        for (id, value) in lets.into_iter().rev() {
             *relation = RelationExpr::Let {
-                name,
+                id,
                 value: Box::new(value),
                 body: Box::new(relation.take_safely()),
             };
@@ -31,14 +30,14 @@ impl InlineLet {
     pub fn collect_lets(
         &self,
         relation: &mut RelationExpr,
-        lets: &mut Vec<(QualName, RelationExpr)>,
+        lets: &mut Vec<(LocalId, RelationExpr)>,
     ) {
-        if let RelationExpr::Let { name, value, body } = relation {
+        if let RelationExpr::Let { id, value, body } = relation {
             self.collect_lets(value, lets);
 
             let mut num_gets = 0;
             body.visit_mut_pre(&mut |relation| match relation {
-                RelationExpr::Get { name: get_name, .. } if name == get_name => {
+                RelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
                     num_gets += 1;
                 }
                 _ => (),
@@ -51,14 +50,14 @@ impl InlineLet {
             if inlinable {
                 // if only used once, just inline it
                 body.visit_mut_pre(&mut |relation| match relation {
-                    RelationExpr::Get { name: get_name, .. } if name == get_name => {
+                    RelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
                         *relation = (**value).clone();
                     }
                     _ => (),
                 });
             } else {
                 // otherwise lift it to the top so it's out of the way
-                lets.push((name.clone(), value.take_safely()));
+                lets.push((*id, value.take_safely()));
             }
 
             *relation = body.take_safely();

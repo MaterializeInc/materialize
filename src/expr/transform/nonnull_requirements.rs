@@ -8,8 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::RelationExpr;
-use repr::QualName;
+use crate::{Id, RelationExpr};
 
 /// Drive non-null requirements to `RelationExpr::Constant` collections.
 ///
@@ -44,27 +43,26 @@ impl NonNullRequirements {
         &self,
         relation: &mut RelationExpr,
         mut columns: HashSet<usize>,
-        gets: &mut HashMap<QualName, Vec<HashSet<usize>>>,
+        gets: &mut HashMap<Id, Vec<HashSet<usize>>>,
     ) {
         match relation {
             RelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
                 let datums = row.unpack();
                 columns.iter().all(|c| datums[*c] != repr::Datum::Null)
             }),
-            RelationExpr::Get { name, .. } => {
-                gets.entry(name.clone())
-                    .or_insert(Vec::new())
-                    .push(columns.clone());
+            RelationExpr::Get { id, .. } => {
+                gets.entry(*id).or_insert(Vec::new()).push(columns.clone());
             }
-            RelationExpr::Let { name, value, body } => {
+            RelationExpr::Let { id, value, body } => {
                 // Let harvests any non-null requirements from its body,
                 // and acts on the intersection of the requirements for
                 // each corresponding Get, pushing them at its value.
-                let prior = gets.insert(name.clone(), Vec::new());
+                let id = Id::Local(*id);
+                let prior = gets.insert(id, Vec::new());
                 self.action(body, columns, gets);
-                let mut needs = gets.remove(name).unwrap();
+                let mut needs = gets.remove(&id).unwrap();
                 if let Some(prior) = prior {
-                    gets.insert(name.clone(), prior);
+                    gets.insert(id, prior);
                 }
                 if let Some(mut need) = needs.pop() {
                     while let Some(x) = needs.pop() {

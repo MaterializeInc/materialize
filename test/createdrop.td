@@ -49,10 +49,10 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 # Test that creating objects of the same name does not work
 
 ! CREATE MATERIALIZED VIEW i AS SELECT 1.5 AS c
-catalog item i already exists
+catalog item 'i' already exists
 
 ! CREATE INDEX v ON v2(x)
-catalog item v already exists
+catalog item 'v' already exists
 
 $ set dummy={
     "type": "record",
@@ -65,7 +65,7 @@ $ set dummy={
             "name": "row",
             "type": "record",
             "fields": [
-              {"name": "X", 
+              {"name": "X",
                "type": {
                   "type": "bytes",
                   "scale": 3,
@@ -82,16 +82,16 @@ $ set dummy={
   }
 
 ! CREATE SOURCE v2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${dummy}'
-catalog item v2 already exists
+catalog item 'v2' already exists
 
 ! CREATE SOURCE i2 FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${dummy}'
-catalog item i2 already exists
+catalog item 'i2' already exists
 
 ! CREATE INDEX s ON v2(x)
-catalog item s already exists
+catalog item 's' already exists
 
 ! CREATE MATERIALIZED VIEW s AS SELECT 'bloop' AS d
-catalog item s already exists
+catalog item 's' already exists
 
 # Test that objects do not get dropped if the drop command does not specify the correct type
 ! DROP SOURCE v

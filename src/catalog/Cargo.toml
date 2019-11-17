@@ -10,5 +10,6 @@ path = "lib.rs"
 
 [dependencies]
 dataflow-types = { path = "../dataflow-types" }
+expr = { path = "../expr" }
 failure = "0.1.6"
 repr = { path = "../repr" }
