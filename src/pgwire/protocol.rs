@@ -99,13 +99,6 @@ impl<A> Conn for Framed<A, Codec> where A: AsyncWrite + AsyncRead + 'static + Se
 
 type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Error> + Send>;
 
-#[derive(Debug)]
-pub enum ErrorKind {
-    Standard,
-    Extended,
-    Fatal,
-}
-
 /// A state machine that drives the pgwire backend.
 ///
 /// Much of the state machine boilerplate is generated automatically with the
@@ -120,7 +113,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
     Start { stream: A, session: Session },
 
-    #[state_machine_future(transitions(SendAuthenticationOk, SendError, Done, Error))]
+    #[state_machine_future(transitions(SendAuthenticationOk, SendFatalError, Done, Error))]
     RecvStartup { recv: Recv<A>, session: Session },
 
     #[state_machine_future(transitions(SendReadyForQuery, SendError, Error))]
@@ -137,6 +130,7 @@ pub enum StateMachine<A: Conn + 'static> {
         HandleQuery,
         RecvQuery,
         SendError,
+        SendFatalError,
         SendParseComplete,
         SendReadyForQuery,
         SendParameterDescription,
@@ -179,7 +173,7 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
     SendBindComplete { send: SinkSend<A>, session: Session },
 
-    #[state_machine_future(transitions(SendDescribeResponse, SendError, Error))]
+    #[state_machine_future(transitions(SendDescribeResponse, SendFatalError, Error))]
     SendParameterDescription {
         send: SinkSend<A>,
         session: Session,
@@ -259,8 +253,11 @@ pub enum StateMachine<A: Conn + 'static> {
     SendError {
         send: SinkSend<A>,
         session: Session,
-        kind: ErrorKind,
+        extended: bool,
     },
+
+    #[state_machine_future(transitions(Done, Error))]
+    SendFatalError { send: SinkSend<A> },
 
     #[state_machine_future(ready)]
     Done(()),
@@ -322,29 +319,19 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 transition!(Done(()))
             }
 
-            _ => transition!(SendError {
-                send: conn.send(BackendMessage::ErrorResponse {
-                    severity: Severity::Fatal,
-                    code: "08P01",
-                    message: "invalid frontend message flow at startup".into(),
-                    detail: None,
-                }),
-                session: state.session,
-                kind: ErrorKind::Fatal,
-            }),
+            _ => transition!(send_fatal_error(
+                conn,
+                "08P01",
+                "invalid frontend message flow at startup"
+            )),
         };
 
         if version != VERSION_3 {
-            transition!(SendError {
-                send: conn.send(BackendMessage::ErrorResponse {
-                    severity: Severity::Fatal,
-                    code: "08004",
-                    message: "server does not support SSL".into(),
-                    detail: None,
-                }),
-                session: state.session,
-                kind: ErrorKind::Fatal,
-            })
+            transition!(send_fatal_error(
+                conn,
+                "08004",
+                "server does not support SSL"
+            ));
         }
 
         let messages: Vec<_> = iter::once(BackendMessage::AuthenticationOk)
@@ -468,16 +455,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             name,
                         });
                     }
-                    None => transition!(SendError {
-                        send: conn.send(BackendMessage::ErrorResponse {
-                            severity: Severity::Fatal,
-                            code: "08P01",
-                            message: "prepared statement does not exist".into(),
-                            detail: Some(format!("name: {}", name)),
-                        }),
-                        session: state.session,
-                        kind: ErrorKind::Fatal,
-                    }),
+                    None => transition!(send_fatal_error(
+                        conn,
+                        "26000",
+                        "prepared statement does not exist"
+                    )),
                 }
             }
             FrontendMessage::Bind {
@@ -507,16 +489,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                             session,
                         });
                     }
-                    Err(e) => transition!(SendError {
-                        send: conn.send(BackendMessage::ErrorResponse {
-                            severity: Severity::Fatal,
-                            code: "08P01",
-                            message: e.to_string(),
-                            detail: None,
-                        }),
-                        session: session,
-                        kind: ErrorKind::Fatal,
-                    }),
+                    Err(err) => transition!(send_fatal_error(conn, "08P01", err.to_string())),
                 }
             }
             FrontendMessage::Execute { portal_name } => {
@@ -551,16 +524,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             }
             FrontendMessage::Sync => transition!(send_ready_for_query(conn, state.session)),
             FrontendMessage::Terminate => transition!(Done(())),
-            _ => transition!(SendError {
-                send: conn.send(BackendMessage::ErrorResponse {
-                    severity: Severity::Fatal,
-                    code: "08P01",
-                    message: "invalid frontend message flow".into(),
-                    detail: None,
-                }),
-                session: state.session,
-                kind: ErrorKind::Fatal,
-            }),
+            _ => transition!(send_fatal_error(
+                conn,
+                "08P01",
+                "invalid frontend message flow"
+            )),
         }
     }
 
@@ -695,20 +663,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 session,
             })) => {
                 let state = state.take();
-                transition!(SendError {
-                    send: state.conn.send(BackendMessage::ErrorResponse {
-                        severity: Severity::Error,
-                        code: "99999",
-                        message: err.to_string(),
-                        detail: None,
-                    }),
+                transition!(send_error(
+                    state.conn,
                     session,
-                    kind: if state.extended {
-                        ErrorKind::Extended
-                    } else {
-                        ErrorKind::Standard
-                    },
-                });
+                    state.extended,
+                    "99999",
+                    err.to_string()
+                ));
             }
             Err(futures::sync::oneshot::Canceled) => {
                 panic!("Connection to sql planner closed unexpectedly")
@@ -792,16 +753,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         match try_ready!(state.rows_rx.poll()) {
             PeekResponse::Canceled => {
                 let state = state.take();
-                transition!(SendError {
-                    send: state.conn.send(BackendMessage::ErrorResponse {
-                        severity: Severity::Error,
-                        code: "57014",
-                        message: "canceling statement due to user request".into(),
-                        detail: None,
-                    }),
-                    session: state.session,
-                    kind: ErrorKind::Standard,
-                });
+                transition!(send_error(
+                    state.conn,
+                    state.session,
+                    state.extended,
+                    "57014",
+                    "canceling statement due to user request"
+                ));
             }
             PeekResponse::Rows(rows) => {
                 let state = state.take();
@@ -907,20 +865,13 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 session,
             } => {
                 let state = state.take();
-                transition!(SendError {
-                    send: state.conn.send(BackendMessage::ErrorResponse {
-                        severity: Severity::Error,
-                        code: "99999",
-                        message: err.to_string(),
-                        detail: None,
-                    }),
+                transition!(send_error(
+                    state.conn,
                     session,
-                    kind: if state.extended {
-                        ErrorKind::Extended
-                    } else {
-                        ErrorKind::Standard
-                    },
-                });
+                    state.extended,
+                    "99999",
+                    err.to_string()
+                ));
             }
         }
     }
@@ -981,7 +932,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         state: &'s mut RentToOwn<'s, SendError<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
     ) -> Poll<AfterSendError<A>, failure::Error> {
-        trace!("cid={} send error kind={:?}", cx.conn_id, state.kind);
+        trace!("cid={} send error extended={}", cx.conn_id, state.extended);
         let conn = try_ready!(state.send.poll());
         let mut state = state.take();
         state.session.fail_transaction();
@@ -990,14 +941,28 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 .with_label_values(&["error", ""])
                 .inc();
         }
-        match state.kind {
-            ErrorKind::Standard => transition!(send_ready_for_query(conn, state.session)),
-            ErrorKind::Extended => transition!(DrainUntilSync {
+        if state.extended {
+            transition!(DrainUntilSync {
                 recv: conn.recv(),
                 session: state.session,
-            }),
-            ErrorKind::Fatal => transition!(Done(())),
+            })
+        } else {
+            transition!(send_ready_for_query(conn, state.session))
         }
+    }
+
+    fn poll_send_fatal_error<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendFatalError<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendFatalError, failure::Error> {
+        try_ready!(state.send.poll());
+        trace!("cid={} send fatal error", cx.conn_id);
+        if cx.gather_metrics {
+            RESPONSES_SENT_COUNTER
+                .with_label_values(&["error", ""])
+                .inc();
+        }
+        transition!(Done(()))
     }
 }
 
@@ -1093,7 +1058,7 @@ fn send_describe_response<A, R>(
 ) -> R
 where
     A: Conn + 'static,
-    R: From<SendError<A>> + From<SendDescribeResponse<A>>,
+    R: From<SendFatalError<A>> + From<SendDescribeResponse<A>>,
 {
     trace!(
         "cid={} send describe response statement_name={:?}",
@@ -1109,17 +1074,8 @@ where
     let stmt = match stmt {
         Some(stmt) => stmt,
         None => {
-            return SendError {
-                send: conn.send(BackendMessage::ErrorResponse {
-                    severity: Severity::Fatal,
-                    code: "08P01",
-                    message: "portal or prepared statement does not exist".into(),
-                    detail: Some(format!("name: {}", name)),
-                }),
-                session,
-                kind: ErrorKind::Fatal,
-            }
-            .into();
+            return send_fatal_error(conn, "26000", "portal or prepared statement does not exist")
+                .into();
         }
     };
     match stmt.desc() {
@@ -1140,5 +1096,41 @@ where
             }
             .into()
         }
+    }
+}
+
+fn send_error<A>(
+    conn: A,
+    session: Session,
+    extended: bool,
+    code: &'static str,
+    message: impl Into<String>,
+) -> SendError<A>
+where
+    A: Conn + 'static,
+{
+    SendError {
+        send: conn.send(BackendMessage::ErrorResponse {
+            severity: Severity::Error,
+            code,
+            message: message.into(),
+            detail: None,
+        }),
+        session,
+        extended,
+    }
+}
+
+fn send_fatal_error<A>(conn: A, code: &'static str, message: impl Into<String>) -> SendFatalError<A>
+where
+    A: Conn + 'static,
+{
+    SendFatalError {
+        send: conn.send(BackendMessage::ErrorResponse {
+            severity: Severity::Fatal,
+            code,
+            message: message.into(),
+            detail: None,
+        }),
     }
 }
