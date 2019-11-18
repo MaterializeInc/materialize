@@ -600,3 +600,20 @@ SELECT t FROM timestamptzish WHERE t > TIMESTAMPTZ '1999-12-31 9:46:01-04' - INT
 1999-12-31 07:11:01 UTC
 1999-12-31 13:46:01 UTC
 2000-01-01 08:00:00 UTC
+
+# Tests now() and current_timestamp()
+
+query B
+SELECT now() > timestamp '2015-06-13 00:00:00'
+----
+true
+
+query B
+SELECT now() + INTERVAL '100' HOUR > now()
+----
+true
+
+query B
+SELECT current_timestamp() > timestamp '2016-06-13 00:00:00'
+----
+true
