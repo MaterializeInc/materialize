@@ -15,12 +15,18 @@ use futures::sync::mpsc::UnboundedSender;
 use futures::{try_ready, Async, Future, Poll, Sink, Stream};
 use lazy_static::lazy_static;
 use log::{debug, trace};
+use prometheus::IntCounterVec;
 use state_machine_future::StateMachineFuture as Smf;
 use state_machine_future::{transition, RentToOwn};
-use std::str;
 use tokio::codec::Framed;
 use tokio::io;
 use tokio::io::{AsyncRead, AsyncWrite};
+
+use coord::{self, ExecuteResponse};
+use dataflow_types::{PeekResponse, Update};
+use ore::future::{Recv, StreamExt};
+use repr::{RelationDesc, Row};
+use sql::Session;
 
 use crate::codec::Codec;
 use crate::message::{
@@ -28,13 +34,6 @@ use crate::message::{
     Severity, VERSIONS, VERSION_3,
 };
 use crate::secrets::SecretManager;
-use coord::{self, ExecuteResponse};
-use dataflow_types::{PeekResponse, Update};
-use ore::future::{Recv, StreamExt};
-use repr::{RelationDesc, Row};
-use sql::Session;
-
-use prometheus::IntCounterVec;
 
 lazy_static! {
     /// The number of responses that we have ever sent to clients
