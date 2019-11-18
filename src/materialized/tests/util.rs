@@ -12,7 +12,6 @@ use postgres::{Connection, TlsMode};
 pub fn start_server() -> Result<(materialized::Server, Connection), Box<dyn Error>> {
     let server = materialized::serve(materialized::Config {
         logging_granularity: None,
-        version: "TEST".into(),
         threads: 1,
         process: 0,
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],

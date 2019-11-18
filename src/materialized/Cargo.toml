@@ -35,3 +35,6 @@ tokio = "0.1"
 [dev-dependencies]
 postgres = "0.15"
 pretty_assertions = "0.6.1"
+
+[build-dependencies]
+duct = "0.13.3"

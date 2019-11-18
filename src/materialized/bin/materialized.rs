@@ -90,12 +90,15 @@ fn run() -> Result<(), failure::Error> {
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
     let popts = opts.parse(&args[1..])?;
-    let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("MZ_GIT_SHA"));
     if popts.opt_present("h") {
         print!("{}", opts.usage("usage: materialized [options]"));
         return Ok(());
     } else if popts.opt_present("v") {
-        println!("materialized v{}", version);
+        println!(
+            "materialized v{} ({})",
+            materialized::VERSION,
+            materialized::BUILD_SHA
+        );
         return Ok(());
     }
 
@@ -134,7 +137,6 @@ fn run() -> Result<(), failure::Error> {
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
-        version,
         threads,
         process,
         addresses,

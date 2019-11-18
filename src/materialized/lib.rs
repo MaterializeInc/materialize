@@ -37,13 +37,22 @@ use ore::tokio::net::TcpStreamExt;
 
 mod http;
 
+/// The version of the crate.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The SHA identifying the Git commit at which the crate was built.
+pub const BUILD_SHA: &str = env!("MZ_GIT_SHA");
+
+/// Returns a human-readable version string.
+pub fn version() -> String {
+    format!("v{} ({})", VERSION, &BUILD_SHA[..9])
+}
+
 /// Configuration for a `materialized` server.
 pub struct Config {
     /// The interval at which the internal Timely cluster should publish updates
     /// about its state.
     pub logging_granularity: Option<Duration>,
-    /// The version of `materialized to report in informational messages.
-    pub version: String,
     /// The number of Timely worker threads that this process should host.
     pub threads: usize,
     /// The ID of this process in the cluster. IDs must be contiguously
@@ -133,8 +142,8 @@ pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     config.addresses[config.process].set_port(local_addr.port());
 
     println!(
-        "materialized v{} listening on {}...",
-        config.version,
+        "materialized {} listening on {}...",
+        version(),
         SocketAddr::new(listen_addr.ip(), local_addr.port()),
     );
 
