@@ -27,6 +27,7 @@ use std::env;
 use ::postgres::rows::Row as PostgresRow;
 use ::postgres::types::FromSql;
 use ::postgres::{Connection, TlsMode};
+use chrono::Utc;
 use failure::{bail, format_err};
 use postgres::params::{ConnectParams, IntoConnectParams};
 use rust_decimal::Decimal;
@@ -364,6 +365,11 @@ fn push_column(
             let d: chrono::NaiveDateTime =
                 get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?.unwrap();
             row.push(Datum::Timestamp(d));
+        }
+        DataType::TimestampTz => {
+            let d: chrono::DateTime<Utc> =
+                get_column_inner::<chrono::DateTime<Utc>>(postgres_row, i, nullable)?.unwrap();
+            row.push(Datum::TimestampTz(d));
         }
         DataType::Interval => {
             let pgi =

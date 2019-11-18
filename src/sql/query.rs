@@ -1164,6 +1164,14 @@ fn plan_expr<'a>(
                         DateTimeField::Minute => UnaryFunc::ExtractTimestampMinute,
                         DateTimeField::Second => UnaryFunc::ExtractTimestampSecond,
                     },
+                    ScalarType::TimestampTz => match field {
+                        DateTimeField::Year => UnaryFunc::ExtractTimestampTzYear,
+                        DateTimeField::Month => UnaryFunc::ExtractTimestampTzMonth,
+                        DateTimeField::Day => UnaryFunc::ExtractTimestampTzDay,
+                        DateTimeField::Hour => UnaryFunc::ExtractTimestampTzHour,
+                        DateTimeField::Minute => UnaryFunc::ExtractTimestampTzMinute,
+                        DateTimeField::Second => UnaryFunc::ExtractTimestampTzSecond,
+                    },
                     other => bail!(
                         "EXTRACT expects timestamp, interval, or date input, got {:?}",
                         other
@@ -1698,8 +1706,10 @@ fn plan_arithmetic_op<'a>(
             let timelike_and_interval = match (&ltype.scalar_type, &rtype.scalar_type) {
                 (Date, Interval)
                 | (Timestamp, Interval)
+                | (TimestampTz, Interval)
                 | (Interval, Date)
-                | (Interval, Timestamp) => true,
+                | (Interval, Timestamp)
+                | (Interval, TimestampTz) => true,
                 _ => false,
             };
             if both_decimals || timelike_and_interval {
@@ -1759,7 +1769,7 @@ fn plan_arithmetic_op<'a>(
             // Infer the unknown type. Dates and timestamps want an interval for
             // arithmetic. Everything else wants its own type.
             let type_hint = match ltype.scalar_type {
-                Date | Timestamp => Interval,
+                Date | Timestamp | TimestampTz => Interval,
                 other => other,
             };
             let rexpr = plan_expr(catalog, ecx, right, Some(type_hint))?;
@@ -1839,6 +1849,12 @@ fn plan_arithmetic_op<'a>(
                 mem::swap(&mut ltype, &mut rtype);
                 AddTimestampInterval
             }
+            (TimestampTz, Interval) => AddTimestampTzInterval,
+            (Interval, TimestampTz) => {
+                mem::swap(&mut lexpr, &mut rexpr);
+                mem::swap(&mut ltype, &mut rtype);
+                AddTimestampTzInterval
+            }
             _ => bail!(
                 "no overload for {:?} + {:?}",
                 ltype.scalar_type,
@@ -1851,6 +1867,7 @@ fn plan_arithmetic_op<'a>(
             (Float32, Float32) => SubFloat32,
             (Float64, Float64) => SubFloat64,
             (Timestamp, Interval) => SubTimestampInterval,
+            (TimestampTz, Interval) => SubTimestampTzInterval,
             _ => bail!(
                 "no overload for {:?} - {:?}",
                 ltype.scalar_type,
@@ -2166,6 +2183,7 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
                 minute,
                 second,
                 nano,
+                ..
             },
         ) => (
             Datum::from_ymd_hms_nano(
@@ -2180,6 +2198,33 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
                 *nano,
             )?,
             ScalarType::Timestamp,
+        ),
+        Value::TimestampTz(
+            _,
+            ParsedTimestamp {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nano,
+                timezone_offset_second,
+            },
+        ) => (
+            Datum::from_ymd_hms_nano_tz_offset(
+                (*year)
+                    .try_into()
+                    .map_err(|e| format_err!("Year is too large {}: {}", year, e))?,
+                *month,
+                *day,
+                *hour,
+                *minute,
+                *second,
+                *nano,
+                *timezone_offset_second,
+            )?,
+            ScalarType::TimestampTz,
         ),
         Value::Time(_) => bail!("TIME literals are not supported: {}", l.to_string()),
         Value::Interval(iv) => {
@@ -2295,7 +2340,8 @@ fn best_target_type(iter: impl IntoIterator<Item = ScalarType>) -> Option<Scalar
             ScalarType::Float64 => 5,
             ScalarType::Date => 6,
             ScalarType::Timestamp => 7,
-            _ => 8,
+            ScalarType::TimestampTz => 8,
+            _ => 9,
         })
 }
 
@@ -2344,6 +2390,8 @@ where
         }
         (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),
         (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
+        (Date, TimestampTz) => expr.call_unary(CastDateToTimestampTz),
+        (Timestamp, TimestampTz) => expr.call_unary(CastTimestampToTimestampTz),
         (Null, _) => {
             // assert_eq!(expr, ScalarExpr::Literal(Datum::Null, ColumnType::new(ScalarType::Null)));
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
@@ -2421,6 +2469,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         }
         DataType::Date => ScalarType::Date,
         DataType::Timestamp => ScalarType::Timestamp,
+        DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
         DataType::Time => ScalarType::Time,
         DataType::Bytea => ScalarType::Bytes,
@@ -2431,7 +2480,6 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         | other @ DataType::Custom(_)
         | other @ DataType::Regclass
         | other @ DataType::TimeTz
-        | other @ DataType::TimestampTz
         | other @ DataType::Uuid
         | other @ DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", other),
     })
@@ -2562,6 +2610,7 @@ fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, f
         ("max", ScalarType::String) => AggregateFunc::MaxString,
         ("max", ScalarType::Date) => AggregateFunc::MaxDate,
         ("max", ScalarType::Timestamp) => AggregateFunc::MaxTimestamp,
+        ("max", ScalarType::TimestampTz) => AggregateFunc::MaxTimestampTz,
         ("max", ScalarType::Null) => AggregateFunc::MaxNull,
         ("min", ScalarType::Int32) => AggregateFunc::MinInt32,
         ("min", ScalarType::Int64) => AggregateFunc::MinInt64,
@@ -2572,6 +2621,7 @@ fn find_agg_func(name: &str, scalar_type: ScalarType) -> Result<AggregateFunc, f
         ("min", ScalarType::String) => AggregateFunc::MinString,
         ("min", ScalarType::Date) => AggregateFunc::MinDate,
         ("min", ScalarType::Timestamp) => AggregateFunc::MinTimestamp,
+        ("min", ScalarType::TimestampTz) => AggregateFunc::MinTimestampTz,
         ("min", ScalarType::Null) => AggregateFunc::MinNull,
         ("sum", ScalarType::Int32) => AggregateFunc::SumInt32,
         ("sum", ScalarType::Int64) => AggregateFunc::SumInt64,

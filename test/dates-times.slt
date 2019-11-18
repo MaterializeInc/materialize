@@ -336,3 +336,267 @@ SELECT c FROM timestamp_compares WHERE c != TIMESTAMP '2008-12-01 09:09:09.9' + 
 query T rowsort
 SELECT c FROM timestamp_compares WHERE c > TIMESTAMP '2008-12-31 09:09:09.9' + INTERVAL '2' MONTH
 ----
+
+statement ok
+CREATE TABLE timestampwithtzish (
+    t timestamp
+)
+
+statement ok
+INSERT INTO timestampwithtzish
+VALUES
+    (TIMESTAMP WITH TIME ZONE '1999-12-31 11:11:01+04:00'),
+    (TIMESTAMP WITH TIME ZONE '1999-12-31 16:16:01+02:30'),
+    (TIMESTAMP WITH TIME ZONE '1999-12-31 20:00:00-12'),
+    (TIMESTAMP WITH TIME ZONE '1999-12-31 18:00:00+12')
+
+query T rowsort
+SELECT * FROM timestampwithtzish
+----
+1999-12-31 06:00:00
+1999-12-31 07:11:01
+1999-12-31 13:46:01
+2000-01-01 08:00:00
+
+statement ok
+CREATE TABLE timestamptzish (
+    t timestamptz
+)
+
+statement ok
+INSERT INTO timestamptzish
+VALUES
+    (TIMESTAMPTZ '1999-12-31 11:11:01+04:00'),
+    (TIMESTAMPTZ '1999-12-31 16:16:01+02:30'),
+    (TIMESTAMPTZ '1999-12-31 20:00:00-12'),
+    (TIMESTAMPTZ '1999-12-31 18:00:00+12')
+
+query T rowsort
+SELECT * FROM timestamptzish
+----
+1999-12-31 06:00:00 UTC
+1999-12-31 07:11:01 UTC
+1999-12-31 13:46:01 UTC
+2000-01-01 08:00:00 UTC
+
+query T
+SELECT MAX(t) FROM timestamptzish
+----
+2000-01-01 08:00:00 UTC
+
+query T
+SELECT MIN(t) FROM timestamptzish
+----
+1999-12-31 06:00:00 UTC
+
+# Timestamptz arithmetic with month intervals. Should behave the same as DATE and timestamp
+
+query T
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-6' + INTERVAL '1' YEAR
+----
+2001-01-01 06:00:00 UTC
+
+query T
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-7' - INTERVAL '1' YEAR
+----
+1999-01-01 07:00:00 UTC
+
+query T
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-6' + INTERVAL '3' MONTH
+----
+2000-04-01 06:00:00 UTC
+
+query T
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-7' - INTERVAL '4' MONTH
+----
+1999-09-01 07:00:00 UTC
+
+statement error no overload for interval - timestamptz
+SELECT INTERVAL '1' YEAR - TIMESTAMPTZ '2000-01-01 00:00:00-4:00'
+
+# Timestamptz arithmetic with duration intervals.
+
+query T
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + INTERVAL '7' HOUR
+----
+2000-01-01 11:00:00 UTC
+
+query T
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + INTERVAL '3' MINUTE
+----
+2000-01-01 04:03:00 UTC
+
+query T
+SELECT INTERVAL '6' HOUR + TIMESTAMPTZ '2000-01-01 00:00:00-04'
+----
+2000-01-01 10:00:00 UTC
+
+query T
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' - INTERVAL '2' HOUR
+----
+2000-01-01 02:00:00 UTC
+
+statement error no overload for interval - timestamptz
+SELECT INTERVAL '2' HOUR - TIMESTAMPTZ '2000-01-01 00:00:00-04'
+
+statement error no overload for interval * timestamptz
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' * INTERVAL '2' HOUR
+
+statement error no overload for interval * timestamptz
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' / INTERVAL '2' HOUR
+
+statement error no overload for timestamptz + timestamptz
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMPTZ '1999-01-01 00:00:00z'
+
+statement error no overload for timestamptz + timestamp
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMP '1999-01-01 00:00:00'
+
+# Tests with comparison operators and timestamptz
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00+01' < TIMESTAMPTZ '2000-01-01 00:00:00-04'
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00+01' > TIMESTAMPTZ '2000-01-01 00:00:00-04'
+----
+false
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00+01' <= TIMESTAMPTZ '2000-01-01 00:00:00-04'
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00+01' >= TIMESTAMPTZ '2000-01-01 00:00:00-04'
+----
+false
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 02:00:00+01' = TIMESTAMPTZ '2000-01-01 01:00:00z'
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 02:00:00+01' >= TIMESTAMPTZ '2000-01-01 01:00:00z'
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 02:00:00+01' <= TIMESTAMPTZ '2000-01-01 01:00:00z'
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 02:00:00+01' != TIMESTAMPTZ '2000-01-01 01:00:00z'
+----
+false
+
+# Tests with comparison operators across different time types
+
+query B
+SELECT TIMESTAMP '2000-01-01 00:00:00' > DATE '2000-01-01'
+----
+false
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00+4' > DATE '2000-01-01'
+----
+false
+
+query B
+SELECT DATE '2001-01-01' > TIMESTAMPTZ '2000-01-01 00:00:00+4'
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 00:00:00+4' > TIMESTAMP '2000-01-01 01:00:00'
+----
+false
+
+query B
+SELECT TIMESTAMP '2000-01-01 00:00:00' > TIMESTAMPTZ '2000-01-01 01:00:00+04'
+----
+true
+
+# Timestamptz comparisons after interval math
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 01:00:00+01' < TIMESTAMPTZ '2000-01-01 00:01:00z' + INTERVAL '1' HOUR
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 01:00:00+01' <= TIMESTAMPTZ '2000-01-01 00:01:00z' + INTERVAL '1' HOUR
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 01:00:00+01' > TIMESTAMPTZ '2000-01-01 00:01:00z' + INTERVAL '1' HOUR
+----
+false
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 01:00:00+01' >= TIMESTAMPTZ '2000-01-01 00:01:00z' + INTERVAL '1' HOUR
+----
+false
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 01:00:00+01' + INTERVAL '3' HOUR > TIMESTAMPTZ '2000-01-01 00:01:00z' + INTERVAL '1' HOUR
+----
+true
+
+query B
+SELECT TIMESTAMPTZ '2000-01-01 01:00:00+01' + INTERVAL '1' MINUTE != TIMESTAMPTZ '2000-01-01 00:01:00+01' + INTERVAL '1' HOUR
+----
+false
+
+# comparisons with timestamptz
+
+query T
+SELECT t FROM timestamptzish WHERE t = TIMESTAMPTZ '1999-12-31 13:46:01z'
+----
+1999-12-31 13:46:01 UTC
+
+query T
+SELECT t FROM timestamptzish WHERE t = TIMESTAMP '1999-12-31 13:46:01'
+----
+1999-12-31 13:46:01 UTC
+
+query T
+SELECT t FROM timestamptzish WHERE t = TIMESTAMPTZ '1999-12-31 9:46:01-04'
+----
+1999-12-31 13:46:01 UTC
+
+query T
+SELECT t FROM timestamptzish WHERE t > TIMESTAMPTZ '1999-12-31 9:46:01-04'
+----
+2000-01-01 08:00:00 UTC
+
+query T rowsort
+SELECT t FROM timestamptzish WHERE t >= TIMESTAMPTZ '1999-12-31 9:46:01-04'
+----
+1999-12-31 13:46:01 UTC
+2000-01-01 08:00:00 UTC
+
+query T rowsort
+SELECT t FROM timestamptzish WHERE t < TIMESTAMPTZ '1999-12-31 9:46:01-04'
+----
+1999-12-31 06:00:00 UTC
+1999-12-31 07:11:01 UTC
+
+query T rowsort
+SELECT t FROM timestamptzish WHERE t <= TIMESTAMPTZ '1999-12-31 9:46:01-04'
+----
+1999-12-31 06:00:00 UTC
+1999-12-31 07:11:01 UTC
+1999-12-31 13:46:01 UTC
+
+query T rowsort
+SELECT t FROM timestamptzish WHERE t > TIMESTAMPTZ '1999-12-31 9:46:01-04' - INTERVAL '12' HOUR
+----
+1999-12-31 06:00:00 UTC
+1999-12-31 07:11:01 UTC
+1999-12-31 13:46:01 UTC
+2000-01-01 08:00:00 UTC
