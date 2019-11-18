@@ -62,8 +62,7 @@ pub fn plan_root_query(
     crate::transform::transform(&mut query);
     let outer_scope = &Scope::empty(None);
     let outer_relation_type = &RelationType::empty();
-    let qcx = QueryContext::new(
-        None,
+    let qcx = QueryContext::root(
         outer_scope,
         outer_relation_type,
         Rc::new(RefCell::new(BTreeMap::new())),
@@ -546,8 +545,7 @@ pub fn plan_index(
     let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
     let outer_scope = &Scope::empty(None);
     let outer_relation_type = &RelationType::empty();
-    let qcx = &QueryContext::new(
-        None,
+    let qcx = &QueryContext::root(
         outer_scope,
         outer_relation_type,
         Rc::new(RefCell::new(BTreeMap::new())),
@@ -1081,12 +1079,7 @@ fn plan_expr<'a>(
                         .chain(ecx.relation_type.column_types.iter().cloned())
                         .collect(),
                 );
-                let qcx = QueryContext::new(
-                    Some(ecx.qcx.current_timestamp),
-                    &ecx.scope,
-                    outer_relation_type,
-                    ecx.qcx.param_types.clone(),
-                );
+                let qcx = ExprContext::derived_query_context(&ecx, outer_relation_type);
                 let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
                 Ok(expr.exists())
             }
@@ -1103,12 +1096,7 @@ fn plan_expr<'a>(
                         .chain(ecx.relation_type.column_types.iter().cloned())
                         .collect(),
                 );
-                let qcx = QueryContext::new(
-                    Some(ecx.qcx.current_timestamp),
-                    &ecx.scope,
-                    outer_relation_type,
-                    ecx.qcx.param_types.clone(),
-                );
+                let qcx = ExprContext::derived_query_context(&ecx, outer_relation_type);
                 let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
                 let column_types = qcx.relation_type(&expr).column_types;
                 if column_types.len() != 1 {
@@ -1281,12 +1269,7 @@ fn plan_any_or_all<'a>(
             .chain(ecx.relation_type.column_types.iter().cloned())
             .collect(),
     );
-    let qcx = QueryContext::new(
-        Some(ecx.qcx.current_timestamp),
-        &ecx.scope,
-        outer_relation_type,
-        ecx.qcx.param_types.clone(),
-    );
+    let qcx = ExprContext::derived_query_context(&ecx, outer_relation_type);
     // plan right
 
     let (right, _scope) = plan_subquery(catalog, &qcx, right)?;
@@ -2607,19 +2590,13 @@ struct QueryContext<'a> {
 }
 
 impl<'a> QueryContext<'a> {
-    fn new(
-        current_timestamp: Option<DateTime<Utc>>,
+    fn root(
         outer_scope: &'a Scope,
         outer_relation_type: &'a RelationType,
         param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
     ) -> QueryContext<'a> {
-        let current_timestamp = match current_timestamp {
-            Some(timestamp) => timestamp,
-            None => Utc::now(),
-        };
-
         QueryContext {
-            current_timestamp,
+            current_timestamp: Utc::now(),
             outer_scope,
             outer_relation_type,
             param_types,
@@ -2660,6 +2637,15 @@ impl<'a> ExprContext<'a> {
             &self.relation_type,
             &self.qcx.param_types.borrow(),
         )
+    }
+
+    fn derived_query_context(&self, outer_relation_type: &'a RelationType) -> QueryContext<'a> {
+        QueryContext {
+            current_timestamp: self.qcx.current_timestamp,
+            outer_scope: &self.scope,
+            outer_relation_type,
+            param_types: self.qcx.param_types.clone(),
+        }
     }
 }
 
