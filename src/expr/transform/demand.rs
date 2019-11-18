@@ -115,28 +115,27 @@ impl Demand {
                     .flat_map(|(r, a)| std::iter::repeat(r).take(*a))
                     .collect::<Vec<_>>();
 
-                //we want to keep only one key from its equivalence class and project
-                //duplicate keys to their equivalent
-                let mut projection: Vec<usize> = (0..input_arities.iter().sum()).collect();
-                // assumes the same column does not appear in the two different equivalence classes
-                // TODO: can it be assumed that variables/variable are all sorted/in canonical form?
+                // We want to keep only one key from its equivalence class and permute
+                // duplicate keys to their equivalent.
+                let mut permutation: Vec<usize> = (0..input_arities.iter().sum()).collect();
+                // Assumes the same column does not appear in the two different equivalence classes
                 for variable in variables.iter() {
                     let (min_rel, min_col) = variable.iter().min().unwrap();
                     for (rel, col) in variable {
-                        projection[prior_arities[*rel] + col] = prior_arities[*min_rel] + *min_col;
+                        permutation[prior_arities[*rel] + col] = prior_arities[*min_rel] + *min_col;
                     }
                 }
 
-                //what the upstream relation demands from the join
-                //organized by the input from which the demand will be fulfilled
+                // What the upstream relation demands from the join
+                // organized by the input from which the demand will be fulfilled
                 let mut demand_vec = vec![Vec::new(); inputs.len()];
-                //what the join demands from each input
+                // What the join demands from each input
                 let mut new_columns = vec![HashSet::new(); inputs.len()];
 
-                // Project each required column to its new location
+                // Permute each required column to its new location
                 // and record it as demanded of both the input and the join
                 for column in columns {
-                    let projected_column = projection[column];
+                    let projected_column = permutation[column];
                     let rel = input_relation[projected_column];
                     let col = projected_column - prior_arities[rel];
                     demand_vec[rel].push(col);
@@ -159,7 +158,7 @@ impl Demand {
                     self.action(input, columns, gets);
                 }
 
-                *relation = relation.take_dangerous().project(projection);
+                *relation = relation.take_dangerous().project(permutation);
             }
             RelationExpr::Reduce {
                 input,

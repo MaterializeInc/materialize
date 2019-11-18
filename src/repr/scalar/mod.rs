@@ -503,6 +503,9 @@ impl<'a> ScalarType {
             ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
             ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
+            ScalarType::TimestampTz => {
+                Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
+            }
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
             ScalarType::Bytes => Datum::Bytes(&[]),
             ScalarType::String => Datum::String(""),
