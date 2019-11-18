@@ -112,18 +112,15 @@ pub enum StateMachine<A: Conn + 'static> {
     #[state_machine_future(start, transitions(RecvStartup))]
     Start { stream: A, session: Session },
 
-    #[state_machine_future(transitions(SendAuthenticationOk, SendFatalError, Done, Error))]
+    #[state_machine_future(transitions(SendReadyForQuery, SendFatalError, Done, Error))]
     RecvStartup { recv: Recv<A>, session: Session },
-
-    #[state_machine_future(transitions(SendReadyForQuery, SendError, Error))]
-    SendAuthenticationOk {
-        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
-        session: Session,
-    },
 
     // Shared query flow.
     #[state_machine_future(transitions(RecvQuery, SendError, Error))]
-    SendReadyForQuery { send: SinkSend<A>, session: Session },
+    SendReadyForQuery {
+        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
+        session: Session,
+    },
 
     #[state_machine_future(transitions(
         HandleQuery,
@@ -348,9 +345,12 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 conn_id: cx.conn_id,
                 secret_key: cx.conn_secrets.get(cx.conn_id).unwrap(),
             }))
+            .chain(iter::once(BackendMessage::ReadyForQuery(
+                state.session.transaction().into(),
+            )))
             .collect();
 
-        transition!(SendAuthenticationOk {
+        transition!(SendReadyForQuery {
             send: Box::new(
                 stream::iter_ok(messages)
                     .forward(conn)
@@ -358,16 +358,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             ),
             session: state.session,
         })
-    }
-
-    fn poll_send_authentication_ok<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendAuthenticationOk<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendAuthenticationOk<A>, failure::Error> {
-        trace!("cid={} auth ok", cx.conn_id);
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        transition!(send_ready_for_query(conn, state.session))
     }
 
     // Shared query flow.
@@ -983,7 +973,7 @@ where
     A: Conn + 'static,
 {
     SendReadyForQuery {
-        send: conn.send(BackendMessage::ReadyForQuery(session.transaction().into())),
+        send: Box::new(conn.send(BackendMessage::ReadyForQuery(session.transaction().into()))),
         session,
     }
 }
