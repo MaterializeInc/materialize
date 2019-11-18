@@ -3,24 +3,26 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
 use futures::{Future, Sink};
-use repr::Row;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::order::PartialOrder;
 use timely::Data;
 
-pub fn tail<G, B>(stream: &Stream<G, B>, name: &str, connector: TailSinkConnector)
+use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
+use repr::{QualName, Row};
+
+pub fn tail<G, B>(stream: &Stream<G, B>, name: &QualName, connector: TailSinkConnector)
 where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<Row, Row, Timestamp, Diff>,
 {
     let mut tx = connector.tx.connect().wait().unwrap();
-    stream.sink(Pipeline, &name, move |input| {
+    // TODO: should this preserve the QualName part of it?
+    stream.sink(Pipeline, &name.to_string(), move |input| {
         input.for_each(|_, batches| {
             let mut results: Vec<Update> = Vec::new();
             for batch in batches.iter() {

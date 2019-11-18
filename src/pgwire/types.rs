@@ -51,6 +51,12 @@ pub const TIMESTAMP: PgType = PgType {
     typlen: 8,
 };
 
+/// Timestamp with time zone
+pub const TIMESTAMPTZ: PgType = PgType {
+    oid: 1184,
+    typlen: 8,
+};
+
 /// Time interval.
 pub const INTERVAL: PgType = PgType {
     oid: 1186,
@@ -105,6 +111,7 @@ impl From<&ScalarType> for PgType {
             ScalarType::Decimal { .. } => NUMERIC,
             ScalarType::Date => DATE,
             ScalarType::Timestamp => TIMESTAMP,
+            ScalarType::TimestampTz => TIMESTAMPTZ,
             ScalarType::Interval => INTERVAL,
             ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Bytes => BYTEA,

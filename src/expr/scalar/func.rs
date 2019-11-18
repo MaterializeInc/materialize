@@ -7,7 +7,7 @@ use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
 
-use chrono::{Datelike, NaiveDateTime, Timelike};
+use chrono::{DateTime, Datelike, NaiveDateTime, Timelike, Utc};
 use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
@@ -200,6 +200,23 @@ pub fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
 }
 
+pub fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::TimestampTz(DateTime::<Utc>::from_utc(
+        a.unwrap_date().and_hms(0, 0, 0),
+        Utc,
+    ))
+}
+
+pub fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
+}
+
 pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -244,6 +261,25 @@ pub fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     })
 }
 
+pub fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+
+    let dt = a.unwrap_timestamptz().naive_utc();
+
+    let new_ndt = match b {
+        Datum::Interval(Interval::Months(months)) => add_timestamp_months(dt, months),
+        Datum::Interval(Interval::Duration {
+            is_positive,
+            duration,
+        }) => add_timestamp_duration(dt, is_positive, duration),
+        _ => panic!("Tried to do timestamp addition with non-interval: {:?}", b),
+    };
+
+    Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
+}
+
 pub fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
@@ -255,11 +291,29 @@ pub fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             duration,
         }),
         _ => panic!(
-            "Tried to do timestamp subtraction with non-interval: {:?}",
+            "Tried to do timestamptz subtraction with non-interval: {:?}",
             b
         ),
     };
     add_timestamp_interval(a, inverse)
+}
+
+pub fn sub_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let inverse = match b {
+        Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
+        Datum::Interval(Interval::Duration {
+            is_positive,
+            duration,
+        }) => Datum::Interval(Interval::Duration {
+            is_positive: !is_positive,
+            duration,
+        }),
+        _ => panic!(
+            "Tried to do timestamptz subtraction with non-interval: {:?}",
+            b
+        ),
+    };
+    add_timestamptz_interval(a, inverse)
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
@@ -671,11 +725,25 @@ pub fn extract_timestamp_year<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().year()))
 }
 
+pub fn extract_timestamptz_year<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamptz().year()))
+}
+
 pub fn extract_timestamp_month<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
     }
     Datum::from(f64::from(a.unwrap_timestamp().month()))
+}
+
+pub fn extract_timestamptz_month<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamptz().month()))
 }
 
 pub fn extract_timestamp_day<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -685,11 +753,25 @@ pub fn extract_timestamp_day<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().day()))
 }
 
+pub fn extract_timestamptz_day<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamptz().day()))
+}
+
 pub fn extract_timestamp_hour<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
     }
     Datum::from(f64::from(a.unwrap_timestamp().hour()))
+}
+
+pub fn extract_timestamptz_hour<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamptz().hour()))
 }
 
 pub fn extract_timestamp_minute<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -699,11 +781,28 @@ pub fn extract_timestamp_minute<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_timestamp().minute()))
 }
 
+pub fn extract_timestamptz_minute<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(f64::from(a.unwrap_timestamptz().minute()))
+}
+
 pub fn extract_timestamp_second<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
     }
     let a = a.unwrap_timestamp();
+    let s = f64::from(a.second());
+    let ns = f64::from(a.nanosecond()) / 1e9;
+    Datum::from(s + ns)
+}
+
+pub fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    let a = a.unwrap_timestamptz();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
     Datum::from(s + ns)
@@ -718,12 +817,14 @@ pub enum BinaryFunc {
     AddFloat32,
     AddFloat64,
     AddTimestampInterval,
+    AddTimestampTzInterval,
     AddDecimal,
     SubInt32,
     SubInt64,
     SubFloat32,
     SubFloat64,
     SubTimestampInterval,
+    SubTimestampTzInterval,
     SubDecimal,
     MulInt32,
     MulInt64,
@@ -759,12 +860,14 @@ impl BinaryFunc {
             BinaryFunc::AddFloat32 => add_float32,
             BinaryFunc::AddFloat64 => add_float64,
             BinaryFunc::AddTimestampInterval => add_timestamp_interval,
+            BinaryFunc::AddTimestampTzInterval => add_timestamptz_interval,
             BinaryFunc::AddDecimal => add_decimal,
             BinaryFunc::SubInt32 => sub_int32,
             BinaryFunc::SubInt64 => sub_int64,
             BinaryFunc::SubFloat32 => sub_float32,
             BinaryFunc::SubFloat64 => sub_float64,
             BinaryFunc::SubTimestampInterval => sub_timestamp_interval,
+            BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval,
             BinaryFunc::SubDecimal => sub_decimal,
             BinaryFunc::MulInt32 => mul_int32,
             BinaryFunc::MulInt64 => mul_int64,
@@ -863,7 +966,10 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
             }
 
-            AddTimestampInterval | SubTimestampInterval => input1_type,
+            AddTimestampInterval
+            | SubTimestampInterval
+            | AddTimestampTzInterval
+            | SubTimestampTzInterval => input1_type,
         }
     }
 }
@@ -878,12 +984,14 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddFloat32 => f.write_str("+"),
             BinaryFunc::AddFloat64 => f.write_str("+"),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
+            BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
             BinaryFunc::AddDecimal => f.write_str("+"),
             BinaryFunc::SubInt32 => f.write_str("-"),
             BinaryFunc::SubInt64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
             BinaryFunc::SubTimestampInterval => f.write_str("-"),
+            BinaryFunc::SubTimestampTzInterval => f.write_str("-"),
             BinaryFunc::SubDecimal => f.write_str("-"),
             BinaryFunc::MulInt32 => f.write_str("*"),
             BinaryFunc::MulInt64 => f.write_str("*"),
@@ -950,6 +1058,8 @@ pub enum UnaryFunc {
     CastDecimalToFloat32,
     CastDecimalToFloat64,
     CastDateToTimestamp,
+    CastDateToTimestampTz,
+    CastTimestampToTimestampTz,
     Ascii,
     ExtractIntervalYear,
     ExtractIntervalMonth,
@@ -963,6 +1073,12 @@ pub enum UnaryFunc {
     ExtractTimestampHour,
     ExtractTimestampMinute,
     ExtractTimestampSecond,
+    ExtractTimestampTzYear,
+    ExtractTimestampTzMonth,
+    ExtractTimestampTzDay,
+    ExtractTimestampTzHour,
+    ExtractTimestampTzMinute,
+    ExtractTimestampTzSecond,
 }
 
 impl UnaryFunc {
@@ -995,6 +1111,8 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
             UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
+            UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz,
+            UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz,
             UnaryFunc::Ascii => ascii,
             UnaryFunc::ExtractIntervalYear => extract_interval_year,
             UnaryFunc::ExtractIntervalMonth => extract_interval_month,
@@ -1008,6 +1126,12 @@ impl UnaryFunc {
             UnaryFunc::ExtractTimestampHour => extract_timestamp_hour,
             UnaryFunc::ExtractTimestampMinute => extract_timestamp_minute,
             UnaryFunc::ExtractTimestampSecond => extract_timestamp_second,
+            UnaryFunc::ExtractTimestampTzYear => extract_timestamptz_year,
+            UnaryFunc::ExtractTimestampTzMonth => extract_timestamptz_month,
+            UnaryFunc::ExtractTimestampTzDay => extract_timestamptz_day,
+            UnaryFunc::ExtractTimestampTzHour => extract_timestamptz_hour,
+            UnaryFunc::ExtractTimestampTzMinute => extract_timestamptz_minute,
+            UnaryFunc::ExtractTimestampTzSecond => extract_timestamptz_second,
         }
     }
 
@@ -1052,6 +1176,10 @@ impl UnaryFunc {
             CastDecimalToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
             CastDecimalToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
             CastDateToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(in_nullable),
+            CastDateToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable),
+            CastTimestampToTimestampTz => {
+                ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
+            }
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
             | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
@@ -1067,7 +1195,15 @@ impl UnaryFunc {
             | ExtractTimestampDay
             | ExtractTimestampHour
             | ExtractTimestampMinute
-            | ExtractTimestampSecond => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            | ExtractTimestampSecond
+            | ExtractTimestampTzYear
+            | ExtractTimestampTzMonth
+            | ExtractTimestampTzDay
+            | ExtractTimestampTzHour
+            | ExtractTimestampTzMinute
+            | ExtractTimestampTzSecond => {
+                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
+            }
         }
     }
 }
@@ -1102,6 +1238,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
+            UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
+            UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
@@ -1115,6 +1253,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExtractTimestampHour => f.write_str("tsextracthour"),
             UnaryFunc::ExtractTimestampMinute => f.write_str("tsextractminute"),
             UnaryFunc::ExtractTimestampSecond => f.write_str("tsextractsecond"),
+            UnaryFunc::ExtractTimestampTzYear => f.write_str("tstzextractyear"),
+            UnaryFunc::ExtractTimestampTzMonth => f.write_str("tstzextractmonth"),
+            UnaryFunc::ExtractTimestampTzDay => f.write_str("tstzextractday"),
+            UnaryFunc::ExtractTimestampTzHour => f.write_str("tstzextracthour"),
+            UnaryFunc::ExtractTimestampTzMinute => f.write_str("tstzextractminute"),
+            UnaryFunc::ExtractTimestampTzSecond => f.write_str("tstzextractsecond"),
         }
     }
 }

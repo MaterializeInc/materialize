@@ -1,5 +1,6 @@
 {{/*  Include all JavaScript files here  */}}
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+<script src="https://identity.netlify.com/v1/netlify-identity-widget.js" async></script>
 
 {{ $toggle := resources.Get "js/menutoggle.js" -}}
 {{ $js := slice $toggle | resources.Concat "js/bundle.js" | resources.Minify }}

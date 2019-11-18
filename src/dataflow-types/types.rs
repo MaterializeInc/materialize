@@ -11,12 +11,13 @@
 
 // Clippy doesn't understand `as_of` and complains.
 #![allow(clippy::wrong_self_convention)]
+use std::cmp::Ordering;
+
+use serde::{Deserialize, Serialize};
+use url::Url;
 
 use expr::{ColumnOrder, RelationExpr, ScalarExpr};
-use repr::{Datum, RelationDesc, RelationType, Row};
-use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use url::Url;
+use repr::{Datum, QualName, RelationDesc, RelationType, Row};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -127,7 +128,7 @@ impl DataflowDesc {
     }
 
     /// Collects the names of the dataflows that this dataflow depends upon.
-    pub fn uses(&self) -> Vec<&str> {
+    pub fn uses(&self) -> Vec<&QualName> {
         let mut out = Vec::new();
         for view in self.views.iter() {
             view.relation_expr.unbound_uses(&mut out);
@@ -194,7 +195,7 @@ impl From<Index> for DataflowDesc {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Source {
-    pub name: String,
+    pub name: QualName,
     pub connector: SourceConnector,
     pub desc: RelationDesc,
 }
@@ -203,8 +204,8 @@ pub struct Source {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Sink {
-    pub name: String,
-    pub from: (String, RelationDesc),
+    pub name: QualName,
+    pub from: (QualName, RelationDesc),
     pub connector: SinkConnector,
 }
 
@@ -212,7 +213,7 @@ pub struct Sink {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct View {
-    pub name: String,
+    pub name: QualName,
     pub raw_sql: String,
     pub relation_expr: RelationExpr,
     pub desc: RelationDesc,
@@ -257,9 +258,9 @@ pub struct TailSinkConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Index {
     /// Name of Index
-    pub name: String,
+    pub name: QualName,
     /// Name of collection the index is on
-    pub on_name: String,
+    pub on_name: QualName,
     /// Types of the columns of the `on_name` collection
     pub relation_type: RelationType,
     /// Numbers of the columns to be arranged, in order of decreasing primacy
@@ -275,29 +276,29 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use repr::{ColumnType, RelationType, ScalarType};
+    use repr::{ColumnType, LiteralName, RelationType, ScalarType};
 
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
         let dataflow = DataflowDesc::new().add_view(View {
-            name: "report".into(),
+            name: "report".lit(),
             raw_sql: "<none>".into(),
             relation_expr: RelationExpr::Project {
                 outputs: vec![1, 2],
                 input: Box::new(RelationExpr::join(
                     vec![
                         RelationExpr::Get {
-                            name: "orders".into(),
+                            name: "orders".lit(),
                             typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
                         },
                         Box::new(RelationExpr::Union {
                             left: Box::new(RelationExpr::Get {
-                                name: "customers2018".into(),
+                                name: "customers2018".lit(),
                                 typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
                             }),
                             right: Box::new(RelationExpr::Get {
-                                name: "customers2019".into(),
+                                name: "customers2019".lit(),
                                 typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
                             }),
                         })

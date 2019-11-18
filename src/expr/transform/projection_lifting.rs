@@ -3,8 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::RelationExpr;
 use std::collections::HashMap;
+
+use crate::RelationExpr;
+use repr::QualName;
 
 /// Hoist projections wherever possible, in order to minimize structural limitations on transformations.
 /// Projections can be re-introduced in the physical planning stage.
@@ -26,14 +28,14 @@ impl ProjectionLifting {
         &self,
         relation: &mut RelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut HashMap<String, (repr::RelationType, Vec<usize>)>,
+        gets: &mut HashMap<QualName, (repr::RelationType, Vec<usize>)>,
     ) {
         match relation {
             RelationExpr::Constant { .. } => {}
             RelationExpr::Get { name, .. } => {
                 if let Some((typ, columns)) = gets.get(name) {
                     *relation = RelationExpr::Get {
-                        name: name.to_string(),
+                        name: name.clone(),
                         typ: typ.clone(),
                     }
                     .project(columns.clone());
@@ -43,7 +45,7 @@ impl ProjectionLifting {
                 self.action(value, gets);
                 if let RelationExpr::Project { input, outputs } = &mut **value {
                     let typ = input.typ();
-                    let prior = gets.insert(name.to_string(), (typ, outputs.clone()));
+                    let prior = gets.insert(name.clone(), (typ, outputs.clone()));
                     assert!(!prior.is_some());
                     **value = input.take_dangerous();
                 }

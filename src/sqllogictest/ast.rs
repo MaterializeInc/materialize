@@ -83,7 +83,7 @@ pub struct QueryOutput<'a> {
     pub types: Vec<Type>,
     pub sort: Sort,
     pub label: Option<&'a str>,
-    pub column_names: Option<Vec<&'a str>>,
+    pub column_names: Option<Vec<repr::ColumnName>>,
     pub mode: Mode,
     pub output: Output,
     pub output_str: &'a str,

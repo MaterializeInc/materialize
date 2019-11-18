@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use repr::{RelationDesc, ScalarType};
+use repr::{LiteralName, QualName, RelationDesc, ScalarType};
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -82,24 +82,24 @@ impl LogVariant {
         ]
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> QualName {
         // Bind all names in one place to avoid accidental clashes.
         match self {
-            LogVariant::Timely(TimelyLog::Operates) => "logs_operates",
-            LogVariant::Timely(TimelyLog::Channels) => "logs_channels",
-            LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed",
-            LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram",
-            LogVariant::Timely(TimelyLog::Addresses) => "logs_addresses",
-            LogVariant::Timely(TimelyLog::Parks) => "logs_parks",
-            LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement",
-            LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing",
-            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows",
+            LogVariant::Timely(TimelyLog::Operates) => "logs_operates".lit(),
+            LogVariant::Timely(TimelyLog::Channels) => "logs_channels".lit(),
+            LogVariant::Timely(TimelyLog::Elapsed) => "logs_elapsed".lit(),
+            LogVariant::Timely(TimelyLog::Histogram) => "logs_histogram".lit(),
+            LogVariant::Timely(TimelyLog::Addresses) => "logs_addresses".lit(),
+            LogVariant::Timely(TimelyLog::Parks) => "logs_parks".lit(),
+            LogVariant::Differential(DifferentialLog::Arrangement) => "logs_arrangement".lit(),
+            LogVariant::Differential(DifferentialLog::Sharing) => "logs_sharing".lit(),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => "logs_dataflows".lit(),
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => {
-                "logs_dataflow_dependency"
+                "logs_dataflow_dependency".lit()
             }
-            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers",
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks",
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations",
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => "logs_frontiers".lit(),
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => "logs_peeks".lit(),
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => "logs_peek_durations".lit(),
         }
     }
 

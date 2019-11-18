@@ -6,7 +6,7 @@
 use crate::decimal::Significand;
 use crate::scalar::Interval;
 use crate::Datum;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
@@ -117,6 +117,7 @@ enum Tag {
     Decimal,
     Date,
     Timestamp,
+    TimestampTz,
     Interval,
     Bytes,
     String,
@@ -212,6 +213,10 @@ impl Row {
             Tag::Timestamp => {
                 let t = self.read_copy::<NaiveDateTime>(offset);
                 Datum::Timestamp(t)
+            }
+            Tag::TimestampTz => {
+                let t = self.read_copy::<DateTime<Utc>>(offset);
+                Datum::TimestampTz(t)
             }
             Tag::Interval => {
                 let i = self.read_copy::<Interval>(offset);
@@ -319,6 +324,12 @@ impl<'a> PackableRow<'a> {
                 data.push(Tag::Timestamp as u8);
                 data.extend(&unsafe {
                     transmute::<NaiveDateTime, [u8; size_of::<NaiveDateTime>()]>(t)
+                });
+            }
+            Datum::TimestampTz(t) => {
+                data.push(Tag::TimestampTz as u8);
+                data.extend(&unsafe {
+                    transmute::<DateTime<Utc>, [u8; size_of::<DateTime<Utc>>()]>(t)
                 });
             }
             Datum::Interval(i) => {
@@ -464,6 +475,10 @@ mod tests {
             Datum::Timestamp(
                 NaiveDate::from_isoywd(2019, 30, chrono::Weekday::Wed).and_hms(14, 32, 11),
             ),
+            Datum::TimestampTz(DateTime::<Utc>::from_utc(
+                NaiveDateTime::from_timestamp(61, 0),
+                Utc,
+            )),
             Datum::Interval(Interval::Months(312)),
             Datum::Interval(Interval::Duration {
                 is_positive: true,

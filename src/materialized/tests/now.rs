@@ -6,37 +6,18 @@
 use chrono::NaiveDateTime;
 use std::error::Error;
 
-use postgres::{Connection, TlsMode};
-use rand;
-use rand::Rng;
+mod util;
 
 #[test]
 fn test_now() -> Result<(), Box<dyn Error>> {
     ore::log::init();
-    ore::panic::set_abort_on_panic();
 
-    // connect to a random, ephemeral port
-    let rand_port = rand::thread_rng().gen_range(20_000, 40_000).to_string();
-    let _server = materialized::serve(materialized::Config {
-        logging_granularity: None,
-        version: "TEST".into(),
-        threads: 1,
-        process: 0,
-        addresses: vec![format!("127.0.0.1:{}", rand_port).into()],
-        bootstrap_sql: "".into(),
-        data_directory: None,
-        symbiosis_url: None,
-        gather_metrics: false,
-    })?;
-
-    let conn = Connection::connect(
-        format!("postgresql://root@127.0.0.1:{}", rand_port),
-        TlsMode::None,
-    )?;
+    let (_server, conn) = util::start_server()?;
 
     let rows = &conn.query("SELECT now()", &[])?;
     assert_eq!(1, rows.len());
-    let now: NaiveDateTime = rows.get(0).get(0);
+    // Confirm that `now()` returns a NaiveDateTime, don't assert a specific time.
+    let _now: NaiveDateTime = rows.get(0).get(0);
 
     Ok(())
 }

@@ -21,7 +21,7 @@ use futures::sync::mpsc::UnboundedReceiver;
 use futures::{Future, Sink};
 use ore::future::sync::mpsc::ReceiverExt;
 use ore::future::FutureExt;
-use repr::{Datum, Row, RowPacker, RowUnpacker};
+use repr::{Datum, QualName, Row, RowPacker, RowUnpacker};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
@@ -63,16 +63,16 @@ pub enum SequencedCommand {
     /// Create a sequence of dataflows.
     CreateDataflows(Vec<DataflowDesc>),
     /// Drop the sources bound to these names.
-    DropSources(Vec<String>),
+    DropSources(Vec<QualName>),
     /// Drop the views bound to these names.
-    DropViews(Vec<String>),
+    DropViews(Vec<QualName>),
     /// Drop the sinks bound to these names.
-    DropSinks(Vec<String>),
+    DropSinks(Vec<QualName>),
     /// Drop the indexes bound to these names.
-    DropIndexes(Vec<(String, Vec<usize>)>),
+    DropIndexes(Vec<(QualName, Vec<usize>)>),
     /// Peek at a materialized view.
     Peek {
-        name: String,
+        name: QualName,
         conn_id: u32,
         tx: comm::mpsc::Sender<PeekResponse>,
         timestamp: Timestamp,
@@ -83,15 +83,18 @@ pub enum SequencedCommand {
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek { conn_id: u32 },
     /// Insert `updates` into the local input named `name`.
-    Insert { name: String, updates: Vec<Update> },
+    Insert {
+        name: QualName,
+        updates: Vec<Update>,
+    },
     /// Advance the timestamp for the local input named `name`.
-    AdvanceTime { name: String, to: Timestamp },
+    AdvanceTime { name: QualName, to: Timestamp },
     /// Enable compaction in views.
     ///
     /// Each entry in the vector names a view and provides a frontier after which
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
-    AllowCompaction(Vec<(String, Vec<Timestamp>)>),
+    AllowCompaction(Vec<(QualName, Vec<Timestamp>)>),
     /// Append a new event to the log stream.
     AppendLog(MaterializedEvent),
     /// Request that feedback is streamed to the provided channel.
@@ -110,7 +113,7 @@ pub struct WorkerFeedbackWithMeta {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
     /// A list of names of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(String, ChangeBatch<Timestamp>)>),
+    FrontierUppers(Vec<(QualName, ChangeBatch<Timestamp>)>),
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
@@ -190,9 +193,9 @@ where
     feedback_tx: Option<Box<dyn Sink<SinkItem = WorkerFeedbackWithMeta, SinkError = ()>>>,
     command_rx: UnboundedReceiver<SequencedCommand>,
     materialized_logger: Option<logging::materialized::Logger>,
-    sink_tokens: HashMap<String, Box<dyn Any>>,
-    local_inputs: HashMap<String, LocalInput>,
-    reported_frontiers: HashMap<String, Antichain<Timestamp>>,
+    sink_tokens: HashMap<QualName, Box<dyn Any>>,
+    local_inputs: HashMap<QualName, LocalInput>,
+    reported_frontiers: HashMap<QualName, Antichain<Timestamp>>,
 }
 
 impl<'w, A> Worker<'w, A>
@@ -249,21 +252,21 @@ where
             // Install traces as maintained views.
             for (log, (key, trace)) in t_traces {
                 self.traces
-                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                    .set_by_keys(log.name(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.name().to_string(), Antichain::from_elem(0));
+                    .insert(log.name(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in d_traces {
                 self.traces
-                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                    .set_by_keys(log.name(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.name().to_string(), Antichain::from_elem(0));
+                    .insert(log.name(), Antichain::from_elem(0));
             }
             for (log, (key, trace)) in m_traces {
                 self.traces
-                    .set_by_keys(log.name().to_string(), &key[..], WithDrop::from(trace));
+                    .set_by_keys(log.name(), &key[..], WithDrop::from(trace));
                 self.reported_frontiers
-                    .insert(log.name().to_string(), Antichain::from_elem(0));
+                    .insert(log.name(), Antichain::from_elem(0));
             }
 
             self.materialized_logger = self.inner.log_register().get("materialized");
@@ -365,13 +368,13 @@ where
                             if self.traces.traces.contains_key(&view.name) {
                                 panic!("View already installed: {}", view.name);
                             }
-                            logger.log(MaterializedEvent::Dataflow(view.name.to_string(), true));
+                            logger.log(MaterializedEvent::Dataflow(view.name.clone(), true));
                         }
                     }
                     for view in dataflow.views.iter() {
                         let prior = self
                             .reported_frontiers
-                            .insert(view.name.to_string(), Antichain::from_elem(0));
+                            .insert(view.name.clone(), Antichain::from_elem(0));
                         assert!(prior == None);
                     }
 
@@ -396,7 +399,7 @@ where
                 for name in &names {
                     if self.traces.del_collection_traces(name).is_some() {
                         if let Some(logger) = self.materialized_logger.as_mut() {
-                            logger.log(MaterializedEvent::Dataflow(name.to_string(), false));
+                            logger.log(MaterializedEvent::Dataflow(name.clone(), false));
                         }
                     }
                     self.reported_frontiers
@@ -556,7 +559,7 @@ pub(crate) struct LocalInput {
 #[derive(Clone)]
 struct PendingPeek {
     /// The name of the dataflow to peek.
-    name: String,
+    name: QualName,
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
     /// A transmitter connected to the intended recipient of the peek.
@@ -575,7 +578,7 @@ struct PendingPeek {
 impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self) -> crate::logging::materialized::Peek {
-        crate::logging::materialized::Peek::new(&self.name, self.timestamp, self.conn_id)
+        crate::logging::materialized::Peek::new(self.name.clone(), self.timestamp, self.conn_id)
     }
 
     /// Attempts to fulfill the peek and reports success.

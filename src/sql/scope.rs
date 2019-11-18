@@ -22,14 +22,15 @@
 
 //! Many sql expressions do strange and arbitrary things to scopes. Rather than try to capture them all here, we just expose the internals of `Scope` and handle it in the appropriate place in `super::query`.
 
-use super::expr::ColumnRef;
 use failure::bail;
-use ore::option::OptionExt;
+
+use super::expr::ColumnRef;
+use repr::{ColumnName, QualName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItemName {
-    pub table_name: Option<String>,
-    pub column_name: Option<String>,
+    pub table_name: Option<QualName>,
+    pub column_name: Option<ColumnName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +67,7 @@ pub struct Scope {
 }
 
 impl ScopeItem {
-    pub fn from_column_name(column_name: Option<String>) -> Self {
+    pub fn from_column_name(column_name: Option<ColumnName>) -> Self {
         ScopeItem {
             names: vec![ScopeItemName {
                 table_name: None,
@@ -99,20 +100,21 @@ impl Scope {
         }
     }
 
-    pub fn from_source<I, S>(
-        table_name: Option<&str>,
+    pub fn from_source<I, N>(
+        table_name: Option<impl Into<QualName>>,
         column_names: I,
         outer_scope: Option<Scope>,
     ) -> Self
     where
-        I: Iterator<Item = Option<S>>,
-        S: Into<String>,
+        I: Iterator<Item = Option<N>>,
+        N: Into<ColumnName>,
     {
         let mut scope = Scope::empty(outer_scope);
+        let table_name = table_name.map(|n| n.into());
         scope.items = column_names
             .map(|column_name| ScopeItem {
                 names: vec![ScopeItemName {
-                    table_name: table_name.owned(),
+                    table_name: table_name.clone(),
                     column_name: column_name.map(|n| n.into()),
                 }],
                 expr: None,
@@ -122,12 +124,12 @@ impl Scope {
     }
 
     /// Constructs an iterator over the canonical name for each column.
-    pub fn column_names(&self) -> impl Iterator<Item = Option<&str>> {
+    pub fn column_names(&self) -> impl Iterator<Item = Option<&ColumnName>> {
         self.items.iter().map(|item| {
             item.names
                 .iter()
-                .find(|n| n.column_name.is_some())
-                .map(|n| n.column_name.mz_as_deref().unwrap())
+                .filter_map(|n| n.column_name.as_ref())
+                .next()
         })
     }
 
@@ -188,23 +190,23 @@ impl Scope {
 
     pub fn resolve_column<'a>(
         &'a self,
-        column_name: &str,
+        column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
         self.resolve(
-            |item: &ScopeItemName| item.column_name.mz_as_deref() == Some(column_name),
-            column_name,
+            |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
+            column_name.as_str(),
         )
     }
 
     pub fn resolve_table_column<'a>(
         &'a self,
-        table_name: &str,
-        column_name: &str,
+        table_name: &QualName,
+        column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
         self.resolve(
             |item: &ScopeItemName| {
-                item.table_name.mz_as_deref() == Some(table_name)
-                    && item.column_name.mz_as_deref() == Some(column_name)
+                item.table_name.as_ref() == Some(table_name)
+                    && item.column_name.as_ref() == Some(column_name)
             },
             &format!("{}.{}", table_name, column_name),
         )

@@ -38,10 +38,9 @@ use dataflow_types::{
 use expr::RelationExpr;
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
-use repr::{Datum, RelationDesc, Row, RowPacker, RowUnpacker};
+use repr::{ColumnName, Datum, LiteralName, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
-use symbiosis::Postgres;
 
 use crate::{Command, ExecuteResponse, Response};
 
@@ -63,126 +62,6 @@ where
     pub data_directory: Option<&'a Path>,
 }
 
-fn apply_plan(
-    catalog: &mut Catalog,
-    session: &mut Session,
-    plan: &Plan,
-) -> Result<(), failure::Error> {
-    match plan {
-        Plan::CreateView(view) => catalog.insert(CatalogItem::View(view.clone()))?,
-        Plan::CreateTable { name, desc } => catalog.insert(CatalogItem::Source(Source {
-            name: name.clone(),
-            connector: SourceConnector::Local,
-            desc: desc.clone(),
-        }))?,
-        Plan::CreateSource(source) => catalog.insert(CatalogItem::Source(source.clone()))?,
-        Plan::CreateSources(sources) => {
-            for source in sources {
-                catalog.insert(CatalogItem::Source(source.clone()))?
-            }
-        }
-        Plan::CreateSink(sink) => catalog.insert(CatalogItem::Sink(sink.clone()))?,
-        Plan::CreateIndex(index) => catalog.insert(CatalogItem::Index(index.clone()))?,
-        Plan::DropItems(names, _item_type) => {
-            for name in names {
-                catalog.remove(name);
-            }
-        }
-        Plan::SetVariable { name, value } => session.set(name, value)?,
-        Plan::StartTransaction => session.start_transaction(),
-        Plan::Commit | Plan::Rollback => session.end_transaction(),
-        _ => (),
-    }
-    Ok(())
-}
-
-fn handle_statement<C>(
-    coord: &mut Coordinator<C>,
-    session: &mut Session,
-    stmt: sql::Statement,
-    portal_name: Option<String>,
-    conn_id: u32,
-) -> Result<ExecuteResponse, failure::Error>
-where
-    C: comm::Connection,
-{
-    sql::plan(&coord.catalog, session, stmt.clone(), portal_name)
-        .or_else(|err| {
-            // Executing the query failed. If we're running in symbiosis with
-            // Postgres, see if Postgres can handle it.
-            match coord.symbiosis {
-                Some(ref mut postgres) if postgres.can_handle(&stmt) => postgres.execute(&stmt),
-                _ => Err(err),
-            }
-        })
-        .and_then(|plan| {
-            apply_plan(&mut coord.catalog, session, &plan)?;
-            Ok(plan)
-        })
-        .map(|plan| coord.sequence_plan(plan, conn_id))
-}
-
-fn handle_execute<C>(
-    coord: &mut Coordinator<C>,
-    session: &mut Session,
-    portal_name: String,
-    conn_id: u32,
-) -> Result<ExecuteResponse, failure::Error>
-where
-    C: comm::Connection,
-{
-    let portal = session
-        .get_portal(&portal_name)
-        .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
-    let prepared = session
-        .get_prepared_statement(&portal.statement_name)
-        .ok_or_else(|| {
-            failure::format_err!(
-                "statement for portal does not exist portal={:?} statement={:?}",
-                portal_name,
-                portal.statement_name
-            )
-        })?;
-    match prepared.sql() {
-        Some(stmt) => {
-            let stmt = stmt.clone();
-            handle_statement(coord, session, stmt, Some(portal_name), conn_id)
-        }
-        None => Ok(ExecuteResponse::EmptyQuery),
-    }
-}
-
-fn handle_parse(
-    postgres: Option<&mut Postgres>,
-    catalog: &Catalog,
-    session: &mut Session,
-    name: String,
-    sql: String,
-) -> Result<(), failure::Error> {
-    let stmts = sql::parse(sql)?;
-    let (stmt, desc, param_types) = match stmts.len() {
-        0 => (None, None, vec![]),
-        1 => {
-            let stmt = stmts.into_element();
-            let (desc, param_types) = match sql::describe(catalog, stmt.clone()) {
-                Ok((desc, param_types)) => (desc, param_types),
-                // Describing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it. Note that Postgres
-                // only handles commands that do not return rows, so the
-                // `RelationDesc` is always `None`.
-                Err(err) => match postgres {
-                    Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
-                    _ => return Err(err),
-                },
-            };
-            (Some(stmt), desc, param_types)
-        }
-        n => bail!("expected no more than one query, got {}", n),
-    };
-    session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
-    Ok(())
-}
-
 /// Glues the external world to the Timely workers.
 pub struct Coordinator<C>
 where
@@ -194,18 +73,18 @@ where
     optimizer: expr::transform::Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    views: HashMap<String, ViewState>,
+    views: HashMap<QualName, ViewState>,
     /// Each source name maps to a source and re-written name (for auto-created views).
-    sources: HashMap<String, (dataflow_types::Source, Option<String>)>,
+    sources: HashMap<QualName, (dataflow_types::Source, Option<QualName>)>,
     /// Maps user-defined indexes by collection + key and how many aliases it has
-    indexes: HashMap<(String, Vec<usize>), usize>,
+    indexes: HashMap<(QualName, Vec<usize>), usize>,
     /// Maps user-defined index names to their collection + key
-    index_aliases: HashMap<String, (String, Vec<usize>)>,
-    since_updates: Vec<(String, Vec<Timestamp>)>,
+    index_aliases: HashMap<QualName, (QualName, Vec<usize>)>,
+    since_updates: Vec<(QualName, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
-    active_tails: HashMap<u32, String>,
+    active_tails: HashMap<u32, QualName>,
     local_input_time: Timestamp,
     log: bool,
 }
@@ -231,7 +110,7 @@ where
             broadcast_tx,
             num_timely_workers: u64::try_from(config.num_timely_workers).unwrap(),
             optimizer: Default::default(),
-            catalog: Catalog::new(config.logging),
+            catalog: Catalog::default(),
             symbiosis,
             views: HashMap::new(),
             sources: HashMap::new(),
@@ -245,6 +124,11 @@ where
 
         if let Some(logging_config) = config.logging {
             for log in logging_config.active_logs().iter() {
+                coordinator.catalog.insert(CatalogItem::Source(Source {
+                    name: log.name(),
+                    connector: SourceConnector::Local,
+                    desc: log.schema(),
+                }))?;
                 // Insert with 1 second compaction latency.
                 coordinator.insert_source(log.name(), 1_000);
             }
@@ -257,7 +141,7 @@ where
             let conn_id = 0;
             let mut session = sql::Session::default();
             for stmt in sql::parse(config.bootstrap_sql)? {
-                handle_statement(&mut coordinator, &mut session, stmt, None, conn_id)?;
+                coordinator.handle_statement(&mut session, stmt, None, conn_id)?;
             }
         }
 
@@ -280,7 +164,7 @@ where
                     conn_id,
                     tx,
                 }) => {
-                    let result = handle_execute(self, &mut session, portal_name, conn_id);
+                    let result = self.handle_execute(&mut session, portal_name, conn_id);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -290,13 +174,7 @@ where
                     mut session,
                     tx,
                 }) => {
-                    let result = handle_parse(
-                        self.symbiosis.as_mut(),
-                        &self.catalog,
-                        &mut session,
-                        name,
-                        sql,
-                    );
+                    let result = self.handle_parse(&mut session, name, sql);
                     let _ = tx.send(Response { result, session });
                 }
 
@@ -355,9 +233,19 @@ where
         }
     }
 
-    pub fn sequence_plan(&mut self, plan: Plan, conn_id: u32) -> ExecuteResponse {
-        match plan {
+    pub fn sequence_plan(
+        &mut self,
+        session: &mut Session,
+        plan: Plan,
+        conn_id: u32,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        Ok(match plan {
             Plan::CreateTable { name, desc } => {
+                self.catalog.insert(CatalogItem::Source(Source {
+                    name: name.clone(),
+                    connector: SourceConnector::Local,
+                    desc: desc.clone(),
+                }))?;
                 self.create_sources(vec![Source {
                     name,
                     connector: SourceConnector::Local,
@@ -367,39 +255,49 @@ where
             }
 
             Plan::CreateSource(source) => {
+                self.catalog.insert(CatalogItem::Source(source.clone()))?;
                 let sources = vec![source];
                 self.create_sources(sources);
                 ExecuteResponse::CreatedSource
             }
 
             Plan::CreateSources(sources) => {
+                for source in &sources {
+                    self.catalog.insert(CatalogItem::Source(source.clone()))?;
+                }
                 self.create_sources(sources.clone());
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::pack(&[Datum::String(&s.name)]))
+                        .map(|s| Row::pack(&[Datum::String(&s.name.to_string())]))
                         .collect(),
                 )
             }
 
             Plan::CreateSink(sink) => {
+                self.catalog.insert(CatalogItem::Sink(sink.clone()))?;
                 self.create_dataflows(vec![DataflowDesc::from(sink)]);
                 ExecuteResponse::CreatedSink
             }
 
             Plan::CreateView(view) => {
+                self.catalog.insert(CatalogItem::View(view.clone()))?;
                 self.create_dataflows(vec![DataflowDesc::from(view)]);
                 ExecuteResponse::CreatedView
             }
 
             Plan::CreateIndex(index) => {
+                self.catalog.insert(CatalogItem::Index(index.clone()))?;
                 self.create_index(index);
                 ExecuteResponse::CreatedIndex
             }
 
             Plan::DropItems(names, item_type) => {
+                for name in &names {
+                    self.catalog.remove(&name);
+                }
                 let mut sources_to_drop = Vec::new();
-                let mut views_to_drop = Vec::new();
+                let mut views_to_drop: Vec<QualName> = Vec::new();
                 let mut indexes_to_drop = Vec::new();
                 for name in names {
                     // TODO: Test if a name was installed and error if not?
@@ -442,11 +340,25 @@ where
 
             Plan::EmptyQuery => ExecuteResponse::EmptyQuery,
 
-            Plan::SetVariable { name, .. } => ExecuteResponse::SetVariable { name },
+            Plan::SetVariable { name, value } => {
+                session.set(&name, &value)?;
+                ExecuteResponse::SetVariable { name }
+            }
 
-            Plan::StartTransaction => ExecuteResponse::StartTransaction,
-            Plan::Commit => ExecuteResponse::Commit,
-            Plan::Rollback => ExecuteResponse::Rollback,
+            Plan::StartTransaction => {
+                session.start_transaction();
+                ExecuteResponse::StartTransaction
+            }
+
+            Plan::Commit => {
+                session.end_transaction();
+                ExecuteResponse::Commit
+            }
+
+            Plan::Rollback => {
+                session.end_transaction();
+                ExecuteResponse::Rollback
+            }
 
             Plan::Peek {
                 mut source,
@@ -497,7 +409,7 @@ where
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
                     // peek completes.
-                    let name = format!("<peek_{}>", Uuid::new_v4());
+                    let name = format!("<peek_{}>", Uuid::new_v4()).lit();
                     let typ = source.typ();
                     let ncols = typ.column_types.len();
                     // Cheat a little bit here to get a relation description. A
@@ -508,8 +420,10 @@ where
                     // will ultimately be correctly transmitted to the client
                     // because they are safely stashed in the connection's
                     // session.
-                    let desc =
-                        RelationDesc::new(typ, iter::repeat::<Option<String>>(None).take(ncols));
+                    let desc = RelationDesc::new(
+                        typ,
+                        iter::repeat::<Option<ColumnName>>(None).take(ncols),
+                    );
                     let dataflow = DataflowDesc::from(View {
                         name: name.clone(),
                         raw_sql: "<none>".into(),
@@ -595,14 +509,14 @@ where
             }
 
             Plan::Tail(source) => {
-                let mut source_name = source.name().to_string();
+                let mut source_name = source.name().clone();
                 if let Some((_source, rename)) = self.sources.get(&source_name) {
                     if let Some(rename) = rename {
                         source_name = rename.clone();
                     }
                 }
 
-                let name = format!("<tail_{}>", Uuid::new_v4());
+                let name = format!("<tail_{}>", Uuid::new_v4()).lit();
                 self.active_tails.insert(conn_id, name.clone());
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 let since = self
@@ -658,7 +572,7 @@ where
                     .sources
                     .iter()
                     .filter_map(|(name, (src, _view))| match src.connector {
-                        SourceConnector::Local => Some(name.as_str()),
+                        SourceConnector::Local => Some(name),
                         _ => None,
                     });
 
@@ -678,7 +592,7 @@ where
                     MutationKind::Update => ExecuteResponse::Updated(affected_rows),
                 }
             }
-        }
+        })
     }
 
     /// Create sources as described by `sources`.
@@ -737,7 +651,7 @@ where
         if let Some((_source, new_name)) = self.sources.get(&idx.on_name) {
             // If the source has a corresponding view, use its name instead.
             if let Some(new_name) = new_name {
-                idx.on_name = new_name.to_string();
+                idx.on_name = new_name.clone();
             } else {
                 panic!("create_index called on bare source");
             }
@@ -776,7 +690,7 @@ where
                             if let Some(new_name) = new_name {
                                 *name = new_name.clone();
                             } else {
-                                sources.push(name.to_string());
+                                sources.push(name.clone());
                             }
                         }
                     }
@@ -804,7 +718,7 @@ where
         }
     }
 
-    pub fn drop_views(&mut self, dataflow_names: Vec<String>) {
+    pub fn drop_views(&mut self, dataflow_names: Vec<QualName>) {
         for name in dataflow_names.iter() {
             self.remove_view(name);
         }
@@ -814,14 +728,14 @@ where
         )
     }
 
-    pub fn drop_sinks(&mut self, dataflow_names: Vec<String>) {
+    pub fn drop_sinks(&mut self, dataflow_names: Vec<QualName>) {
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::DropSinks(dataflow_names),
         )
     }
 
-    pub fn drop_indexes(&mut self, dataflow_names: Vec<String>, cascaded: bool) {
+    pub fn drop_indexes(&mut self, dataflow_names: Vec<QualName>, cascaded: bool) {
         let mut trace_keys = Vec::new();
         for name in dataflow_names {
             if let Some(trace_key) = self.index_aliases.remove(&name) {
@@ -978,9 +892,9 @@ where
     /// The `reached` input allows us to deduplicate views, and avoid e.g. recursion.
     fn sources_frontier(
         &self,
-        name: &str,
+        name: &QualName,
         bound: &mut Antichain<Timestamp>,
-        reached: &mut HashSet<String>,
+        reached: &mut HashSet<QualName>,
     ) {
         if let Some((_source, rename)) = self.sources.get(name) {
             if let Some(rename) = rename {
@@ -989,7 +903,7 @@ where
                 panic!("sources_frontier called on bare source");
             }
         } else {
-            reached.insert(name.to_string());
+            reached.insert(name.clone());
             if let Some(view) = self.views.get(name) {
                 if view.depends_on_source {
                     // Views that depend on a source should propose their own frontiers,
@@ -1009,7 +923,7 @@ where
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(&mut self, name: &str, mut changes: ChangeBatch<Timestamp>) {
+    pub fn update_upper(&mut self, name: &QualName, mut changes: ChangeBatch<Timestamp>) {
         if let Some(entry) = self.views.get_mut(name) {
             let changes: Vec<_> = entry.upper.update_iter(changes.drain()).collect();
             if !changes.is_empty() {
@@ -1018,7 +932,7 @@ where
                         broadcast(
                             &mut self.broadcast_tx,
                             SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                                name.to_string(),
+                                name.clone(),
                                 time,
                                 change,
                             )),
@@ -1033,13 +947,13 @@ where
                     since.insert(time.saturating_sub(entry.compaction_latency_ms));
                 }
                 self.since_updates
-                    .push((name.to_string(), since.elements().to_vec()));
+                    .push((name.clone(), since.elements().to_vec()));
             }
         }
     }
 
     /// The upper frontier of a maintained view, if it exists.
-    fn upper_of(&self, name: &str) -> Option<AntichainRef<Timestamp>> {
+    fn upper_of(&self, name: &QualName) -> Option<AntichainRef<Timestamp>> {
         self.views.get(name).map(|v| v.upper.frontier())
     }
 
@@ -1050,7 +964,7 @@ where
     /// or equal to some element of the since frontier the accumulation will be correct,
     /// and for other times no such guarantee holds.
     #[allow(dead_code)]
-    fn update_since(&mut self, name: &str, since: &[Timestamp]) {
+    fn update_since(&mut self, name: &QualName, since: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             entry.since.clear();
             entry.since.extend(since.iter().cloned());
@@ -1059,7 +973,7 @@ where
 
     /// The since frontier of a maintained view, if it exists.
     #[allow(dead_code)]
-    fn since_of(&self, name: &str) -> Option<&Antichain<Timestamp>> {
+    fn since_of(&self, name: &QualName) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.since)
     }
 
@@ -1092,15 +1006,15 @@ where
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    fn insert_source(&mut self, name: &str, compaction_ms: Timestamp) {
-        self.remove_view(name);
+    fn insert_source(&mut self, name: QualName, compaction_ms: Timestamp) {
+        self.remove_view(&name);
         let mut viewstate = ViewState::new(self.num_timely_workers);
         if self.log {
             for time in viewstate.upper.frontier().iter() {
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                        name.to_string(),
+                        name.clone(),
                         time.clone(),
                         1,
                     )),
@@ -1108,20 +1022,20 @@ where
             }
         }
         viewstate.set_compaction_latency(compaction_ms);
-        self.views.insert(name.to_string(), viewstate);
+        self.views.insert(name, viewstate);
     }
 
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    fn remove_view(&mut self, name: &str) {
+    fn remove_view(&mut self, name: &QualName) {
         if let Some(state) = self.views.remove(name) {
             if self.log {
                 for time in state.upper.frontier().iter() {
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            name.to_string(),
+                            name.clone(),
                             time.clone(),
                             -1,
                         )),
@@ -1129,6 +1043,82 @@ where
                 }
             }
         }
+    }
+
+    fn handle_statement(
+        &mut self,
+        session: &mut Session,
+        stmt: sql::Statement,
+        portal_name: Option<String>,
+        conn_id: u32,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        sql::plan(&self.catalog, session, stmt.clone(), portal_name)
+            .or_else(|err| {
+                // Executing the query failed. If we're running in symbiosis with
+                // Postgres, see if Postgres can handle it.
+                match self.symbiosis {
+                    Some(ref mut postgres) if postgres.can_handle(&stmt) => postgres.execute(&stmt),
+                    _ => Err(err),
+                }
+            })
+            .and_then(|plan| self.sequence_plan(session, plan, conn_id))
+    }
+
+    fn handle_execute(
+        &mut self,
+        session: &mut Session,
+        portal_name: String,
+        conn_id: u32,
+    ) -> Result<ExecuteResponse, failure::Error> {
+        let portal = session
+            .get_portal(&portal_name)
+            .ok_or_else(|| failure::format_err!("portal does not exist {:?}", portal_name))?;
+        let prepared = session
+            .get_prepared_statement(&portal.statement_name)
+            .ok_or_else(|| {
+                failure::format_err!(
+                    "statement for portal does not exist portal={:?} statement={:?}",
+                    portal_name,
+                    portal.statement_name
+                )
+            })?;
+        match prepared.sql() {
+            Some(stmt) => {
+                let stmt = stmt.clone();
+                self.handle_statement(session, stmt, Some(portal_name), conn_id)
+            }
+            None => Ok(ExecuteResponse::EmptyQuery),
+        }
+    }
+
+    fn handle_parse(
+        &self,
+        session: &mut Session,
+        name: String,
+        sql: String,
+    ) -> Result<(), failure::Error> {
+        let stmts = sql::parse(sql)?;
+        let (stmt, desc, param_types) = match stmts.len() {
+            0 => (None, None, vec![]),
+            1 => {
+                let stmt = stmts.into_element();
+                let (desc, param_types) = match sql::describe(&self.catalog, stmt.clone()) {
+                    Ok((desc, param_types)) => (desc, param_types),
+                    // Describing the query failed. If we're running in symbiosis with
+                    // Postgres, see if Postgres can handle it. Note that Postgres
+                    // only handles commands that do not return rows, so the
+                    // `RelationDesc` is always `None`.
+                    Err(err) => match self.symbiosis {
+                        Some(ref postgres) if postgres.can_handle(&stmt) => (None, vec![]),
+                        _ => return Err(err),
+                    },
+                };
+                (Some(stmt), desc, param_types)
+            }
+            n => bail!("expected no more than one query, got {}", n),
+        };
+        session.set_prepared_statement(name, PreparedStatement::new(stmt, desc, param_types));
+        Ok(())
     }
 }
 
@@ -1155,7 +1145,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 /// Per-view state.
 pub struct ViewState {
     /// Names of views on which this view depends.
-    uses: Vec<String>,
+    uses: Vec<QualName>,
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     upper: MutableAntichain<Timestamp>,
@@ -1197,7 +1187,7 @@ impl ViewState {
         view.relation_expr.unbound_uses(&mut out);
         out.sort();
         out.dedup();
-        view_state.uses = out.iter().map(|x| x.to_string()).collect();
+        view_state.uses = out.into_iter().cloned().collect();
         view_state
     }
 
@@ -1208,6 +1198,6 @@ impl ViewState {
 }
 
 /// Creates an internal name for sources that are unlikely to clash with view names.
-fn create_internal_source_name(name: &str) -> String {
-    format!("{}-VIEW", name)
+fn create_internal_source_name(name: &QualName) -> QualName {
+    name.with_trailing_string("-VIEW")
 }

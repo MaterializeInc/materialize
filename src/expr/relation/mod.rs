@@ -7,18 +7,19 @@
 // Clippy is wrong.
 #![allow(clippy::op_ref, clippy::len_zero)]
 
-pub mod func;
+use failure::ResultExt;
+use pretty::Doc::Space;
+use pretty::{BoxDoc, Doc};
+use serde::{Deserialize, Serialize};
 
 use self::func::AggregateFunc;
 use crate::pretty_pretty::{
     compact_intersperse_doc, tighten_outputs, to_braced_doc, to_tightly_braced_doc,
 };
 use crate::ScalarExpr;
-use failure::ResultExt;
-use pretty::Doc::Space;
-use pretty::{BoxDoc, Doc};
-use repr::{ColumnType, Datum, RelationType, Row};
-use serde::{Deserialize, Serialize};
+use repr::{ColumnType, Datum, LiteralName, QualName, RelationType, Row};
+
+pub mod func;
 
 /// An abstract syntax tree which defines a collection.
 ///
@@ -37,14 +38,14 @@ pub enum RelationExpr {
     /// Get an existing dataflow
     Get {
         /// The name of the collection to load.
-        name: String,
+        name: QualName,
         /// Schema of the collection.
         typ: RelationType,
     },
     /// Introduce a temporary dataflow
     Let {
         /// The name to be used in `Get` variants to retrieve `value`.
-        name: String,
+        name: QualName,
         /// The collection to be bound to `name`.
         value: Box<RelationExpr>,
         /// The result of the `Let`, evaluated with `name` bound to `value`.
@@ -497,7 +498,7 @@ impl RelationExpr {
     ///
     /// This method is complicated only by the need to handle potential shadowing of let bindings,
     /// whose binding becomes visible only in their body.
-    pub fn unbound_uses<'a, 'b>(&'a self, out: &'b mut Vec<&'a str>) {
+    pub fn unbound_uses<'a, 'b>(&'a self, out: &'b mut Vec<&'a QualName>) {
         match self {
             RelationExpr::Let { name, value, body } => {
                 // Append names from `value` but discard `name` from uses in `body`.
@@ -507,7 +508,7 @@ impl RelationExpr {
                 value.unbound_uses(out);
                 let mut temp = Vec::new();
                 body.unbound_uses(&mut temp);
-                temp.retain(|n| n != name);
+                temp.retain(|n| n != &name);
                 out.extend(temp.drain(..));
             }
             RelationExpr::Get { name, .. } => {
@@ -664,11 +665,12 @@ impl RelationExpr {
                 );
                 to_tightly_braced_doc("Constant [", rows, "]")
             }
-            RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name, "}"),
+            RelationExpr::Get { name, typ: _ } => to_braced_doc("Get {", name.to_string(), "}"),
             RelationExpr::Let { name, value, body } => {
                 // NB: We don't include the body inside the curly braces, so that recursively
                 // nested Let expressions do *not* increase the indentation.
-                let binding = to_braced_doc("Let {", to_doc!(name, " = ", value), "} in").group();
+                let binding =
+                    to_braced_doc("Let {", to_doc!(name.to_string(), " = ", value), "} in").group();
                 to_doc!(binding, Space, body)
             }
             RelationExpr::Project { input, outputs } => {
@@ -825,12 +827,12 @@ impl RelationExpr {
         } else {
             let name = format!("tmp_{}", id_gen.allocate_id());
             let get = RelationExpr::Get {
-                name: name.clone(),
+                name: name.clone().lit(),
                 typ: self.typ(),
             };
             let body = (body)(id_gen, get)?;
             Ok(RelationExpr::Let {
-                name,
+                name: name.lit(),
                 value: Box::new(self),
                 body: Box::new(body),
             })
@@ -1039,9 +1041,9 @@ mod tests {
         let c2 = constant(vec![vec![42]]);
         let c3 = constant(vec![vec![665]]);
         let binding = RelationExpr::Let {
-            name: String::from("id-2"),
+            name: QualName::trusted("id-2"),
             value: Box::new(RelationExpr::Let {
-                name: String::from("id-1"),
+                name: QualName::trusted("id-1"),
                 value: Box::new(c1),
                 body: Box::new(c2),
             }),
@@ -1050,18 +1052,18 @@ mod tests {
 
         assert_eq!(
             binding.to_doc().pretty(100).to_string(),
-            "Let { id-2 = Let { id-1 = Constant [[13]] } in Constant [[42]] } in Constant [[665]]"
+            r#"Let { "id-2" = Let { "id-1" = Constant [[13]] } in Constant [[42]] } in Constant [[665]]"#
         );
 
         assert_eq!(
             binding.to_doc().pretty(28).to_string(),
-            "Let {
-  id-2 = Let {
-    id-1 = Constant [[13]]
+            r#"Let {
+  "id-2" = Let {
+    "id-1" = Constant [[13]]
   } in
   Constant [[42]]
 } in
-Constant [[665]]"
+Constant [[665]]"#
         );
     }
 

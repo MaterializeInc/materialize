@@ -13,18 +13,20 @@
 //!
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
-use backtrace::Backtrace;
-use failure::{bail, ResultExt};
-use lazy_static::lazy_static;
 use std::env;
 use std::fs::{read_to_string, File};
 use std::io::{BufRead, BufReader};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::panic;
 use std::panic::PanicInfo;
 use std::path::PathBuf;
 use std::process;
 use std::sync::Mutex;
 use std::thread;
+
+use backtrace::Backtrace;
+use failure::{bail, format_err, ResultExt};
+use lazy_static::lazy_static;
 
 fn main() {
     if let Err(err) = run() {
@@ -88,12 +90,15 @@ fn run() -> Result<(), failure::Error> {
     opts.optflag("", "no-prometheus", "Do not gather prometheus metrics");
 
     let popts = opts.parse(&args[1..])?;
-    let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("MZ_GIT_SHA"));
     if popts.opt_present("h") {
         print!("{}", opts.usage("usage: materialized [options]"));
         return Ok(());
     } else if popts.opt_present("v") {
-        println!("materialized v{}", version);
+        println!(
+            "materialized v{} ({})",
+            materialized::VERSION,
+            materialized::BUILD_SHA
+        );
         return Ok(());
     }
 
@@ -118,7 +123,7 @@ fn run() -> Result<(), failure::Error> {
 
     let addresses = match address_file {
         None => (0..processes)
-            .map(|i| format!("127.0.0.1:{}", 6875 + i))
+            .map(|i| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6875 + i as u16))
             .collect(),
         Some(address_file) => read_address_file(&address_file, processes)?,
     };
@@ -132,7 +137,6 @@ fn run() -> Result<(), failure::Error> {
 
     let _server = materialized::serve(materialized::Config {
         logging_granularity,
-        version,
         threads,
         process,
         addresses,
@@ -148,7 +152,7 @@ fn run() -> Result<(), failure::Error> {
     }
 }
 
-fn read_address_file(path: &str, n: usize) -> Result<Vec<String>, failure::Error> {
+fn read_address_file(path: &str, n: usize) -> Result<Vec<SocketAddr>, failure::Error> {
     let file =
         File::open(path).with_context(|err| format!("opening address file {}: {}", path, err))?;
     let mut lines = BufReader::new(file).lines();
@@ -156,7 +160,18 @@ fn read_address_file(path: &str, n: usize) -> Result<Vec<String>, failure::Error
     if addrs.len() < n || lines.next().is_some() {
         bail!("address file does not contain exactly {} lines", n);
     }
-    Ok(addrs)
+    Ok(addrs
+        .into_iter()
+        .map(|addr| match addr.to_socket_addrs() {
+            // TODO(benesch): we should try all possible addresses, not just the
+            // first (#502).
+            Ok(mut addrs) => match addrs.next() {
+                Some(addr) => Ok(addr),
+                None => Err(format_err!("{} did not resolve to any addresses", addr)),
+            },
+            Err(err) => Err(format_err!("error resolving {}: {}", addr, err)),
+        })
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 lazy_static! {

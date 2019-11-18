@@ -58,7 +58,7 @@ tests=(
     test/cockroach/bit.slt
     # test/cockroach/builtin_function.slt
     test/cockroach/bytes.slt
-    # test/cockroach/case_sensitive_names.slt
+    test/cockroach/case_sensitive_names.slt
     # test/cockroach/collatedstring_constraint.slt
     test/cockroach/collatedstring_index1.slt
     test/cockroach/collatedstring_index2.slt

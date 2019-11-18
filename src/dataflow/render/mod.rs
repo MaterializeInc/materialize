@@ -21,7 +21,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
 use expr::RelationExpr;
-use repr::{Datum, Row, RowPacker, RowUnpacker};
+use repr::{Datum, QualName, Row, RowPacker, RowUnpacker};
 
 use super::sink;
 use super::source;
@@ -36,8 +36,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    dataflow_drops: &mut HashMap<String, Box<dyn Any>>,
-    local_inputs: &mut HashMap<String, LocalInput>,
+    dataflow_drops: &mut HashMap<QualName, Box<dyn Any>>,
+    local_inputs: &mut HashMap<QualName, LocalInput>,
     logger: &mut Option<Logger>,
 ) {
     let worker_index = worker.index();
@@ -212,7 +212,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 match context.arrangement(&to_arrange, &idx.keys) {
                     Some(ArrangementFlavor::Local(local)) => {
                         manager.set_user_created(
-                            idx.on_name,
+                            &idx.on_name,
                             &idx.keys,
                             WithDrop::new(local.trace.clone(), tokens.clone()),
                         );
@@ -302,7 +302,7 @@ where
                 RelationExpr::Let { name, value, body } => {
                     let typ = value.typ();
                     let bind = RelationExpr::Get {
-                        name: name.to_string(),
+                        name: name.clone(),
                         typ,
                     };
                     if self.has_collection(&bind) {

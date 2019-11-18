@@ -116,6 +116,13 @@ us() {
     echo -ne "\e[34m$*\e[0m"
 }
 
+# [u]sage-[f]lag: Paint the argument as a flag
+#
+# In usage text, write: "usage: $0 `uf --FLAG`"
+uf() {
+    echo -ne "\e[32m$*\e[0m"
+}
+
 # [u]sage-[w]arn: Paint the argument as a warning
 #
 # In usage text, write: "usage: $0 `uw WILL DELETE EVERYTHING`"

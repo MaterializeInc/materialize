@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
 use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
@@ -128,6 +128,18 @@ where
     Datum::from(x)
 }
 
+pub fn max_timestamptz<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<DateTime<Utc>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_timestamptz())
+        .max();
+    Datum::from(x)
+}
+
 pub fn max_null<'a, I>(_datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -241,6 +253,18 @@ where
         .into_iter()
         .filter(|d| !d.is_null())
         .map(|d| d.unwrap_timestamp())
+        .min();
+    Datum::from(x)
+}
+
+pub fn min_timestamptz<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let x: Option<DateTime<Utc>> = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_timestamptz())
         .min();
     Datum::from(x)
 }
@@ -369,6 +393,7 @@ pub enum AggregateFunc {
     MaxString,
     MaxDate,
     MaxTimestamp,
+    MaxTimestampTz,
     MaxNull,
     MinInt32,
     MinInt64,
@@ -379,6 +404,7 @@ pub enum AggregateFunc {
     MinString,
     MinDate,
     MinTimestamp,
+    MinTimestampTz,
     MinNull,
     SumInt32,
     SumInt64,
@@ -407,6 +433,7 @@ impl AggregateFunc {
             AggregateFunc::MaxString => max_string,
             AggregateFunc::MaxDate => max_date,
             AggregateFunc::MaxTimestamp => max_timestamp,
+            AggregateFunc::MaxTimestampTz => max_timestamptz,
             AggregateFunc::MaxNull => max_null,
             AggregateFunc::MinInt32 => min_int32,
             AggregateFunc::MinInt64 => min_int64,
@@ -417,6 +444,7 @@ impl AggregateFunc {
             AggregateFunc::MinString => min_string,
             AggregateFunc::MinDate => min_date,
             AggregateFunc::MinTimestamp => min_timestamp,
+            AggregateFunc::MinTimestampTz => min_timestamptz,
             AggregateFunc::MinNull => min_null,
             AggregateFunc::SumInt32 => sum_int32,
             AggregateFunc::SumInt64 => sum_int64,
@@ -474,6 +502,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MaxString => f.write_str("max"),
             AggregateFunc::MaxDate => f.write_str("max"),
             AggregateFunc::MaxTimestamp => f.write_str("max"),
+            AggregateFunc::MaxTimestampTz => f.write_str("max"),
             AggregateFunc::MaxNull => f.write_str("max"),
             AggregateFunc::MinInt32 => f.write_str("min"),
             AggregateFunc::MinInt64 => f.write_str("min"),
@@ -484,6 +513,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::MinString => f.write_str("min"),
             AggregateFunc::MinDate => f.write_str("min"),
             AggregateFunc::MinTimestamp => f.write_str("min"),
+            AggregateFunc::MinTimestampTz => f.write_str("min"),
             AggregateFunc::MinNull => f.write_str("min"),
             AggregateFunc::SumInt32 => f.write_str("sum"),
             AggregateFunc::SumInt64 => f.write_str("sum"),
