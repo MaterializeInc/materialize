@@ -378,12 +378,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         trace!("cid={} auth ok", cx.conn_id);
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        transition!(SendReadyForQuery {
-            send: conn.send(BackendMessage::ReadyForQuery(
-                state.session.transaction().into()
-            )),
-            session: state.session,
-        })
+        transition!(send_ready_for_query(conn, state.session))
     }
 
     fn poll_send_ready_for_query<'s, 'c>(
@@ -393,10 +388,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         trace!("cid={} send ready for query", cx.conn_id);
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        transition!(RecvQuery {
-            recv: conn.recv(),
-            session: state.session,
-        })
+        transition!(recv_query(conn, state.session))
     }
 
     fn poll_start_copy_out<'s, 'c>(
@@ -406,11 +398,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         trace!("cid={} starting copy out", cx.conn_id);
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        transition!(WaitForUpdates {
-            conn,
-            session: state.session,
-            rx: state.rx,
-        })
+        transition!(wait_for_updates(conn, state.session, state.rx))
     }
 
     fn poll_recv_query<'s, 'c>(
@@ -454,16 +442,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             FrontendMessage::CloseStatement { name } => {
                 let mut session = state.session;
                 session.remove_prepared_statement(&name);
-                transition!(RecvQuery {
-                    recv: conn.recv(),
-                    session,
-                });
+                transition!(recv_query(conn, session));
             }
             FrontendMessage::ClosePortal { name: _ } => {
-                transition!(RecvQuery {
-                    recv: conn.recv(),
-                    session: state.session,
-                });
+                transition!(recv_query(conn, state.session));
             }
             FrontendMessage::DescribePortal { name } => Ok(Async::Ready(send_describe_response(
                 conn,
@@ -567,12 +549,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                     extended: true,
                 })
             }
-            FrontendMessage::Sync => transition!(SendReadyForQuery {
-                send: conn.send(BackendMessage::ReadyForQuery(
-                    state.session.transaction().into()
-                )),
-                session: state.session,
-            }),
+            FrontendMessage::Sync => transition!(send_ready_for_query(conn, state.session)),
             FrontendMessage::Terminate => transition!(Done(())),
             _ => transition!(SendError {
                 send: conn.send(BackendMessage::ErrorResponse {
@@ -761,10 +738,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         trace!("cid={} sent extended row description", cx.conn_id);
-        transition!(RecvQuery {
-            recv: conn.recv(),
-            session: state.session,
-        })
+        transition!(recv_query(conn, state.session))
     }
 
     fn poll_send_row_description<'s, 'c>(
@@ -805,12 +779,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             Ok(Async::Ready(None)) => {
                 trace!("cid={} update stream finished", cx.conn_id);
                 let state = state.take();
-                transition!(SendReadyForQuery {
-                    send: state.conn.send(BackendMessage::ReadyForQuery(
-                        state.session.transaction().into()
-                    )),
-                    session: state.session,
-                })
+                transition!(send_ready_for_query(state.conn, state.session));
             }
             Err(err) => panic!("error receiving tail results: {}", err),
         }
@@ -862,11 +831,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendUpdates<A>, failure::Error> {
         let (_, conn) = try_ready!(state.send.poll());
         let state = state.take();
-        transition!(WaitForUpdates {
-            conn: conn,
-            session: state.session,
-            rx: state.rx,
-        })
+        transition!(wait_for_updates(conn, state.session, state.rx))
     }
 
     fn poll_send_command_complete<'s, 'c>(
@@ -889,17 +854,9 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 .inc();
         }
         if extended {
-            transition!(RecvQuery {
-                recv: conn.recv(),
-                session: state.session,
-            })
+            transition!(recv_query(conn, state.session))
         } else {
-            transition!(SendReadyForQuery {
-                send: conn.send(BackendMessage::ReadyForQuery(
-                    state.session.transaction().into()
-                )),
-                session: state.session,
-            })
+            transition!(send_ready_for_query(conn, state.session));
         }
     }
 
@@ -976,10 +933,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         trace!("cid={} transition to recv extended", cx.conn_id);
-        transition!(RecvQuery {
-            recv: conn.recv(),
-            session: state.session,
-        })
+        transition!(recv_query(conn, state.session))
     }
 
     fn poll_send_bind_complete<'s, 'c>(
@@ -988,10 +942,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
     ) -> Poll<AfterSendBindComplete<A>, failure::Error> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
-        transition!(RecvQuery {
-            recv: conn.recv(),
-            session: state.session,
-        })
+        transition!(recv_query(conn, state.session))
     }
 
     fn poll_drain_until_sync<'s, 'c>(
@@ -1003,19 +954,11 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         match msg {
             FrontendMessage::Sync => {
                 let state = state.take();
-                transition!(SendReadyForQuery {
-                    send: conn.send(BackendMessage::ReadyForQuery(
-                        state.session.transaction().into()
-                    )),
-                    session: state.session,
-                })
+                transition!(send_ready_for_query(conn, state.session));
             }
             _ => {
                 let state = state.take();
-                transition!(DrainUntilSync {
-                    recv: conn.recv(),
-                    session: state.session,
-                })
+                transition!(drain_until_sync(conn, state.session))
             }
         }
     }
@@ -1048,12 +991,7 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 .inc();
         }
         match state.kind {
-            ErrorKind::Standard => transition!(SendReadyForQuery {
-                send: conn.send(BackendMessage::ReadyForQuery(
-                    state.session.transaction().into()
-                )),
-                session: state.session,
-            }),
+            ErrorKind::Standard => transition!(send_ready_for_query(conn, state.session)),
             ErrorKind::Extended => transition!(DrainUntilSync {
                 recv: conn.recv(),
                 session: state.session,
@@ -1061,6 +999,47 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             ErrorKind::Fatal => transition!(Done(())),
         }
     }
+}
+
+fn send_ready_for_query<A>(conn: A, session: Session) -> SendReadyForQuery<A>
+where
+    A: Conn + 'static,
+{
+    SendReadyForQuery {
+        send: conn.send(BackendMessage::ReadyForQuery(session.transaction().into())),
+        session,
+    }
+}
+
+fn recv_query<A>(conn: A, session: Session) -> RecvQuery<A>
+where
+    A: Conn + 'static,
+{
+    RecvQuery {
+        recv: conn.recv(),
+        session,
+    }
+}
+
+fn drain_until_sync<A>(conn: A, session: Session) -> DrainUntilSync<A>
+where
+    A: Conn + 'static,
+{
+    DrainUntilSync {
+        recv: conn.recv(),
+        session,
+    }
+}
+
+fn wait_for_updates<A>(
+    conn: A,
+    session: Session,
+    rx: comm::mpsc::Receiver<Vec<Update>>,
+) -> WaitForUpdates<A>
+where
+    A: Conn + 'static,
+{
+    WaitForUpdates { conn, session, rx }
 }
 
 #[allow(clippy::too_many_arguments)]
