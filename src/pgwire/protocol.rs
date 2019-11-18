@@ -108,7 +108,7 @@ type MessageStream = Box<dyn Stream<Item = BackendMessage, Error = failure::Erro
 #[derive(Smf)]
 #[state_machine_future(context = "Context")]
 pub enum StateMachine<A: Conn + 'static> {
-    // Startup flow
+    // Startup.
     #[state_machine_future(start, transitions(RecvStartup))]
     Start { stream: A, session: Session },
 
@@ -121,7 +121,7 @@ pub enum StateMachine<A: Conn + 'static> {
         session: Session,
     },
 
-    // Regular query flow.
+    // Shared query flow.
     #[state_machine_future(transitions(RecvQuery, SendError, Error))]
     SendReadyForQuery { send: SinkSend<A>, session: Session },
 
@@ -165,33 +165,6 @@ pub enum StateMachine<A: Conn + 'static> {
         extended: bool,
     },
 
-    // Extended query flow.
-    #[state_machine_future(transitions(RecvQuery, Error))]
-    SendParseComplete { send: SinkSend<A>, session: Session },
-
-    #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
-    SendBindComplete { send: SinkSend<A>, session: Session },
-
-    #[state_machine_future(transitions(SendDescribeResponse, SendFatalError, Error))]
-    SendParameterDescription {
-        send: SinkSend<A>,
-        session: Session,
-        name: String,
-    },
-
-    #[state_machine_future(transitions(RecvQuery, Error))]
-    SendDescribeResponse { send: SinkSend<A>, session: Session },
-
-    // Response flows
-    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
-    SendRowDescription {
-        send: SinkSend<A>,
-        session: Session,
-        row_desc: RelationDesc,
-        rows_rx: coord::RowsFuture,
-    },
-
-    /// Wait for the dataflow layer to send us rows
     #[state_machine_future(transitions(WaitForRows, SendCommandComplete, SendError, Error))]
     WaitForRows {
         conn: A,
@@ -200,6 +173,51 @@ pub enum StateMachine<A: Conn + 'static> {
         rows_rx: coord::RowsFuture,
         field_formats: Option<Vec<FieldFormat>>,
         extended: bool,
+    },
+
+    #[state_machine_future(transitions(WaitForRows, SendCommandComplete, Error))]
+    SendRowDescription {
+        send: SinkSend<A>,
+        session: Session,
+        row_desc: RelationDesc,
+        rows_rx: coord::RowsFuture,
+    },
+
+    #[state_machine_future(transitions(SendReadyForQuery, RecvQuery, Error))]
+    SendCommandComplete {
+        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
+        session: Session,
+        extended: bool,
+        /// Labels for prometheus. These provide the `kind` label value in [`RESPONSES_SENT_COUNTER`]
+        label: &'static str,
+    },
+
+    // Extended-only query flow.
+    #[state_machine_future(transitions(RecvQuery, Error))]
+    SendParseComplete { send: SinkSend<A>, session: Session },
+
+    #[state_machine_future(transitions(RecvQuery, SendError, Error, Done))]
+    SendBindComplete { send: SinkSend<A>, session: Session },
+
+    #[state_machine_future(transitions(RecvQuery, Error))]
+    SendDescribeResponse { send: SinkSend<A>, session: Session },
+
+    #[state_machine_future(transitions(SendDescribeResponse, SendFatalError, Error))]
+    SendParameterDescription {
+        send: SinkSend<A>,
+        session: Session,
+        name: String,
+    },
+
+    #[state_machine_future(transitions(SendReadyForQuery, DrainUntilSync))]
+    DrainUntilSync { recv: Recv<A>, session: Session },
+
+    // COPY operations.
+    #[state_machine_future(transitions(WaitForUpdates, Error))]
+    StartCopyOut {
+        send: SinkSend<A>,
+        session: Session,
+        rx: comm::mpsc::Receiver<Vec<Update>>,
     },
 
     #[state_machine_future(transitions(
@@ -215,13 +233,6 @@ pub enum StateMachine<A: Conn + 'static> {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
 
-    #[state_machine_future(transitions(WaitForUpdates, Error))]
-    StartCopyOut {
-        send: SinkSend<A>,
-        session: Session,
-        rx: comm::mpsc::Receiver<Vec<Update>>,
-    },
-
     #[state_machine_future(transitions(SendError, Error, WaitForUpdates))]
     SendUpdates {
         send: Box<dyn Future<Item = (MessageStream, A), Error = failure::Error> + Send>,
@@ -229,6 +240,7 @@ pub enum StateMachine<A: Conn + 'static> {
         rx: comm::mpsc::Receiver<Vec<Update>>,
     },
 
+    // Asynchronous operations.
     #[state_machine_future(transitions(SendCommandComplete))]
     SendParameterStatus {
         send: SinkSend<A>,
@@ -236,18 +248,7 @@ pub enum StateMachine<A: Conn + 'static> {
         extended: bool,
     },
 
-    #[state_machine_future(transitions(SendReadyForQuery, RecvQuery, Error))]
-    SendCommandComplete {
-        send: Box<dyn Future<Item = A, Error = io::Error> + Send>,
-        session: Session,
-        extended: bool,
-        /// Labels for prometheus. These provide the `kind` label value in [`RESPONSES_SENT_COUNTER`]
-        label: &'static str,
-    },
-
-    #[state_machine_future(transitions(SendReadyForQuery, DrainUntilSync))]
-    DrainUntilSync { recv: Recv<A>, session: Session },
-
+    // Errors and termination.
     #[state_machine_future(transitions(DrainUntilSync, SendReadyForQuery, Done, Error))]
     SendError {
         send: SinkSend<A>,
@@ -284,6 +285,8 @@ fn format_update(update: Update) -> BackendMessage {
 }
 
 impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
+    // Startup.
+
     fn poll_start<'s, 'c>(
         state: &'s mut RentToOwn<'s, Start<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
@@ -367,6 +370,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         transition!(send_ready_for_query(conn, state.session))
     }
 
+    // Shared query flow.
+
     fn poll_send_ready_for_query<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendReadyForQuery<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
@@ -375,16 +380,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         let conn = try_ready!(state.send.poll());
         let state = state.take();
         transition!(recv_query(conn, state.session))
-    }
-
-    fn poll_start_copy_out<'s, 'c>(
-        state: &'s mut RentToOwn<'s, StartCopyOut<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterStartCopyOut<A>, failure::Error> {
-        trace!("cid={} starting copy out", cx.conn_id);
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        transition!(wait_for_updates(conn, state.session, state.rx))
     }
 
     fn poll_recv_query<'s, 'c>(
@@ -676,147 +671,6 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         }
     }
 
-    fn poll_send_parameter_description<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendParameterDescription<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendParameterDescription<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        Ok(Async::Ready(send_describe_response(
-            conn,
-            state.session,
-            state.name,
-            DescribeKind::Statement,
-            cx.conn_id,
-        )))
-    }
-
-    fn poll_send_describe_response<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendDescribeResponse<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendDescribeResponse<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        trace!("cid={} sent extended row description", cx.conn_id);
-        transition!(recv_query(conn, state.session))
-    }
-
-    fn poll_send_row_description<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        trace!("cid={} send row description", cx.conn_id);
-        transition!(WaitForRows {
-            conn,
-            session: state.session,
-            row_desc: state.row_desc,
-            rows_rx: state.rows_rx,
-            field_formats: None,
-            extended: false
-        })
-    }
-
-    fn poll_wait_for_updates<'s, 'c>(
-        state: &'s mut RentToOwn<'s, WaitForUpdates<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterWaitForUpdates<A>, failure::Error> {
-        trace!("cid={} wait for updates", cx.conn_id);
-        match state.rx.poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(Some(results))) => {
-                let state = state.take();
-                let stream: MessageStream = Box::new(futures::stream::iter_ok(
-                    results.into_iter().map(format_update),
-                ));
-                transition!(SendUpdates {
-                    send: Box::new(stream.forward(state.conn)),
-                    session: state.session,
-                    rx: state.rx,
-                })
-            }
-            Ok(Async::Ready(None)) => {
-                trace!("cid={} update stream finished", cx.conn_id);
-                let state = state.take();
-                transition!(send_ready_for_query(state.conn, state.session));
-            }
-            Err(err) => panic!("error receiving tail results: {}", err),
-        }
-    }
-
-    fn poll_wait_for_rows<'s, 'c>(
-        state: &'s mut RentToOwn<'s, WaitForRows<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterWaitForRows<A>, failure::Error> {
-        match try_ready!(state.rows_rx.poll()) {
-            PeekResponse::Canceled => {
-                let state = state.take();
-                transition!(send_error(
-                    state.conn,
-                    state.session,
-                    state.extended,
-                    "57014",
-                    "canceling statement due to user request"
-                ));
-            }
-            PeekResponse::Rows(rows) => {
-                let state = state.take();
-                let extended = state.extended;
-                trace!(
-                    "cid={} wait for rows: count={} extended={}",
-                    cx.conn_id,
-                    rows.len(),
-                    extended
-                );
-                transition!(send_rows(
-                    state.conn,
-                    state.session,
-                    rows,
-                    state.row_desc,
-                    state.field_formats.clone(),
-                    state.extended,
-                    cx.conn_id,
-                ));
-            }
-        }
-    }
-
-    fn poll_send_updates<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendUpdates<A>>,
-        _: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendUpdates<A>, failure::Error> {
-        let (_, conn) = try_ready!(state.send.poll());
-        let state = state.take();
-        transition!(wait_for_updates(conn, state.session, state.rx))
-    }
-
-    fn poll_send_command_complete<'s, 'c>(
-        state: &'s mut RentToOwn<'s, SendCommandComplete<A>>,
-        cx: &'c mut RentToOwn<'c, Context>,
-    ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
-        let conn = try_ready!(state.send.poll());
-        let state = state.take();
-        let extended = state.extended;
-        let in_transaction = state.session.transaction();
-        trace!(
-            "cid={} send command complete extended={} transaction={:?}",
-            cx.conn_id,
-            extended,
-            in_transaction,
-        );
-        if cx.gather_metrics {
-            RESPONSES_SENT_COUNTER
-                .with_label_values(&["success", state.label])
-                .inc();
-        }
-        if extended {
-            transition!(recv_query(conn, state.session))
-        } else {
-            transition!(send_ready_for_query(conn, state.session));
-        }
-    }
-
     fn poll_handle_parse<'s, 'c>(
         state: &'s mut RentToOwn<'s, HandleParse<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
@@ -875,6 +729,88 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         }
     }
 
+    fn poll_wait_for_rows<'s, 'c>(
+        state: &'s mut RentToOwn<'s, WaitForRows<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterWaitForRows<A>, failure::Error> {
+        match try_ready!(state.rows_rx.poll()) {
+            PeekResponse::Canceled => {
+                let state = state.take();
+                transition!(send_error(
+                    state.conn,
+                    state.session,
+                    state.extended,
+                    "57014",
+                    "canceling statement due to user request"
+                ));
+            }
+            PeekResponse::Rows(rows) => {
+                let state = state.take();
+                let extended = state.extended;
+                trace!(
+                    "cid={} wait for rows: count={} extended={}",
+                    cx.conn_id,
+                    rows.len(),
+                    extended
+                );
+                transition!(send_rows(
+                    state.conn,
+                    state.session,
+                    rows,
+                    state.row_desc,
+                    state.field_formats.clone(),
+                    state.extended,
+                    cx.conn_id,
+                ));
+            }
+        }
+    }
+
+    fn poll_send_row_description<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendRowDescription<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendRowDescription<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        trace!("cid={} send row description", cx.conn_id);
+        transition!(WaitForRows {
+            conn,
+            session: state.session,
+            row_desc: state.row_desc,
+            rows_rx: state.rows_rx,
+            field_formats: None,
+            extended: false
+        })
+    }
+
+    fn poll_send_command_complete<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendCommandComplete<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendCommandComplete<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        let extended = state.extended;
+        let in_transaction = state.session.transaction();
+        trace!(
+            "cid={} send command complete extended={} transaction={:?}",
+            cx.conn_id,
+            extended,
+            in_transaction,
+        );
+        if cx.gather_metrics {
+            RESPONSES_SENT_COUNTER
+                .with_label_values(&["success", state.label])
+                .inc();
+        }
+        if extended {
+            transition!(recv_query(conn, state.session))
+        } else {
+            transition!(send_ready_for_query(conn, state.session));
+        }
+    }
+
+    // Extended-only query flow.
+
     fn poll_send_parse_complete<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendParseComplete<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
@@ -895,6 +831,31 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         transition!(recv_query(conn, state.session))
     }
 
+    fn poll_send_describe_response<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendDescribeResponse<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendDescribeResponse<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        trace!("cid={} sent extended row description", cx.conn_id);
+        transition!(recv_query(conn, state.session))
+    }
+
+    fn poll_send_parameter_description<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendParameterDescription<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendParameterDescription<A>, failure::Error> {
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        Ok(Async::Ready(send_describe_response(
+            conn,
+            state.session,
+            state.name,
+            DescribeKind::Statement,
+            cx.conn_id,
+        )))
+    }
+
     fn poll_drain_until_sync<'s, 'c>(
         state: &'s mut RentToOwn<'s, DrainUntilSync<A>>,
         cx: &'c mut RentToOwn<'c, Context>,
@@ -913,6 +874,56 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
         }
     }
 
+    // COPY operations.
+
+    fn poll_start_copy_out<'s, 'c>(
+        state: &'s mut RentToOwn<'s, StartCopyOut<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterStartCopyOut<A>, failure::Error> {
+        trace!("cid={} starting copy out", cx.conn_id);
+        let conn = try_ready!(state.send.poll());
+        let state = state.take();
+        transition!(wait_for_updates(conn, state.session, state.rx))
+    }
+
+    fn poll_wait_for_updates<'s, 'c>(
+        state: &'s mut RentToOwn<'s, WaitForUpdates<A>>,
+        cx: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterWaitForUpdates<A>, failure::Error> {
+        trace!("cid={} wait for updates", cx.conn_id);
+        match state.rx.poll() {
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Ok(Async::Ready(Some(results))) => {
+                let state = state.take();
+                let stream: MessageStream = Box::new(futures::stream::iter_ok(
+                    results.into_iter().map(format_update),
+                ));
+                transition!(SendUpdates {
+                    send: Box::new(stream.forward(state.conn)),
+                    session: state.session,
+                    rx: state.rx,
+                })
+            }
+            Ok(Async::Ready(None)) => {
+                trace!("cid={} update stream finished", cx.conn_id);
+                let state = state.take();
+                transition!(send_ready_for_query(state.conn, state.session));
+            }
+            Err(err) => panic!("error receiving tail results: {}", err),
+        }
+    }
+
+    fn poll_send_updates<'s, 'c>(
+        state: &'s mut RentToOwn<'s, SendUpdates<A>>,
+        _: &'c mut RentToOwn<'c, Context>,
+    ) -> Poll<AfterSendUpdates<A>, failure::Error> {
+        let (_, conn) = try_ready!(state.send.poll());
+        let state = state.take();
+        transition!(wait_for_updates(conn, state.session, state.rx))
+    }
+
+    // Asynchronous operations.
+
     fn poll_send_parameter_status<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendParameterStatus<A>>,
         _: &'c mut RentToOwn<'c, Context>,
@@ -926,6 +937,8 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
             label: "set",
         })
     }
+
+    // Errors and termination.
 
     fn poll_send_error<'s, 'c>(
         state: &'s mut RentToOwn<'s, SendError<A>>,
