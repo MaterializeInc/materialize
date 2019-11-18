@@ -9,7 +9,7 @@ steps:
   - id: build
     label: ":docker: build"
     command: ci/test/build.sh
-    if: $CHANGED_RUST || $CHANGED_SLT || $CHANGED_TESTDRIVE || build.branch == "master"
+    if: $CHANGED_RUST || $CHANGED_SLT || $CHANGED_TESTDRIVE
     timeout_in_minutes: 30
     agents:
       queue: builder

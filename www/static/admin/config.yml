@@ -1,0 +1,25 @@
+backend:
+  name: git-gateway
+
+publish_mode: editorial_workflow
+
+media_folder: www/static/images/uploads
+public_folder: /images/uploads
+
+collections:
+- name: team
+  label: Team Member
+  folder: www/data/team
+  extension: yml
+  create: true
+  identifier_field: name
+  slug: "{{handle}}"
+  fields:
+  - { label: Name, name: name, widget: string }
+  - { label: Handle, name: handle, widget: string }
+  - { label: Title, name: title, widget: string }
+  - { label: Blurb, name: blurb, widget: text }
+  - { label: Headshot, name: headshot, widget: image }
+  - { label: Order, name: order, widget: number, valueType: int }
+  - { label: Homepage, name: homepage, widget: string, required: false }
+  editor: { preview: false }

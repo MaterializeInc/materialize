@@ -10,8 +10,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use std::collections::{BTreeMap, HashMap};
 
 use dataflow_types::{Diff, Timestamp};
-
-use repr::Row;
+use repr::{QualName, Row};
 
 #[allow(dead_code)]
 pub type KeysValsSpine = OrdValSpine<Row, Row, Timestamp, Diff>;
@@ -24,7 +23,7 @@ pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 /// of a collection. These arrangements can either be unkeyed, or keyed by some expression.
 pub struct TraceManager {
     /// A map from named collections to maintained traces.
-    pub traces: HashMap<String, CollectionTraces>,
+    pub traces: HashMap<QualName, CollectionTraces>,
 }
 
 impl Default for TraceManager {
@@ -56,7 +55,7 @@ impl TraceManager {
     /// associated traces may not accumulate to the correct quantities for times
     /// not in advance of `frontier`. Users should take care to only rely on
     /// accumulations at times in advance of `frontier`.
-    pub fn allow_compaction(&mut self, name: &str, frontier: &[Timestamp]) {
+    pub fn allow_compaction(&mut self, name: &QualName, frontier: &[Timestamp]) {
         if let Some(val) = self.traces.get_mut(name) {
             val.merge_logical(frontier);
         }
@@ -64,7 +63,11 @@ impl TraceManager {
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(&self, name: &str, keys: &[usize]) -> Option<&WithDrop<KeysValsHandle>> {
+    pub fn get_by_keys(
+        &self,
+        name: &QualName,
+        keys: &[usize],
+    ) -> Option<&WithDrop<KeysValsHandle>> {
         let collection = self.traces.get(name)?;
         if let Some(system) = collection.system.get(keys) {
             Some(system)
@@ -77,7 +80,7 @@ impl TraceManager {
     #[allow(dead_code)]
     pub fn get_by_keys_mut(
         &mut self,
-        name: &str,
+        name: &QualName,
         keys: &[usize],
     ) -> Option<&mut WithDrop<KeysValsHandle>> {
         let collection = self.traces.get_mut(name)?;
@@ -91,7 +94,7 @@ impl TraceManager {
     /// Returns a copy of all by_key arrangements, should they exist.
     pub fn get_all_keyed(
         &mut self,
-        name: &str,
+        name: &QualName,
     ) -> Option<impl Iterator<Item = (&Vec<usize>, &mut WithDrop<KeysValsHandle>)>> {
         let collection_trace = self.traces.get_mut(name)?;
         Some(
@@ -104,7 +107,7 @@ impl TraceManager {
 
     pub fn get_default_with_key(
         &mut self,
-        name: &str,
+        name: &QualName,
     ) -> Option<(&[usize], &mut WithDrop<KeysValsHandle>)> {
         if let Some(collection) = self.traces.get_mut(name) {
             Some((
@@ -120,7 +123,7 @@ impl TraceManager {
     }
 
     /// get the default arrangement, which is by primary key
-    pub fn get_default(&self, name: &str) -> Option<&WithDrop<KeysValsHandle>> {
+    pub fn get_default(&self, name: &QualName) -> Option<&WithDrop<KeysValsHandle>> {
         if let Some(collection) = self.traces.get(name) {
             collection.system.get(&collection.default_arr_key)
         } else {
@@ -130,7 +133,7 @@ impl TraceManager {
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(&mut self, name: String, keys: &[usize], trace: WithDrop<KeysValsHandle>) {
+    pub fn set_by_keys(&mut self, name: QualName, keys: &[usize], trace: WithDrop<KeysValsHandle>) {
         //Currently it is assumed that the first arrangement for a collection is the one
         //keyed by the primary keys
         self.traces
@@ -143,25 +146,25 @@ impl TraceManager {
     /// Add a user created index
     pub fn set_user_created(
         &mut self,
-        collection_name: String,
+        collection_name: &QualName,
         keys: &[usize],
         trace: WithDrop<KeysValsHandle>,
     ) {
         // The collection should exist already
         self.traces
-            .get_mut(&collection_name)
+            .get_mut(collection_name)
             .unwrap()
             .user
             .insert(keys.to_vec(), trace);
     }
 
     /// Removes all of a collection's traces
-    pub fn del_collection_traces(&mut self, name: &str) -> Option<CollectionTraces> {
+    pub fn del_collection_traces(&mut self, name: &QualName) -> Option<CollectionTraces> {
         self.traces.remove(name)
     }
 
     /// Removes a user-created trace
-    pub fn del_user_trace(&mut self, collection_name: &str, keys: &[usize]) -> bool {
+    pub fn del_user_trace(&mut self, collection_name: &QualName, keys: &[usize]) -> bool {
         self.traces
             .get_mut(collection_name)
             .unwrap()

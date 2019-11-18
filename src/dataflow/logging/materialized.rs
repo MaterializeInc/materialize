@@ -17,7 +17,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
-use repr::{Datum, RowPacker, RowUnpacker};
+use repr::{Datum, QualName, RowPacker, RowUnpacker};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -28,13 +28,16 @@ pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifi
 )]
 pub enum MaterializedEvent {
     /// Dataflow command, true for create and false for drop.
-    Dataflow(String, bool),
+    Dataflow(QualName, bool),
     /// Dataflow depends on a named source of data.
-    DataflowDependency { dataflow: String, source: String },
+    DataflowDependency {
+        dataflow: QualName,
+        source: QualName,
+    },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Available frontier information for views.
-    Frontier(String, Timestamp, i64),
+    Frontier(QualName, Timestamp, i64),
 }
 
 /// A logged peek event.
@@ -43,7 +46,7 @@ pub enum MaterializedEvent {
 )]
 pub struct Peek {
     /// The name of the view the peek targets.
-    name: String,
+    name: QualName,
     /// The logical timestamp requested.
     time: Timestamp,
     /// The connection ID of the peek.
@@ -51,9 +54,9 @@ pub struct Peek {
 }
 
 impl Peek {
-    pub fn new(name: &str, time: Timestamp, conn_id: u32) -> Self {
+    pub fn new(name: QualName, time: Timestamp, conn_id: u32) -> Self {
         Self {
-            name: name.to_string(),
+            name,
             time,
             conn_id,
         }
@@ -175,7 +178,10 @@ pub fn construct<A: Allocate>(
             .map({
                 let mut packer = RowPacker::new();
                 move |(name, worker)| {
-                    packer.pack(&[Datum::String(&*name), Datum::Int64(worker as i64)])
+                    packer.pack(&[
+                        Datum::String(&*name.to_string()),
+                        Datum::Int64(worker as i64),
+                    ])
                 }
             });
 
@@ -191,8 +197,8 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(dataflow, source, worker)| {
                     packer.pack(&[
-                        Datum::String(&*dataflow),
-                        Datum::String(&*source),
+                        Datum::String(&*dataflow.to_string()),
+                        Datum::String(&*source.to_string()),
                         Datum::Int64(worker as i64),
                     ])
                 }
@@ -212,7 +218,7 @@ pub fn construct<A: Allocate>(
                     packer.pack(&[
                         Datum::String(&*format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
-                        Datum::String(&*peek.name),
+                        Datum::String(&*peek.name.to_string()),
                         Datum::Int64(peek.time as i64),
                     ])
                 }
@@ -229,7 +235,10 @@ pub fn construct<A: Allocate>(
             .map({
                 let mut packer = RowPacker::new();
                 move |(name, logical)| {
-                    packer.pack(&[Datum::String(&*name), Datum::Int64(logical as i64)])
+                    packer.pack(&[
+                        Datum::String(&*name.to_string()),
+                        Datum::Int64(logical as i64),
+                    ])
                 }
             });
 

@@ -44,7 +44,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 
 > CREATE INDEX i ON v(a)
 
-> CREATE INDEX i2 ON s(Y)
+> CREATE INDEX i2 ON s("Y")
 
 # Test that creating objects of the same name does not work
 
@@ -166,10 +166,10 @@ s is not of type VIEW
 # Test that drop without if exists does not work if the object does not exist
 
 ! DROP INDEX nonexistent
-catalog item nonexistent does not exist
+catalog item 'nonexistent' does not exist
 
 ! DROP VIEW nonexistent
-catalog item nonexistent does not exist
+catalog item 'nonexistent' does not exist
 
 ! DROP SOURCE nonexistent
-catalog item nonexistent does not exist
+catalog item 'nonexistent' does not exist

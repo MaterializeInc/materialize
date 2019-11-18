@@ -84,10 +84,10 @@ cannot delete test1: still depended upon by catalog item 'test2'
 # rather than verifying the drop by checking whether DROP VIEW fails.
 
 ! DROP VIEW test1;
-catalog item test1 does not exist
+catalog item 'test1' does not exist
 
 ! DROP VIEW test2;
-catalog item test2 does not exist
+catalog item 'test2' does not exist
 
 # Test that DROP VIEW IF EXISTS succeeds even if the view does not exist.
 
@@ -101,7 +101,7 @@ catalog item test2 does not exist
 > DROP SOURCE s CASCADE;
 
 ! DROP VIEW test4;
-catalog item test4 does not exist
+catalog item 'test4' does not exist
 
 # Test that sinks cannot be depended upon.
 
@@ -125,7 +125,7 @@ cannot delete v2: still depended upon by catalog item 'i1'
 
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
-> CREATE INDEX i2 ON s(X);
+> CREATE INDEX i2 ON s("X");
 
 ! DROP SOURCE s;
 cannot delete s: still depended upon by catalog item 'i2'
@@ -139,15 +139,15 @@ catalog item i1 is an index and cannot be depended upon
 > DROP VIEW v2 CASCADE;
 
 ! DROP VIEW v2;
-catalog item v2 does not exist
+catalog item 'v2' does not exist
 
 ! DROP INDEX i1;
-catalog item i1 does not exist
+catalog item 'i1' does not exist
 
 > DROP SOURCE s CASCADE;
 
 ! DROP SOURCE s;
-catalog item s does not exist
+catalog item 's' does not exist
 
 ! DROP INDEX i2;
-catalog item i2 does not exist
+catalog item 'i2' does not exist

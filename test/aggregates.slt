@@ -35,9 +35,9 @@ SELECT a+1 FROM t GROUP BY a+1 HAVING sum(b) = 3;
 query TTT colnames
 SHOW COLUMNS FROM t
 ----
- Field Nullable Type
- a     YES      int8
- b     YES      int8
+Field  Nullable  Type
+ a     YES       int8
+ b     YES       int8
 
 # avg on an integer column should return a decimal with the default decimal
 # division scale increase.

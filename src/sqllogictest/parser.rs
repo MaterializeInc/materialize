@@ -10,6 +10,7 @@ use std::borrow::ToOwned;
 use failure::{bail, format_err};
 use lazy_static::lazy_static;
 use regex::Regex;
+use repr::ColumnName;
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
 
@@ -206,6 +207,10 @@ fn parse_query<'a>(
     if multiline && (check_column_names || sort.yes()) {
         bail!("multiline option is incompatible with all other options");
     }
+    lazy_static! {
+        static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
+        static ref HASH_REGEX: Regex = Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
+    }
     let label = words.next();
     let sql = parse_sql(input)?;
     let column_names = if check_column_names {
@@ -213,15 +218,12 @@ fn parse_query<'a>(
             split_at(input, &LINE_REGEX)?
                 .split(' ')
                 .filter(|s| !s.is_empty())
+                .map(ColumnName::from)
                 .collect(),
         )
     } else {
         None
     };
-    lazy_static! {
-        static ref LINE_REGEX: Regex = Regex::new("\r?(\n|$)").unwrap();
-        static ref HASH_REGEX: Regex = Regex::new(r"(\S+) values hashing to (\S+)").unwrap();
-    }
     let output_str = *input;
     let output = match HASH_REGEX.captures(input) {
         Some(captures) => Output::Hashed {

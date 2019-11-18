@@ -16,7 +16,7 @@ use super::util::source;
 use super::SharedCapability;
 use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
 use interchange::avro;
-use repr::Row;
+use repr::{QualName, Row};
 
 use lazy_static::lazy_static;
 use prometheus::{IntCounter, IntCounterVec};
@@ -46,7 +46,7 @@ lazy_static! {
 
 pub fn kafka<G>(
     scope: &G,
-    name: &str,
+    name: &QualName,
     connector: KafkaSourceConnector,
     read_kafka: bool,
 ) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SharedCapability>)
@@ -60,7 +60,7 @@ where
         schema_registry_url,
     } = connector;
     let (stream, capability) = source(scope, name, move |info| {
-        let name = name.to_owned();
+        let name = name.clone();
         let activator = scope.activator_for(&info.address[..]);
 
         let mut config = ClientConfig::new();
@@ -93,9 +93,8 @@ where
 
         move |cap, output| {
             if let Some(consumer) = consumer.as_mut() {
-                // Repeatedly interrogate Kafka for messages. Cease only when
-                // Kafka stops returning new data. We could cease earlier, if we
-                // had a better policy.
+                // Repeatedly interrogate Kafka for messages. Cease when
+                // Kafka stops returning new data, or after 10 milliseconds.
                 let timer = std::time::Instant::now();
 
                 while let Some(result) = consumer.poll(Duration::from_millis(0)) {
