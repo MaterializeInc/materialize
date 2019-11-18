@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, Utc};
 use std::error::Error;
 
 mod util;
@@ -16,8 +16,8 @@ fn test_now() -> Result<(), Box<dyn Error>> {
 
     let rows = &conn.query("SELECT now()", &[])?;
     assert_eq!(1, rows.len());
-    // Confirm that `now()` returns a NaiveDateTime, don't assert a specific time.
-    let _now: NaiveDateTime = rows.get(0).get(0);
+    // Confirm that `now()` returns a DateTime<Utc>, don't assert a specific time.
+    let _now: DateTime<Utc> = rows.get(0).get(0);
 
     Ok(())
 }

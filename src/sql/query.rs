@@ -15,7 +15,7 @@
 //! In `RelationExpr`, aggregates can only be applied immediately at the time of grouping.
 //! To deal with this, whenever we see a SQL GROUP BY we look ahead for aggregates and precompute them in the `RelationExpr::Reduce`. When we reach the same aggregates during normal planning later on, we look them up in an `ExprContext` to find the precomputed versions.
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use std::cell::RefCell;
 use std::cmp;
 use std::collections::{btree_map, BTreeMap, HashSet};
@@ -1459,8 +1459,8 @@ fn plan_function<'a>(
             }
 
             "now" => Ok(ScalarExpr::Literal(
-                Row::pack(&[Datum::Timestamp(ecx.qcx.current_timestamp)]),
-                ColumnType::new(ScalarType::Timestamp),
+                Row::pack(&[Datum::TimestampTz(ecx.qcx.current_timestamp)]),
+                ColumnType::new(ScalarType::TimestampTz),
             )),
 
             "nullif" => {
@@ -2547,7 +2547,7 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
 #[derive(Debug)]
 struct QueryContext<'a> {
     /// Always add the current timestamp of the query, available for now() function.
-    current_timestamp: NaiveDateTime,
+    current_timestamp: DateTime<Utc>,
     /// The scope of the outer relation expression.
     outer_scope: &'a Scope,
     /// The type of the outer relation expression.
@@ -2563,10 +2563,8 @@ impl<'a> QueryContext<'a> {
         outer_relation_type: &'a RelationType,
         param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
     ) -> QueryContext<'a> {
-        let current_timestamp = Utc::now().timestamp();
-        let current_timestamp = NaiveDateTime::from_timestamp(current_timestamp, 0);
         QueryContext {
-            current_timestamp,
+            current_timestamp: Utc::now(),
             outer_scope,
             outer_relation_type,
             param_types,
