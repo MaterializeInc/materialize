@@ -19,6 +19,13 @@ fn test_now() -> Result<(), Box<dyn Error>> {
     // Confirm that `now()` returns a DateTime<Utc>, don't assert a specific time.
     let _now: DateTime<Utc> = rows.get(0).get(0);
 
+    let rows = &conn.query("SELECT now(), (SELECT now())", &[])?;
+    assert_eq!(1, rows.len());
+    // Confirm calls to now() will use the same DateTime<Utc> from the QueryContext
+    let first_now: DateTime<Utc> = rows.get(0).get(0);
+    let second_now: DateTime<Utc> = rows.get(0).get(1);
+    assert_eq!(first_now, second_now);
+
     let rows = &conn.query("SELECT current_timestamp()", &[])?;
     assert_eq!(1, rows.len());
     // Confirm that `current_timestamp()` returns a DateTime<Utc>, don't assert a specific time.
