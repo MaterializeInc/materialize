@@ -149,6 +149,12 @@ For larger test files, it is imperative that you compile in release mode, i.e.,
 by passing the `--release` flag as above. The extra compile time will quickly be
 made up for by a much faster execution.
 
+To add logging for tests, append `-vv`, e.g.:
+
+```shell
+$ cargo run --bin sqllogictest --release -- test/TESTFILE.slt -vv
+```
+
 The offical SQLite test files are in [test/sqllogictest](/test/sqllogictest),
 and some additional test files from CockroachDB are in
 [test/cockroach](/test/cockroach). Some additional Materialize-specific
