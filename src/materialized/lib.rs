@@ -17,7 +17,7 @@ use futures::sync::mpsc::{self, UnboundedSender};
 use futures::{Future, Stream};
 use log::error;
 use std::any::Any;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
@@ -51,7 +51,7 @@ pub struct Config {
     pub process: usize,
     /// The addresses of each process in the cluster, including this node,
     /// in order of process ID.
-    pub addresses: Vec<String>,
+    pub addresses: Vec<SocketAddr>,
     /// SQL to run if bootstrapping a new cluster.
     pub bootstrap_sql: String,
     /// The directory in which `materialized` should store its own metadata.
@@ -110,7 +110,7 @@ fn reject_connection<A: AsyncWrite>(a: A) -> impl Future<Item = (), Error = io::
 }
 
 /// Start a `materialized` server.
-pub fn serve(config: Config) -> Result<Server, failure::Error> {
+pub fn serve(mut config: Config) -> Result<Server, failure::Error> {
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
     let (cmd_tx, cmd_rx) = mpsc::unbounded::<coord::Command>();
@@ -120,37 +120,26 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
     let is_primary = config.process == 0;
     let num_timely_workers = config.num_timely_workers();
 
-    // Initialize pgwire / http listener.
+    // Initialize network listener.
     let listen_addr = SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        config.addresses[config.process]
-            .split(':')
-            .nth(1)
-            .ok_or_else(|| format_err!("unable to parse node address"))?
-            .parse()?,
+        match config.addresses[config.process].ip() {
+            IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        },
+        config.addresses[config.process].port(),
     );
     let listener = TcpListener::bind(&listen_addr)?;
+    let local_addr = listener.local_addr()?;
+    config.addresses[config.process].set_port(local_addr.port());
+
     println!(
         "materialized v{} listening on {}...",
-        config.version, listen_addr
+        config.version,
+        SocketAddr::new(listen_addr.ip(), local_addr.port()),
     );
 
-    let socket_addrs = config
-        .addresses
-        .iter()
-        .map(|addr| match addr.to_socket_addrs() {
-            // TODO(benesch): we should try all possible addresses, not just the
-            // first (#502).
-            Ok(mut addrs) => match addrs.next() {
-                Some(addr) => Ok(addr),
-                None => Err(format_err!("{} did not resolve to any addresses", addr)),
-            },
-            Err(err) => Err(format_err!("error resolving {}: {}", addr, err)),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
     let mut runtime = tokio::runtime::Runtime::new()?;
-    let switchboard = Switchboard::new(socket_addrs, config.process, runtime.executor());
+    let switchboard = Switchboard::new(config.addresses, config.process, runtime.executor());
     let gather_metrics = config.gather_metrics;
     runtime.spawn({
         let switchboard = switchboard.clone();
@@ -232,6 +221,7 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
     .map_err(|s| format_err!("{}", s))?;
 
     Ok(Server {
+        local_addr,
         _cmd_tx: cmd_tx,
         _dataflow_guard: Box::new(dataflow_guard),
         _coord_thread: coord_thread,
@@ -241,9 +231,16 @@ pub fn serve(config: Config) -> Result<Server, failure::Error> {
 
 /// A running `materialized` server.
 pub struct Server {
+    local_addr: SocketAddr,
     // Drop order matters for these fields.
     _cmd_tx: Arc<mpsc::UnboundedSender<coord::Command>>,
     _dataflow_guard: Box<dyn Any>,
     _coord_thread: Option<JoinOnDropHandle<()>>,
     _runtime: Runtime,
+}
+
+impl Server {
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
 }

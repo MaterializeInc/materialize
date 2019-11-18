@@ -1453,7 +1453,6 @@ dependencies = [
  "postgres",
  "pretty_assertions",
  "prometheus",
- "rand 0.7.2",
  "tokio",
 ]
 
