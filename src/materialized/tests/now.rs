@@ -19,5 +19,10 @@ fn test_now() -> Result<(), Box<dyn Error>> {
     // Confirm that `now()` returns a DateTime<Utc>, don't assert a specific time.
     let _now: DateTime<Utc> = rows.get(0).get(0);
 
+    let rows = &conn.query("SELECT current_timestamp()", &[])?;
+    assert_eq!(1, rows.len());
+    // Confirm that `current_timestamp()` returns a DateTime<Utc>, don't assert a specific time.
+    let _current_timestamp: DateTime<Utc> = rows.get(0).get(0);
+
     Ok(())
 }

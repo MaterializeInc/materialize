@@ -1445,6 +1445,11 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "current_timestamp" | "now" => Ok(ScalarExpr::Literal(
+                Row::pack(&[Datum::TimestampTz(ecx.qcx.current_timestamp)]),
+                ColumnType::new(ScalarType::TimestampTz),
+            )),
+
             "mod" => {
                 if sql_func.args.len() != 2 {
                     bail!("mod requires exactly two arguments");
@@ -1457,11 +1462,6 @@ fn plan_function<'a>(
                     &sql_func.args[1],
                 )
             }
-
-            "now" => Ok(ScalarExpr::Literal(
-                Row::pack(&[Datum::TimestampTz(ecx.qcx.current_timestamp)]),
-                ColumnType::new(ScalarType::TimestampTz),
-            )),
 
             "nullif" => {
                 if sql_func.args.len() != 2 {
