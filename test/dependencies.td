@@ -125,7 +125,7 @@ cannot delete v2: still depended upon by catalog item 'i1'
 
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
-> CREATE INDEX i2 ON s(X);
+> CREATE INDEX i2 ON s("X");
 
 ! DROP SOURCE s;
 cannot delete s: still depended upon by catalog item 'i2'

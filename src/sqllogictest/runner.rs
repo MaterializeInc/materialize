@@ -40,7 +40,7 @@ use coord::ExecuteResponse;
 use dataflow;
 use ore::option::OptionExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::{ColumnType, Datum, LiteralName, QualName, RelationDesc, Row};
+use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 use sql::{Session, Statement};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::{Parser as SqlParser, ParserError as SqlParserError};
@@ -72,8 +72,8 @@ pub enum Outcome<'a> {
         message: String,
     },
     WrongColumnNames {
-        expected_column_names: &'a Vec<QualName>,
-        inferred_column_names: Vec<QualName>,
+        expected_column_names: &'a Vec<ColumnName>,
+        inferred_column_names: Vec<ColumnName>,
     },
     OutputFailure {
         expected_output: &'a Output,
@@ -580,7 +580,7 @@ impl State {
         if let Some(expected_column_names) = expected_column_names {
             let inferred_column_names = desc
                 .iter_names()
-                .map(|t| t.owned().unwrap_or_else(|| "?column?".lit()))
+                .map(|t| t.owned().unwrap_or_else(|| "?column?".into()))
                 .collect::<Vec<_>>();
             if expected_column_names != &inferred_column_names {
                 return Ok(Outcome::WrongColumnNames {

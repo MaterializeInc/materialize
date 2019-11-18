@@ -37,12 +37,13 @@ use catalog::Catalog;
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::MAX_DECIMAL_PRECISION;
-use repr::{ColumnType, Datum, LiteralName, QualName, RelationDesc, RelationType, ScalarType};
+use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, ScalarType};
 
 use super::expr::{
     AggregateExpr, AggregateFunc, BinaryFunc, ColumnOrder, ColumnRef, JoinKind, RelationExpr,
     ScalarExpr, UnaryFunc, VariadicFunc,
 };
+use super::names;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
@@ -73,7 +74,7 @@ pub fn plan_root_query(
             .collect(),
     );
 
-    let desc = RelationDesc::new(typ, scope.column_names().map(|o| o.cloned()).collect());
+    let desc = RelationDesc::new(typ, scope.column_names());
     let mut param_types = vec![];
     for (i, (n, typ)) in qcx.unwrap_param_types().into_iter().enumerate() {
         if n != i + 1 {
@@ -327,7 +328,7 @@ fn plan_set_expr(
             }
             let mut scope = Scope::empty(Some(qcx.outer_scope.clone()));
             for i in 0..types.unwrap().len() {
-                let name = Some(format!("column{}", i + 1).lit());
+                let name = Some(format!("column{}", i + 1).into());
                 scope.items.push(ScopeItem::from_column_name(name));
             }
             Ok((expr.unwrap(), scope))
@@ -368,7 +369,7 @@ fn plan_view_select(
                 RelationExpr::constant(vec![vec![]], typ.clone()),
                 Scope::from_source(
                     tn,
-                    iter::empty::<Option<QualName>>(),
+                    iter::empty::<Option<ColumnName>>(),
                     Some(qcx.outer_scope.clone()),
                 ),
             ))
@@ -457,7 +458,7 @@ fn plan_view_select(
             group_scope.items.push(ScopeItem {
                 names: vec![ScopeItemName {
                     table_name: None,
-                    column_name: Some(QualName::try_from(sql_function.name.clone())?),
+                    column_name: Some(sql_function.name.to_string().into()),
                 }],
                 expr: Some(Expr::Function(sql_function.clone())),
             });
@@ -693,7 +694,7 @@ fn plan_select_item<'a>(
                 0,
                 ScopeItemName {
                     table_name: None,
-                    column_name: Some(alias.try_into()?),
+                    column_name: Some(names::ident_to_col_name(alias.clone())),
                 },
             );
             scope_item.expr = Some(sql_expr.clone());
@@ -854,8 +855,8 @@ fn plan_join_constraint<'a>(
             catalog,
             &column_names
                 .iter()
-                .map(|ident| QualName::try_from(ident))
-                .collect::<Result<Vec<_>, _>>()?,
+                .map(|ident| names::ident_to_col_name(ident.clone()))
+                .collect::<Vec<_>>(),
             left,
             left_scope,
             right,
@@ -894,7 +895,7 @@ fn plan_join_constraint<'a>(
 #[allow(clippy::too_many_arguments)]
 fn plan_using_constraint(
     _: &Catalog,
-    column_names: &[QualName],
+    column_names: &[ColumnName],
     left: RelationExpr,
     left_scope: Scope,
     right: RelationExpr,
@@ -994,14 +995,17 @@ fn plan_expr<'a>(
     } else {
         match e {
             Expr::Identifier(name) => {
-                let (i, _) = ecx.scope.resolve_column(&QualName::try_from(name)?)?;
+                let (i, _) = ecx
+                    .scope
+                    .resolve_column(&names::ident_to_col_name(name.clone()))?;
                 Ok(ScalarExpr::Column(i))
             }
             Expr::CompoundIdentifier(names) => {
                 if names.len() == 2 {
-                    let (i, _) = ecx
-                        .scope
-                        .resolve_table_column(&(&names[0]).try_into()?, &(&names[1]).try_into()?)?;
+                    let (i, _) = ecx.scope.resolve_table_column(
+                        &(&names[0]).try_into()?,
+                        &names::ident_to_col_name(names[1].clone()),
+                    )?;
                     Ok(ScalarExpr::Column(i))
                 } else {
                     bail!(
@@ -1277,11 +1281,11 @@ fn plan_any_or_all<'a>(
     // plan left and op
     // this is a bit of a hack - we want to plan `op` as if the original expr was `(SELECT ANY/ALL(left op right[1]) FROM right)`
     let mut scope = Scope::empty(Some(ecx.scope.clone()));
-    let right_name = format!("right_{}", Uuid::new_v4()).lit();
+    let right_name = format!("right_{}", Uuid::new_v4());
     scope.items.push(ScopeItem {
         names: vec![ScopeItemName {
-            table_name: Some(right_name.clone()),
-            column_name: Some(right_name.clone()),
+            table_name: None,
+            column_name: Some(ColumnName::from(right_name.clone())),
         }],
         expr: None,
     });
@@ -1298,7 +1302,7 @@ fn plan_any_or_all<'a>(
         &any_ecx,
         op,
         left,
-        &Expr::Identifier(Ident::try_from(right_name)?),
+        &Expr::Identifier(Ident::new(right_name)),
     )?;
 
     // plan subquery

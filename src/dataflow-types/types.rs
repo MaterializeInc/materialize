@@ -308,8 +308,8 @@ mod tests {
                 )),
             },
             desc: RelationDesc::empty()
-                .add_column("name".lit(), ScalarType::String)
-                .add_column("quantity".lit(), ScalarType::String),
+                .add_column("name", ScalarType::String)
+                .add_column("quantity", ScalarType::String),
         });
 
         let decoded: DataflowDesc =

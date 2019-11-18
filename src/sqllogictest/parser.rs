@@ -10,7 +10,7 @@ use std::borrow::ToOwned;
 use failure::{bail, format_err};
 use lazy_static::lazy_static;
 use regex::Regex;
-use repr::QualName;
+use repr::ColumnName;
 
 use crate::ast::{Mode, Output, QueryOutput, Record, Sort, Type};
 
@@ -218,7 +218,7 @@ fn parse_query<'a>(
             split_at(input, &LINE_REGEX)?
                 .split(' ')
                 .filter(|s| !s.is_empty())
-                .map(|s| QualName::trusted(s))
+                .map(ColumnName::from)
                 .collect(),
         )
     } else {

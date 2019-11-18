@@ -44,7 +44,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 
 > CREATE INDEX i ON v(a)
 
-> CREATE INDEX i2 ON s(Y)
+> CREATE INDEX i2 ON s("Y")
 
 # Test that creating objects of the same name does not work
 

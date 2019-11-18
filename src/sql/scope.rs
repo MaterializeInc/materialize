@@ -25,12 +25,12 @@
 use failure::bail;
 
 use super::expr::ColumnRef;
-use repr::QualName;
+use repr::{ColumnName, QualName};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeItemName {
     pub table_name: Option<QualName>,
-    pub column_name: Option<QualName>,
+    pub column_name: Option<ColumnName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +67,7 @@ pub struct Scope {
 }
 
 impl ScopeItem {
-    pub fn from_column_name(column_name: Option<QualName>) -> Self {
+    pub fn from_column_name(column_name: Option<ColumnName>) -> Self {
         ScopeItem {
             names: vec![ScopeItemName {
                 table_name: None,
@@ -100,15 +100,14 @@ impl Scope {
         }
     }
 
-    pub fn from_source<I, Q1>(
+    pub fn from_source<I, N>(
         table_name: Option<impl Into<QualName>>,
         column_names: I,
         outer_scope: Option<Scope>,
     ) -> Self
     where
-        I: Iterator<Item = Option<Q1>>,
-        //Q: Into<QualName>,
-        Q1: Into<QualName>,
+        I: Iterator<Item = Option<N>>,
+        N: Into<ColumnName>,
     {
         let mut scope = Scope::empty(outer_scope);
         let table_name = table_name.map(|n| n.into());
@@ -124,26 +123,8 @@ impl Scope {
         scope
     }
 
-    // pub fn from_source_owned(
-    //     table_name: Option<QualName>,
-    //     column_names: Vec<Option<QualName>>,
-    //     outer_scope: Option<Scope>,
-    // ) -> Self {
-    //     let mut scope = Scope::empty(outer_scope);
-    //     scope.items = column_names
-    //         .map(|column_name| ScopeItem {
-    //             names: vec![ScopeItemName {
-    //                 table_name: table_name.clone(),
-    //                 column_name,
-    //             }],
-    //             expr: None,
-    //         })
-    //         .collect();
-    //     scope
-    // }
-
     /// Constructs an iterator over the canonical name for each column.
-    pub fn column_names(&self) -> impl Iterator<Item = Option<&QualName>> {
+    pub fn column_names(&self) -> impl Iterator<Item = Option<&ColumnName>> {
         self.items.iter().map(|item| {
             item.names
                 .iter()
@@ -175,7 +156,7 @@ impl Scope {
     fn resolve<'a, Matches>(
         &'a self,
         matches: Matches,
-        name_in_error: &QualName,
+        name_in_error: &str,
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error>
     where
         Matches: Fn(&ScopeItemName) -> bool,
@@ -209,25 +190,25 @@ impl Scope {
 
     pub fn resolve_column<'a>(
         &'a self,
-        column_name: &QualName,
+        column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
         self.resolve(
             |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
-            column_name,
+            column_name.as_str(),
         )
     }
 
     pub fn resolve_table_column<'a>(
         &'a self,
         table_name: &QualName,
-        column_name: &QualName,
+        column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItem), failure::Error> {
         self.resolve(
             |item: &ScopeItemName| {
                 item.table_name.as_ref() == Some(table_name)
                     && item.column_name.as_ref() == Some(column_name)
             },
-            &QualName::from_names(&[table_name.clone(), column_name.clone()])?,
+            &format!("{}.{}", table_name, column_name),
         )
     }
 

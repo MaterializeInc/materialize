@@ -38,7 +38,7 @@ use dataflow_types::{
 use expr::RelationExpr;
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
-use repr::{Datum, LiteralName, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
+use repr::{ColumnName, Datum, LiteralName, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
 
@@ -422,7 +422,7 @@ where
                     // session.
                     let desc = RelationDesc::new(
                         typ,
-                        iter::repeat::<Option<QualName>>(None).take(ncols).collect(),
+                        iter::repeat::<Option<ColumnName>>(None).take(ncols),
                     );
                     let dataflow = DataflowDesc::from(View {
                         name: name.clone(),

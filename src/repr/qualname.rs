@@ -117,20 +117,6 @@ impl QualName {
         }
     }
 
-    //pub fn matches_ident_name(&self, rhs: &str) -> bool {}
-
-    /// Invalid names are currently generated throughout the code base because we were using strings and could be lazy
-    ///
-    /// TODO: get rid of this
-    pub fn invalid() -> QualName {
-        QualName::trusted("$$_INVALID_NAME_$$")
-    }
-
-    /// Extract a QualName from an object, or construct an invalid one
-    pub fn from_or_invalid(name: ObjectName) -> QualName {
-        QualName::new_normalized(name.0).unwrap_or_else(|_| QualName::invalid())
-    }
-
     /// Create a QualName based on a string that is trusted to be correct
     pub fn trusted(ident: &str) -> QualName {
         QualName(vec![Identifier {

@@ -21,7 +21,7 @@ mod row;
 mod scalar;
 
 pub use qualname::{LiteralName, QualName};
-pub use relation::{ColumnType, RelationDesc, RelationType};
+pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
 pub use row::{PackableRow, Row, RowPacker, RowUnpacker, UnpackedRow};
 pub use scalar::decimal;
 pub use scalar::regex;
