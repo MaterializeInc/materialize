@@ -83,6 +83,39 @@ pub fn plan_root_query(
     Ok((expr, desc, finishing, param_types))
 }
 
+fn plan_expr_or_col_index<'a>(
+    catalog: &Catalog,
+    ecx: &ExprContext,
+    e: &'a Expr,
+    type_hint: Option<ScalarType>,
+    clause_name: &str,
+) -> Result<ScalarExpr, failure::Error> {
+    match e {
+        Expr::Value(Value::Number(n)) => {
+            let n = n.parse::<usize>().with_context(|err| {
+                format_err!(
+                    "unable to parse column reference in {}: {}: {}",
+                    clause_name,
+                    err,
+                    n
+                )
+            })?;
+            let max = ecx.relation_type.column_types.len();
+            if n < 1 || n > max {
+                bail!(
+                    "column reference {} in {} is out of range (1 - {})",
+                    n,
+                    clause_name,
+                    max
+                );
+            }
+            Some(Ok(ScalarExpr::Column(ColumnRef::Inner(n - 1))))
+        }
+        _ => None,
+    }
+    .unwrap_or_else(|| plan_expr(catalog, ecx, e, type_hint))
+}
+
 fn plan_query(
     catalog: &Catalog,
     qcx: &QueryContext,
@@ -106,63 +139,41 @@ fn plan_query(
     let mut order_by = vec![];
     let mut map_exprs = vec![];
     for obe in &q.order_by {
-        match &obe.expr {
-            Expr::Value(Value::Number(n)) => {
-                let n = n.parse::<usize>().with_context(|err| {
-                    format_err!(
-                        "unable to parse column reference in ORDER BY: {}: {}",
-                        err,
-                        n
-                    )
-                })?;
-                let max = output_typ.column_types.len();
-                if n < 1 || n > max {
-                    bail!(
-                        "column reference {} in ORDER BY is out of range (1 - {})",
-                        n,
-                        max
-                    );
-                }
-                order_by.push(ColumnOrder {
-                    column: n - 1,
-                    desc: match obe.asc {
-                        None => false,
-                        Some(asc) => !asc,
-                    },
-                });
-            }
-            other => {
-                let ecx = &ExprContext {
-                    qcx,
-                    name: "ORDER BY clause",
-                    scope: &scope,
-                    relation_type: &output_typ,
-                    allow_aggregates: true,
-                    allow_subqueries: true,
-                };
-                let expr = plan_expr(catalog, ecx, other, Some(ScalarType::String))?;
-                // If the expression is a reference to an existing column,
-                // do not introduce a new column to support it.
-                if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
-                    order_by.push(ColumnOrder {
-                        column,
-                        desc: match obe.asc {
-                            None => false,
-                            Some(asc) => !asc,
-                        },
-                    });
-                } else {
-                    let idx = output_typ.column_types.len() + map_exprs.len();
-                    map_exprs.push(expr);
-                    order_by.push(ColumnOrder {
-                        column: idx,
-                        desc: match obe.asc {
-                            None => false,
-                            Some(asc) => !asc,
-                        },
-                    });
-                }
-            }
+        let ecx = &ExprContext {
+            qcx,
+            name: "ORDER BY clause",
+            scope: &scope,
+            relation_type: &output_typ,
+            allow_aggregates: true,
+            allow_subqueries: true,
+        };
+        let expr = plan_expr_or_col_index(
+            catalog,
+            ecx,
+            &obe.expr,
+            Some(ScalarType::String),
+            "ORDER BY",
+        )?;
+        // If the expression is a reference to an existing column,
+        // do not introduce a new column to support it.
+        if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
+            order_by.push(ColumnOrder {
+                column,
+                desc: match obe.asc {
+                    None => false,
+                    Some(asc) => !asc,
+                },
+            });
+        } else {
+            let idx = output_typ.column_types.len() + map_exprs.len();
+            map_exprs.push(expr);
+            order_by.push(ColumnOrder {
+                column: idx,
+                desc: match obe.asc {
+                    None => false,
+                    Some(asc) => !asc,
+                },
+            });
         }
     }
 
@@ -409,7 +420,13 @@ fn plan_view_select(
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in &s.group_by {
-            let expr = plan_expr(catalog, ecx, group_expr, Some(ScalarType::String))?;
+            let expr = plan_expr_or_col_index(
+                catalog,
+                ecx,
+                group_expr,
+                Some(ScalarType::String),
+                "GROUP BY",
+            )?;
             let new_column = group_key.len();
             // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
             if group_exprs
