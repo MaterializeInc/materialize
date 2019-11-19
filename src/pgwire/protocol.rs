@@ -452,28 +452,37 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 raw_parameter_bytes,
                 return_field_formats,
             } => {
-                trace!(
-                    "cid={} handle bind statement={:?} portal={:?}, raw_parameter_bytes={:?}, return_field_formats={:?}",
-                    cx.conn_id,
-                    statement_name,
-                    portal_name,
-                    raw_parameter_bytes,
-                    return_field_formats
-                );
-
                 let mut session = state.session;
                 let fmts = return_field_formats.iter().map(bool::from).collect();
                 let stmt = session.get_prepared_statement(&statement_name).unwrap();
                 let param_types = stmt.param_types();
                 match raw_parameter_bytes.decode_parameters(param_types) {
                     Ok(row) => {
+                        trace!(
+                            "cid={} handle bind statement={:?} portal={:?} row={:?} return_field_formats={:?}",
+                            cx.conn_id,
+                            statement_name,
+                            portal_name,
+                            row,
+                            return_field_formats
+                        );
                         session.set_portal(portal_name, statement_name, Some(row), fmts)?;
                         transition!(SendBindComplete {
                             send: conn.send(BackendMessage::BindComplete),
                             session,
                         });
                     }
-                    Err(err) => transition!(send_fatal_error(conn, "08P01", err.to_string())),
+                    Err(e) => {
+                        trace!(
+                            "cid={} handle bind err={:?} statement={:?} portal={:?} return_field_formats={:?}",
+                            cx.conn_id,
+                            e,
+                            statement_name,
+                            portal_name,
+                            return_field_formats
+                        );
+                        transition!(send_fatal_error(conn, "08P01", err.to_string()))
+                    }
                 }
             }
             FrontendMessage::Execute { portal_name } => {

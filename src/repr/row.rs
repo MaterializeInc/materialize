@@ -3,14 +3,16 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::borrow::Borrow;
+use std::fmt;
+use std::mem::{size_of, transmute};
+
 use crate::decimal::Significand;
 use crate::scalar::Interval;
 use crate::Datum;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use std::borrow::Borrow;
-use std::mem::{size_of, transmute};
 
 /// A packed representation for `Datum`s.
 ///
@@ -52,7 +54,7 @@ use std::mem::{size_of, transmute};
 /// ```
 ///
 /// `Row::pack` and `Row::unpack` can cause a surprising amount of allocation. In performance-sensitive code, use `RowPacker` and `RowUnpacker` instead to reuse intermediate storage.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Row {
     data: Box<[u8]>,
 }
@@ -61,6 +63,15 @@ pub struct Row {
 pub struct RowIter<'a> {
     row: &'a Row,
     offset: usize,
+}
+
+impl fmt::Debug for Row {
+    /// Debug representation using the internal datums
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("Row{")?;
+        f.debug_list().entries(self.iter()).finish()?;
+        f.write_str("}")
+    }
 }
 
 /// `RowUnpacker` provides a reusable buffer as an alternative to `Row::unpack` for unpacking large numbers of `Row`s.
