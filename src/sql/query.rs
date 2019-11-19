@@ -60,13 +60,7 @@ pub fn plan_root_query(
     mut query: Query,
 ) -> Result<(RelationExpr, RelationDesc, RowSetFinishing, Vec<ScalarType>), failure::Error> {
     crate::transform::transform(&mut query);
-    let outer_scope = &Scope::empty(None);
-    let outer_relation_type = &RelationType::empty();
-    let qcx = QueryContext::root(
-        outer_scope,
-        outer_relation_type,
-        Rc::new(RefCell::new(BTreeMap::new())),
-    );
+    let qcx = QueryContext::root();
     let (expr, scope, finishing) = plan_query(catalog, &qcx, &query)?;
     let typ = qcx.relation_type(&expr);
     let typ = RelationType::new(
@@ -541,15 +535,8 @@ pub fn plan_index(
     key_parts: &[Expr],
 ) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
     let desc = catalog.get_desc(on_name)?;
-
     let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
-    let outer_scope = &Scope::empty(None);
-    let outer_relation_type = &RelationType::empty();
-    let qcx = &QueryContext::root(
-        outer_scope,
-        outer_relation_type,
-        Rc::new(RefCell::new(BTreeMap::new())),
-    );
+    let qcx = &QueryContext::root();
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "CREATE INDEX",
@@ -1070,16 +1057,7 @@ fn plan_expr<'a>(
                 if !ecx.allow_subqueries {
                     bail!("{} does not allow subqueries", ecx.name)
                 }
-                let outer_relation_type = &RelationType::new(
-                    ecx.qcx
-                        .outer_relation_type
-                        .column_types
-                        .iter()
-                        .cloned()
-                        .chain(ecx.relation_type.column_types.iter().cloned())
-                        .collect(),
-                );
-                let qcx = ExprContext::derived_query_context(&ecx, outer_relation_type);
+                let qcx = ecx.derived_query_context();
                 let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
                 Ok(expr.exists())
             }
@@ -1087,16 +1065,7 @@ fn plan_expr<'a>(
                 if !ecx.allow_subqueries {
                     bail!("{} does not allow subqueries", ecx.name)
                 }
-                let outer_relation_type = &RelationType::new(
-                    ecx.qcx
-                        .outer_relation_type
-                        .column_types
-                        .iter()
-                        .cloned()
-                        .chain(ecx.relation_type.column_types.iter().cloned())
-                        .collect(),
-                );
-                let qcx = ExprContext::derived_query_context(&ecx, outer_relation_type);
+                let qcx = ecx.derived_query_context();
                 let (expr, _scope) = plan_subquery(catalog, &qcx, query)?;
                 let column_types = qcx.relation_type(&expr).column_types;
                 if column_types.len() != 1 {
@@ -1260,16 +1229,7 @@ fn plan_any_or_all<'a>(
     if !ecx.allow_subqueries {
         bail!("{} does not allow subqueries", ecx.name)
     }
-    let outer_relation_type = &RelationType::new(
-        ecx.qcx
-            .outer_relation_type
-            .column_types
-            .iter()
-            .cloned()
-            .chain(ecx.relation_type.column_types.iter().cloned())
-            .collect(),
-    );
-    let qcx = ExprContext::derived_query_context(&ecx, outer_relation_type);
+    let qcx = ecx.derived_query_context();
     // plan right
 
     let (right, _scope) = plan_subquery(catalog, &qcx, right)?;
@@ -2577,29 +2537,25 @@ impl<'ast> Visit<'ast> for AggregateFuncVisitor<'ast> {
 
 /// A bundle of unrelated things that we need for planning `Query`s.
 #[derive(Debug)]
-struct QueryContext<'a> {
+struct QueryContext {
     /// Always add the current timestamp of the query, available for now() function.
     current_timestamp: DateTime<Utc>,
     /// The scope of the outer relation expression.
-    outer_scope: &'a Scope,
+    outer_scope: Scope,
     /// The type of the outer relation expression.
-    outer_relation_type: &'a RelationType,
+    outer_relation_type: RelationType,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
 }
 
-impl<'a> QueryContext<'a> {
-    fn root(
-        outer_scope: &'a Scope,
-        outer_relation_type: &'a RelationType,
-        param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
-    ) -> QueryContext<'a> {
+impl QueryContext {
+    fn root() -> QueryContext {
         QueryContext {
             current_timestamp: Utc::now(),
-            outer_scope,
-            outer_relation_type,
-            param_types,
+            outer_scope: Scope::empty(None),
+            outer_relation_type: RelationType::empty(),
+            param_types: Rc::new(RefCell::new(BTreeMap::new())),
         }
     }
 
@@ -2615,7 +2571,7 @@ impl<'a> QueryContext<'a> {
 /// A bundle of unrelated things that we need for planning `Expr`s.
 #[derive(Debug)]
 struct ExprContext<'a> {
-    qcx: &'a QueryContext<'a>,
+    qcx: &'a QueryContext,
     /// The name of this kind of expression eg "WHERE clause". Used only for error messages.
     name: &'static str,
     /// The context for the `Query` that contains this `Expr`.
@@ -2639,11 +2595,19 @@ impl<'a> ExprContext<'a> {
         )
     }
 
-    fn derived_query_context(&self, outer_relation_type: &'a RelationType) -> QueryContext<'a> {
+    fn derived_query_context(&self) -> QueryContext {
         QueryContext {
             current_timestamp: self.qcx.current_timestamp,
-            outer_scope: &self.scope,
-            outer_relation_type,
+            outer_scope: self.scope.clone(),
+            outer_relation_type: RelationType::new(
+                self.qcx
+                    .outer_relation_type
+                    .column_types
+                    .iter()
+                    .cloned()
+                    .chain(self.relation_type.column_types.iter().cloned())
+                    .collect(),
+            ),
             param_types: self.qcx.param_types.clone(),
         }
     }
