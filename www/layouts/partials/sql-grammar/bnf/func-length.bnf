@@ -1,0 +1,2 @@
+func_length ::=
+  'LENGTH' '(' str (',' encoding_name)? ')'

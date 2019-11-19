@@ -39,3 +39,11 @@ You can now include the diagram on a page using:
 Because our diagrams rely on Hugo's `partials` features, the diagram files are
 maintained in the `/www` dir (the actual Hugo site), but referenced as if they
 were local (through the magic of symlinks).
+
+## Function + Operator docs
+
+The **Functions** you see at `www/docs/sql/functions/` are populated from `www/data/sql_funcs.json`. Unfortunately this means that they're ad hoc and are not actually generated from the Materialize source code.
+
+As new functions get added, this file must be manually updated. The idea here is to structure functions by their input type (whereas operators are grouped by their output type), largely influenced by the way that Postgres structures their function docs.
+
+If you see the need to add or change the grouping here, don't be shy.

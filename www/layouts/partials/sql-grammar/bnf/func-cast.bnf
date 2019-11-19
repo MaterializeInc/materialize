@@ -1,0 +1,2 @@
+func_cast ::=
+  'CAST' '(' val 'AS' type ')'

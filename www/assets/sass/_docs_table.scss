@@ -15,4 +15,13 @@ th {
 td {
   padding: 10px;
   min-width: 160px;
+
+  .highlight {
+    background-color: #fff;
+    margin-bottom: 0px;
+    padding: 0px;
+    pre {
+      background-color: #fff !important;
+    }
+  }
 }
