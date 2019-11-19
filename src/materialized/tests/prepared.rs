@@ -3,12 +3,10 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::error::Error;
-
 mod util;
 
 #[test]
-fn test_prepared_statements() -> Result<(), Box<dyn Error>> {
+fn test_prepared_statements() -> util::TestResult {
     ore::log::init();
 
     let data_dir = None;

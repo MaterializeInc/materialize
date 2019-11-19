@@ -11,6 +11,8 @@ use std::time::Duration;
 use postgres::params::{ConnectParams, Host};
 use postgres::{Connection, TlsMode};
 
+pub type TestResult = Result<(), Box<dyn Error>>;
+
 pub fn start_server(
     data_directory: Option<PathBuf>,
 ) -> Result<(materialized::Server, Connection), Box<dyn Error>> {
