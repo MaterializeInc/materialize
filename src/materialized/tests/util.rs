@@ -12,10 +12,24 @@ use postgres::params::{ConnectParams, Host};
 use postgres::{Connection, TlsMode};
 
 pub type TestResult = Result<(), Box<dyn Error>>;
+type TResult = Result<(materialized::Server, Connection), Box<dyn Error>>;
 
-pub fn start_server(
-    data_directory: Option<PathBuf>,
-) -> Result<(materialized::Server, Connection), Box<dyn Error>> {
+pub fn start_server(data_directory: Option<PathBuf>) -> TResult {
+    start_server_inner(data_directory, None)
+}
+
+// since this is only used in some of the test crates it shows up as a dead code warning in the others
+#[allow(dead_code)]
+pub fn start_symbiosis_server(data_directory: Option<PathBuf>) -> TResult {
+    start_server_inner(
+        data_directory,
+        std::env::var("MZ_SYMBIOSIS_URL")
+            .ok()
+            .or_else(|| Some("postgres://localhost:5432".into())),
+    )
+}
+
+fn start_server_inner(data_directory: Option<PathBuf>, symbiosis_url: Option<String>) -> TResult {
     let server = materialized::serve(materialized::Config {
         logging_granularity: Some(Duration::from_secs(1)),
         threads: 1,
@@ -23,7 +37,7 @@ pub fn start_server(
         addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
         bootstrap_sql: "".into(),
         data_directory,
-        symbiosis_url: None,
+        symbiosis_url,
         gather_metrics: false,
     })?;
     let local_addr = server.local_addr();
