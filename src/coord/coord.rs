@@ -132,7 +132,7 @@ where
                     }),
                 )?;
                 // Insert with 1 second compaction latency.
-                coordinator.insert_source(log.id(), 1_000);
+                coordinator.insert_source(log.id(), Some(1_000));
             }
         }
 
@@ -948,13 +948,20 @@ where
                 }
 
                 // Advance the compaction frontier to trail the new frontier.
-                // This logic assumes one-dimensional `Timestamp` time.
-                let mut since = Antichain::new();
-                for time in entry.upper.frontier().iter() {
-                    since.insert(time.saturating_sub(entry.compaction_latency_ms));
+                // If the compaction latency is `None` compaction messages are
+                // not emitted, and the trace should be broadly useable.
+                // TODO: If the frontier advances surprisingly quickly, e.g. in
+                // the case of a constant collection, this compaction is actively
+                // harmful. We should reconsider compaction policy with an eye
+                // towards minimizing unexpected screw-ups.
+                if let Some(compaction_latency_ms) = entry.compaction_latency_ms {
+                    let mut since = Antichain::new();
+                    for time in entry.upper.frontier().iter() {
+                        since.insert(time.saturating_sub(compaction_latency_ms));
+                    }
+                    self.since_updates
+                        .push((name.clone(), since.elements().to_vec()));
                 }
-                self.since_updates
-                    .push((name.clone(), since.elements().to_vec()));
             }
         }
     }
@@ -1013,7 +1020,7 @@ where
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    fn insert_source(&mut self, name: GlobalId, compaction_ms: Timestamp) {
+    fn insert_source(&mut self, name: GlobalId, compaction_ms: Option<Timestamp>) {
         self.remove_view(&name);
         let mut viewstate = ViewState::new(self.num_timely_workers);
         if self.log {
@@ -1167,7 +1174,7 @@ pub struct ViewState {
     ///
     /// This timestamp drives the advancement of the since frontier as a
     /// function of the upper frontier, trailing it by exactly this much.
-    compaction_latency_ms: Timestamp,
+    compaction_latency_ms: Option<Timestamp>,
     /// True if the dataflow defining the view may depend on a source, which
     /// leads us to include the frontier of the view in timestamp selection,
     /// as the view cannot be expected to advance its frontier simply because
@@ -1184,7 +1191,7 @@ impl ViewState {
             uses: Vec::new(),
             upper,
             since: Antichain::from_elem(0),
-            compaction_latency_ms: 60_000,
+            compaction_latency_ms: Some(60_000),
             depends_on_source: true,
         }
     }
@@ -1201,7 +1208,7 @@ impl ViewState {
     }
 
     /// Sets the latency behind the collection frontier at which compaction occurs.
-    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
+    pub fn set_compaction_latency(&mut self, latency_ms: Option<Timestamp>) {
         self.compaction_latency_ms = latency_ms;
     }
 }
