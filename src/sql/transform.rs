@@ -16,6 +16,7 @@ use repr::QualName;
 
 pub fn transform(query: &mut Query) {
     AvgFuncRewriter.visit_query(query);
+    IdentFuncRewriter.visit_query(query);
 }
 
 // Rewrites `avg(col)` to `sum(col) / count(col)`, so that we can pretend the
@@ -54,6 +55,28 @@ impl<'ast> VisitMut<'ast> for AvgFuncRewriter {
                     right: Box::new(count),
                 };
                 *expr = Expr::Nested(Box::new(div));
+            }
+        }
+    }
+}
+
+// Rewrites special keywords that SQL considers to be function calls to actual
+// function calls. For example, `SELECT current_timestamp` is rewritten to
+// `SELECT current_timestamp()`.
+struct IdentFuncRewriter;
+
+impl<'ast> VisitMut<'ast> for IdentFuncRewriter {
+    fn visit_expr(&mut self, expr: &'ast mut Expr) {
+        visit_mut::visit_expr(self, expr);
+        if let Expr::Identifier(ident) = expr {
+            let name = ObjectName(vec![ident.clone()]);
+            if QualName::name_equals(name, "current_timestamp") {
+                *expr = Expr::Function(Function {
+                    name: ObjectName(vec!["current_timestamp".into()]),
+                    args: vec![],
+                    over: None,
+                    distinct: false,
+                })
             }
         }
     }

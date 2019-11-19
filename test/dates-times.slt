@@ -617,3 +617,8 @@ query B
 SELECT current_timestamp() > timestamp '2016-06-13 00:00:00'
 ----
 true
+
+query B
+SELECT current_timestamp > timestamp '2016-06-13 00:00:00'
+----
+true
