@@ -1618,7 +1618,13 @@ fn plan_unary_op<'a>(
     let expr = plan_expr(catalog, ecx, expr, Some(type_hint))?;
     let typ = ecx.column_type(&expr);
     let func = match op {
-        UnaryOperator::Not => UnaryFunc::Not,
+        UnaryOperator::Not => match typ.scalar_type {
+            ScalarType::Bool => UnaryFunc::Not,
+            _ => bail!(
+                "Cannot apply operator Not to non-boolean type {:?}",
+                typ.scalar_type
+            ),
+        },
         UnaryOperator::Plus => return Ok(expr), // no-op
         UnaryOperator::Minus => match typ.scalar_type {
             ScalarType::Int32 => UnaryFunc::NegInt32,
