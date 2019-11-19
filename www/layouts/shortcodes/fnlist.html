@@ -1,0 +1,37 @@
+{{ range $.Site.Data.sql_funcs }}
+<h2>
+  <a class="headline-hash" href="#{{ lower .type }}">
+    {{.type}}
+  </a>
+  <a name="{{ lower .type }}"></a>
+</h2>
+
+<table>
+
+  <tr>
+    <th>
+      Function
+    </th>
+    <th>
+      Computes
+    </th>
+  </tr>
+  {{ range .functions }}
+  <tr>
+    <td>
+
+      {{ highlight .signature "rust" "" }}
+
+    </td>
+    <td>
+
+      {{ .description | markdownify }}
+
+      {{ if .url}}(<a href="{{ .url}}">docs</a>){{ end }}
+
+    </td>
+  </tr>
+  {{ end }} {{/*  {{ range .functions }} */}}
+</table>
+
+{{ end }}{{/*  {{ range $.Site.Data.sql_funcs }} */}}

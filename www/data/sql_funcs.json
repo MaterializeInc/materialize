@@ -1,0 +1,102 @@
+[
+    {
+        "type": "Generic",
+        "functions": [
+            {
+                "signature": "cast(cast_expr) -> T",
+                "description": "Value as type `T`",
+                "url": "cast"
+            },
+            {
+                "signature": "coalesce(x: T...) -> T?",
+                "description": "First non-_NULL_ arg, or _NULL_ if all are _NULL_"
+            },
+            {
+                "signature": "nullif(x: T, y: T) -> T?",
+                "description": "_NULL_ if `x == y`, else `x`"
+            }
+        ]
+    },
+    {
+        "type": "Aggregate",
+        "functions": [
+            {
+                "signature": "count(x: T) -> Int",
+                "description": "Number on non-_NULL_ inputs"
+            },
+            {
+                "signature": "max(x: T) -> T",
+                "description": "Maximum value among `T`"
+            },
+            {
+                "signature": "min(x: T) -> T",
+                "description": "Minimum value among `T`"
+            }
+        ]
+    },
+    {
+        "type": "Column",
+        "functions": [
+            {
+                "signature": "lhs bool_op all(c: C) -> Bool",
+                "description": "`true` iff applying `bool_op` to `lhs` and every value of C evaluates to `true`"
+            },
+            {
+                "signature": "lhs bool_op any(c: C) -> Bool",
+                "description": "`true` iff applying `bool_op` to `lhs` and any value of C evaluates to `true`"
+            }
+        ]
+    },
+    {
+        "type": "Numbers",
+        "functions": [
+            {
+                "signature": "abs(x: N) -> N",
+                "description": "The absolute value of `x`"
+            },
+            {
+                "signature": "mod(x: N, y: N) -> N",
+                "description": "`x % y`"
+            }
+        ]
+    },
+    {
+        "type": "String",
+        "functions": [
+            {
+                "signature": "ascii(s: Str) -> Int",
+                "description": "The ASCII value of `s`'s left-most character"
+            },
+            {
+                "signature": "length(s: Str) -> Int",
+                "description": "Number of graphemes in `s`",
+                "url": "length"
+            },
+            {
+                "signature": "length(s: Str, encoding_name: Str) -> Int",
+                "description": "Number of graphemes in `s` using `encoding_name`",
+                "url": "length"
+            },
+            {
+                "signature": "substring(s: Str, start_pos: Int) -> String",
+                "description": "Substring of `s` starting at `start_pos`",
+                "url": "substring"
+            },
+            {
+                "signature": "substring(s: Str, start_pos: Int, l: Int) -> String",
+                "description": "Substring starting at `start_pos` of length `l`",
+                "url": "substring"
+            }
+        ]
+    },
+    {
+        "type": "Time",
+        "functions": [
+            {
+                "signature": "extract(extract_expr) -> Float",
+                "description": "Specified time component from value",
+                "url": "extract"
+            }
+        ]
+    }
+]

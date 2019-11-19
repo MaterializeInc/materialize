@@ -1,0 +1,2 @@
+func_extract ::=
+  'EXTRACT' '(' time_component 'FROM' val ')'

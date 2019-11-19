@@ -1,0 +1,31 @@
+[
+    {
+        "type": "String",
+        "functions": [
+            {
+                "signature": "{{< highlight rust >}}length(string: String){{< / highlight >}}",
+                "description": "Length of str",
+                "returnType": "Int",
+                "url": "length"
+            },
+            {
+                "signature": "*length(str: String, encoding_name: String)*",
+                "description": "Length of str in encoding_name",
+                "returnType": "Int",
+                "url": "length"
+            },
+            {
+                "signature": "substring(str: String, start_pos: Int)",
+                "description": "Substring starting at start_pos",
+                "returnType": "String",
+                "url": "substring"
+            },
+            {
+                "signature": "substring(str: String, start_pos: Int, len: Int)",
+                "description": "Substring starting at start_pos of length len",
+                "returnType": "String",
+                "url": "substring"
+            }
+        ]
+    }
+]

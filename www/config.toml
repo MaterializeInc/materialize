@@ -14,3 +14,10 @@ pygmentsStyle = "xcode"
     identifier = "sql"
     name = "SQL"
     weight = 2
+
+    [[menu.main]]
+    identifier = "sql-functions"
+    name = "Functions"
+    url = "/docs/sql/functions/"
+    weight = 1
+    parent = "sql"
