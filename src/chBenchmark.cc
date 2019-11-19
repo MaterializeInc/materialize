@@ -21,6 +21,7 @@ limitations under the License.
 #include "DataSource.h"
 #include "DbcTools.h"
 #include "Log.h"
+#include "PthreadShim.h"
 #include "Queries.h"
 #include "Random.h"
 #include "Schema.h"
