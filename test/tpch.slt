@@ -259,7 +259,7 @@ order by
 Project {
   outputs: [0, 3, 1, 2],
   Reduce {
-    group_key: [17, 12, 15],
+    group_key: [8, 12, 15],
     aggregates: [sum(#22 * (100dec - #23))],
     Join {
       variables: [[(0, 0), (1, 1)], [(1, 0), (2, 0)]],
@@ -852,7 +852,7 @@ Reduce {
     group_key: [0],
     aggregates: [count(#8)],
     Union {
-      Get { id-1 },
+      Project { outputs: [0 .. 8, 0, 10 .. 16], Get { id-1 } },
       Map {
         scalars: [
           null,
@@ -1115,7 +1115,7 @@ Let {
     Filter {
       predicates: [(#4 * 10000000dec) < #28],
       Join {
-        variables: [[(0, 16), (1, 0)]],
+        variables: [[(0, 1), (1, 0)]],
         Get { id-1 },
         Map {
           scalars: [
@@ -1129,7 +1129,7 @@ Let {
             Join {
               variables: [[(0, 1), (1, 0)]],
               Get { lineitem },
-              Distinct { group_key: [16], Get { id-1 } }
+              Distinct { group_key: [1], Get { id-1 } }
             }
           }
         }
@@ -1210,7 +1210,7 @@ Reduce {
       Filter {
         predicates: [#2 > 30000dec],
         Reduce {
-          group_key: [16, 0],
+          group_key: [16, 16],
           aggregates: [sum(#4)],
           Join {
             variables: [[(0, 0), (1, 0)]],
@@ -1536,7 +1536,7 @@ Let {
   id-2 = Map {
     scalars: [true],
     Join {
-      variables: [[(0, 11), (1, 0)], [(0, 13), (1, 1)]],
+      variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
       Get { id-1 },
       Distinct {
         group_key: [0, 1],
@@ -1544,7 +1544,7 @@ Let {
           predicates: [#4 != #1],
           Join {
             variables: [[(0, 0), (1, 0)]],
-            Distinct { group_key: [11, 13], Get { id-1 } },
+            Distinct { group_key: [11, 0], Get { id-1 } },
             Get { lineitem }
           }
         }
@@ -1552,7 +1552,7 @@ Let {
     }
   }
 } in
-Let { id-3 = Distinct { group_key: [11, 13], Get { id-2 } } } in
+Let { id-3 = Distinct { group_key: [11, 0], Get { id-2 } } } in
 Let {
   id-4 = Map {
     scalars: [true],
@@ -1573,7 +1573,7 @@ Reduce {
   group_key: [1],
   aggregates: [countall(null)],
   Join {
-    variables: [[(0, 11), (1, 0)], [(0, 13), (1, 1)]],
+    variables: [[(0, 11), (1, 0)], [(0, 0), (1, 1)]],
     Get { id-2 },
     Union {
       Filter { predicates: [!#2], Get { id-4 } },

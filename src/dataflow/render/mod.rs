@@ -424,7 +424,9 @@ where
 
     fn render_join(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
         if let RelationExpr::Join {
-            inputs, variables, ..
+            inputs,
+            variables,
+            demand,
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most
@@ -439,12 +441,38 @@ where
                 len == list.len()
             }));
 
+            let variables = variables
+                .iter()
+                .map(|v| {
+                    let mut result = v.clone();
+                    result.sort();
+                    result
+                })
+                .collect::<Vec<_>>();
+
             for input in inputs.iter() {
                 self.ensure_rendered(input, scope, worker_index);
             }
 
-            let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+            let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            let arities = types
+                .iter()
+                .map(|t| t.column_types.len())
+                .collect::<Vec<_>>();
+            let mut offset = 0;
+            let mut prior_arities = Vec::new();
+            for input in 0..inputs.len() {
+                prior_arities.push(offset);
+                offset += arities[input];
+            }
 
+            // Unwrap demand
+            let demand = if let Some(demand) = demand {
+                demand.clone()
+            } else {
+                // Assume demand encompasses all columns
+                arities.iter().map(|arity| (0..*arity).collect()).collect()
+            };
             // The relation_expr is to implement join as a `fold` over `inputs`.
             let mut input_iter = inputs.iter().enumerate();
             if let Some((index, input)) = input_iter.next() {
@@ -464,24 +492,61 @@ where
                     // If the class contains *more than one* new column we
                     // may need to put a `filter` in, or perhaps await a
                     // later join (and ensure that one exists).
-
                     let mut old_keys = Vec::new();
                     let mut new_keys = Vec::new();
 
-                    for sets in variables.iter() {
-                        let new_pos = sets
-                            .iter()
-                            .filter(|(i, _)| i == &index)
-                            .map(|(_, c)| *c)
-                            .next();
-                        let old_pos = columns.iter().position(|i| sets.contains(i));
+                    // Determine which columns from `joined` and `input` will be kept
+                    // Initialize the list of kept columns from `demand`
+                    let mut old_outputs = (0..index)
+                        .flat_map(|i| demand[i].iter().map(|c| (i, *c)).collect::<Vec<_>>())
+                        .map(|c| columns.iter().position(|c2| c == *c2).unwrap())
+                        .collect::<Vec<_>>();
+                    let mut new_outputs = demand[index].clone();
 
-                        // If we have both a new and an old column in the constraint ...
-                        if let (Some(new_pos), Some(old_pos)) = (new_pos, old_pos) {
-                            old_keys.push(old_pos);
-                            new_keys.push(new_pos);
+                    for equivalence in variables.iter() {
+                        // Keep columns that are needed for future joins
+                        if equivalence.last().unwrap().0 > index {
+                            if equivalence[0].0 < index {
+                                old_outputs.push(
+                                    columns.iter().position(|c2| equivalence[0] == *c2).unwrap(),
+                                );
+                            } else if equivalence[0].0 == index {
+                                new_outputs.push(equivalence[0].1);
+                            }
+                            // If the relation exceeds the current index,
+                            // we don't need to worry about retaining it
+                            // at this moment.
+                        }
+
+                        // If a key exists in `joined`
+                        if equivalence[0].0 < index {
+                            // Look for a key in `input`
+                            let new_pos = equivalence
+                                .iter()
+                                .filter(|(i, _)| i == &index)
+                                .map(|(_, c)| *c)
+                                .next();
+                            // If a key in input is found, register join keys
+                            if let Some(new_pos) = new_pos {
+                                old_keys.push(
+                                    columns.iter().position(|i| *i == equivalence[0]).unwrap(),
+                                );
+                                new_keys.push(new_pos);
+                            }
                         }
                     }
+
+                    // Dedup both sets of outputs
+                    old_outputs.sort();
+                    old_outputs.dedup();
+                    new_outputs.sort();
+                    new_outputs.dedup();
+                    // List the new locations the columns will be in
+                    columns = old_outputs
+                        .iter()
+                        .map(|i| columns[*i])
+                        .chain(new_outputs.iter().map(|i| (index, *i)))
+                        .collect();
 
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
@@ -514,23 +579,91 @@ where
                         self.set_local(&input, &new_keys[..], new_keyed);
                     }
 
+                    let mut old_unpacker = RowUnpacker::new();
+                    let mut new_unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     joined = match self.arrangement(&input, &new_keys[..]) {
-                        Some(ArrangementFlavor::Local(local)) => old_keyed
-                            .join_core(&local, move |_keys, old, new| {
-                                Some(packer.pack(old.iter().chain(new.iter())))
-                            }),
-                        Some(ArrangementFlavor::Trace(trace)) => old_keyed
-                            .join_core(&trace, move |_keys, old, new| {
-                                Some(packer.pack(old.iter().chain(new.iter())))
-                            }),
+                        Some(ArrangementFlavor::Local(local)) => {
+                            old_keyed.join_core(&local, move |_keys, old, new| {
+                                let old_datums = old_unpacker.unpack(old);
+                                let new_datums = new_unpacker.unpack(new);
+                                Some(
+                                    packer.pack(
+                                        old_outputs
+                                            .iter()
+                                            .map(|i| old_datums[*i])
+                                            .chain(new_outputs.iter().map(|i| new_datums[*i])),
+                                    ),
+                                )
+                            })
+                        }
+                        Some(ArrangementFlavor::Trace(trace)) => {
+                            old_keyed.join_core(&trace, move |_keys, old, new| {
+                                let old_datums = old_unpacker.unpack(old);
+                                let new_datums = new_unpacker.unpack(new);
+                                Some(
+                                    packer.pack(
+                                        old_outputs
+                                            .iter()
+                                            .map(|i| old_datums[*i])
+                                            .chain(new_outputs.iter().map(|i| new_datums[*i])),
+                                    ),
+                                )
+                            })
+                        }
                         None => {
                             panic!("Arrangement alarmingly absent!");
                         }
                     };
-                    columns.extend((0..arities[index]).map(|c| (index, c)));
                 }
 
+                // Permute back to the original positions
+                let mut inverse_columns: Vec<(usize, usize)> = columns
+                    .iter()
+                    .map(|(input, col)| prior_arities[*input] + *col)
+                    .enumerate()
+                    .map(|(new_col, original_col)| (original_col, new_col))
+                    .collect();
+                inverse_columns.sort();
+                let mut inverse_columns_iter = inverse_columns.iter().peekable();
+                let mut outputs = Vec::new();
+                for i in 0..arities.iter().sum() {
+                    if let Some((original_col, new_col)) = inverse_columns_iter.peek() {
+                        if i == *original_col {
+                            outputs.push(Some(*new_col));
+                            inverse_columns_iter.next();
+                            continue;
+                        }
+                    }
+                    outputs.push(None);
+                }
+                let dummy_data = types
+                    .iter()
+                    .flat_map(|t| &t.column_types)
+                    .map(|t| {
+                        if t.nullable {
+                            Datum::Null
+                        } else {
+                            t.scalar_type.dummy_datum()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut unpacker = RowUnpacker::new();
+                let mut packer = RowPacker::new();
+                joined =
+                    joined.map(move |row| {
+                        let datums = unpacker.unpack(&row);
+                        packer.pack(outputs.iter().zip(dummy_data.iter()).map(
+                            |(new_col, dummy)| {
+                                if let Some(new_col) = new_col {
+                                    &datums[*new_col]
+                                } else {
+                                    // Regenerate any columns ignored during join with dummy data
+                                    dummy
+                                }
+                            },
+                        ))
+                    });
                 self.collections.insert(relation_expr.clone(), joined);
             } else {
                 panic!("Empty join; why?");

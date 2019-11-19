@@ -104,6 +104,8 @@ CREATE TABLE age (peep text, age int)
 statement ok
 INSERT INTO age VALUES ('alice', 103), ('bob', 100), ('eve', 104);
 
+# TODO: materialize#489 This test should throw an error because
+# subquery returns more than one row
 query TI rowsort
 SELECT peeps.peep, (
   SELECT age FROM likes, age WHERE peeps.peep = liker AND likee = age.peep
@@ -206,7 +208,7 @@ query T multiline
 EXPLAIN PLAN FOR SELECT *  FROM t1, t3 WHERE t1.a = t3.a AND EXISTS (SELECT * FROM t2)
 ----
 Project {
-  outputs: [0 .. 2],
+  outputs: [0, 0, 2],
   Join {
     variables: [[(0, 0), (1, 0)]],
     Get { t1 },
@@ -227,7 +229,7 @@ Let {
   }
 } in
 Project {
-  outputs: [0 .. 2],
+  outputs: [0, 0, 2],
   Map {
     scalars: [true],
     Join {
