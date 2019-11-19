@@ -853,7 +853,6 @@ fn postgres_type_name(typ: ScalarType) -> &'static str {
         ScalarType::Float64 => "float8",
         ScalarType::Decimal(_, _) => "numeric",
         ScalarType::Date => "date",
-        ScalarType::Time => "time",
         ScalarType::Timestamp => "timestamp",
         ScalarType::TimestampTz => "timestamptz",
         ScalarType::Interval => "interval",
