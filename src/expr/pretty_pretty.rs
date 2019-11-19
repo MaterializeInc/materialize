@@ -13,7 +13,6 @@
 
 //! Making [`pretty`] Pretty Again
 
-use crate::RelationExpr;
 use ore::collections::CollectionExt;
 use pretty::Doc::Space;
 use pretty::{BoxDoc, Doc};
@@ -40,15 +39,6 @@ macro_rules! to_doc {
         )*
         doc
     }}
-}
-
-impl<'a> From<&'a Box<RelationExpr>> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    /// Turn [`RelationExpr`] into [`pretty::Doc`] by invoking
-    /// [`RelationExpr::to_doc`]. Without this trait, `to_doc!` would
-    /// be far less convenient.
-    fn from(s: &'a Box<RelationExpr>) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        s.to_doc()
-    }
 }
 
 /// Embrace `doc` as the sequence `left`, `doc`, `right`. The resulting document has one

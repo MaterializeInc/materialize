@@ -9,8 +9,9 @@
 
 use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
-use catalog::{Catalog, CatalogItem};
-use repr::{RelationDesc, Row, ScalarType};
+use ::expr::GlobalId;
+use catalog::{Catalog, CatalogEntry};
+use repr::{QualName, RelationDesc, Row, ScalarType};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
 
@@ -26,23 +27,22 @@ mod session;
 mod statement;
 mod transform;
 
-use repr::QualName;
 // this is used by sqllogictest to turn sql values into `Datum`
 pub use query::scalar_type_from_sql;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
 pub enum Plan {
-    CreateIndex(Index),
-    CreateSource(Source),
-    CreateSources(Vec<Source>),
-    CreateSink(Sink),
+    CreateIndex(QualName, Index),
+    CreateSource(QualName, Source),
+    CreateSources(Vec<(QualName, Source)>),
+    CreateSink(QualName, Sink),
     CreateTable {
         name: QualName,
         desc: RelationDesc,
     },
-    CreateView(View),
-    DropItems(Vec<QualName>, ObjectType),
+    CreateView(QualName, View),
+    DropItems(Vec<GlobalId>, ObjectType),
     EmptyQuery,
     SetVariable {
         /// The name of the variable
@@ -66,11 +66,11 @@ pub enum Plan {
         when: PeekWhen,
         finishing: RowSetFinishing,
     },
-    Tail(CatalogItem),
+    Tail(CatalogEntry),
     SendRows(Vec<Row>),
     ExplainPlan(::expr::RelationExpr),
     SendDiffs {
-        name: QualName,
+        id: GlobalId,
         updates: Vec<(Row, isize)>,
         affected_rows: usize,
         kind: MutationKind,

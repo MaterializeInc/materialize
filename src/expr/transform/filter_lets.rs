@@ -3,8 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use crate::{RelationExpr, ScalarExpr};
-use repr::QualName;
+use crate::{Id, LocalId, RelationExpr, ScalarExpr};
 
 /// Pushes common filter predicates on gets into the let binding.
 ///
@@ -30,12 +29,12 @@ impl FilterLets {
     }
 
     pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Let { name, value, body } = relation {
+        if let RelationExpr::Let { id, value, body } = relation {
             let mut common = None;
-            common_constraints(body, name, &mut common);
+            common_constraints(body, *id, &mut common);
             if let Some(constraints) = common {
                 if !constraints.is_empty() {
-                    delete_constraints(body, name, &constraints[..]);
+                    delete_constraints(body, *id, &constraints[..]);
                     **value = value.take_dangerous().filter(constraints);
                 }
             }
@@ -51,17 +50,17 @@ impl FilterLets {
 /// filter, the list is immediately set to the empty list.
 fn common_constraints(
     expr: &RelationExpr,
-    bound_name: &QualName,
+    bound_id: LocalId,
     constraints: &mut Option<Vec<ScalarExpr>>,
 ) {
     match expr {
-        RelationExpr::Get { name, .. } if name == bound_name => {
+        RelationExpr::Get { id, .. } if *id == Id::Local(bound_id) => {
             // No filter found, and so no possible common constraints exist.
             *constraints = Some(Vec::new())
         }
         RelationExpr::Filter { input, predicates } => {
-            if let RelationExpr::Get { name, .. } = &**input {
-                if name == bound_name {
+            if let RelationExpr::Get { id, .. } = &**input {
+                if *id == Id::Local(bound_id) {
                     if let Some(constraints) = constraints {
                         // If we have existing constraints, restrict them.
                         constraints.retain(|p| predicates.contains(p));
@@ -71,28 +70,28 @@ fn common_constraints(
                     }
                 }
             } else {
-                expr.visit1(|e| common_constraints(e, bound_name, constraints))
+                expr.visit1(|e| common_constraints(e, bound_id, constraints))
             }
         }
-        _ => expr.visit1(|e| common_constraints(e, bound_name, constraints)),
+        _ => expr.visit1(|e| common_constraints(e, bound_id, constraints)),
     }
 }
 
 /// Delete each constraint in `constraints` from any filter immediately preceding a get for `bound_name`.
-fn delete_constraints(expr: &mut RelationExpr, bound_name: &QualName, constraints: &[ScalarExpr]) {
+fn delete_constraints(expr: &mut RelationExpr, bound_id: LocalId, constraints: &[ScalarExpr]) {
     match expr {
         RelationExpr::Filter { input, predicates } => {
-            if let RelationExpr::Get { name, .. } = &**input {
-                if name == bound_name {
+            if let RelationExpr::Get { id, .. } = &**input {
+                if *id == Id::Local(bound_id) {
                     predicates.retain(|p| !constraints.contains(p));
                     if predicates.is_empty() {
                         *expr = input.take_dangerous();
                     }
                 }
             } else {
-                expr.visit1_mut(|e| delete_constraints(e, bound_name, constraints))
+                expr.visit1_mut(|e| delete_constraints(e, bound_id, constraints))
             }
         }
-        _ => expr.visit1_mut(|e| delete_constraints(e, bound_name, constraints)),
+        _ => expr.visit1_mut(|e| delete_constraints(e, bound_id, constraints)),
     }
 }

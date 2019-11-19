@@ -17,7 +17,8 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
-use repr::{Datum, QualName, RowPacker, RowUnpacker};
+use expr::GlobalId;
+use repr::{Datum, RowPacker, RowUnpacker};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -28,16 +29,16 @@ pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifi
 )]
 pub enum MaterializedEvent {
     /// Dataflow command, true for create and false for drop.
-    Dataflow(QualName, bool),
+    Dataflow(GlobalId, bool),
     /// Dataflow depends on a named source of data.
     DataflowDependency {
-        dataflow: QualName,
-        source: QualName,
+        dataflow: GlobalId,
+        source: GlobalId,
     },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
     /// Available frontier information for views.
-    Frontier(QualName, Timestamp, i64),
+    Frontier(GlobalId, Timestamp, i64),
 }
 
 /// A logged peek event.
@@ -45,8 +46,8 @@ pub enum MaterializedEvent {
     Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub struct Peek {
-    /// The name of the view the peek targets.
-    name: QualName,
+    /// The identifier of the view the peek targets.
+    id: GlobalId,
     /// The logical timestamp requested.
     time: Timestamp,
     /// The connection ID of the peek.
@@ -54,12 +55,8 @@ pub struct Peek {
 }
 
 impl Peek {
-    pub fn new(name: QualName, time: Timestamp, conn_id: u32) -> Self {
-        Self {
-            name,
-            time,
-            conn_id,
-        }
+    pub fn new(id: GlobalId, time: Timestamp, conn_id: u32) -> Self {
+        Self { id, time, conn_id }
     }
 }
 
@@ -112,8 +109,8 @@ pub fn construct<A: Allocate>(
                         let time_ns = time.as_nanos() as Timestamp;
 
                         match datum {
-                            MaterializedEvent::Dataflow(name, is_create) => {
-                                dataflow_session.give((name.clone(), worker, is_create, time_ns));
+                            MaterializedEvent::Dataflow(id, is_create) => {
+                                dataflow_session.give((id, worker, is_create, time_ns));
 
                                 // For now we know that these always happen in
                                 // the correct order, but it may be necessary
@@ -121,13 +118,13 @@ pub fn construct<A: Allocate>(
                                 // reference to their own sources and a logger
                                 // that is called on them in a `with_drop` handler
                                 if is_create {
-                                    active_dataflows.insert((name, worker), vec![]);
+                                    active_dataflows.insert((id, worker), vec![]);
                                 } else {
-                                    let key = &(name, worker);
+                                    let key = &(id, worker);
                                     match active_dataflows.remove(key) {
                                         Some(sources) => {
                                             for (source, worker) in sources {
-                                                let n = key.0.clone();
+                                                let n = key.0;
                                                 dependency_session
                                                     .give((n, source, worker, false, time_ns));
                                             }
@@ -141,9 +138,7 @@ pub fn construct<A: Allocate>(
                                 }
                             }
                             MaterializedEvent::DataflowDependency { dataflow, source } => {
-                                let df = dataflow.clone();
-                                let s = source.clone();
-                                dependency_session.give((df, s, worker, true, time_ns));
+                                dependency_session.give((dataflow, source, worker, true, time_ns));
                                 let key = (dataflow, worker);
                                 match active_dataflows.get_mut(&key) {
                                     Some(existing_sources) => {
@@ -218,7 +213,7 @@ pub fn construct<A: Allocate>(
                     packer.pack(&[
                         Datum::String(&*format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
-                        Datum::String(&*peek.name.to_string()),
+                        Datum::String(&peek.id.to_string()),
                         Datum::Int64(peek.time as i64),
                     ])
                 }

@@ -34,7 +34,8 @@ use sqlparser::ast::{
 };
 use uuid::Uuid;
 
-use catalog::Catalog;
+use ::expr::Id;
+use catalog::{Catalog, CatalogEntry};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::MAX_DECIMAL_PRECISION;
@@ -529,12 +530,13 @@ fn plan_view_select(
     Ok((relation_expr, project_scope))
 }
 
-pub fn plan_index(
-    catalog: &Catalog,
+pub fn plan_index<'a>(
+    catalog: &'a Catalog,
     on_name: &QualName,
     key_parts: &[Expr],
-) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
-    let desc = catalog.get_desc(on_name)?;
+) -> Result<(&'a CatalogEntry, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
+    let item = catalog.get(on_name)?;
+    let desc = item.desc()?;
     let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext::root();
     let ecx = &ExprContext {
@@ -560,7 +562,7 @@ pub fn plan_index(
             func_count += 1;
         }
     }
-    Ok((desc.typ().clone(), arrange_cols, map_exprs))
+    Ok((item, arrange_cols, map_exprs))
 }
 
 fn plan_table_with_joins<'a>(
@@ -605,10 +607,10 @@ fn plan_table_factor<'a>(
                 bail!("WITH hints are not supported");
             }
             let name = QualName::try_from(name.clone())?;
-            let desc = catalog.get_desc(&name)?;
+            let item = catalog.get(&name)?;
             let expr = RelationExpr::Get {
-                name: name.clone(),
-                typ: desc.typ().clone(),
+                id: Id::Global(item.id()),
+                typ: item.desc()?.typ().clone(),
             };
             let alias: QualName = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
@@ -620,7 +622,7 @@ fn plan_table_factor<'a>(
             };
             let scope = Scope::from_source(
                 Some(&alias),
-                desc.iter_names(),
+                item.desc()?.iter_names(),
                 Some(qcx.outer_scope.clone()),
             );
             Ok((expr, scope))

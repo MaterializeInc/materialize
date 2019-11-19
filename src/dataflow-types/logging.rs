@@ -3,9 +3,11 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use repr::{LiteralName, QualName, RelationDesc, ScalarType};
 use std::collections::HashSet;
 use std::time::Duration;
+
+use expr::GlobalId;
+use repr::{LiteralName, QualName, RelationDesc, ScalarType};
 
 /// Logging configuration.
 #[derive(Debug, Clone)]
@@ -103,6 +105,25 @@ impl LogVariant {
         }
     }
 
+    pub fn id(&self) -> GlobalId {
+        // Bind all identifiers in one place to avoid accidental clashes.
+        match self {
+            LogVariant::Timely(TimelyLog::Operates) => GlobalId::system(1),
+            LogVariant::Timely(TimelyLog::Channels) => GlobalId::system(2),
+            LogVariant::Timely(TimelyLog::Elapsed) => GlobalId::system(3),
+            LogVariant::Timely(TimelyLog::Histogram) => GlobalId::system(4),
+            LogVariant::Timely(TimelyLog::Addresses) => GlobalId::system(5),
+            LogVariant::Timely(TimelyLog::Parks) => GlobalId::system(6),
+            LogVariant::Differential(DifferentialLog::Arrangement) => GlobalId::system(7),
+            LogVariant::Differential(DifferentialLog::Sharing) => GlobalId::system(8),
+            LogVariant::Materialized(MaterializedLog::DataflowCurrent) => GlobalId::system(9),
+            LogVariant::Materialized(MaterializedLog::DataflowDependency) => GlobalId::system(10),
+            LogVariant::Materialized(MaterializedLog::FrontierCurrent) => GlobalId::system(11),
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => GlobalId::system(12),
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => GlobalId::system(13),
+        }
+    }
+
     /// By which columns should the logs be indexed.
     ///
     /// This is distinct from the `keys` property of the type, which indicates uniqueness.
@@ -188,7 +209,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
                 .add_column("uuid", ScalarType::String)
                 .add_column("worker", ScalarType::Int64)
-                .add_column("name", ScalarType::String)
+                .add_column("id", ScalarType::String)
                 .add_column("time", ScalarType::Int64)
                 .add_keys(vec![0, 1]),
 

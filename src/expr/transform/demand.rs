@@ -8,8 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::RelationExpr;
-use repr::QualName;
+use crate::{Id, RelationExpr};
 
 /// Drive demand from the root through operators.
 ///
@@ -41,25 +40,24 @@ impl Demand {
         &self,
         relation: &mut RelationExpr,
         mut columns: HashSet<usize>,
-        gets: &mut HashMap<QualName, HashSet<usize>>,
+        gets: &mut HashMap<Id, HashSet<usize>>,
     ) {
         match relation {
             RelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
             }
-            RelationExpr::Get { name, .. } => {
-                gets.entry(name.clone())
-                    .or_insert(HashSet::new())
-                    .extend(columns);
+            RelationExpr::Get { id, .. } => {
+                gets.entry(*id).or_insert(HashSet::new()).extend(columns);
             }
-            RelationExpr::Let { name, value, body } => {
+            RelationExpr::Let { id, value, body } => {
                 // Let harvests any requirements of get from its body,
                 // and pushes the union of the requirements at its value.
-                let prior = gets.insert(name.clone(), HashSet::new());
+                let id = Id::Local(*id);
+                let prior = gets.insert(id, HashSet::new());
                 self.action(body, columns, gets);
-                let needs = gets.remove(name).unwrap();
+                let needs = gets.remove(&id).unwrap();
                 if let Some(prior) = prior {
-                    gets.insert(name.clone(), prior);
+                    gets.insert(id, prior);
                 }
 
                 self.action(value, needs, gets);

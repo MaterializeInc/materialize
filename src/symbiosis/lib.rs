@@ -34,6 +34,7 @@ use rust_decimal::Decimal;
 use sqlparser::ast::ColumnOption;
 use sqlparser::ast::{DataType, ObjectType, Statement};
 
+use catalog::Catalog;
 use ore::option::OptionExt;
 use repr::decimal::Significand;
 use repr::{
@@ -124,7 +125,7 @@ END $$;
         }
     }
 
-    pub fn execute(&mut self, stmt: &Statement) -> Result<Plan, failure::Error> {
+    pub fn execute(&mut self, catalog: &Catalog, stmt: &Statement) -> Result<Plan, failure::Error> {
         Ok(match stmt {
             Statement::CreateTable {
                 name,
@@ -193,21 +194,25 @@ END $$;
             Statement::Drop {
                 names,
                 object_type: ObjectType::Table,
+                if_exists,
                 ..
             } => {
                 self.conn.execute(&stmt.to_string(), &[])?;
-                Plan::DropItems(
-                    names
-                        .iter()
-                        .map(|name| match name.try_into() {
-                            Ok(val) => Ok(val),
-                            Err(e) => {
-                                failure::bail!("unable to drop invalid name {}: {}", name, e);
+                let mut items = Vec::new();
+                for name in names {
+                    match name.try_into() {
+                        Ok(name) => match catalog.try_get(&name) {
+                            None => {
+                                if !if_exists {
+                                    bail!("internal error: table {} missing from catalog", name);
+                                }
                             }
-                        })
-                        .collect::<Result<_, _>>()?,
-                    ObjectType::Table,
-                )
+                            Some(entry) => items.push(entry.id()),
+                        },
+                        Err(e) => bail!("unable to drop invalid name {}: {}", name, e),
+                    }
+                }
+                Plan::DropItems(items, ObjectType::Table)
             }
             Statement::Delete { table_name, .. } => {
                 let mut updates = vec![];
@@ -218,7 +223,7 @@ END $$;
                 }
                 let affected_rows = updates.len();
                 Plan::SendDiffs {
-                    name: table_name,
+                    id: catalog.get(&table_name)?.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Delete,
@@ -233,7 +238,7 @@ END $$;
                 }
                 let affected_rows = updates.len();
                 Plan::SendDiffs {
-                    name: table_name,
+                    id: catalog.get(&table_name)?.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Insert,
@@ -260,7 +265,7 @@ END $$;
                 }
                 assert_eq!(affected_rows * 2, updates.len());
                 Plan::SendDiffs {
-                    name: table_name.try_into()?,
+                    id: catalog.get(&table_name)?.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Update,
