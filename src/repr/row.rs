@@ -90,9 +90,10 @@ pub struct UnpackedRow<'a> {
 ///
 /// ```
 /// # use repr::{Row, Datum, RowPacker};
+/// # use std::borrow::Cow;
 /// let mut packer = RowPacker::new();
-/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String("one")]);
-/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String("two")]);
+/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String(Cow::from("one"))]);
+/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String(Cow::from("two"))]);
 /// ```
 #[derive(Debug)]
 pub struct RowPacker {
@@ -487,8 +488,8 @@ mod tests {
             }),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1]),
-            Datum::String(""),
-            Datum::String("العَرَبِيَّة"),
+            Datum::String(Cow::from("")),
+            Datum::String(Cow::from("العَرَبِيَّة")),
         ]);
     }
 }
