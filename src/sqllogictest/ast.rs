@@ -94,7 +94,7 @@ pub struct QueryOutput<'a> {
 pub enum Record<'a> {
     // A `statement` directive.
     Statement {
-        should_run: bool,
+        expected_error: Option<&'a str>,
         rows_affected: Option<usize>,
         sql: &'a str,
     },

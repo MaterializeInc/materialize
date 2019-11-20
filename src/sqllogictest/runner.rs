@@ -388,10 +388,10 @@ impl State {
     fn run_record<'a>(&mut self, record: &'a Record) -> Result<Outcome<'a>, failure::Error> {
         match &record {
             Record::Statement {
-                should_run,
+                expected_error,
                 rows_affected,
                 sql,
-            } => match self.run_statement(*should_run, *rows_affected, sql)? {
+            } => match self.run_statement(*expected_error, *rows_affected, sql)? {
                 Outcome::Success => Ok(Outcome::Success),
                 // If we failed to execute a statement, running the rest of the
                 // tests in this file will probably cause false positives, so
@@ -407,15 +407,10 @@ impl State {
 
     fn run_statement<'a>(
         &mut self,
-        should_run: bool,
+        expected_error: Option<&'a str>,
         expected_rows_affected: Option<usize>,
         sql: &'a str,
     ) -> Result<Outcome<'a>, failure::Error> {
-        if !should_run {
-            // sure, we totally checked it
-            return Ok(Outcome::Success);
-        }
-
         lazy_static! {
             static ref INDEX_STATEMENT_REGEX: Regex =
                 Regex::new("^(CREATE (UNIQUE )?INDEX|DROP INDEX|REINDEX)").unwrap();
@@ -426,31 +421,43 @@ impl State {
         }
 
         match self.run_sql(sql) {
-            Ok((_desc, resp)) => match expected_rows_affected {
-                None => Ok(Outcome::Success),
-                Some(expected) => match resp {
-                    ExecuteResponse::Inserted(actual)
-                    | ExecuteResponse::Updated(actual)
-                    | ExecuteResponse::Deleted(actual) => {
-                        if expected != actual {
-                            Ok(Outcome::WrongNumberOfRowsInserted {
-                                expected_count: expected,
-                                actual_count: actual,
-                            })
-                        } else {
-                            Ok(Outcome::Success)
+            Ok((_desc, resp)) => {
+                if let Some(expected_error) = expected_error {
+                    return Ok(Outcome::UnexpectedPlanSuccess { expected_error });
+                }
+                match expected_rows_affected {
+                    None => Ok(Outcome::Success),
+                    Some(expected) => match resp {
+                        ExecuteResponse::Inserted(actual)
+                        | ExecuteResponse::Updated(actual)
+                        | ExecuteResponse::Deleted(actual) => {
+                            if expected != actual {
+                                Ok(Outcome::WrongNumberOfRowsInserted {
+                                    expected_count: expected,
+                                    actual_count: actual,
+                                })
+                            } else {
+                                Ok(Outcome::Success)
+                            }
                         }
-                    }
 
-                    _ => Ok(Outcome::PlanFailure {
-                        error: failure::format_err!(
-                            "Query did not insert any rows, expected {}",
-                            expected,
-                        ),
-                    }),
-                },
-            },
-            Err(error) => Ok(Outcome::PlanFailure { error }),
+                        _ => Ok(Outcome::PlanFailure {
+                            error: failure::format_err!(
+                                "Query did not insert any rows, expected {}",
+                                expected,
+                            ),
+                        }),
+                    },
+                }
+            }
+            Err(error) => {
+                if let Some(expected_error) = expected_error {
+                    if Regex::new(expected_error)?.is_match(&error.to_string()) {
+                        return Ok(Outcome::Success);
+                    }
+                }
+                Ok(Outcome::PlanFailure { error })
+            }
         }
     }
 
@@ -500,18 +507,24 @@ impl State {
                 });
             }
             Err(error) => {
-                // TODO(jamii) check error messages, once ours stabilize
-                if output.is_err() {
-                    return Ok(Outcome::Success);
-                } else {
-                    let error_string = format!("{}", error);
-                    if error_string.contains("supported") || error_string.contains("overload") {
-                        // this is a failure, but it's caused by lack of support rather than by bugs
-                        return Ok(Outcome::Unsupported { error });
-                    } else {
-                        return Ok(Outcome::PlanFailure { error });
+                return match output {
+                    Ok(_) => {
+                        let error_string = format!("{}", error);
+                        if error_string.contains("supported") || error_string.contains("overload") {
+                            // this is a failure, but it's caused by lack of support rather than by bugs
+                            Ok(Outcome::Unsupported { error })
+                        } else {
+                            Ok(Outcome::PlanFailure { error })
+                        }
                     }
-                }
+                    Err(expected_error) => {
+                        if Regex::new(expected_error)?.is_match(&error.to_string()) {
+                            Ok(Outcome::Success)
+                        } else {
+                            Ok(Outcome::PlanFailure { error })
+                        }
+                    }
+                };
             }
         };
 

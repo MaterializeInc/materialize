@@ -131,7 +131,7 @@ SELECT DATE '2000-01-01' - INTERVAL '1' YEAR
 ----
 1999-01-01 00:00:00
 
-statement error no overload for interval - date
+statement error no overload for interval - timestamp
 SELECT INTERVAL '1' YEAR - DATE '2000-01-01'
 
 # Timestamp arithmetic with month intervals. Should behave the same as DATE.
@@ -439,16 +439,16 @@ SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' - INTERVAL '2' HOUR
 statement error no overload for interval - timestamptz
 SELECT INTERVAL '2' HOUR - TIMESTAMPTZ '2000-01-01 00:00:00-04'
 
-statement error no overload for interval * timestamptz
+statement error no overload for timestamptz \* interval
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' * INTERVAL '2' HOUR
 
-statement error no overload for interval * timestamptz
+statement error no overload for timestamptz / interval
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' / INTERVAL '2' HOUR
 
-statement error no overload for timestamptz + timestamptz
+statement error no overload for timestamptz \+ timestamptz
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMPTZ '1999-01-01 00:00:00z'
 
-statement error no overload for timestamptz + timestamp
+statement error no overload for timestamptz \+ timestamp
 SELECT TIMESTAMPTZ '2000-01-01 00:00:00-04' + TIMESTAMP '1999-01-01 00:00:00'
 
 # Tests with comparison operators and timestamptz

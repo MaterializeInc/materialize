@@ -74,7 +74,7 @@ pub fn parse_record<'a>(
 
     let mut words = first_line.split(' ').peekable();
     match words.next().unwrap() {
-        "statement" => Ok(Some(parse_statement(words, &mut input)?)),
+        "statement" => Ok(Some(parse_statement(words, first_line, &mut input)?)),
 
         "query" => Ok(Some(parse_query(words, first_line, &mut input, *mode)?)),
 
@@ -130,30 +130,31 @@ pub fn parse_record<'a>(
 
 fn parse_statement<'a>(
     mut words: impl Iterator<Item = &'a str>,
+    first_line: &'a str,
     input: &mut &'a str,
 ) -> Result<Record<'a>, failure::Error> {
-    let (should_run, rows_affected) = match words.next() {
-        Some("count") => (
-            true,
-            Some(
+    let mut expected_error = None;
+    let mut rows_affected = None;
+    match words.next() {
+        Some("count") => {
+            rows_affected = Some(
                 words
                     .next()
-                    .ok_or_else(|| format_err!("missing insert count"))?
+                    .ok_or_else(|| format_err!("missing count of rows affected"))?
                     .parse::<usize>()
-                    .map_err(|err| format_err!("parsing insert count: {}", err))?,
-            ),
-        ),
-        Some("ok") | Some("OK") => (true, None),
-        Some("error") => (false, None),
-        Some(other) => bail!("invalid should_run in: {}", other),
-        None => (true, None),
+                    .map_err(|err| format_err!("parsing count of rows affected: {}", err))?,
+            );
+        }
+        Some("ok") | Some("OK") => (),
+        Some("error") => expected_error = Some(parse_expected_error(first_line)),
+        _ => bail!("invalid statement disposition: {}", first_line),
     };
     let sql = parse_sql(input)?;
     if *input != "" {
         bail!("leftover input: {}", input)
     }
     Ok(Record::Statement {
-        should_run,
+        expected_error,
         rows_affected,
         sql,
     })
@@ -166,7 +167,7 @@ fn parse_query<'a>(
     mode: Mode,
 ) -> Result<Record<'a>, failure::Error> {
     if words.peek() == Some(&"error") {
-        let error = &first_line[12..]; // everything after "query error "
+        let error = parse_expected_error(first_line);
         let sql = input;
         return Ok(Record::Query {
             sql,
@@ -276,6 +277,17 @@ fn parse_query<'a>(
             output_str,
         }),
     })
+}
+
+fn parse_expected_error(line: &str) -> &str {
+    lazy_static! {
+        static ref PGCODE_RE: Regex =
+            Regex::new("(statement|query) error( pgcode [a-zA-Z0-9]{5})? ?").unwrap();
+    }
+    // TODO(benesch): one day this should record the expected pgcode, if
+    // specified.
+    let pos = PGCODE_RE.find(line).unwrap().end();
+    &line[pos..]
 }
 
 /// Split on whitespace to normalize multiple spaces to one space. This happens

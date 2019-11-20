@@ -231,14 +231,21 @@ fn plan_set_expr(
             let right_types = qcx.relation_type(&right_expr).column_types;
             if left_types.len() != right_types.len() {
                 bail!(
-                    "set operation {:?} with {:?} and {:?} columns not supported",
+                    "each {} query must have the same number of columns: {} vs {}",
                     op,
                     left_types.len(),
                     right_types.len(),
                 );
             }
             for (left_col_type, right_col_type) in left_types.iter().zip(right_types.iter()) {
-                left_col_type.union(*right_col_type)?;
+                if left_col_type.union(*right_col_type).is_err() {
+                    bail!(
+                        "{} types {} and {} cannot be matched",
+                        op,
+                        left_col_type.scalar_type,
+                        right_col_type.scalar_type
+                    );
+                }
             }
 
             let relation_expr = match op {
@@ -1910,7 +1917,7 @@ fn plan_arithmetic_op<'a>(
                 AddTimestampTzInterval
             }
             _ => bail!(
-                "no overload for {:?} + {:?}",
+                "no overload for {} + {}",
                 ltype.scalar_type,
                 rtype.scalar_type
             ),
@@ -1923,7 +1930,7 @@ fn plan_arithmetic_op<'a>(
             (Timestamp, Interval) => SubTimestampInterval,
             (TimestampTz, Interval) => SubTimestampTzInterval,
             _ => bail!(
-                "no overload for {:?} - {:?}",
+                "no overload for {} - {}",
                 ltype.scalar_type,
                 rtype.scalar_type
             ),
@@ -1934,7 +1941,7 @@ fn plan_arithmetic_op<'a>(
             (Float32, Float32) => MulFloat32,
             (Float64, Float64) => MulFloat64,
             _ => bail!(
-                "no overload for {:?} * {:?}",
+                "no overload for {} * {}",
                 ltype.scalar_type,
                 rtype.scalar_type
             ),
@@ -1945,7 +1952,7 @@ fn plan_arithmetic_op<'a>(
             (Float32, Float32) => DivFloat32,
             (Float64, Float64) => DivFloat64,
             _ => bail!(
-                "no overload for {:?} / {:?}",
+                "no overload for {} / {}",
                 ltype.scalar_type,
                 rtype.scalar_type
             ),
@@ -1956,7 +1963,7 @@ fn plan_arithmetic_op<'a>(
             (Float32, Float32) => ModFloat32,
             (Float64, Float64) => ModFloat64,
             _ => bail!(
-                "no overload for {:?} % {:?}",
+                "no overload for {} % {}",
                 ltype.scalar_type,
                 rtype.scalar_type
             ),

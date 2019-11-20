@@ -66,3 +66,6 @@ query R
 SELECT avg(NULL)
 ----
 NULL
+
+statement error
+SELECT * ORDER BY SUM(fake_column);
