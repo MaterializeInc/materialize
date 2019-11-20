@@ -32,7 +32,7 @@ SELECT a FROM foo GROUP BY a, foo.a
 ----
 37
 
-statement error no column named bar.b in scope
+statement error internal error: unable to resolve scope item
 SELECT *, count(*) FROM bar GROUP BY a;
 
 query II

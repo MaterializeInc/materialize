@@ -171,7 +171,7 @@ impl Scope {
             .flatten()
             .filter(|(_pos, _item, _level, name)| (matches)(name));
         match results.next() {
-            None => bail!("No column named {} in scope", name_in_error),
+            None => bail!("column \"{}\" does not exist", name_in_error),
             Some((pos, item, level, _name)) => {
                 if results
                     .find(|(pos2, _item, level2, _name)| pos != *pos2 && level == *level2)
