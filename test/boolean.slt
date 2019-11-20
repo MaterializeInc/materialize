@@ -1,0 +1,75 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+statement error
+select not 1;
+
+statement error
+select 1 and 1;
+
+statement error
+select 1 or 1;
+
+statement error
+select 1 or false;
+
+statement error
+select false or 1;
+
+statement error
+select 1 and false;
+
+statement error
+select false and 1;
+
+query B
+select not true;
+----
+false
+
+query B
+select not false;
+----
+true
+
+query B
+select true and false;
+----
+false
+
+query B
+select true and true;
+----
+true
+
+query B
+select false and false;
+----
+false
+
+query B
+select true or false;
+----
+true
+
+query B
+select true or true;
+----
+true
+
+query B
+select false or false;
+----
+false
+
+query B
+select true and not true;
+----
+false
+
+query B
+select not false or false;
+----
+true
