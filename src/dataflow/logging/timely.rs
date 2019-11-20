@@ -11,7 +11,6 @@ use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::Timestamp;
 use repr::{Datum, RowPacker, RowUnpacker};
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::time::Duration;
 use timely::communication::Allocate;
@@ -90,7 +89,7 @@ pub fn construct<A: Allocate>(
                                     packer.pack(&[
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
-                                        Datum::String(Cow::from(&*event.name)),
+                                        Datum::from_str(&event.name),
                                     ]),
                                     time_ms,
                                     1,
@@ -154,7 +153,7 @@ pub fn construct<A: Allocate>(
                                         packer.pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
-                                            Datum::String(Cow::from(&*event.name)),
+                                            Datum::from_str(&event.name),
                                         ]),
                                         time_ms,
                                         -1,
@@ -366,7 +365,7 @@ pub fn construct<A: Allocate>(
                         let mut packer = RowPacker::new();
                         move |row| {
                             let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(key.iter().map(|k| datums[*k].clone()));
+                            let key_row = packer.pack(key.iter().map(|k| &datums[*k]));
                             drop(datums);
                             (key_row, row)
                         }

@@ -17,7 +17,6 @@ use url::Url;
 use ore::collections::CollectionExt;
 use repr::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{ColumnType, Datum, RelationDesc, RelationType, Row, RowPacker, ScalarType};
-use std::borrow::Cow;
 
 /// Validates an Avro key schema for use as a source.
 ///
@@ -424,7 +423,7 @@ impl Decoder {
                     Significand::from_twos_complement_be(&unscaled)?,
                 )),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
-                Value::String(s) => Ok(Datum::String(Cow::from(s))),
+                Value::String(s) => Ok(Datum::from_str(s)),
                 Value::Union(v) => value_to_datum(v),
                 other @ Value::Fixed(..)
                 | other @ Value::Enum(..)

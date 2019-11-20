@@ -140,6 +140,10 @@ impl<'a> Datum<'a> {
         )))
     }
 
+    pub fn from_str(str: &'a str) -> Datum<'a> {
+        Datum::String(Cow::from(str))
+    }
+
     pub fn unwrap_bool(&self) -> bool {
         match self {
             Datum::False => false,
@@ -364,7 +368,7 @@ impl From<SqlInterval> for Datum<'static> {
 
 impl<'a> From<&'a str> for Datum<'a> {
     fn from(s: &'a str) -> Datum<'a> {
-        Datum::String(Cow::from(s))
+        Datum::from_str(s)
     }
 }
 
@@ -507,7 +511,7 @@ impl<'a> ScalarType {
             }
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
             ScalarType::Bytes => Datum::Bytes(&[]),
-            ScalarType::String => Datum::String(Cow::from("")),
+            ScalarType::String => Datum::from_str(""),
         }
     }
 }

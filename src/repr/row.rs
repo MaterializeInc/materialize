@@ -9,7 +9,7 @@ use crate::Datum;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::mem::{size_of, transmute};
 
 /// A packed representation for `Datum`s.
@@ -239,7 +239,7 @@ impl Row {
                     std::slice::from_raw_parts(self.data.as_ptr().add(*offset), len as usize);
                 let string = std::str::from_utf8_unchecked(bytes);
                 *offset += len;
-                Datum::String(Cow::from(string))
+                Datum::from_str(string)
             }
         }
     }
@@ -487,8 +487,8 @@ mod tests {
             }),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1]),
-            Datum::String(""),
-            Datum::String("العَرَبِيَّة"),
+            Datum::String(Cow::from("")),
+            Datum::String(Cow::from("العَرَبِيَّة")),
         ]);
     }
 }

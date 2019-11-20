@@ -1306,8 +1306,8 @@ pub fn substr<'a, 'b>(datums: &'b [Datum<'a>]) -> Datum<'a> {
         for _ in 0..cmp::max(length_in_chars, 0) {
             length_in_bytes += chars.next().map(|char| char.len_utf8()).unwrap_or(0);
         }
-        Datum::String(Cow::from(
-            (&string[start_in_bytes..start_in_bytes + length_in_bytes]).to_string(),
+        Datum::String(Cow::Owned(
+            (string[start_in_bytes..start_in_bytes + length_in_bytes]).to_string(),
         ))
     } else {
         Datum::String(Cow::from((&string[start_in_bytes..]).to_string()))

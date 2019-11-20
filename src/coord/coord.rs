@@ -44,7 +44,6 @@ use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
 
 use crate::{Command, ExecuteResponse, Response};
-use std::borrow::Cow;
 
 enum Message {
     Command(Command),
@@ -295,7 +294,7 @@ where
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::pack(&[Datum::String(Cow::from(&s.0.to_string()))]))
+                        .map(|s| Row::pack(&[Datum::from_str(&s.0.to_string())]))
                         .collect(),
                 )
             }
@@ -525,8 +524,8 @@ where
                                 let mut packer = RowPacker::new();
                                 for row in rows {
                                     let datums = unpacker.unpack(&*row);
-                                    let new_row = packer
-                                        .pack(finishing.project.iter().map(|i| datums[*i].clone()));
+                                    let new_row =
+                                        packer.pack(finishing.project.iter().map(|i| &datums[*i]));
                                     drop(datums);
                                     *row = new_row;
                                 }

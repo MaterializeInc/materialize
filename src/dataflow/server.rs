@@ -681,7 +681,7 @@ impl PendingPeek {
                     let mut packer = RowPacker::new();
                     move |row| {
                         let datums = unpacker.unpack(*row);
-                        packer.pack(columns.iter().map(|i| datums[*i].clone()))
+                        packer.pack(columns.iter().map(|i| &datums[*i]))
                     }
                 })
                 .collect()

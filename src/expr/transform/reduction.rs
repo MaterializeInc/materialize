@@ -172,7 +172,7 @@ impl FoldConstants {
                         .iter()
                         .map(|(input_row, diff)| {
                             let datums = input_row.unpack();
-                            (Row::pack(outputs.iter().map(|i| datums[*i].clone())), *diff)
+                            (Row::pack(outputs.iter().map(|i| &datums[*i])), *diff)
                         })
                         .collect();
                     *relation = RelationExpr::Constant {

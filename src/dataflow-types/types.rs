@@ -66,7 +66,7 @@ pub struct Update {
 
 pub fn compare_columns(order: &[ColumnOrder], left: &[Datum], right: &[Datum]) -> Ordering {
     for order in order {
-        let (lval, rval) = (left[order.column].clone(), right[order.column].clone());
+        let (lval, rval) = (&left[order.column], &right[order.column]);
         let cmp = if order.desc {
             rval.cmp(&lval)
         } else {

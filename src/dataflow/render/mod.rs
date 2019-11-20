@@ -161,7 +161,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             .expect("Render failed to produce collection")
                             .map(move |row| {
                                 let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(key.iter().map(|k| datums[*k].clone()));
+                                let key_row = packer.pack(key.iter().map(|k| &datums[*k]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -325,7 +325,7 @@ where
                     let mut packer = RowPacker::new();
                     let collection = self.collection(input).unwrap().map(move |row| {
                         let datums = unpacker.unpack(&row);
-                        packer.pack(outputs.iter().map(|i| datums[*i].clone()))
+                        packer.pack(outputs.iter().map(|i| &datums[*i]))
                     });
 
                     self.collections.insert(relation_expr.clone(), collection);
@@ -413,7 +413,7 @@ where
                         let keyed = built
                             .map(move |row| {
                                 let datums = unpacker.unpack(&row);
-                                let key_row = packer.pack(keys2.iter().map(|i| datums[*i].clone()));
+                                let key_row = packer.pack(keys2.iter().map(|i| &datums[*i]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -556,7 +556,7 @@ where
                     let old_keyed = joined
                         .map(move |row| {
                             let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(old_keys.iter().map(|i| datums[*i].clone()));
+                            let key_row = packer.pack(old_keys.iter().map(|i| &datums[*i]));
                             drop(datums);
                             (key_row, row)
                         })
@@ -571,8 +571,7 @@ where
                         let new_keyed = built
                             .map(move |row| {
                                 let datums = unpacker.unpack(&row);
-                                let key_row =
-                                    packer.pack(new_keys2.iter().map(|i| datums[*i].clone()));
+                                let key_row = packer.pack(new_keys2.iter().map(|i| &datums[*i]));
                                 drop(datums);
                                 (key_row, row)
                             })
@@ -586,34 +585,39 @@ where
                     let mut old_unpacker = RowUnpacker::new();
                     let mut new_unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
-                    joined =
-                        match self.arrangement(&input, &new_keys[..]) {
-                            Some(ArrangementFlavor::Local(local)) => {
-                                old_keyed.join_core(&local, move |_keys, old, new| {
-                                    let old_datums = old_unpacker.unpack(old);
-                                    let new_datums = new_unpacker.unpack(new);
-                                    Some(packer.pack(
-                                        old_outputs.iter().map(|i| old_datums[*i].clone()).chain(
-                                            new_outputs.iter().map(|i| new_datums[*i].clone()),
-                                        ),
-                                    ))
-                                })
-                            }
-                            Some(ArrangementFlavor::Trace(trace)) => {
-                                old_keyed.join_core(&trace, move |_keys, old, new| {
-                                    let old_datums = old_unpacker.unpack(old);
-                                    let new_datums = new_unpacker.unpack(new);
-                                    Some(packer.pack(
-                                        old_outputs.iter().map(|i| old_datums[*i].clone()).chain(
-                                            new_outputs.iter().map(|i| new_datums[*i].clone()),
-                                        ),
-                                    ))
-                                })
-                            }
-                            None => {
-                                panic!("Arrangement alarmingly absent!");
-                            }
-                        };
+                    joined = match self.arrangement(&input, &new_keys[..]) {
+                        Some(ArrangementFlavor::Local(local)) => {
+                            old_keyed.join_core(&local, move |_keys, old, new| {
+                                let old_datums = old_unpacker.unpack(old);
+                                let new_datums = new_unpacker.unpack(new);
+                                Some(
+                                    packer.pack(
+                                        old_outputs
+                                            .iter()
+                                            .map(|i| &old_datums[*i])
+                                            .chain(new_outputs.iter().map(|i| &new_datums[*i])),
+                                    ),
+                                )
+                            })
+                        }
+                        Some(ArrangementFlavor::Trace(trace)) => {
+                            old_keyed.join_core(&trace, move |_keys, old, new| {
+                                let old_datums = old_unpacker.unpack(old);
+                                let new_datums = new_unpacker.unpack(new);
+                                Some(
+                                    packer.pack(
+                                        old_outputs
+                                            .iter()
+                                            .map(|i| &old_datums[*i])
+                                            .chain(new_outputs.iter().map(|i| &new_datums[*i])),
+                                    ),
+                                )
+                            })
+                        }
+                        None => {
+                            panic!("Arrangement alarmingly absent!");
+                        }
+                    };
                 }
 
                 // Permute back to the original positions
@@ -729,7 +733,7 @@ where
                     move |row| {
                         let datums = unpacker.unpack(&row);
 
-                        let keys = packer.pack(group_key.iter().map(|i| datums[*i].clone()));
+                        let keys = packer.pack(group_key.iter().map(|i| &datums[*i]));
 
                         let mut vals = packer.packable();
                         let mut aggs = vec![1i128];
@@ -962,7 +966,7 @@ where
                     let mut packer = RowPacker::new();
                     move |row| {
                         let datums = unpacker.unpack(&row);
-                        let group_row = packer.pack(group_clone.iter().map(|i| datums[*i].clone()));
+                        let group_row = packer.pack(group_clone.iter().map(|i| &datums[*i]));
                         drop(datums);
                         (group_row, row)
                     }
@@ -1045,7 +1049,7 @@ where
                 let keyed = built
                     .map(move |row| {
                         let datums = unpacker.unpack(&row);
-                        let key_row = packer.pack(keys2.iter().map(|i| datums[*i].clone()));
+                        let key_row = packer.pack(keys2.iter().map(|i| &datums[*i]));
                         drop(datums);
                         (key_row, row)
                     })

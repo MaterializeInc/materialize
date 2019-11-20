@@ -35,7 +35,6 @@ use crate::names;
 use crate::query;
 use crate::session::{Portal, Session};
 use crate::Plan;
-use std::borrow::Cow;
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -241,17 +240,17 @@ fn handle_show_variable(
                 .iter()
                 .map(|v| {
                     Row::pack(&[
-                        Datum::String(Cow::from(v.name())),
-                        Datum::String(Cow::from(&v.value())),
-                        Datum::String(Cow::from(v.description())),
+                        Datum::from_str(v.name()),
+                        Datum::from_str(&v.value()),
+                        Datum::from_str(v.description()),
                     ])
                 })
                 .collect(),
         ))
     } else {
         let variable = session.get(&variable.value)?;
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            Cow::from(&variable.value()),
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::from_str(
+            &variable.value(),
         )])]))
     }
 }
@@ -323,9 +322,9 @@ fn handle_show_columns(
         .map(|(name, typ)| {
             let name = name.map(|n| n.to_string());
             Row::pack(&[
-                Datum::String(Cow::from(name.mz_as_deref().unwrap_or("?"))),
-                Datum::String(Cow::from(if typ.nullable { "YES" } else { "NO" })),
-                Datum::String(Cow::from(postgres_type_name(typ.scalar_type))),
+                Datum::from_str(name.mz_as_deref().unwrap_or("?")),
+                Datum::from_str(if typ.nullable { "YES" } else { "NO" }),
+                Datum::from_str(postgres_type_name(typ.scalar_type)),
             ])
         })
         .collect();
@@ -344,8 +343,8 @@ fn handle_show_create_view(
         bail!("'{}' is not a view", name);
     };
     Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(Cow::from(&*name.to_string())),
-        Datum::String(Cow::from(raw_sql)),
+        Datum::from_str(&name.to_string()),
+        Datum::from_str(raw_sql),
     ])]))
 }
 
@@ -367,8 +366,8 @@ fn handle_show_create_source(
         };
 
     Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(Cow::from(&name.to_string())),
-        Datum::String(Cow::from(&source_url)),
+        Datum::from_str(&name.to_string()),
+        Datum::from_str(&source_url),
     ])]))
 }
 
@@ -636,8 +635,8 @@ pub fn handle_explain(
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
-            Cow::from(&relation_expr.pretty(catalog)),
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::from_str(
+            &relation_expr.pretty(catalog),
         )])]))
     } else {
         Ok(Plan::ExplainPlan(relation_expr))
@@ -684,7 +683,7 @@ fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: &[Datum]) {
 
 fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data: &[Datum]) {
     if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
-        let datum = parameter_data[*position - 1].clone();
+        let datum = &parameter_data[*position - 1];
         let scalar_type = datum.scalar_type();
         std::mem::replace(
             scalar,
