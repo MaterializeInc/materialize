@@ -11,7 +11,8 @@ mod util;
 fn test_prepared_statements() -> Result<(), Box<dyn Error>> {
     ore::log::init();
 
-    let (_server, conn) = util::start_server()?;
+    let data_dir = None;
+    let (_server, conn) = util::start_server(data_dir)?;
 
     let rows: Vec<String> = conn
         .query("SELECT $1", &[&String::from("42")])?

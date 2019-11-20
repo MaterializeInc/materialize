@@ -472,7 +472,6 @@ pub enum ScalarType {
     /// be less than or equal to the precision.
     Decimal(u8, u8),
     Date,
-    Time,
     Timestamp,
     TimestampTz,
     /// A possibly-negative time span
@@ -501,7 +500,6 @@ impl<'a> ScalarType {
             ScalarType::Float64 => Datum::Float64(OrderedFloat(0.0)),
             ScalarType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
             ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
-            ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
             ScalarType::TimestampTz => {
                 Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
@@ -529,7 +527,6 @@ impl PartialEq for ScalarType {
             | (Float32, Float32)
             | (Float64, Float64)
             | (Date, Date)
-            | (Time, Time)
             | (Timestamp, Timestamp)
             | (TimestampTz, TimestampTz)
             | (Interval, Interval)
@@ -544,7 +541,6 @@ impl PartialEq for ScalarType {
             | (Float64, _)
             | (Decimal(_, _), _)
             | (Date, _)
-            | (Time, _)
             | (Timestamp, _)
             | (TimestampTz, _)
             | (Interval, _)
@@ -571,12 +567,11 @@ impl Hash for ScalarType {
                 state.write_u8(*s);
             }
             Date => state.write_u8(7),
-            Time => state.write_u8(8),
-            Timestamp => state.write_u8(9),
-            TimestampTz => state.write_u8(10),
-            Interval => state.write_u8(11),
-            Bytes => state.write_u8(12),
-            String => state.write_u8(13),
+            Timestamp => state.write_u8(8),
+            TimestampTz => state.write_u8(9),
+            Interval => state.write_u8(10),
+            Bytes => state.write_u8(11),
+            String => state.write_u8(12),
         }
     }
 }
@@ -598,7 +593,6 @@ impl fmt::Display for ScalarType {
             Float64 => f.write_str("f64"),
             Decimal(p, s) => write!(f, "decimal({}, {})", p, s),
             Date => f.write_str("date"),
-            Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
             TimestampTz => f.write_str("timestamptz"),
             Interval => f.write_str("interval"),
