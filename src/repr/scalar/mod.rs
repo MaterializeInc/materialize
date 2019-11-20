@@ -507,7 +507,7 @@ impl<'a> ScalarType {
             }
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
             ScalarType::Bytes => Datum::Bytes(&[]),
-            ScalarType::String => Datum::String(""),
+            ScalarType::String => Datum::String(Cow::from("")),
         }
     }
 }

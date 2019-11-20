@@ -18,7 +18,7 @@ use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::Timestamp;
 use expr::GlobalId;
-use repr::{Datum, QualName, RowPacker, RowUnpacker};
+use repr::{Datum, RowPacker, RowUnpacker};
 use std::borrow::Cow;
 
 /// Type alias for logging of materialized events.

@@ -586,39 +586,34 @@ where
                     let mut old_unpacker = RowUnpacker::new();
                     let mut new_unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
-                    joined = match self.arrangement(&input, &new_keys[..]) {
-                        Some(ArrangementFlavor::Local(local)) => {
-                            old_keyed.join_core(&local, move |_keys, old, new| {
-                                let old_datums = old_unpacker.unpack(old);
-                                let new_datums = new_unpacker.unpack(new);
-                                Some(
-                                    packer.pack(
-                                        old_outputs
-                                            .iter()
-                                            .map(|i| old_datums[*i])
-                                            .chain(new_outputs.iter().map(|i| new_datums[*i])),
-                                    ),
-                                )
-                            })
-                        }
-                        Some(ArrangementFlavor::Trace(trace)) => {
-                            old_keyed.join_core(&trace, move |_keys, old, new| {
-                                let old_datums = old_unpacker.unpack(old);
-                                let new_datums = new_unpacker.unpack(new);
-                                Some(
-                                    packer.pack(
-                                        old_outputs
-                                            .iter()
-                                            .map(|i| old_datums[*i])
-                                            .chain(new_outputs.iter().map(|i| new_datums[*i])),
-                                    ),
-                                )
-                            })
-                        }
-                        None => {
-                            panic!("Arrangement alarmingly absent!");
-                        }
-                    };
+                    joined =
+                        match self.arrangement(&input, &new_keys[..]) {
+                            Some(ArrangementFlavor::Local(local)) => {
+                                old_keyed.join_core(&local, move |_keys, old, new| {
+                                    let old_datums = old_unpacker.unpack(old);
+                                    let new_datums = new_unpacker.unpack(new);
+                                    Some(packer.pack(
+                                        old_outputs.iter().map(|i| old_datums[*i].clone()).chain(
+                                            new_outputs.iter().map(|i| new_datums[*i].clone()),
+                                        ),
+                                    ))
+                                })
+                            }
+                            Some(ArrangementFlavor::Trace(trace)) => {
+                                old_keyed.join_core(&trace, move |_keys, old, new| {
+                                    let old_datums = old_unpacker.unpack(old);
+                                    let new_datums = new_unpacker.unpack(new);
+                                    Some(packer.pack(
+                                        old_outputs.iter().map(|i| old_datums[*i].clone()).chain(
+                                            new_outputs.iter().map(|i| new_datums[*i].clone()),
+                                        ),
+                                    ))
+                                })
+                            }
+                            None => {
+                                panic!("Arrangement alarmingly absent!");
+                            }
+                        };
                 }
 
                 // Permute back to the original positions
