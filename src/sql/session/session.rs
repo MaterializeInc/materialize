@@ -245,6 +245,16 @@ impl Session {
         self.prepared_statements.get(name)
     }
 
+    /// Given a portal name, get the associated prepared statement
+    pub fn get_prepared_statement_for_portal(
+        &self,
+        portal_name: &str,
+    ) -> Option<&PreparedStatement> {
+        self.portals
+            .get(portal_name)
+            .and_then(|portal| self.prepared_statements.get(&portal.statement_name))
+    }
+
     /// Ensure that the given portal exists
     ///
     /// **Errors** if the statement name has not be set
@@ -262,6 +272,8 @@ impl Session {
                     statement_name,
                     parameters: row,
                     return_field_formats,
+                    max_rows: None,
+                    remaining_rows: None,
                 },
             );
             Ok(())
@@ -275,8 +287,18 @@ impl Session {
         }
     }
 
+    /// Remove the portal, doing nothing if the portal does not exist
+    pub fn remove_portal(&mut self, portal_name: &str) {
+        let _ = self.portals.remove(portal_name);
+    }
+
     /// Retrieve a portal by name
     pub fn get_portal(&self, portal_name: &str) -> Option<&Portal> {
         self.portals.get(portal_name)
+    }
+
+    /// Get a portal for mutation
+    pub fn get_portal_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
+        self.portals.get_mut(portal_name)
     }
 }

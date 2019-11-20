@@ -153,6 +153,10 @@ pub enum FrontendMessage {
     Execute {
         /// The name of the portal to execute.
         portal_name: String,
+        /// The maximum number number of rows to return before suspending.
+        ///
+        /// 0 or negative means infinite.
+        max_rows: i32,
     },
 
     /// Finish an extended query.
@@ -194,9 +198,11 @@ pub enum BackendMessage {
         secret_key: u32,
     },
     ParameterDescription(Vec<ParameterDescription>),
+    PortalSuspended,
     NoData,
     ParseComplete,
     BindComplete,
+    CloseComplete,
     ErrorResponse {
         severity: Severity,
         code: &'static str,
