@@ -34,7 +34,8 @@ use sqlparser::ast::{
 };
 use uuid::Uuid;
 
-use catalog::Catalog;
+use ::expr::Id;
+use catalog::{Catalog, CatalogEntry};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
 use repr::decimal::MAX_DECIMAL_PRECISION;
@@ -83,6 +84,39 @@ pub fn plan_root_query(
     Ok((expr, desc, finishing, param_types))
 }
 
+fn plan_expr_or_col_index<'a>(
+    catalog: &Catalog,
+    ecx: &ExprContext,
+    e: &'a Expr,
+    type_hint: Option<ScalarType>,
+    clause_name: &str,
+) -> Result<ScalarExpr, failure::Error> {
+    match e {
+        Expr::Value(Value::Number(n)) => {
+            let n = n.parse::<usize>().with_context(|err| {
+                format_err!(
+                    "unable to parse column reference in {}: {}: {}",
+                    clause_name,
+                    err,
+                    n
+                )
+            })?;
+            let max = ecx.relation_type.column_types.len();
+            if n < 1 || n > max {
+                bail!(
+                    "column reference {} in {} is out of range (1 - {})",
+                    n,
+                    clause_name,
+                    max
+                );
+            }
+            Some(Ok(ScalarExpr::Column(ColumnRef::Inner(n - 1))))
+        }
+        _ => None,
+    }
+    .unwrap_or_else(|| plan_expr(catalog, ecx, e, type_hint))
+}
+
 fn plan_query(
     catalog: &Catalog,
     qcx: &QueryContext,
@@ -106,63 +140,41 @@ fn plan_query(
     let mut order_by = vec![];
     let mut map_exprs = vec![];
     for obe in &q.order_by {
-        match &obe.expr {
-            Expr::Value(Value::Number(n)) => {
-                let n = n.parse::<usize>().with_context(|err| {
-                    format_err!(
-                        "unable to parse column reference in ORDER BY: {}: {}",
-                        err,
-                        n
-                    )
-                })?;
-                let max = output_typ.column_types.len();
-                if n < 1 || n > max {
-                    bail!(
-                        "column reference {} in ORDER BY is out of range (1 - {})",
-                        n,
-                        max
-                    );
-                }
-                order_by.push(ColumnOrder {
-                    column: n - 1,
-                    desc: match obe.asc {
-                        None => false,
-                        Some(asc) => !asc,
-                    },
-                });
-            }
-            other => {
-                let ecx = &ExprContext {
-                    qcx,
-                    name: "ORDER BY clause",
-                    scope: &scope,
-                    relation_type: &output_typ,
-                    allow_aggregates: true,
-                    allow_subqueries: true,
-                };
-                let expr = plan_expr(catalog, ecx, other, Some(ScalarType::String))?;
-                // If the expression is a reference to an existing column,
-                // do not introduce a new column to support it.
-                if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
-                    order_by.push(ColumnOrder {
-                        column,
-                        desc: match obe.asc {
-                            None => false,
-                            Some(asc) => !asc,
-                        },
-                    });
-                } else {
-                    let idx = output_typ.column_types.len() + map_exprs.len();
-                    map_exprs.push(expr);
-                    order_by.push(ColumnOrder {
-                        column: idx,
-                        desc: match obe.asc {
-                            None => false,
-                            Some(asc) => !asc,
-                        },
-                    });
-                }
-            }
+        let ecx = &ExprContext {
+            qcx,
+            name: "ORDER BY clause",
+            scope: &scope,
+            relation_type: &output_typ,
+            allow_aggregates: true,
+            allow_subqueries: true,
+        };
+        let expr = plan_expr_or_col_index(
+            catalog,
+            ecx,
+            &obe.expr,
+            Some(ScalarType::String),
+            "ORDER BY",
+        )?;
+        // If the expression is a reference to an existing column,
+        // do not introduce a new column to support it.
+        if let ScalarExpr::Column(ColumnRef::Inner(column)) = expr {
+            order_by.push(ColumnOrder {
+                column,
+                desc: match obe.asc {
+                    None => false,
+                    Some(asc) => !asc,
+                },
+            });
+        } else {
+            let idx = output_typ.column_types.len() + map_exprs.len();
+            map_exprs.push(expr);
+            order_by.push(ColumnOrder {
+                column: idx,
+                desc: match obe.asc {
+                    None => false,
+                    Some(asc) => !asc,
+                },
+            });
         }
     }
 
@@ -409,7 +421,13 @@ fn plan_view_select(
         let mut group_scope = Scope::empty(Some(qcx.outer_scope.clone()));
         let mut select_all_mapping = BTreeMap::new();
         for group_expr in &s.group_by {
-            let expr = plan_expr(catalog, ecx, group_expr, Some(ScalarType::String))?;
+            let expr = plan_expr_or_col_index(
+                catalog,
+                ecx,
+                group_expr,
+                Some(ScalarType::String),
+                "GROUP BY",
+            )?;
             let new_column = group_key.len();
             // repeated exprs in GROUP BY confuse name resolution later, and dropping them doesn't change the result
             if group_exprs
@@ -530,12 +548,13 @@ fn plan_view_select(
     Ok((relation_expr, project_scope))
 }
 
-pub fn plan_index(
-    catalog: &Catalog,
+pub fn plan_index<'a>(
+    catalog: &'a Catalog,
     on_name: &QualName,
     key_parts: &[Expr],
-) -> Result<(RelationType, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
-    let desc = catalog.get_desc(on_name)?;
+) -> Result<(&'a CatalogEntry, Vec<usize>, Vec<ScalarExpr>), failure::Error> {
+    let item = catalog.get(on_name)?;
+    let desc = item.desc()?;
     let scope = Scope::from_source(Some(on_name), desc.iter_names(), Some(Scope::empty(None)));
     let qcx = &QueryContext::root();
     let ecx = &ExprContext {
@@ -561,7 +580,7 @@ pub fn plan_index(
             func_count += 1;
         }
     }
-    Ok((desc.typ().clone(), arrange_cols, map_exprs))
+    Ok((item, arrange_cols, map_exprs))
 }
 
 fn plan_table_with_joins<'a>(
@@ -606,10 +625,10 @@ fn plan_table_factor<'a>(
                 bail!("WITH hints are not supported");
             }
             let name = QualName::try_from(name.clone())?;
-            let desc = catalog.get_desc(&name)?;
+            let item = catalog.get(&name)?;
             let expr = RelationExpr::Get {
-                name: name.clone(),
-                typ: desc.typ().clone(),
+                id: Id::Global(item.id()),
+                typ: item.desc()?.typ().clone(),
             };
             let alias: QualName = if let Some(TableAlias { name, columns }) = alias {
                 if !columns.is_empty() {
@@ -621,7 +640,7 @@ fn plan_table_factor<'a>(
             };
             let scope = Scope::from_source(
                 Some(&alias),
-                desc.iter_names(),
+                item.desc()?.iter_names(),
                 Some(qcx.outer_scope.clone()),
             );
             Ok((expr, scope))
@@ -1579,7 +1598,13 @@ fn plan_unary_op<'a>(
     let expr = plan_expr(catalog, ecx, expr, Some(type_hint))?;
     let typ = ecx.column_type(&expr);
     let func = match op {
-        UnaryOperator::Not => UnaryFunc::Not,
+        UnaryOperator::Not => match typ.scalar_type {
+            ScalarType::Bool => UnaryFunc::Not,
+            _ => bail!(
+                "Cannot apply operator Not to non-boolean type {:?}",
+                typ.scalar_type
+            ),
+        },
         UnaryOperator::Plus => return Ok(expr), // no-op
         UnaryOperator::Minus => match typ.scalar_type {
             ScalarType::Int32 => UnaryFunc::NegInt32,
@@ -2466,7 +2491,6 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         DataType::Timestamp => ScalarType::Timestamp,
         DataType::TimestampTz => ScalarType::TimestampTz,
         DataType::Interval => ScalarType::Interval,
-        DataType::Time => ScalarType::Time,
         DataType::Bytea => ScalarType::Bytes,
         other @ DataType::Array(_)
         | other @ DataType::Binary(..)
@@ -2474,6 +2498,7 @@ pub fn scalar_type_from_sql(data_type: &DataType) -> Result<ScalarType, failure:
         | other @ DataType::Clob(_)
         | other @ DataType::Custom(_)
         | other @ DataType::Regclass
+        | other @ DataType::Time
         | other @ DataType::TimeTz
         | other @ DataType::Uuid
         | other @ DataType::Varbinary(_) => bail!("Unexpected SQL type: {:?}", other),

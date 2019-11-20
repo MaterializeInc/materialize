@@ -13,16 +13,16 @@ use timely::order::PartialOrder;
 use timely::Data;
 
 use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
-use repr::{QualName, Row};
+use expr::GlobalId;
+use repr::Row;
 
-pub fn tail<G, B>(stream: &Stream<G, B>, name: &QualName, connector: TailSinkConnector)
+pub fn tail<G, B>(stream: &Stream<G, B>, id: GlobalId, connector: TailSinkConnector)
 where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<Row, Row, Timestamp, Diff>,
 {
     let mut tx = connector.tx.connect().wait().unwrap();
-    // TODO: should this preserve the QualName part of it?
-    stream.sink(Pipeline, &name.to_string(), move |input| {
+    stream.sink(Pipeline, &format!("tail-{}", id), move |input| {
         input.for_each(|_, batches| {
             let mut results: Vec<Update> = Vec::new();
             for batch in batches.iter() {

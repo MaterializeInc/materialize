@@ -5,8 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::RelationExpr;
-use repr::QualName;
+use crate::{Id, RelationExpr};
 
 /// Hoist projections wherever possible, in order to minimize structural limitations on transformations.
 /// Projections can be re-introduced in the physical planning stage.
@@ -28,30 +27,31 @@ impl ProjectionLifting {
         &self,
         relation: &mut RelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut HashMap<QualName, (repr::RelationType, Vec<usize>)>,
+        gets: &mut HashMap<Id, (repr::RelationType, Vec<usize>)>,
     ) {
         match relation {
             RelationExpr::Constant { .. } => {}
-            RelationExpr::Get { name, .. } => {
-                if let Some((typ, columns)) = gets.get(name) {
+            RelationExpr::Get { id, .. } => {
+                if let Some((typ, columns)) = gets.get(id) {
                     *relation = RelationExpr::Get {
-                        name: name.clone(),
+                        id: *id,
                         typ: typ.clone(),
                     }
                     .project(columns.clone());
                 }
             }
-            RelationExpr::Let { name, value, body } => {
+            RelationExpr::Let { id, value, body } => {
                 self.action(value, gets);
+                let id = Id::Local(*id);
                 if let RelationExpr::Project { input, outputs } = &mut **value {
                     let typ = input.typ();
-                    let prior = gets.insert(name.clone(), (typ, outputs.clone()));
+                    let prior = gets.insert(id, (typ, outputs.clone()));
                     assert!(!prior.is_some());
                     **value = input.take_dangerous();
                 }
 
                 self.action(body, gets);
-                gets.remove(name);
+                gets.remove(&id);
             }
             RelationExpr::Project { input, outputs } => {
                 self.action(input, gets);
@@ -107,39 +107,44 @@ impl ProjectionLifting {
             RelationExpr::Join {
                 inputs,
                 variables,
-                projection,
+                demand,
             } => {
                 for input in inputs.iter_mut() {
                     self.action(input, gets);
                 }
 
-                if projection.is_none() {
-                    let mut projection = Vec::new();
-                    let mut temp_arity = 0;
+                let mut projection = Vec::new();
+                let mut temp_arity = 0;
 
-                    for (index, join_input) in inputs.iter_mut().enumerate() {
-                        if let RelationExpr::Project { input, outputs } = join_input {
-                            for variable in variables.iter_mut() {
-                                for (rel, col) in variable.iter_mut() {
-                                    if *rel == index {
-                                        *col = outputs[*col];
-                                    }
+                for (index, join_input) in inputs.iter_mut().enumerate() {
+                    if let RelationExpr::Project { input, outputs } = join_input {
+                        for variable in variables.iter_mut() {
+                            for (rel, col) in variable.iter_mut() {
+                                if *rel == index {
+                                    *col = outputs[*col];
                                 }
                             }
-                            for output in outputs.iter() {
-                                projection.push(temp_arity + *output);
-                            }
-                            temp_arity += input.arity();
-                            *join_input = input.take_dangerous();
-                        } else {
-                            let arity = join_input.arity();
-                            projection.extend(temp_arity..(temp_arity + arity));
-                            temp_arity += arity;
                         }
-                    }
+                        for output in outputs.iter() {
+                            projection.push(temp_arity + *output);
+                        }
 
-                    *relation = relation.take_dangerous().project(projection);
+                        if let Some(demand) = demand {
+                            for col in demand[index].iter_mut() {
+                                *col = outputs[*col];
+                            }
+                        }
+
+                        temp_arity += input.arity();
+                        *join_input = input.take_dangerous();
+                    } else {
+                        let arity = join_input.arity();
+                        projection.extend(temp_arity..(temp_arity + arity));
+                        temp_arity += arity;
+                    }
                 }
+
+                *relation = relation.take_dangerous().project(projection);
             }
             RelationExpr::Reduce {
                 input,

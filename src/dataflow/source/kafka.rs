@@ -16,7 +16,7 @@ use super::util::source;
 use super::SharedCapability;
 use dataflow_types::{Diff, KafkaSourceConnector, Timestamp};
 use interchange::avro;
-use repr::{QualName, Row};
+use repr::Row;
 
 use lazy_static::lazy_static;
 use prometheus::{IntCounter, IntCounterVec};
@@ -46,7 +46,7 @@ lazy_static! {
 
 pub fn kafka<G>(
     scope: &G,
-    name: &QualName,
+    name: String,
     connector: KafkaSourceConnector,
     read_kafka: bool,
 ) -> (Stream<G, (Row, Timestamp, Diff)>, Option<SharedCapability>)
@@ -59,8 +59,7 @@ where
         raw_schema,
         schema_registry_url,
     } = connector;
-    let (stream, capability) = source(scope, name, move |info| {
-        let name = name.clone();
+    let (stream, capability) = source(scope, &name.clone(), move |info| {
         let activator = scope.activator_for(&info.address[..]);
 
         let mut config = ClientConfig::new();

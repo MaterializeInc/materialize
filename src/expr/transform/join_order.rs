@@ -60,7 +60,9 @@ impl JoinOrder {
     }
     pub fn action(&self, relation: &mut RelationExpr) {
         if let RelationExpr::Join {
-            inputs, variables, ..
+            inputs,
+            variables,
+            demand,
         } = relation
         {
             let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
@@ -109,8 +111,8 @@ impl JoinOrder {
 
             // Step 4: prepare output
             let mut new_inputs = Vec::new();
-            for rel in relation_expr_order.into_iter() {
-                new_inputs.push(inputs[rel].clone()); // TODO: Extract from `inputs`.
+            for rel in relation_expr_order.iter() {
+                new_inputs.push(inputs[*rel].clone()); // TODO: Extract from `inputs`.
             }
 
             // put join constraints in a canonical format.
@@ -119,7 +121,19 @@ impl JoinOrder {
             }
             new_variables.sort();
 
-            let join = RelationExpr::join(new_inputs, new_variables);
+            let join = if let Some(demand) = demand {
+                let mut new_demand = Vec::new();
+                for rel in relation_expr_order.into_iter() {
+                    new_demand.push(demand[rel].clone());
+                }
+                RelationExpr::Join {
+                    inputs: new_inputs,
+                    variables: new_variables,
+                    demand: Some(new_demand),
+                }
+            } else {
+                RelationExpr::join(new_inputs, new_variables)
+            };
 
             // Output projection
             *relation = join.project(projection);

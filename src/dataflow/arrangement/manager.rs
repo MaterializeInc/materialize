@@ -10,7 +10,8 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use std::collections::{BTreeMap, HashMap};
 
 use dataflow_types::{Diff, Timestamp};
-use repr::{QualName, Row};
+use expr::GlobalId;
+use repr::Row;
 
 #[allow(dead_code)]
 pub type KeysValsSpine = OrdValSpine<Row, Row, Timestamp, Diff>;
@@ -19,11 +20,12 @@ pub type KeysValsHandle = TraceValHandle<Row, Row, Timestamp, Diff>;
 
 /// A map from collection names to cached arrangements.
 ///
-/// A `TraceManager` stores maps from string names to various arranged representations
-/// of a collection. These arrangements can either be unkeyed, or keyed by some expression.
+/// A `TraceManager` stores maps from global identifiers to various arranged
+/// representations of a collection. These arrangements can either be unkeyed,
+/// or keyed by some expression.
 pub struct TraceManager {
-    /// A map from named collections to maintained traces.
-    pub traces: HashMap<QualName, CollectionTraces>,
+    /// A map from global identifiers to maintained traces.
+    pub traces: HashMap<GlobalId, CollectionTraces>,
 }
 
 impl Default for TraceManager {
@@ -49,26 +51,22 @@ impl TraceManager {
         }
     }
 
-    /// Enables compaction of traces associated with the name.
+    /// Enables compaction of traces associated with the identifier.
     ///
     /// Compaction may not occur immediately, but once this method is called the
     /// associated traces may not accumulate to the correct quantities for times
     /// not in advance of `frontier`. Users should take care to only rely on
     /// accumulations at times in advance of `frontier`.
-    pub fn allow_compaction(&mut self, name: &QualName, frontier: &[Timestamp]) {
-        if let Some(val) = self.traces.get_mut(name) {
+    pub fn allow_compaction(&mut self, id: GlobalId, frontier: &[Timestamp]) {
+        if let Some(val) = self.traces.get_mut(&id) {
             val.merge_logical(frontier);
         }
     }
 
     /// Returns a copy of a by_key arrangement, should it exist.
     #[allow(dead_code)]
-    pub fn get_by_keys(
-        &self,
-        name: &QualName,
-        keys: &[usize],
-    ) -> Option<&WithDrop<KeysValsHandle>> {
-        let collection = self.traces.get(name)?;
+    pub fn get_by_keys(&self, id: GlobalId, keys: &[usize]) -> Option<&WithDrop<KeysValsHandle>> {
+        let collection = self.traces.get(&id)?;
         if let Some(system) = collection.system.get(keys) {
             Some(system)
         } else {
@@ -80,10 +78,10 @@ impl TraceManager {
     #[allow(dead_code)]
     pub fn get_by_keys_mut(
         &mut self,
-        name: &QualName,
+        id: GlobalId,
         keys: &[usize],
     ) -> Option<&mut WithDrop<KeysValsHandle>> {
-        let collection = self.traces.get_mut(name)?;
+        let collection = self.traces.get_mut(&id)?;
         if let Some(system) = collection.system.get_mut(keys) {
             Some(system)
         } else {
@@ -94,9 +92,9 @@ impl TraceManager {
     /// Returns a copy of all by_key arrangements, should they exist.
     pub fn get_all_keyed(
         &mut self,
-        name: &QualName,
+        id: GlobalId,
     ) -> Option<impl Iterator<Item = (&Vec<usize>, &mut WithDrop<KeysValsHandle>)>> {
-        let collection_trace = self.traces.get_mut(name)?;
+        let collection_trace = self.traces.get_mut(&id)?;
         Some(
             collection_trace
                 .system
@@ -107,9 +105,9 @@ impl TraceManager {
 
     pub fn get_default_with_key(
         &mut self,
-        name: &QualName,
+        id: GlobalId,
     ) -> Option<(&[usize], &mut WithDrop<KeysValsHandle>)> {
-        if let Some(collection) = self.traces.get_mut(name) {
+        if let Some(collection) = self.traces.get_mut(&id) {
             Some((
                 &collection.default_arr_key,
                 collection
@@ -123,8 +121,8 @@ impl TraceManager {
     }
 
     /// get the default arrangement, which is by primary key
-    pub fn get_default(&self, name: &QualName) -> Option<&WithDrop<KeysValsHandle>> {
-        if let Some(collection) = self.traces.get(name) {
+    pub fn get_default(&self, id: GlobalId) -> Option<&WithDrop<KeysValsHandle>> {
+        if let Some(collection) = self.traces.get(&id) {
             collection.system.get(&collection.default_arr_key)
         } else {
             None
@@ -133,11 +131,11 @@ impl TraceManager {
 
     /// Binds a by_keys arrangement.
     #[allow(dead_code)]
-    pub fn set_by_keys(&mut self, name: QualName, keys: &[usize], trace: WithDrop<KeysValsHandle>) {
+    pub fn set_by_keys(&mut self, id: GlobalId, keys: &[usize], trace: WithDrop<KeysValsHandle>) {
         //Currently it is assumed that the first arrangement for a collection is the one
         //keyed by the primary keys
         self.traces
-            .entry(name)
+            .entry(id)
             .or_insert_with(|| CollectionTraces::new(keys.to_vec()))
             .system
             .insert(keys.to_vec(), trace);
@@ -146,27 +144,27 @@ impl TraceManager {
     /// Add a user created index
     pub fn set_user_created(
         &mut self,
-        collection_name: &QualName,
+        collection_id: GlobalId,
         keys: &[usize],
         trace: WithDrop<KeysValsHandle>,
     ) {
         // The collection should exist already
         self.traces
-            .get_mut(collection_name)
+            .get_mut(&collection_id)
             .unwrap()
             .user
             .insert(keys.to_vec(), trace);
     }
 
     /// Removes all of a collection's traces
-    pub fn del_collection_traces(&mut self, name: &QualName) -> Option<CollectionTraces> {
-        self.traces.remove(name)
+    pub fn del_collection_traces(&mut self, id: GlobalId) -> Option<CollectionTraces> {
+        self.traces.remove(&id)
     }
 
     /// Removes a user-created trace
-    pub fn del_user_trace(&mut self, collection_name: &QualName, keys: &[usize]) -> bool {
+    pub fn del_user_trace(&mut self, id: GlobalId, keys: &[usize]) -> bool {
         self.traces
-            .get_mut(collection_name)
+            .get_mut(&id)
             .unwrap()
             .user
             .remove(keys)

@@ -16,8 +16,8 @@ use std::cmp::Ordering;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use expr::{ColumnOrder, RelationExpr, ScalarExpr};
-use repr::{Datum, QualName, RelationDesc, RelationType, Row};
+use expr::{ColumnOrder, GlobalId, RelationExpr, ScalarExpr};
+use repr::{Datum, RelationDesc, RelationType, Row};
 
 /// System-wide update type.
 pub type Diff = isize;
@@ -107,14 +107,14 @@ impl RowSetFinishing {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct DataflowDesc {
-    /// Named sources used by the dataflow.
-    pub sources: Vec<Source>,
-    /// Named views produced by the dataflow.
-    pub views: Vec<View>,
-    /// Named sinks internal to the dataflow.
-    pub sinks: Vec<Sink>,
-    /// Named indexes used by the dataflow.
-    pub indexes: Vec<Index>,
+    /// Sources used by the dataflow.
+    pub sources: Vec<(GlobalId, Source)>,
+    /// Views produced by the dataflow.
+    pub views: Vec<(GlobalId, View)>,
+    /// Sinks internal to the dataflow.
+    pub sinks: Vec<(GlobalId, Sink)>,
+    /// Indexes used by the dataflow.
+    pub indexes: Vec<(GlobalId, Index)>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// This is logically equivalent to a timely dataflow `Antichain`,
@@ -127,63 +127,43 @@ impl DataflowDesc {
         Default::default()
     }
 
-    /// Collects the names of the dataflows that this dataflow depends upon.
-    pub fn uses(&self) -> Vec<&QualName> {
+    /// Collects the IDs of the dataflows that this dataflow depends upon.
+    pub fn uses(&self) -> Vec<GlobalId> {
         let mut out = Vec::new();
-        for view in self.views.iter() {
-            view.relation_expr.unbound_uses(&mut out);
+        for (_id, view) in self.views.iter() {
+            view.relation_expr.global_uses(&mut out);
         }
-        for index in self.indexes.iter() {
-            out.push(&index.on_name);
+        for (_id, index) in self.indexes.iter() {
+            out.push(index.on_id);
         }
         out.sort();
         out.dedup();
         out
     }
 
-    pub fn add_source(mut self, source: Source) -> Self {
-        self.sources.push(source);
+    pub fn add_source(mut self, id: GlobalId, source: Source) -> Self {
+        self.sources.push((id, source));
         self
     }
-    pub fn add_view(mut self, view: View) -> Self {
-        self.views.push(view);
+
+    pub fn add_view(mut self, id: GlobalId, view: View) -> Self {
+        self.views.push((id, view));
         self
     }
-    pub fn add_sink(mut self, sink: Sink) -> Self {
-        self.sinks.push(sink);
+
+    pub fn add_sink(mut self, id: GlobalId, sink: Sink) -> Self {
+        self.sinks.push((id, sink));
         self
     }
-    pub fn add_index(mut self, index: Index) -> Self {
-        self.indexes.push(index);
+
+    pub fn add_index(mut self, id: GlobalId, index: Index) -> Self {
+        self.indexes.push((id, index));
         self
     }
+
     pub fn as_of(mut self, as_of: Option<Vec<Timestamp>>) -> Self {
         self.as_of = as_of;
         self
-    }
-}
-
-impl From<Source> for DataflowDesc {
-    fn from(s: Source) -> Self {
-        DataflowDesc::new().add_source(s)
-    }
-}
-
-impl From<View> for DataflowDesc {
-    fn from(v: View) -> Self {
-        DataflowDesc::new().add_view(v)
-    }
-}
-
-impl From<Sink> for DataflowDesc {
-    fn from(s: Sink) -> Self {
-        DataflowDesc::new().add_sink(s)
-    }
-}
-
-impl From<Index> for DataflowDesc {
-    fn from(i: Index) -> Self {
-        DataflowDesc::new().add_index(i)
     }
 }
 
@@ -195,7 +175,6 @@ impl From<Index> for DataflowDesc {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Source {
-    pub name: QualName,
     pub connector: SourceConnector,
     pub desc: RelationDesc,
 }
@@ -204,8 +183,7 @@ pub struct Source {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Sink {
-    pub name: QualName,
-    pub from: (QualName, RelationDesc),
+    pub from: (GlobalId, RelationDesc),
     pub connector: SinkConnector,
 }
 
@@ -213,7 +191,6 @@ pub struct Sink {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct View {
-    pub name: QualName,
     pub raw_sql: String,
     pub relation_expr: RelationExpr,
     pub desc: RelationDesc,
@@ -257,16 +234,14 @@ pub struct TailSinkConnector {
 #[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Index {
-    /// Name of Index
-    pub name: QualName,
-    /// Name of collection the index is on
-    pub on_name: QualName,
-    /// Types of the columns of the `on_name` collection
+    /// Identity of the collection the index is on.
+    pub on_id: GlobalId,
+    /// Types of the columns of the `on_id` collection.
     pub relation_type: RelationType,
-    /// Numbers of the columns to be arranged, in order of decreasing primacy
-    /// Includes the numbers of extra columns defined in `fxns`
+    /// Numbers of the columns to be arranged, in order of decreasing primacy.
+    /// Includes the numbers of extra columns defined in `fxns`.
     pub keys: Vec<usize>,
-    /// Functions of the columns to evaluate and arrange on
+    /// Functions of the columns to evaluate and arrange on.
     pub funcs: Vec<ScalarExpr>,
 }
 
@@ -276,41 +251,48 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use repr::{ColumnType, LiteralName, RelationType, ScalarType};
+    use expr::Id;
+    use repr::{ColumnType, RelationType, ScalarType};
 
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = DataflowDesc::new().add_view(View {
-            name: "report".lit(),
-            raw_sql: "<none>".into(),
-            relation_expr: RelationExpr::Project {
-                outputs: vec![1, 2],
-                input: Box::new(RelationExpr::join(
-                    vec![
-                        RelationExpr::Get {
-                            name: "orders".lit(),
-                            typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
-                        },
-                        Box::new(RelationExpr::Union {
-                            left: Box::new(RelationExpr::Get {
-                                name: "customers2018".lit(),
+        let dataflow = DataflowDesc::new().add_view(
+            GlobalId::user(4),
+            View {
+                raw_sql: "<none>".into(),
+                relation_expr: RelationExpr::Project {
+                    outputs: vec![1, 2],
+                    input: Box::new(RelationExpr::join(
+                        vec![
+                            RelationExpr::Get {
+                                id: Id::Global(GlobalId::user(1)),
                                 typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
-                            }),
-                            right: Box::new(RelationExpr::Get {
-                                name: "customers2019".lit(),
-                                typ: RelationType::new(vec![ColumnType::new(ScalarType::Int64)]),
-                            }),
-                        })
-                        .distinct(),
-                    ],
-                    vec![vec![(0, 0), (1, 0)]],
-                )),
+                            },
+                            Box::new(RelationExpr::Union {
+                                left: Box::new(RelationExpr::Get {
+                                    id: Id::Global(GlobalId::user(2)),
+                                    typ: RelationType::new(vec![ColumnType::new(
+                                        ScalarType::Int64,
+                                    )]),
+                                }),
+                                right: Box::new(RelationExpr::Get {
+                                    id: Id::Global(GlobalId::user(3)),
+                                    typ: RelationType::new(vec![ColumnType::new(
+                                        ScalarType::Int64,
+                                    )]),
+                                }),
+                            })
+                            .distinct(),
+                        ],
+                        vec![vec![(0, 0), (1, 0)]],
+                    )),
+                },
+                desc: RelationDesc::empty()
+                    .add_column("name", ScalarType::String)
+                    .add_column("quantity", ScalarType::String),
             },
-            desc: RelationDesc::empty()
-                .add_column("name", ScalarType::String)
-                .add_column("quantity", ScalarType::String),
-        });
+        );
 
         let decoded: DataflowDesc =
             serde_json::from_str(&serde_json::to_string_pretty(&dataflow)?)?;

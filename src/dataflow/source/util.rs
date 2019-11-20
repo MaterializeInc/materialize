@@ -14,13 +14,8 @@ use timely::Data;
 
 use super::SharedCapability;
 use dataflow_types::Timestamp;
-use repr::QualName;
 
-pub fn source<G, D, B, L>(
-    scope: &G,
-    name: &QualName,
-    construct: B,
-) -> (Stream<G, D>, SharedCapability)
+pub fn source<G, D, B, L>(scope: &G, name: &str, construct: B) -> (Stream<G, D>, SharedCapability)
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
@@ -29,7 +24,7 @@ where
         + 'static,
 {
     let mut cap_out = None;
-    let stream = timely_source(scope, &*name.to_string(), |cap, info| {
+    let stream = timely_source(scope, name, |cap, info| {
         // Share ownership of the source's capability with the outside world.
         let cap = Rc::new(RefCell::new(cap));
         cap_out = Some(cap.clone());

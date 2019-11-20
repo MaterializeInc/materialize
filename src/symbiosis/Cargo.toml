@@ -9,6 +9,7 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+catalog = { path = "../catalog" }
 chrono = { version = "0.4", features = ["serde"] }
 dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.6"

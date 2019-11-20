@@ -473,7 +473,6 @@ pub enum ScalarType {
     /// be less than or equal to the precision.
     Decimal(u8, u8),
     Date,
-    Time,
     Timestamp,
     TimestampTz,
     /// A possibly-negative time span
@@ -484,11 +483,31 @@ pub enum ScalarType {
     String,
 }
 
-impl ScalarType {
+impl<'a> ScalarType {
     pub fn unwrap_decimal_parts(self) -> (u8, u8) {
         match self {
             ScalarType::Decimal(p, s) => (p, s),
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
+        }
+    }
+
+    pub fn dummy_datum(self) -> Datum<'a> {
+        match self {
+            ScalarType::Null => Datum::Null,
+            ScalarType::Bool => Datum::False,
+            ScalarType::Int32 => Datum::Int32(0),
+            ScalarType::Int64 => Datum::Int64(0),
+            ScalarType::Float32 => Datum::Float32(OrderedFloat(0.0)),
+            ScalarType::Float64 => Datum::Float64(OrderedFloat(0.0)),
+            ScalarType::Decimal(_, _) => Datum::Decimal(Significand::new(0)),
+            ScalarType::Date => Datum::Date(NaiveDate::from_ymd(1, 1, 1)),
+            ScalarType::Timestamp => Datum::Timestamp(NaiveDateTime::from_timestamp(0, 0)),
+            ScalarType::TimestampTz => {
+                Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
+            }
+            ScalarType::Interval => Datum::Interval(Interval::Months(0)),
+            ScalarType::Bytes => Datum::Bytes(&[]),
+            ScalarType::String => Datum::String(""),
         }
     }
 }
@@ -509,7 +528,6 @@ impl PartialEq for ScalarType {
             | (Float32, Float32)
             | (Float64, Float64)
             | (Date, Date)
-            | (Time, Time)
             | (Timestamp, Timestamp)
             | (TimestampTz, TimestampTz)
             | (Interval, Interval)
@@ -524,7 +542,6 @@ impl PartialEq for ScalarType {
             | (Float64, _)
             | (Decimal(_, _), _)
             | (Date, _)
-            | (Time, _)
             | (Timestamp, _)
             | (TimestampTz, _)
             | (Interval, _)
@@ -551,12 +568,11 @@ impl Hash for ScalarType {
                 state.write_u8(*s);
             }
             Date => state.write_u8(7),
-            Time => state.write_u8(8),
-            Timestamp => state.write_u8(9),
-            TimestampTz => state.write_u8(10),
-            Interval => state.write_u8(11),
-            Bytes => state.write_u8(12),
-            String => state.write_u8(13),
+            Timestamp => state.write_u8(8),
+            TimestampTz => state.write_u8(9),
+            Interval => state.write_u8(10),
+            Bytes => state.write_u8(11),
+            String => state.write_u8(12),
         }
     }
 }
@@ -578,7 +594,6 @@ impl fmt::Display for ScalarType {
             Float64 => f.write_str("f64"),
             Decimal(p, s) => write!(f, "decimal({}, {})", p, s),
             Date => f.write_str("date"),
-            Time => f.write_str("time"),
             Timestamp => f.write_str("timestamp"),
             TimestampTz => f.write_str("timestamptz"),
             Interval => f.write_str("interval"),

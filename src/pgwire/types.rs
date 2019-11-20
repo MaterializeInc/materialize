@@ -113,7 +113,6 @@ impl From<&ScalarType> for PgType {
             ScalarType::Timestamp => TIMESTAMP,
             ScalarType::TimestampTz => TIMESTAMPTZ,
             ScalarType::Interval => INTERVAL,
-            ScalarType::Time => unimplemented!("TIME is not implemented"),
             ScalarType::Bytes => BYTEA,
             ScalarType::String => TEXT,
         }

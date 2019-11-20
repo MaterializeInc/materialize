@@ -18,6 +18,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::fs;
 use std::iter;
 use std::path::Path;
 
@@ -25,7 +26,6 @@ use failure::bail;
 use futures::{sink, stream, Future, Sink as FuturesSink, Stream};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
-use uuid::Uuid;
 
 use catalog::{Catalog, CatalogItem};
 use dataflow::logging::materialized::MaterializedEvent;
@@ -35,10 +35,11 @@ use dataflow_types::{
     compare_columns, DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source,
     SourceConnector, TailSinkConnector, Timestamp, Update, View,
 };
-use expr::RelationExpr;
+use expr::{GlobalId, Id, RelationExpr};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
-use repr::{ColumnName, Datum, LiteralName, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
+use ore::option::OptionExt;
+use repr::{ColumnName, Datum, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
 
@@ -74,18 +75,18 @@ where
     optimizer: expr::transform::Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    views: HashMap<QualName, ViewState>,
+    views: HashMap<GlobalId, ViewState>,
     /// Each source name maps to a source and re-written name (for auto-created views).
-    sources: HashMap<QualName, (dataflow_types::Source, Option<QualName>)>,
+    sources: HashMap<GlobalId, (dataflow_types::Source, Option<GlobalId>)>,
     /// Maps user-defined indexes by collection + key and how many aliases it has
-    indexes: HashMap<(QualName, Vec<usize>), usize>,
+    indexes: HashMap<(GlobalId, Vec<usize>), usize>,
     /// Maps user-defined index names to their collection + key
-    index_aliases: HashMap<QualName, (QualName, Vec<usize>)>,
-    since_updates: Vec<(QualName, Vec<Timestamp>)>,
+    index_aliases: HashMap<GlobalId, (GlobalId, Vec<usize>)>,
+    since_updates: Vec<(GlobalId, Vec<Timestamp>)>,
     /// For each connection running a TAIL command, the name of the dataflow
     /// that is servicing the TAIL. A connection can only run one TAIL at a
     /// time.
-    active_tails: HashMap<u32, QualName>,
+    active_tails: HashMap<u32, GlobalId>,
     local_input_time: Timestamp,
     log: bool,
 }
@@ -106,12 +107,19 @@ where
             None
         };
 
-        let mut coordinator = Self {
+        let catalog_path = if let Some(data_directory) = config.data_directory {
+            fs::create_dir_all(data_directory)?;
+            Some(data_directory.join("catalog"))
+        } else {
+            None
+        };
+
+        let mut coord = Self {
             switchboard: config.switchboard,
             broadcast_tx,
             num_timely_workers: u64::try_from(config.num_timely_workers).unwrap(),
             optimizer: Default::default(),
-            catalog: Catalog::default(),
+            catalog: Catalog::open(catalog_path.mz_as_deref())?,
             symbiosis,
             views: HashMap::new(),
             sources: HashMap::new(),
@@ -123,15 +131,40 @@ where
             log: config.logging.is_some(),
         };
 
+        let catalog_entries: Vec<_> = coord
+            .catalog
+            .iter()
+            .map(|entry| (entry.id(), entry.item().clone()))
+            .collect();
+        for (id, item) in catalog_entries {
+            match item {
+                CatalogItem::Source(source) => {
+                    coord.create_sources_id(vec![(id, source)]);
+                }
+                CatalogItem::View(view) => {
+                    let dataflow = DataflowDesc::new().add_view(id, view.clone());
+                    coord.create_dataflows(vec![dataflow]);
+                }
+                CatalogItem::Sink(sink) => {
+                    let dataflow = DataflowDesc::new().add_sink(id, sink.clone());
+                    coord.create_dataflows(vec![dataflow]);
+                }
+                CatalogItem::Index(index) => coord.create_index(id, index),
+            }
+        }
+
         if let Some(logging_config) = config.logging {
             for log in logging_config.active_logs().iter() {
-                coordinator.catalog.insert(CatalogItem::Source(Source {
-                    name: log.name(),
-                    connector: SourceConnector::Local,
-                    desc: log.schema(),
-                }))?;
+                coord.catalog.insert_id(
+                    log.id(),
+                    log.name(),
+                    CatalogItem::Source(Source {
+                        connector: SourceConnector::Local,
+                        desc: log.schema(),
+                    }),
+                )?;
                 // Insert with 1 second compaction latency.
-                coordinator.insert_source(log.name(), 1_000);
+                coord.insert_source(log.id(), Some(1_000));
             }
         }
 
@@ -142,11 +175,11 @@ where
             let conn_id = 0;
             let mut session = sql::Session::default();
             for stmt in sql::parse(config.bootstrap_sql)? {
-                coordinator.handle_statement(&mut session, stmt, None, conn_id)?;
+                coord.handle_statement(&mut session, stmt, None, conn_id)?;
             }
         }
 
-        Ok(coordinator)
+        Ok(coord)
     }
 
     pub fn serve(&mut self, cmd_rx: futures::sync::mpsc::UnboundedReceiver<Command>) {
@@ -242,77 +275,71 @@ where
     ) -> Result<ExecuteResponse, failure::Error> {
         Ok(match plan {
             Plan::CreateTable { name, desc } => {
-                self.catalog.insert(CatalogItem::Source(Source {
-                    name: name.clone(),
-                    connector: SourceConnector::Local,
-                    desc: desc.clone(),
-                }))?;
-                self.create_sources(vec![Source {
+                self.create_sources(vec![(
                     name,
-                    connector: SourceConnector::Local,
-                    desc,
-                }]);
+                    Source {
+                        connector: SourceConnector::Local,
+                        desc: desc.clone(),
+                    },
+                )])?;
                 ExecuteResponse::CreatedTable
             }
 
-            Plan::CreateSource(source) => {
-                self.catalog.insert(CatalogItem::Source(source.clone()))?;
-                let sources = vec![source];
-                self.create_sources(sources);
+            Plan::CreateSource(name, source) => {
+                self.create_sources(vec![(name, source)])?;
                 ExecuteResponse::CreatedSource
             }
 
             Plan::CreateSources(sources) => {
-                for source in &sources {
-                    self.catalog.insert(CatalogItem::Source(source.clone()))?;
-                }
-                self.create_sources(sources.clone());
+                self.create_sources(sources.clone())?;
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::pack(&[Datum::String(Cow::from(&s.name.to_string()))]))
+                        .map(|s| Row::pack(&[Datum::String(Cow::from(&s.0.to_string()))]))
                         .collect(),
                 )
             }
 
-            Plan::CreateSink(sink) => {
-                self.catalog.insert(CatalogItem::Sink(sink.clone()))?;
-                self.create_dataflows(vec![DataflowDesc::from(sink)]);
+            Plan::CreateSink(name, sink) => {
+                let id = self.catalog.insert(name, CatalogItem::Sink(sink.clone()))?;
+                self.create_dataflows(vec![DataflowDesc::new().add_sink(id, sink)]);
                 ExecuteResponse::CreatedSink
             }
 
-            Plan::CreateView(view) => {
-                self.catalog.insert(CatalogItem::View(view.clone()))?;
-                self.create_dataflows(vec![DataflowDesc::from(view)]);
+            Plan::CreateView(name, view) => {
+                let id = self.catalog.insert(name, CatalogItem::View(view.clone()))?;
+                self.create_dataflows(vec![DataflowDesc::new().add_view(id, view)]);
                 ExecuteResponse::CreatedView
             }
 
-            Plan::CreateIndex(index) => {
-                self.catalog.insert(CatalogItem::Index(index.clone()))?;
-                self.create_index(index);
+            Plan::CreateIndex(name, index) => {
+                let id = self
+                    .catalog
+                    .insert(name, CatalogItem::Index(index.clone()))?;
+                self.create_index(id, index);
                 ExecuteResponse::CreatedIndex
             }
 
-            Plan::DropItems(names, item_type) => {
-                for name in &names {
-                    self.catalog.remove(&name);
+            Plan::DropItems(ids, item_type) => {
+                for id in &ids {
+                    self.catalog.remove(*id);
                 }
                 let mut sources_to_drop = Vec::new();
-                let mut views_to_drop: Vec<QualName> = Vec::new();
+                let mut views_to_drop: Vec<GlobalId> = Vec::new();
                 let mut indexes_to_drop = Vec::new();
-                for name in names {
+                for id in ids {
                     // TODO: Test if a name was installed and error if not?
-                    if let Some((_source, new_name)) = self.sources.remove(&name) {
-                        sources_to_drop.push(name.clone());
-                        if let Some(name) = new_name {
-                            views_to_drop.push(name);
+                    if let Some((_source, new_id)) = self.sources.remove(&id) {
+                        sources_to_drop.push(id);
+                        if let Some(id) = new_id {
+                            views_to_drop.push(id);
                         } else {
-                            panic!("Attempting to drop an uninstalled source: {}", name);
+                            panic!("Attempting to drop an uninstalled source: {}", id);
                         }
-                    } else if self.views.contains_key(&name) {
-                        views_to_drop.push(name);
+                    } else if self.views.contains_key(&id) {
+                        views_to_drop.push(id);
                     } else {
-                        indexes_to_drop.push(name);
+                        indexes_to_drop.push(id);
                     }
                 }
                 if !sources_to_drop.is_empty() {
@@ -384,12 +411,15 @@ where
                 let (project, filter) = Self::plan_peek(&mut source);
 
                 // Create a transient view if the peek is not of a base relation.
-                if let RelationExpr::Get { name, typ: _ } = source {
+                if let RelationExpr::Get {
+                    id: Id::Global(mut id),
+                    typ: _,
+                } = source
+                {
                     // If `name` is a source, we'll need to rename it.
-                    let mut name = name.clone();
-                    if let Some((_source, rename)) = self.sources.get(&name) {
+                    if let Some((_source, rename)) = self.sources.get(&id) {
                         if let Some(rename) = rename {
-                            name = rename.clone();
+                            id = *rename;
                         }
                     }
 
@@ -397,7 +427,7 @@ where
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::Peek {
-                            name,
+                            id,
                             conn_id,
                             tx: rows_tx,
                             timestamp,
@@ -410,7 +440,6 @@ where
                     // Slow path. We need to perform some computation, so build
                     // a new transient dataflow that will be dropped after the
                     // peek completes.
-                    let name = format!("<peek_{}>", Uuid::new_v4()).lit();
                     let typ = source.typ();
                     let ncols = typ.column_types.len();
                     // Cheat a little bit here to get a relation description. A
@@ -425,19 +454,21 @@ where
                         typ,
                         iter::repeat::<Option<ColumnName>>(None).take(ncols),
                     );
-                    let dataflow = DataflowDesc::from(View {
-                        name: name.clone(),
+                    let view_id = self.catalog.allocate_id();
+                    let view = View {
                         raw_sql: "<none>".into(),
                         relation_expr: source,
                         desc,
-                    })
-                    .as_of(Some(vec![timestamp.clone()]));
+                    };
+                    let dataflow = DataflowDesc::new()
+                        .add_view(view_id, view)
+                        .as_of(Some(vec![timestamp.clone()]));
 
                     self.create_dataflows(vec![dataflow]);
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::Peek {
-                            name: name.clone(),
+                            id: view_id,
                             conn_id,
                             tx: rows_tx,
                             timestamp,
@@ -448,7 +479,7 @@ where
                     );
                     broadcast(
                         &mut self.broadcast_tx,
-                        SequencedCommand::DropViews(vec![name]),
+                        SequencedCommand::DropViews(vec![view_id]),
                     );
                 }
 
@@ -510,29 +541,30 @@ where
             }
 
             Plan::Tail(source) => {
-                let mut source_name = source.name().clone();
-                if let Some((_source, rename)) = self.sources.get(&source_name) {
+                let mut source_id = source.id();
+                if let Some((_source, rename)) = self.sources.get(&source_id) {
                     if let Some(rename) = rename {
-                        source_name = rename.clone();
+                        source_id = rename.clone();
                     }
                 }
 
-                let name = format!("<tail_{}>", Uuid::new_v4()).lit();
-                self.active_tails.insert(conn_id, name.clone());
+                let sink_id = self.catalog.allocate_id();
+                self.active_tails.insert(conn_id, sink_id);
                 let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
                 let since = self
-                    .upper_of(&source_name)
+                    .upper_of(&source_id)
                     .expect("name missing at coordinator")
                     .get(0)
                     .copied()
                     .unwrap_or(Timestamp::max_value());
+                let sink = Sink {
+                    from: (source_id, source.desc()?.clone()),
+                    connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
+                };
+                let dataflow = DataflowDesc::new().add_sink(sink_id, sink);
                 broadcast(
                     &mut self.broadcast_tx,
-                    SequencedCommand::CreateDataflows(vec![DataflowDesc::from(Sink {
-                        name,
-                        from: (source_name, source.desc().clone()),
-                        connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
-                    })]),
+                    SequencedCommand::CreateDataflows(vec![dataflow]),
                 );
 
                 ExecuteResponse::Tailing { rx }
@@ -542,13 +574,13 @@ where
 
             Plan::ExplainPlan(mut relation_expr) => {
                 self.optimizer.optimize(&mut relation_expr);
-                let pretty = relation_expr.pretty();
+                let pretty = relation_expr.pretty(&self.catalog);
                 let rows = vec![Row::pack(vec![Datum::from(&*pretty)])];
                 send_immediate_rows(rows)
             }
 
             Plan::SendDiffs {
-                name,
+                id,
                 updates,
                 affected_rows,
                 kind,
@@ -564,7 +596,7 @@ where
 
                 broadcast(
                     &mut self.broadcast_tx,
-                    SequencedCommand::Insert { name, updates },
+                    SequencedCommand::Insert { id, updates },
                 );
 
                 self.local_input_time += 1;
@@ -577,11 +609,11 @@ where
                         _ => None,
                     });
 
-                for name in local_inputs {
+                for id in local_inputs {
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AdvanceTime {
-                            name: name.into(),
+                            id: *id,
                             to: self.local_input_time,
                         },
                     );
@@ -600,66 +632,80 @@ where
     ///
     /// This method installs descriptions of each source in `sources` in the
     /// coordinator, so that they can be recovered when used by name in views.
-    /// The method also creates a view for each source which mirrors the contents,
-    /// using the same name.
-    fn create_sources(&mut self, sources: Vec<dataflow_types::Source>) {
-        for source in sources.iter() {
-            // Effecting policy, we mirror all sources with a view.
-            let name = create_internal_source_name(&source.name);
-            self.sources
-                .insert(source.name.clone(), (source.clone(), Some(name)));
+    /// The method also creates a view for each source which mirrors the
+    /// contents.
+    fn create_sources(
+        &mut self,
+        sources: Vec<(QualName, dataflow_types::Source)>,
+    ) -> Result<(), failure::Error> {
+        let mut source_ids = Vec::with_capacity(sources.len());
+        for (name, source) in sources {
+            let id = self
+                .catalog
+                .insert(name.clone(), CatalogItem::Source(source.clone()))?;
+            source_ids.push((id, source));
         }
-        let mut dataflows = Vec::new();
-        for source in sources.iter() {
-            if let Some(rename) = &self.sources.get(&source.name).unwrap().1 {
-                dataflows.push(
-                    DataflowDesc::new()
-                        .add_view(View {
-                            name: rename.clone(),
+        self.create_sources_id(source_ids);
+        Ok(())
+    }
+
+    // Like `create_sources`, but for when the source IDs have already been
+    // assigned.
+    fn create_sources_id(&mut self, sources: Vec<(GlobalId, dataflow_types::Source)>) {
+        let dataflows: Vec<_> = sources
+            .into_iter()
+            .map(|(source_id, source)| {
+                // Effecting policy, we mirror all sources with a view.
+                let view_id = self.catalog.allocate_id();
+                self.sources
+                    .insert(source_id, (source.clone(), Some(view_id)));
+                DataflowDesc::new()
+                    .add_view(
+                        view_id,
+                        View {
                             relation_expr: RelationExpr::Get {
-                                name: source.name.clone(),
+                                id: Id::Global(source_id),
                                 typ: source.desc.typ().clone(),
                             },
                             raw_sql: "<created by CREATE SOURCE>".to_string(),
                             desc: source.desc.clone(),
-                        })
-                        .add_source(source.clone()),
-                );
-            }
-        }
+                        },
+                    )
+                    .add_source(source_id, source.clone())
+            })
+            .collect();
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(dataflows.clone()),
         );
         for dataflow in dataflows.iter() {
-            self.insert_views(dataflow);
-        }
-        for source in sources {
-            if let SourceConnector::Local = source.connector {
-                broadcast(
-                    &mut self.broadcast_tx,
-                    SequencedCommand::AdvanceTime {
-                        name: source.name,
-                        to: self.local_input_time,
-                    },
-                );
+            for (source_id, source) in &dataflow.sources {
+                if let SourceConnector::Local = source.connector {
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AdvanceTime {
+                            id: *source_id,
+                            to: self.local_input_time,
+                        },
+                    );
+                }
             }
+            self.insert_views(dataflow);
         }
     }
 
-    fn create_index(&mut self, mut idx: dataflow_types::Index) {
+    fn create_index(&mut self, idx_id: GlobalId, mut idx: dataflow_types::Index) {
         // Rewrite the source used.
-        if let Some((_source, new_name)) = self.sources.get(&idx.on_name) {
+        if let Some((_source, new_id)) = self.sources.get(&idx.on_id) {
             // If the source has a corresponding view, use its name instead.
-            if let Some(new_name) = new_name {
-                idx.on_name = new_name.clone();
+            if let Some(new_id) = new_id {
+                idx.on_id = *new_id;
             } else {
                 panic!("create_index called on bare source");
             }
         }
-        let trace_key = (idx.on_name.clone(), idx.keys.clone());
-        self.index_aliases
-            .insert(idx.name.clone(), trace_key.clone());
+        let trace_key = (idx.on_id.clone(), idx.keys.clone());
+        self.index_aliases.insert(idx_id, trace_key.clone());
 
         if let Some(count) = self.indexes.get_mut(&trace_key) {
             // just increment the count. no need to build a duplicate index
@@ -667,9 +713,7 @@ where
             return;
         }
         self.indexes.insert(trace_key, 1);
-
-        let dataflows = vec![DataflowDesc::from(idx)];
-
+        let dataflows = vec![DataflowDesc::new().add_index(idx_id, idx)];
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(dataflows),
@@ -682,16 +726,20 @@ where
             // dependency experience. Perhaps change the order if we are ok
             // with that.
             let mut sources = Vec::new();
-            for view in dataflow.views.iter_mut() {
+            for (_id, view) in dataflow.views.iter_mut() {
                 // Collect names of sources used, rewrite them...
                 view.relation_expr.visit_mut(&mut |e| {
-                    if let RelationExpr::Get { name, typ: _ } = e {
-                        if let Some((_source, new_name)) = self.sources.get(name) {
+                    if let RelationExpr::Get {
+                        id: Id::Global(id),
+                        typ: _,
+                    } = e
+                    {
+                        if let Some((_source, new_id)) = self.sources.get(id) {
                             // If the source has a corresponding view, use its name instead.
-                            if let Some(new_name) = new_name {
-                                *name = new_name.clone();
+                            if let Some(new_id) = new_id {
+                                *id = *new_id;
                             } else {
-                                sources.push(name.clone());
+                                sources.push(*id);
                             }
                         }
                     }
@@ -699,14 +747,14 @@ where
             }
             sources.sort();
             sources.dedup();
-            for name in sources {
+            for id in sources {
                 dataflow
                     .sources
-                    .push(self.sources.get(&name).unwrap().0.clone());
+                    .push((id, self.sources.get(&id).unwrap().0.clone()));
             }
 
             // Now optimize the query expression.
-            for view in dataflow.views.iter_mut() {
+            for (_id, view) in dataflow.views.iter_mut() {
                 self.optimizer.optimize(&mut view.relation_expr);
             }
         }
@@ -719,7 +767,7 @@ where
         }
     }
 
-    pub fn drop_views(&mut self, dataflow_names: Vec<QualName>) {
+    pub fn drop_views(&mut self, dataflow_names: Vec<GlobalId>) {
         for name in dataflow_names.iter() {
             self.remove_view(name);
         }
@@ -729,14 +777,14 @@ where
         )
     }
 
-    pub fn drop_sinks(&mut self, dataflow_names: Vec<QualName>) {
+    pub fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::DropSinks(dataflow_names),
         )
     }
 
-    pub fn drop_indexes(&mut self, dataflow_names: Vec<QualName>, cascaded: bool) {
+    pub fn drop_indexes(&mut self, dataflow_names: Vec<GlobalId>, cascaded: bool) {
         let mut trace_keys = Vec::new();
         for name in dataflow_names {
             if let Some(trace_key) = self.index_aliases.remove(&name) {
@@ -839,30 +887,30 @@ where
             // `source` depends on transitively, ignoring the accepted times of
             // intermediate views.
             PeekWhen::EarliestSource | PeekWhen::Immediately => {
-                // Collect unbound names in `source`.
-                let mut names = Vec::new();
-                source.unbound_uses(&mut names);
-                names.sort();
-                names.dedup();
+                // Collect global identifiers in `source`.
+                let mut ids = Vec::new();
+                source.global_uses(&mut ids);
+                ids.sort();
+                ids.dedup();
 
                 // Form lower bound on available times.
                 let mut bound = Antichain::new();
                 match when {
                     PeekWhen::EarliestSource => {
-                        for name in names {
+                        for id in ids {
                             let mut reached = HashSet::new();
-                            self.sources_frontier(name, &mut bound, &mut reached);
+                            self.sources_frontier(id, &mut bound, &mut reached);
                         }
                     }
                     PeekWhen::Immediately => {
-                        for mut name in names {
-                            if let Some((_source, rename)) = &self.sources.get(name) {
+                        for mut id in ids {
+                            if let Some((_source, rename)) = &self.sources.get(&id) {
                                 if let Some(rename) = rename {
-                                    name = &rename;
+                                    id = *rename;
                                 }
                             }
                             bound.extend(
-                                self.upper_of(name)
+                                self.upper_of(&id)
                                     .expect("Upper bound missing")
                                     .iter()
                                     .cloned(),
@@ -893,29 +941,29 @@ where
     /// The `reached` input allows us to deduplicate views, and avoid e.g. recursion.
     fn sources_frontier(
         &self,
-        name: &QualName,
+        id: GlobalId,
         bound: &mut Antichain<Timestamp>,
-        reached: &mut HashSet<QualName>,
+        reached: &mut HashSet<GlobalId>,
     ) {
-        if let Some((_source, rename)) = self.sources.get(name) {
+        if let Some((_source, rename)) = self.sources.get(&id) {
             if let Some(rename) = rename {
-                self.sources_frontier(rename, bound, reached);
+                self.sources_frontier(*rename, bound, reached);
             } else {
                 panic!("sources_frontier called on bare source");
             }
         } else {
-            reached.insert(name.clone());
-            if let Some(view) = self.views.get(name) {
+            reached.insert(id);
+            if let Some(view) = self.views.get(&id) {
                 if view.depends_on_source {
                     // Views that depend on a source should propose their own frontiers,
                     // which means we need not investigate their input frontiers (which
                     // should be at least as far along).
-                    let upper = self.upper_of(name).expect("Name missing at coordinator");
+                    let upper = self.upper_of(&id).expect("Name missing at coordinator");
                     bound.extend(upper.iter().cloned());
                 } else {
-                    for name in view.uses.iter() {
-                        if !reached.contains(name) {
-                            self.sources_frontier(name, bound, reached);
+                    for id in view.uses.iter() {
+                        if !reached.contains(id) {
+                            self.sources_frontier(*id, bound, reached);
                         }
                     }
                 }
@@ -924,7 +972,7 @@ where
     }
 
     /// Updates the upper frontier of a named view.
-    pub fn update_upper(&mut self, name: &QualName, mut changes: ChangeBatch<Timestamp>) {
+    pub fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
         if let Some(entry) = self.views.get_mut(name) {
             let changes: Vec<_> = entry.upper.update_iter(changes.drain()).collect();
             if !changes.is_empty() {
@@ -942,19 +990,26 @@ where
                 }
 
                 // Advance the compaction frontier to trail the new frontier.
-                // This logic assumes one-dimensional `Timestamp` time.
-                let mut since = Antichain::new();
-                for time in entry.upper.frontier().iter() {
-                    since.insert(time.saturating_sub(entry.compaction_latency_ms));
+                // If the compaction latency is `None` compaction messages are
+                // not emitted, and the trace should be broadly useable.
+                // TODO: If the frontier advances surprisingly quickly, e.g. in
+                // the case of a constant collection, this compaction is actively
+                // harmful. We should reconsider compaction policy with an eye
+                // towards minimizing unexpected screw-ups.
+                if let Some(compaction_latency_ms) = entry.compaction_latency_ms {
+                    let mut since = Antichain::new();
+                    for time in entry.upper.frontier().iter() {
+                        since.insert(time.saturating_sub(compaction_latency_ms));
+                    }
+                    self.since_updates
+                        .push((name.clone(), since.elements().to_vec()));
                 }
-                self.since_updates
-                    .push((name.clone(), since.elements().to_vec()));
             }
         }
     }
 
     /// The upper frontier of a maintained view, if it exists.
-    fn upper_of(&self, name: &QualName) -> Option<AntichainRef<Timestamp>> {
+    fn upper_of(&self, name: &GlobalId) -> Option<AntichainRef<Timestamp>> {
         self.views.get(name).map(|v| v.upper.frontier())
     }
 
@@ -965,7 +1020,7 @@ where
     /// or equal to some element of the since frontier the accumulation will be correct,
     /// and for other times no such guarantee holds.
     #[allow(dead_code)]
-    fn update_since(&mut self, name: &QualName, since: &[Timestamp]) {
+    fn update_since(&mut self, name: &GlobalId, since: &[Timestamp]) {
         if let Some(entry) = self.views.get_mut(name) {
             entry.since.clear();
             entry.since.extend(since.iter().cloned());
@@ -974,7 +1029,7 @@ where
 
     /// The since frontier of a maintained view, if it exists.
     #[allow(dead_code)]
-    fn since_of(&self, name: &QualName) -> Option<&Antichain<Timestamp>> {
+    fn since_of(&self, name: &GlobalId) -> Option<&Antichain<Timestamp>> {
         self.views.get(name).map(|v| &v.since)
     }
 
@@ -983,8 +1038,8 @@ where
     /// Initializes managed state and logs the insertion (and removal of any existing view).
     fn insert_views(&mut self, dataflow: &DataflowDesc) {
         let contains_sources = !dataflow.sources.is_empty();
-        for view in dataflow.views.iter() {
-            self.remove_view(&view.name);
+        for (view_id, view) in dataflow.views.iter() {
+            self.remove_view(view_id);
             let mut viewstate = ViewState::from_view(view, self.num_timely_workers);
             viewstate.depends_on_source = contains_sources;
             if self.log {
@@ -992,14 +1047,14 @@ where
                     broadcast(
                         &mut self.broadcast_tx,
                         SequencedCommand::AppendLog(MaterializedEvent::Frontier(
-                            view.name.clone(),
+                            *view_id,
                             time.clone(),
                             1,
                         )),
                     );
                 }
             }
-            self.views.insert(view.name.clone(), viewstate);
+            self.views.insert(*view_id, viewstate);
         }
     }
 
@@ -1007,7 +1062,7 @@ where
     ///
     /// Unlike `insert_view`, this method can be called without a dataflow argument.
     /// This is most commonly used for internal sources such as logging.
-    fn insert_source(&mut self, name: QualName, compaction_ms: Timestamp) {
+    fn insert_source(&mut self, name: GlobalId, compaction_ms: Option<Timestamp>) {
         self.remove_view(&name);
         let mut viewstate = ViewState::new(self.num_timely_workers);
         if self.log {
@@ -1029,7 +1084,7 @@ where
     /// Removes a view from the coordinator.
     ///
     /// Removes the managed state and logs the removal.
-    fn remove_view(&mut self, name: &QualName) {
+    fn remove_view(&mut self, name: &GlobalId) {
         if let Some(state) = self.views.remove(name) {
             if self.log {
                 for time in state.upper.frontier().iter() {
@@ -1058,7 +1113,9 @@ where
                 // Executing the query failed. If we're running in symbiosis with
                 // Postgres, see if Postgres can handle it.
                 match self.symbiosis {
-                    Some(ref mut postgres) if postgres.can_handle(&stmt) => postgres.execute(&stmt),
+                    Some(ref mut postgres) if postgres.can_handle(&stmt) => {
+                        postgres.execute(&self.catalog, &stmt)
+                    }
                     _ => Err(err),
                 }
             })
@@ -1146,7 +1203,7 @@ fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
 /// Per-view state.
 pub struct ViewState {
     /// Names of views on which this view depends.
-    uses: Vec<QualName>,
+    uses: Vec<GlobalId>,
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     upper: MutableAntichain<Timestamp>,
@@ -1159,7 +1216,7 @@ pub struct ViewState {
     ///
     /// This timestamp drives the advancement of the since frontier as a
     /// function of the upper frontier, trailing it by exactly this much.
-    compaction_latency_ms: Timestamp,
+    compaction_latency_ms: Option<Timestamp>,
     /// True if the dataflow defining the view may depend on a source, which
     /// leads us to include the frontier of the view in timestamp selection,
     /// as the view cannot be expected to advance its frontier simply because
@@ -1176,7 +1233,7 @@ impl ViewState {
             uses: Vec::new(),
             upper,
             since: Antichain::from_elem(0),
-            compaction_latency_ms: 60_000,
+            compaction_latency_ms: Some(60_000),
             depends_on_source: true,
         }
     }
@@ -1185,20 +1242,15 @@ impl ViewState {
     pub fn from_view(view: &View, workers: u64) -> Self {
         let mut view_state = Self::new(workers);
         let mut out = Vec::new();
-        view.relation_expr.unbound_uses(&mut out);
+        view.relation_expr.global_uses(&mut out);
         out.sort();
         out.dedup();
-        view_state.uses = out.into_iter().cloned().collect();
+        view_state.uses = out;
         view_state
     }
 
     /// Sets the latency behind the collection frontier at which compaction occurs.
-    pub fn set_compaction_latency(&mut self, latency_ms: Timestamp) {
+    pub fn set_compaction_latency(&mut self, latency_ms: Option<Timestamp>) {
         self.compaction_latency_ms = latency_ms;
     }
-}
-
-/// Creates an internal name for sources that are unlikely to clash with view names.
-fn create_internal_source_name(name: &QualName) -> QualName {
-    name.with_trailing_string("-VIEW")
 }

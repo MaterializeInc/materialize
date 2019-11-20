@@ -56,20 +56,12 @@
 //! binding currently being processed. Also, the reversed pre-order of a tree
 //! does *not* result in the post-order.
 
-use crate::RelationExpr;
+use crate::{Id, LocalId, RelationExpr};
 use indexmap::IndexMap;
-use repr::{LiteralName, QualName, RelationType};
+use repr::RelationType;
 use std::collections::HashMap;
 
 // -----------------------------------------------------------------------------
-
-/// For now, an identifier is just a string,
-type Identifier = QualName;
-
-/// Create a fresh identifier that is guaranteed not to be bound.
-pub fn fresh_id() -> Identifier {
-    format!("bdg-{}", uuid::Uuid::new_v4()).lit()
-}
 
 /// Determine whether the expression is bindable, i.e., does not produce a
 /// constant or access the value of a binding. This function is used to suppress
@@ -83,12 +75,9 @@ pub fn is_bindable(expr: &RelationExpr) -> bool {
 }
 
 /// Create a new *local* binding, i.e., [`RelationExpr::Let`].
-pub fn bind_local<I>(name: I, value: RelationExpr, body: RelationExpr) -> RelationExpr
-where
-    I: Into<Identifier>,
-{
+pub fn bind_local(id: LocalId, value: RelationExpr, body: RelationExpr) -> RelationExpr {
     RelationExpr::Let {
-        name: name.into(),
+        id,
         value: Box::new(value),
         body: Box::new(body),
     }
@@ -100,7 +89,7 @@ where
 #[derive(Debug)]
 pub struct LocalBinding<'a> {
     env: &'a mut Environment,
-    name: QualName,
+    id: LocalId,
     prior: Option<RelationExpr>,
 }
 
@@ -108,8 +97,7 @@ impl Drop for LocalBinding<'_> {
     /// Drop this local binding by restoring the environment to its prior state.
     fn drop(&mut self) {
         if let Some(value) = self.prior.take() {
-            let name = std::mem::replace(&mut self.name, QualName::trusted("$INVALID$"));
-            self.env.bindings.insert(name, value);
+            self.env.bindings.insert(self.id, value);
         } else {
             self.env.bindings.pop();
         }
@@ -124,29 +112,24 @@ impl Drop for LocalBinding<'_> {
 /// subsequent bindings.
 #[derive(Debug, Default)]
 pub struct Environment {
-    bindings: IndexMap<Identifier, RelationExpr>,
+    bindings: IndexMap<LocalId, RelationExpr>,
+    id: usize,
 }
 
 impl Environment {
     /// Determine whether the name is bound in this environment.
-    #[allow(clippy::ptr_arg)]
-    pub fn is_bound(&self, name: &Identifier) -> bool {
-        self.bindings.contains_key(name)
+    pub fn is_bound(&self, id: LocalId) -> bool {
+        self.bindings.contains_key(&id)
     }
 
-    #[allow(clippy::ptr_arg)]
-    fn ensure_unbound(&self, name: &Identifier) {
-        if self.bindings.contains_key(name) {
-            panic!("environment already contains binding for {}", name);
-        }
-    }
-
-    /// Add a new binding for the given name and value to this environment.
+    /// Add a new binding for the given ID and value to this environment.
     /// This method panics if this environment already contains a binding
     /// with the given name. See also [`Environment::bind_local`].
-    pub fn bind(&mut self, name: Identifier, value: RelationExpr) -> &mut Self {
-        self.ensure_unbound(&name);
-        self.bindings.insert(name, value);
+    pub fn bind(&mut self, id: LocalId, value: RelationExpr) -> &mut Self {
+        if self.bindings.contains_key(&id) {
+            panic!("environment already contains binding for {}", id);
+        }
+        self.bindings.insert(id, value);
         self
     }
 
@@ -154,19 +137,18 @@ impl Environment {
     /// environment. This method does support shadowed identifiers but
     /// the binding only persists as long as the returned object. See also
     /// [`Environment::bind`].
-    pub fn bind_local(&mut self, name: Identifier, value: RelationExpr) -> LocalBinding {
-        let prior = self.bindings.insert(name.clone(), value);
+    pub fn bind_local(&mut self, id: LocalId, value: RelationExpr) -> LocalBinding {
+        let prior = self.bindings.insert(id, value);
         LocalBinding {
             env: self,
-            name,
+            id,
             prior,
         }
     }
 
     /// Look up the given name in this environment.
-    #[allow(clippy::ptr_arg)]
-    pub fn lookup(&self, name: &Identifier) -> Option<&RelationExpr> {
-        self.bindings.get(name)
+    pub fn lookup(&self, id: LocalId) -> Option<&RelationExpr> {
+        self.bindings.get(&id)
     }
 
     /// Use this environment's bindings in the given expression. This method
@@ -205,13 +187,13 @@ impl Hoist {
             // we recurse on extract().
             if let RelationExpr::Let { .. } = expr {
                 if let RelationExpr::Let {
-                    name,
+                    id,
                     mut value,
                     body,
                 } = expr.take_dangerous()
                 {
                     extract_all(&mut *value, env);
-                    env.bind(name, *value);
+                    env.bind(id, *value);
                     *expr = *body;
                     // By the magic vested in extract1(), expr now is let's body.
                     extract_all(expr, env);
@@ -261,22 +243,24 @@ impl Unbind {
             match expr {
                 RelationExpr::Let { .. } => {
                     if let RelationExpr::Let {
-                        name,
+                        id,
                         mut value,
                         body,
                     } = expr.take_dangerous()
                     {
                         unbind_all(&mut value, env);
 
-                        let local = env.bind_local(name.clone(), *value.clone());
+                        let local = env.bind_local(id, *value.clone());
                         *expr = *body;
                         unbind_all(expr, local.env);
                     } else {
                         unreachable!();
                     }
                 }
-                RelationExpr::Get { name, .. } => {
-                    if let Some(value) = env.lookup(name) {
+                RelationExpr::Get {
+                    id: Id::Local(id), ..
+                } => {
+                    if let Some(value) = env.lookup(*id) {
                         *expr = value.clone();
                     }
                 }
@@ -321,7 +305,7 @@ impl Count {
 /// track the name and type of a repeated dataflow graph.
 #[derive(Clone, Debug)]
 pub struct Patch {
-    name: Identifier,
+    id: LocalId,
     typ: RelationType,
 }
 
@@ -329,7 +313,7 @@ impl From<Patch> for RelationExpr {
     /// Convert a patch into a [`RelationExpr::Get`].
     fn from(patch: Patch) -> Self {
         RelationExpr::Get {
-            name: patch.name,
+            id: Id::Local(patch.id),
             typ: patch.typ,
         }
     }
@@ -380,21 +364,20 @@ impl Metadata {
     /// the metadata from counting to patching. The resulting patch has
     /// a fresh name and the value's type. This method panics if the
     /// metadata is a count smaller than two or already a patch.
-    pub fn start_patching(&mut self, value: &RelationExpr) -> (Identifier, RelationExpr) {
+    pub fn start_patching(&mut self, value: &RelationExpr, id: LocalId) -> RelationExpr {
         if let Metadata::Counting(Count { count }) = self {
             if *count < 2 {
                 panic!("trying to patch dataflow node that isn't duplicated");
             }
 
             let patch = Patch {
-                name: fresh_id(),
+                id,
                 typ: value.typ(),
             };
-            let name = patch.name.clone();
             let reference = patch.clone().into();
 
             *self = Metadata::Patching(patch);
-            (name, reference)
+            reference
         } else {
             panic!("trying to patch dataflow node that has been patched already");
         }
@@ -440,10 +423,12 @@ impl Deduplicate {
             if *count <= 1 || !is_bindable(expr) {
                 expr.visit1_mut(|e| Deduplicate::patch_all(e, census, env));
             } else {
-                let (name, reference) = metadata.start_patching(expr);
+                let id = LocalId::new(env.id);
+                env.id += 1;
+                let reference = metadata.start_patching(expr, id);
                 expr.visit1_mut(|e| Deduplicate::patch_all(e, census, env));
                 let value = std::mem::replace(expr, reference);
-                env.bind(name, value);
+                env.bind(id, value);
             }
         } else {
             *expr = metadata.unwrap_patch().clone().into();
@@ -469,59 +454,13 @@ impl super::Transform for Deduplicate {
     }
 }
 
-// =============================================================================
-
-/// The normalize optimization.
-#[derive(Debug)]
-pub struct Normalize;
-
-impl Normalize {
-    /// Normalize the names of local bindings.
-    pub fn normalize(expr: &mut RelationExpr) {
-        let mut count: usize = 0;
-        let mut names = HashMap::new();
-
-        fn rename(
-            expr: &mut RelationExpr,
-            count: &mut usize,
-            names: &mut HashMap<QualName, QualName>,
-        ) {
-            if let RelationExpr::Let { name, value, body } = expr {
-                rename(value, count, names);
-
-                *count += 1;
-                let stale = std::mem::replace(name, format!("id-{}", count).lit());
-                names.insert(stale, name.clone());
-
-                rename(body, count, names);
-            } else if let RelationExpr::Get { name, .. } = expr {
-                if let Some(n) = names.get(name) {
-                    *name = n.clone();
-                }
-            } else {
-                expr.visit1_mut(|e| rename(e, count, names));
-            }
-        }
-
-        rename(expr, &mut count, &mut names);
-    }
-}
-
-impl super::Transform for Normalize {
-    /// Normalize names of local bindings.
-    fn transform(&self, expr: &mut RelationExpr) {
-        Normalize::normalize(expr);
-    }
-}
-
-// =============================================================================
-
 #[cfg(test)]
 mod tests {
-    use std::convert::TryInto;
+    use repr::{ColumnType, Datum, ScalarType};
 
     use super::*;
-    use repr::{ColumnType, Datum, ScalarType};
+    use crate::id::test_utils::DummyHumanizer;
+    use crate::GlobalId;
 
     fn trace(label: &str, expr: &RelationExpr) {
         println!(
@@ -529,7 +468,7 @@ mod tests {
             "━".repeat(80),
             label,
             "┈".repeat(80),
-            expr.pretty()
+            expr.pretty(&DummyHumanizer)
         );
     }
 
@@ -540,36 +479,28 @@ mod tests {
         )
     }
 
-    fn r<N>(n: N, t: RelationType) -> RelationExpr
-    where
-        N: TryInto<QualName>,
-        N::Error: std::fmt::Debug,
-    {
+    fn r(id: char, t: RelationType) -> RelationExpr {
         RelationExpr::Get {
-            name: n.try_into().unwrap(),
+            id: Id::Local(LocalId::new(id as usize)),
             typ: t,
         }
     }
 
-    pub fn force_bind<N>(name: N, value: RelationExpr, body: RelationExpr) -> RelationExpr
-    where
-        N: TryInto<QualName>,
-        N::Error: std::fmt::Debug,
-    {
-        bind_local(name.try_into().unwrap(), value, body)
+    pub fn force_bind(id: char, value: RelationExpr, body: RelationExpr) -> RelationExpr {
+        bind_local(LocalId::new(id as usize), value, body)
     }
 
     #[test]
     fn test_hoist() {
         let b = force_bind;
         let mut expr = b(
-            "h",
+            'h',
             b(
-                "d",
-                b("b", b("a", n(1), n(2)), b("c", n(3), n(4))),
-                b("f", b("e", n(5), n(6)), b("g", n(7), n(8))),
+                'd',
+                b('b', b('a', n(1), n(2)), b('c', n(3), n(4))),
+                b('f', b('e', n(5), n(6)), b('g', n(7), n(8))),
             ),
-            b("i", n(9), b("j", n(10), n(11)).distinct().negate()),
+            b('i', n(9), b('j', n(10), n(11)).distinct().negate()),
         );
 
         trace("IN hoist", &expr);
@@ -579,30 +510,30 @@ mod tests {
         assert_eq!(
             expr,
             b(
-                "a",
+                'a',
                 n(1),
                 b(
-                    "b",
+                    'b',
                     n(2),
                     b(
-                        "c",
+                        'c',
                         n(3),
                         b(
-                            "d",
+                            'd',
                             n(4),
                             b(
-                                "e",
+                                'e',
                                 n(5),
                                 b(
-                                    "f",
+                                    'f',
                                     n(6),
                                     b(
-                                        "g",
+                                        'g',
                                         n(7),
                                         b(
-                                            "h",
+                                            'h',
                                             n(8),
-                                            b("i", n(9), b("j", n(10), n(11).distinct().negate()))
+                                            b('i', n(9), b('j', n(10), n(11).distinct().negate()))
                                         )
                                     )
                                 )
@@ -617,11 +548,11 @@ mod tests {
     #[test]
     fn test_unbind() {
         let b = force_bind;
-        let a = b("b", n(1), r("b", n(1).typ()).union(r("b", n(1).typ())));
+        let a = b('b', n(1), r('b', n(1).typ()).union(r('b', n(1).typ())));
         let mut expr = b(
-            "a",
+            'a',
             a.clone(),
-            r("a", a.typ()).union(b("a", n(2), r("a", a.typ()))),
+            r('a', a.typ()).union(b('a', n(2), r('a', a.typ()))),
         );
 
         trace("IN unbind", &expr);
@@ -631,13 +562,20 @@ mod tests {
         assert_eq!(expr, n(1).union(n(1)).union(n(2)))
     }
 
-    fn extract_names(expr: &RelationExpr) -> (QualName, RelationType, QualName, RelationType) {
-        if let RelationExpr::Let { name, value, body } = expr {
-            let n1 = name.clone();
-            let t1 = value.typ();
-
-            if let RelationExpr::Let { name, value, .. } = &**body {
-                (n1, t1, name.clone(), value.typ())
+    fn extract_ids(expr: &RelationExpr) -> (char, RelationType, char, RelationType) {
+        if let RelationExpr::Let {
+            id: id1,
+            value: value1,
+            body,
+        } = expr
+        {
+            if let RelationExpr::Let {
+                id: id2,
+                value: value2,
+                ..
+            } = &**body
+            {
+                (id1.into(), value1.typ(), id2.into(), value2.typ())
             } else {
                 panic!("body of outermost expression expected to be local binding");
             }
@@ -660,51 +598,19 @@ mod tests {
         trace("OUT deduplicate", &expr);
 
         let b = force_bind;
-        let (n1, t1, n2, t2) = extract_names(&expr);
+        let (id1, t1, id2, t2) = extract_ids(&expr);
 
-        let expected = r(n2.clone(), t2.clone()).union(n(5).distinct()).threshold();
-        let expected2 = r(n2.clone(), t2)
+        let expected = r(id2.clone(), t2.clone())
+            .union(n(5).distinct())
+            .threshold();
+        let expected2 = r(id2.clone(), t2)
             .distinct()
-            .union(r(n1.clone(), t1.clone()));
+            .union(r(id1.clone(), t1.clone()));
         let expected = expected.union(expected2);
-        let expected2 = n(1).negate().union(n(2)).union(r(n1.clone(), t1));
-        let expected = b(n2, expected2, expected);
+        let expected2 = n(1).negate().union(n(2)).union(r(id1.clone(), t1));
+        let expected = b(id2, expected2, expected);
         let expected2 = n(3).negate().union(n(4));
-        let expected = b(n1, expected2, expected);
-        assert_eq!(expr, expected);
-    }
-
-    #[test]
-    fn test_normalize() {
-        let expr1 = n(1).negate().union(n(2));
-        let expr2 = n(3).negate().union(n(4));
-        let expr3 = expr1.clone().union(expr2.clone());
-        let expr4 = expr3.clone().union(n(5).distinct()).threshold();
-        let expr5 = expr3.clone().distinct().union(expr2.clone());
-        let mut expr = expr4.union(expr5);
-
-        trace("IN normalize", &expr);
-        Deduplicate::deduplicate(&mut expr);
-        Normalize::normalize(&mut expr);
-        trace("OUT normalize", &expr);
-
-        let b = force_bind;
-        let e1 = n(3).negate().union(n(4));
-        let t1 = e1.typ();
-        let e2 = n(1).negate().union(n(2)).union(r("id-1", t1.clone()));
-        let t2 = e2.typ();
-        let expected = b(
-            "id-1",
-            e1,
-            b(
-                "id-2",
-                e2,
-                r("id-2", t2.clone())
-                    .union(n(5).distinct())
-                    .threshold()
-                    .union(r("id-2", t2).distinct().union(r("id-1", t1))),
-            ),
-        );
+        let expected = b(id1, expected2, expected);
         assert_eq!(expr, expected);
     }
 }

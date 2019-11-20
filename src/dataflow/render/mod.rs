@@ -20,8 +20,8 @@ use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
-use expr::RelationExpr;
-use repr::{Datum, QualName, Row, RowPacker, RowUnpacker};
+use expr::{GlobalId, Id, RelationExpr};
+use repr::{Datum, Row, RowPacker, RowUnpacker};
 
 use super::sink;
 use super::source;
@@ -36,8 +36,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
-    dataflow_drops: &mut HashMap<QualName, Box<dyn Any>>,
-    local_inputs: &mut HashMap<QualName, LocalInput>,
+    dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
+    local_inputs: &mut HashMap<GlobalId, LocalInput>,
     logger: &mut Option<Logger>,
 ) {
     let worker_index = worker.index();
@@ -53,20 +53,19 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
             let mut source_tokens = Vec::new();
             // Load declared sources into the rendering context.
-            for src in dataflow.sources {
+            for (src_id, src) in dataflow.sources {
                 let (stream, capability) = match src.connector {
                     SourceConnector::Kafka(c) => {
                         // Distribute read responsibility among workers.
                         use differential_dataflow::hashable::Hashable;
-                        let hash = src.name.hashed() as usize;
+                        let hash = src_id.hashed() as usize;
                         let read_from_kafka = hash % worker_peers == worker_index;
-                        source::kafka(region, &src.name, c, read_from_kafka)
+                        source::kafka(region, format!("kafka-{}", src_id), c, read_from_kafka)
                     }
                     SourceConnector::Local => {
                         let ((handle, capability), stream) = region.new_unordered_input();
                         if worker_index == 0 {
-                            local_inputs
-                                .insert(src.name.clone(), LocalInput { handle, capability });
+                            local_inputs.insert(src_id, LocalInput { handle, capability });
                         }
                         (stream, None)
                     }
@@ -75,7 +74,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 // Introduce the stream by name, as an unarranged collection.
                 context.collections.insert(
                     RelationExpr::Get {
-                        name: src.name,
+                        id: Id::Global(src_id),
                         typ: src.desc.typ().clone(),
                     },
                     stream.as_collection(),
@@ -85,7 +84,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
 
             let source_tokens = Rc::new(source_tokens);
 
-            for view in dataflow.views {
+            for (view_id, view) in dataflow.views {
                 let mut tokens = Vec::new();
                 let as_of = dataflow
                     .as_of
@@ -96,15 +95,19 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 view.relation_expr.visit(&mut |e| {
                     // Some `Get` expressions are for let bindings, and should not be loaded.
                     // We might want explicitly enumerate assets to import.
-                    if let RelationExpr::Get { name, typ: _ } = e {
+                    if let RelationExpr::Get {
+                        id: Id::Global(id),
+                        typ: _,
+                    } = e
+                    {
                         // Import arrangements for this collection.
                         // TODO: we could import only used arrangements.
-                        if let Some(traces) = manager.get_all_keyed(&name) {
+                        if let Some(traces) = manager.get_all_keyed(*id) {
                             for (key, trace) in traces {
                                 let token = trace.to_drop().clone();
                                 let (arranged, button) = trace.import_frontier_core(
                                     scope,
-                                    &format!("View({}, {:?})", name, key),
+                                    &format!("View({}, {:?})", id, key),
                                     as_of.clone(),
                                 );
                                 let arranged = arranged.enter(region);
@@ -115,8 +118,8 @@ pub(crate) fn build_dataflow<A: Allocate>(
                             // Log the dependency.
                             if let Some(logger) = logger {
                                 logger.log(MaterializedEvent::DataflowDependency {
-                                    dataflow: view.name.clone(),
-                                    source: name.clone(),
+                                    dataflow: view_id,
+                                    source: *id,
                                 });
                             }
                         }
@@ -139,7 +142,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     // TODO: This stores all arrangements. Should we store fewer?
                     for (key, arrangement) in arrangements {
                         manager.set_by_keys(
-                            view.name.clone(),
+                            view_id,
                             &key[..],
                             WithDrop::new(arrangement.trace.clone(), tokens.clone()),
                         );
@@ -162,9 +165,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                                 drop(datums);
                                 (key_row, row)
                             })
-                            .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view.name));
+                            .arrange_named::<KeysValsSpine>(&format!("Arrange: {}", view_id));
                         manager.set_by_keys(
-                            view.name.clone(),
+                            view_id,
                             &key_clone[..],
                             WithDrop::new(arrangement.trace, tokens.clone()),
                         );
@@ -172,20 +175,20 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 }
             }
 
-            for idx in dataflow.indexes {
+            for (_idx_id, idx) in dataflow.indexes {
                 let mut tokens = Vec::new();
                 let get_expr = RelationExpr::Get {
-                    name: idx.on_name.clone(),
+                    id: Id::Global(idx.on_id),
                     typ: idx.relation_type.clone(),
                 };
                 // TODO (wangandi) for the function-based column case,
                 // think about checking if there is another index
                 // with the function pre-rendered
-                let (key, trace) = manager.get_default_with_key(&idx.on_name).unwrap();
+                let (key, trace) = manager.get_default_with_key(idx.on_id).unwrap();
                 let token = trace.to_drop().clone();
                 let (arranged, button) = trace.import_frontier_core(
                     scope,
-                    &format!("View({}, {:?})", &idx.on_name, key),
+                    &format!("View({}, {:?})", &idx.on_id, key),
                     vec![0],
                 );
                 let arranged = arranged.enter(region);
@@ -212,7 +215,7 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 match context.arrangement(&to_arrange, &idx.keys) {
                     Some(ArrangementFlavor::Local(local)) => {
                         manager.set_user_created(
-                            &idx.on_name,
+                            idx.on_id,
                             &idx.keys,
                             WithDrop::new(local.trace.clone(), tokens.clone()),
                         );
@@ -227,9 +230,9 @@ pub(crate) fn build_dataflow<A: Allocate>(
                 };
             }
 
-            for sink in dataflow.sinks {
+            for (sink_id, sink) in dataflow.sinks {
                 let (_key, trace) = manager
-                    .get_all_keyed(&sink.from.0)
+                    .get_all_keyed(sink.from.0)
                     .expect("View missing")
                     .next()
                     .expect("No arrangements");
@@ -238,11 +241,11 @@ pub(crate) fn build_dataflow<A: Allocate>(
                     trace.import_core(scope, &format!("Import({:?})", sink.from));
 
                 match sink.connector {
-                    SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, &sink.name, c),
-                    SinkConnector::Tail(c) => sink::tail(&arrangement.stream, &sink.name, c),
+                    SinkConnector::Kafka(c) => sink::kafka(&arrangement.stream, sink_id, c),
+                    SinkConnector::Tail(c) => sink::tail(&arrangement.stream, sink_id, c),
                 }
 
-                dataflow_drops.insert(sink.name, Box::new((token, button.press_on_drop())));
+                dataflow_drops.insert(sink_id, Box::new((token, button.press_on_drop())));
             }
         });
     })
@@ -293,16 +296,16 @@ where
 
                 // A get should have been loaded into the context, and it is surprising to
                 // reach this point given the `has_collection()` guard at the top of the method.
-                RelationExpr::Get { name, typ: _ } => {
+                RelationExpr::Get { id, typ: _ } => {
                     // TODO: something more tasteful.
                     // perhaps load an empty collection, warn?
-                    panic!("Collection {} not pre-loaded", name);
+                    panic!("Collection {} not pre-loaded", id);
                 }
 
-                RelationExpr::Let { name, value, body } => {
+                RelationExpr::Let { id, value, body } => {
                     let typ = value.typ();
                     let bind = RelationExpr::Get {
-                        name: name.clone(),
+                        id: Id::Local(*id),
                         typ,
                     };
                     if self.has_collection(&bind) {
@@ -424,7 +427,9 @@ where
 
     fn render_join(&mut self, relation_expr: &RelationExpr, scope: &mut G, worker_index: usize) {
         if let RelationExpr::Join {
-            inputs, variables, ..
+            inputs,
+            variables,
+            demand,
         } = relation_expr
         {
             // For the moment, assert that each relation participates at most
@@ -439,12 +444,38 @@ where
                 len == list.len()
             }));
 
+            let variables = variables
+                .iter()
+                .map(|v| {
+                    let mut result = v.clone();
+                    result.sort();
+                    result
+                })
+                .collect::<Vec<_>>();
+
             for input in inputs.iter() {
                 self.ensure_rendered(input, scope, worker_index);
             }
 
-            let arities = inputs.iter().map(|i| i.arity()).collect::<Vec<_>>();
+            let types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
+            let arities = types
+                .iter()
+                .map(|t| t.column_types.len())
+                .collect::<Vec<_>>();
+            let mut offset = 0;
+            let mut prior_arities = Vec::new();
+            for input in 0..inputs.len() {
+                prior_arities.push(offset);
+                offset += arities[input];
+            }
 
+            // Unwrap demand
+            let demand = if let Some(demand) = demand {
+                demand.clone()
+            } else {
+                // Assume demand encompasses all columns
+                arities.iter().map(|arity| (0..*arity).collect()).collect()
+            };
             // The relation_expr is to implement join as a `fold` over `inputs`.
             let mut input_iter = inputs.iter().enumerate();
             if let Some((index, input)) = input_iter.next() {
@@ -464,24 +495,61 @@ where
                     // If the class contains *more than one* new column we
                     // may need to put a `filter` in, or perhaps await a
                     // later join (and ensure that one exists).
-
                     let mut old_keys = Vec::new();
                     let mut new_keys = Vec::new();
 
-                    for sets in variables.iter() {
-                        let new_pos = sets
-                            .iter()
-                            .filter(|(i, _)| i == &index)
-                            .map(|(_, c)| *c)
-                            .next();
-                        let old_pos = columns.iter().position(|i| sets.contains(i));
+                    // Determine which columns from `joined` and `input` will be kept
+                    // Initialize the list of kept columns from `demand`
+                    let mut old_outputs = (0..index)
+                        .flat_map(|i| demand[i].iter().map(|c| (i, *c)).collect::<Vec<_>>())
+                        .map(|c| columns.iter().position(|c2| c == *c2).unwrap())
+                        .collect::<Vec<_>>();
+                    let mut new_outputs = demand[index].clone();
 
-                        // If we have both a new and an old column in the constraint ...
-                        if let (Some(new_pos), Some(old_pos)) = (new_pos, old_pos) {
-                            old_keys.push(old_pos);
-                            new_keys.push(new_pos);
+                    for equivalence in variables.iter() {
+                        // Keep columns that are needed for future joins
+                        if equivalence.last().unwrap().0 > index {
+                            if equivalence[0].0 < index {
+                                old_outputs.push(
+                                    columns.iter().position(|c2| equivalence[0] == *c2).unwrap(),
+                                );
+                            } else if equivalence[0].0 == index {
+                                new_outputs.push(equivalence[0].1);
+                            }
+                            // If the relation exceeds the current index,
+                            // we don't need to worry about retaining it
+                            // at this moment.
+                        }
+
+                        // If a key exists in `joined`
+                        if equivalence[0].0 < index {
+                            // Look for a key in `input`
+                            let new_pos = equivalence
+                                .iter()
+                                .filter(|(i, _)| i == &index)
+                                .map(|(_, c)| *c)
+                                .next();
+                            // If a key in input is found, register join keys
+                            if let Some(new_pos) = new_pos {
+                                old_keys.push(
+                                    columns.iter().position(|i| *i == equivalence[0]).unwrap(),
+                                );
+                                new_keys.push(new_pos);
+                            }
                         }
                     }
+
+                    // Dedup both sets of outputs
+                    old_outputs.sort();
+                    old_outputs.dedup();
+                    new_outputs.sort();
+                    new_outputs.dedup();
+                    // List the new locations the columns will be in
+                    columns = old_outputs
+                        .iter()
+                        .map(|i| columns[*i])
+                        .chain(new_outputs.iter().map(|i| (index, *i)))
+                        .collect();
 
                     let mut unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
@@ -515,23 +583,91 @@ where
                         self.set_local(&input, &new_keys[..], new_keyed);
                     }
 
+                    let mut old_unpacker = RowUnpacker::new();
+                    let mut new_unpacker = RowUnpacker::new();
                     let mut packer = RowPacker::new();
                     joined = match self.arrangement(&input, &new_keys[..]) {
-                        Some(ArrangementFlavor::Local(local)) => old_keyed
-                            .join_core(&local, move |_keys, old, new| {
-                                Some(packer.pack(old.iter().chain(new.iter())))
-                            }),
-                        Some(ArrangementFlavor::Trace(trace)) => old_keyed
-                            .join_core(&trace, move |_keys, old, new| {
-                                Some(packer.pack(old.iter().chain(new.iter())))
-                            }),
+                        Some(ArrangementFlavor::Local(local)) => {
+                            old_keyed.join_core(&local, move |_keys, old, new| {
+                                let old_datums = old_unpacker.unpack(old);
+                                let new_datums = new_unpacker.unpack(new);
+                                Some(
+                                    packer.pack(
+                                        old_outputs
+                                            .iter()
+                                            .map(|i| old_datums[*i])
+                                            .chain(new_outputs.iter().map(|i| new_datums[*i])),
+                                    ),
+                                )
+                            })
+                        }
+                        Some(ArrangementFlavor::Trace(trace)) => {
+                            old_keyed.join_core(&trace, move |_keys, old, new| {
+                                let old_datums = old_unpacker.unpack(old);
+                                let new_datums = new_unpacker.unpack(new);
+                                Some(
+                                    packer.pack(
+                                        old_outputs
+                                            .iter()
+                                            .map(|i| old_datums[*i])
+                                            .chain(new_outputs.iter().map(|i| new_datums[*i])),
+                                    ),
+                                )
+                            })
+                        }
                         None => {
                             panic!("Arrangement alarmingly absent!");
                         }
                     };
-                    columns.extend((0..arities[index]).map(|c| (index, c)));
                 }
 
+                // Permute back to the original positions
+                let mut inverse_columns: Vec<(usize, usize)> = columns
+                    .iter()
+                    .map(|(input, col)| prior_arities[*input] + *col)
+                    .enumerate()
+                    .map(|(new_col, original_col)| (original_col, new_col))
+                    .collect();
+                inverse_columns.sort();
+                let mut inverse_columns_iter = inverse_columns.iter().peekable();
+                let mut outputs = Vec::new();
+                for i in 0..arities.iter().sum() {
+                    if let Some((original_col, new_col)) = inverse_columns_iter.peek() {
+                        if i == *original_col {
+                            outputs.push(Some(*new_col));
+                            inverse_columns_iter.next();
+                            continue;
+                        }
+                    }
+                    outputs.push(None);
+                }
+                let dummy_data = types
+                    .iter()
+                    .flat_map(|t| &t.column_types)
+                    .map(|t| {
+                        if t.nullable {
+                            Datum::Null
+                        } else {
+                            t.scalar_type.dummy_datum()
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut unpacker = RowUnpacker::new();
+                let mut packer = RowPacker::new();
+                joined =
+                    joined.map(move |row| {
+                        let datums = unpacker.unpack(&row);
+                        packer.pack(outputs.iter().zip(dummy_data.iter()).map(
+                            |(new_col, dummy)| {
+                                if let Some(new_col) = new_col {
+                                    &datums[*new_col]
+                                } else {
+                                    // Regenerate any columns ignored during join with dummy data
+                                    dummy
+                                }
+                            },
+                        ))
+                    });
                 self.collections.insert(relation_expr.clone(), joined);
             } else {
                 panic!("Empty join; why?");
