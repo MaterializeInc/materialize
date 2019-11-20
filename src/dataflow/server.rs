@@ -308,15 +308,10 @@ where
                 if let SequencedCommand::Shutdown = cmd {
                     shutdown = true;
                 }
-                // Avoid non-determinism in post-shutdown commands.
-                if !shutdown {
-                    self.handle_command(cmd);
-                }
+                self.handle_command(cmd);
             }
 
-            if !shutdown {
-                self.process_peeks();
-            }
+            self.process_peeks();
         }
     }
 
