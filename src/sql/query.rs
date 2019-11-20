@@ -1556,6 +1556,41 @@ fn plan_function<'a>(
                 plan_cast_internal(ecx, "internal.avg_promotion", expr, output_type)
             }
 
+            // Currently only implement this specific case from Metabase:
+            // to_char(current_timestamp(), 'YYYY-MM-DD HH24:MI:SS.MS TZ')
+            "to_char" => {
+                if sql_func.args.len() != 2 {
+                    bail!("to_char requires exactly two arguments");
+                }
+
+                // &sql_func.args[0] should be current_timestamp()/now()
+                let timestamp_func = plan_expr(
+                    catalog,
+                    ecx,
+                    &sql_func.args[0],
+                    Some(ScalarType::TimestampTz),
+                )?;
+                let typ = ecx.column_type(&timestamp_func);
+                if typ.scalar_type != ScalarType::TimestampTz && typ.scalar_type != ScalarType::Null
+                {
+                    bail!("to_char() currently only implemented for timestamps");
+                }
+
+                let format_string =
+                    plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::String))?;
+                let typ = ecx.column_type(&format_string);
+                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
+                    bail!("to_char() requires a format string as the second parameter");
+                }
+
+                let expr = ScalarExpr::CallBinary {
+                    func: BinaryFunc::ToChar,
+                    expr1: Box::new(timestamp_func),
+                    expr2: Box::new(format_string),
+                };
+                Ok(expr)
+            }
+
             _ => bail!("unsupported function: {}", ident),
         }
     }

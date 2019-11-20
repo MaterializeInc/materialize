@@ -647,6 +647,23 @@ pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a >= b)
 }
 
+pub fn to_char<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if let Datum::TimestampTz(datetime) = a {
+        if let Datum::String(format_string) = b {
+            // PostgreSQL parses this weird format string, hand-interpret for now
+            // to unblock Metabase progress. Will have to revisit formatting strings and
+            // other versions of to_char() in the future.
+            if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
+                let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
+                return Datum::String(Cow::Owned(
+                    datetime.format(interpreted_format_string).to_string(),
+                ));
+            }
+        }
+    }
+    Datum::Null
+}
+
 pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     if a.is_null() || b.is_null() {
         return Datum::Null;
@@ -852,6 +869,7 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     MatchRegex,
+    ToChar,
 }
 
 impl BinaryFunc {
@@ -895,6 +913,7 @@ impl BinaryFunc {
             BinaryFunc::Gt => gt,
             BinaryFunc::Gte => gte,
             BinaryFunc::MatchRegex => match_regex,
+            BinaryFunc::ToChar => to_char,
         }
     }
 
@@ -915,6 +934,8 @@ impl BinaryFunc {
                 // output can be null if the regex is invalid
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
+
+            ToChar => ColumnType::new(ScalarType::String).nullable(false),
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
@@ -1019,6 +1040,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
             BinaryFunc::MatchRegex => f.write_str("~"),
+            BinaryFunc::ToChar => f.write_str("to_char"),
         }
     }
 }
