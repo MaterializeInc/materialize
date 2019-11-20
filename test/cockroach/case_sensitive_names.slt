@@ -207,69 +207,73 @@ SELECT Y, "Y" FROM (SELECT x as y, "Y" FROM foo)
 ----
 y Y
 
-# # Case sensitivity of view names.
-#
-# statement ok
-# CREATE VIEW XV AS SELECT X, "Y" FROM foo
-#
-# mode standard
-#
-# query TT
-# SHOW CREATE VIEW xv
-# ----
-# xv
-# CREATE VIEW XV AS SELECT X, "Y" FROM foo
-#
-# mode cockroach
-#
-# query error pgcode 42P01 relation "XV" does not exist
-# SHOW CREATE VIEW "XV"
-#
-# statement ok
-# CREATE VIEW "YV" AS SELECT X, "Y" FROM foo
-#
-# query TT
-# SHOW CREATE VIEW "YV"
-# ----
-# "YV"  CREATE VIEW "YV" (x, "Y") AS SELECT x, "Y" FROM test.public.foo
-#
-# query error pgcode 42P01 relation "yv" does not exist
-# SHOW CREATE VIEW YV
-#
-# # Case sensitivity of index names.
-#
-# statement ok
-# CREATE TABLE a(x INT, y INT, CONSTRAINT Foo PRIMARY KEY(x)); CREATE INDEX I ON a(y)
-#
+# Case sensitivity of view names.
+
+mode standard
+
+statement ok
+CREATE VIEW XV AS SELECT X, "Y" FROM foo
+
+query TT
+SHOW CREATE VIEW xv
+----
+xv
+CREATE VIEW XV AS SELECT X, "Y" FROM foo
+
+query error pgcode 42P01 relation "XV" does not exist
+SHOW CREATE VIEW "XV"
+
+statement ok
+CREATE VIEW "YV" AS SELECT X, "Y" FROM foo
+
+query TT
+SHOW CREATE VIEW "YV"
+----
+"YV"
+CREATE VIEW "YV" AS SELECT X, "Y" FROM foo
+
+query error pgcode 42P01 relation "yv" does not exist
+SHOW CREATE VIEW YV
+
+mode cockroach
+
+# Case sensitivity of index names.
+
+statement ok
+CREATE TABLE a(x INT, y INT, CONSTRAINT FooIdx PRIMARY KEY(x))
+
+statement ok
+CREATE INDEX I ON a(y)
+
 # statement error index "I" not found
 # SELECT * FROM a@"I"
-#
-# statement error index "Foo" not found
-# SELECT * FROM a@"Foo"
-#
+
+# statement error index "FooIdx" not found
+# SELECT * FROM a@"FooIdx"
+
 # statement error index "I" not found
 # SELECT * FROM a ORDER BY INDEX a@"I"
-#
-# statement error index "Foo" not found
-# SELECT * FROM a ORDER BY INDEX a@"Foo"
-#
+
+# statement error index "FooIdx" not found
+# SELECT * FROM a ORDER BY INDEX a@"FooIdx"
+
 # statement error index "I" does not exist
 # DROP INDEX a@"I"
-#
+
 # statement ok
 # SELECT * FROM a@I
-#
+
 # statement ok
-# SELECT * FROM a@Foo
-#
+# SELECT * FROM a@FooIdx
+
 # statement ok
 # SELECT * FROM a ORDER BY INDEX a@I
-#
+
 # statement ok
-# SELECT * FROM a ORDER BY INDEX a@Foo
-#
-# statement ok
-# DROP INDEX a@I
+# SELECT * FROM a ORDER BY INDEX a@FooIdx
+
+statement ok
+DROP INDEX I
 
 # Unicode sequences are preserved.
 
@@ -300,6 +304,6 @@ Amélie Amélie
 
 # Check that function names are also recognized case-insensitively.
 query T
-SELECT ASCII('abc') -- lint: uppercase function OK
+SELECT AsCIi('abc')
 ----
 a
