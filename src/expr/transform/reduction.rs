@@ -55,7 +55,10 @@ impl FoldConstants {
                              with non-positive multiplicities"
                         );
                         let datums = row.unpack();
-                        let key = group_key.iter().map(|i| datums[*i]).collect::<Vec<_>>();
+                        let key = group_key
+                            .iter()
+                            .map(|i| datums[*i].clone())
+                            .collect::<Vec<_>>();
                         let val = aggregates
                             .iter()
                             .rev()
@@ -169,7 +172,7 @@ impl FoldConstants {
                         .iter()
                         .map(|(input_row, diff)| {
                             let datums = input_row.unpack();
-                            (Row::pack(outputs.iter().map(|i| datums[*i])), *diff)
+                            (Row::pack(outputs.iter().map(|i| &datums[*i])), *diff)
                         })
                         .collect();
                     *relation = RelationExpr::Constant {

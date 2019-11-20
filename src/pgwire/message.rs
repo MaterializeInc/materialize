@@ -407,7 +407,7 @@ impl FieldValue {
                 Some(FieldValue::Numeric(d.with_scale(scale)))
             }
             Datum::Bytes(b) => Some(FieldValue::Bytea(b.to_owned())),
-            Datum::String(s) => Some(FieldValue::Text(s.to_owned())),
+            Datum::String(s) => Some(FieldValue::Text(s.to_owned().to_string())),
         }
     }
 

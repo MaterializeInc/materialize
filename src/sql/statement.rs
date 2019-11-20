@@ -240,16 +240,16 @@ fn handle_show_variable(
                 .iter()
                 .map(|v| {
                     Row::pack(&[
-                        Datum::String(v.name()),
-                        Datum::String(&v.value()),
-                        Datum::String(v.description()),
+                        Datum::cow_from_str(v.name()),
+                        Datum::cow_from_str(&v.value()),
+                        Datum::cow_from_str(v.description()),
                     ])
                 })
                 .collect(),
         ))
     } else {
         let variable = session.get(&variable.value)?;
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::cow_from_str(
             &variable.value(),
         )])]))
     }
@@ -322,9 +322,9 @@ fn handle_show_columns(
         .map(|(name, typ)| {
             let name = name.map(|n| n.to_string());
             Row::pack(&[
-                Datum::String(name.mz_as_deref().unwrap_or("?")),
-                Datum::String(if typ.nullable { "YES" } else { "NO" }),
-                Datum::String(postgres_type_name(typ.scalar_type)),
+                Datum::cow_from_str(name.mz_as_deref().unwrap_or("?")),
+                Datum::cow_from_str(if typ.nullable { "YES" } else { "NO" }),
+                Datum::cow_from_str(postgres_type_name(typ.scalar_type)),
             ])
         })
         .collect();
@@ -343,8 +343,8 @@ fn handle_show_create_view(
         bail!("'{}' is not a view", name);
     };
     Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&*name.to_string()),
-        Datum::String(&raw_sql),
+        Datum::cow_from_str(&name.to_string()),
+        Datum::cow_from_str(raw_sql),
     ])]))
 }
 
@@ -366,8 +366,8 @@ fn handle_show_create_source(
         };
 
     Ok(Plan::SendRows(vec![Row::pack(&[
-        Datum::String(&name.to_string()),
-        Datum::String(&source_url),
+        Datum::cow_from_str(&name.to_string()),
+        Datum::cow_from_str(&source_url),
     ])]))
 }
 
@@ -635,7 +635,7 @@ pub fn handle_explain(
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
-        Ok(Plan::SendRows(vec![Row::pack(&[Datum::String(
+        Ok(Plan::SendRows(vec![Row::pack(&[Datum::cow_from_str(
             &relation_expr.pretty(catalog),
         )])]))
     } else {
@@ -683,13 +683,11 @@ fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: &[Datum]) {
 
 fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data: &[Datum]) {
     if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
-        let datum = parameter_data[*position - 1];
+        let datum = &parameter_data[*position - 1];
+        let scalar_type = datum.scalar_type();
         std::mem::replace(
             scalar,
-            sqlexpr::ScalarExpr::Literal(
-                Row::pack(vec![datum]),
-                ColumnType::new(datum.scalar_type()),
-            ),
+            sqlexpr::ScalarExpr::Literal(Row::pack(vec![datum]), ColumnType::new(scalar_type)),
         );
     };
 }

@@ -174,7 +174,7 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(name, worker)| {
                     packer.pack(&[
-                        Datum::String(&*name.to_string()),
+                        Datum::cow_from_str(&name.to_string()),
                         Datum::Int64(worker as i64),
                     ])
                 }
@@ -192,8 +192,8 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(dataflow, source, worker)| {
                     packer.pack(&[
-                        Datum::String(&*dataflow.to_string()),
-                        Datum::String(&*source.to_string()),
+                        Datum::cow_from_str(&dataflow.to_string()),
+                        Datum::cow_from_str(&source.to_string()),
                         Datum::Int64(worker as i64),
                     ])
                 }
@@ -211,9 +211,9 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(peek, worker)| {
                     packer.pack(&[
-                        Datum::String(&*format!("{}", peek.conn_id)),
+                        Datum::cow_from_str(&format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
-                        Datum::String(&peek.id.to_string()),
+                        Datum::cow_from_str(&peek.id.to_string()),
                         Datum::Int64(peek.time as i64),
                     ])
                 }
@@ -231,7 +231,7 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(name, logical)| {
                     packer.pack(&[
-                        Datum::String(&*name.to_string()),
+                        Datum::cow_from_str(&name.to_string()),
                         Datum::Int64(logical as i64),
                     ])
                 }
@@ -334,7 +334,7 @@ pub fn construct<A: Allocate>(
                         let mut packer = RowPacker::new();
                         move |row| {
                             let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(key.iter().map(|k| datums[*k]));
+                            let key_row = packer.pack(key.iter().map(|k| &datums[*k]));
                             drop(datums);
                             (key_row, row)
                         }

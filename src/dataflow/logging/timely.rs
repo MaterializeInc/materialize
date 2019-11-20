@@ -89,7 +89,7 @@ pub fn construct<A: Allocate>(
                                     packer.pack(&[
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
-                                        Datum::String(&*event.name),
+                                        Datum::cow_from_str(&event.name),
                                     ]),
                                     time_ms,
                                     1,
@@ -153,7 +153,7 @@ pub fn construct<A: Allocate>(
                                         packer.pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
-                                            Datum::String(&*event.name),
+                                            Datum::cow_from_str(&event.name),
                                         ]),
                                         time_ms,
                                         -1,
@@ -365,7 +365,7 @@ pub fn construct<A: Allocate>(
                         let mut packer = RowPacker::new();
                         move |row| {
                             let datums = unpacker.unpack(&row);
-                            let key_row = packer.pack(key.iter().map(|k| datums[*k]));
+                            let key_row = packer.pack(key.iter().map(|k| &datums[*k]));
                             drop(datums);
                             (key_row, row)
                         }

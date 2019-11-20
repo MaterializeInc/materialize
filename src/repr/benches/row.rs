@@ -13,6 +13,7 @@ use ordered_float::OrderedFloat;
 use rand::Rng;
 use repr::decimal::Significand;
 use repr::*;
+use std::borrow::Cow;
 
 const NUM_ROWS: usize = 10_000;
 
@@ -133,7 +134,7 @@ impl OwnedDatum {
             OwnedDatum::Interval(i) => Datum::Interval(*i),
             OwnedDatum::Decimal(s) => Datum::Decimal(*s),
             OwnedDatum::Bytes(bs) => Datum::Bytes(&**bs),
-            OwnedDatum::String(s) => Datum::String(&**s),
+            OwnedDatum::String(s) => Datum::from_str(&**s),
         }
     }
 }

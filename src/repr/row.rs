@@ -90,9 +90,10 @@ pub struct UnpackedRow<'a> {
 ///
 /// ```
 /// # use repr::{Row, Datum, RowPacker};
+/// # use std::borrow::Cow;
 /// let mut packer = RowPacker::new();
-/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String("one")]);
-/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String("two")]);
+/// let row1 = packer.pack(&[Datum::Int32(1), Datum::String(Cow::from("one"))]);
+/// let row2 = packer.pack(&[Datum::Int32(2), Datum::String(Cow::from("two"))]);
 /// ```
 #[derive(Debug)]
 pub struct RowPacker {
@@ -239,7 +240,7 @@ impl Row {
                     std::slice::from_raw_parts(self.data.as_ptr().add(*offset), len as usize);
                 let string = std::str::from_utf8_unchecked(bytes);
                 *offset += len;
-                Datum::String(string)
+                Datum::cow_from_str(string)
             }
         }
     }
@@ -362,7 +363,7 @@ impl<'a> PackableRow<'a> {
         D: Borrow<Datum<'b>>,
     {
         for datum in iter {
-            self.push(*(datum.borrow()));
+            self.push(datum.borrow().clone());
         }
     }
 
@@ -400,7 +401,7 @@ impl RowUnpacker {
                 transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
             },
         };
-        unpacked.extend(iter.into_iter().map(|d| *(d.borrow())));
+        unpacked.extend(iter.into_iter().map(|d| d.borrow().clone()));
         unpacked
     }
 }
@@ -486,8 +487,8 @@ mod tests {
             }),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1]),
-            Datum::String(""),
-            Datum::String("العَرَبِيَّة"),
+            Datum::cow_from_str(""),
+            Datum::cow_from_str("العَرَبِيَّة"),
         ]);
     }
 }

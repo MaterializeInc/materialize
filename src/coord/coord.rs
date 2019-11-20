@@ -294,7 +294,7 @@ where
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::pack(&[Datum::String(&s.0.to_string())]))
+                        .map(|s| Row::pack(&[Datum::cow_from_str(&s.0.to_string())]))
                         .collect(),
                 )
             }
@@ -525,7 +525,7 @@ where
                                 for row in rows {
                                     let datums = unpacker.unpack(&*row);
                                     let new_row =
-                                        packer.pack(finishing.project.iter().map(|i| datums[*i]));
+                                        packer.pack(finishing.project.iter().map(|i| &datums[*i]));
                                     drop(datums);
                                     *row = new_row;
                                 }

@@ -125,7 +125,7 @@ pub fn construct<A: Allocate>(
                 let trace = collection
                     .map(move |row| {
                         let datums = unpacker.unpack(&row);
-                        let key_row = packer.pack(key.iter().map(|k| datums[*k]));
+                        let key_row = packer.pack(key.iter().map(|k| &datums[*k]));
                         drop(datums);
                         (key_row, row)
                     })

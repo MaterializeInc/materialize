@@ -257,15 +257,18 @@ impl ScalarExpr {
                         Datum::Null => {
                             ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null))
                         }
-                        Datum::String(string) => match func::build_like_regex_from_string(string) {
-                            Ok(regex) => ScalarExpr::MatchCachedRegex {
-                                expr: Box::new(expr1.take()),
-                                regex: Regex(regex),
-                            },
-                            Err(_) => {
-                                ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null))
+                        Datum::String(string) => {
+                            match func::build_like_regex_from_string(&string) {
+                                Ok(regex) => ScalarExpr::MatchCachedRegex {
+                                    expr: Box::new(expr1.take()),
+                                    regex: Regex(regex),
+                                },
+                                Err(_) => ScalarExpr::literal(
+                                    Datum::Null,
+                                    ColumnType::new(ScalarType::Null),
+                                ),
                             }
-                        },
+                        }
                         _ => unreachable!(),
                     }
                 } else if *func == BinaryFunc::And && (expr1.is_literal() || expr2.is_literal()) {
@@ -375,7 +378,7 @@ impl ScalarExpr {
 
     pub fn eval<'a>(&'a self, datums: &[Datum<'a>]) -> Datum<'a> {
         match self {
-            ScalarExpr::Column(index) => datums[*index],
+            ScalarExpr::Column(index) => datums[*index].clone(),
             ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
             ScalarExpr::CallUnary { func, expr } => {
                 let eval = expr.eval(datums);
@@ -495,10 +498,11 @@ mod tests {
         let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
         assert_eq!(plus_expr.to_doc().pretty(72).to_string(), "1 + 2");
 
-        let regex_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
-            ScalarExpr::literal(Datum::String("f?oo"), col_type(String)),
-            BinaryFunc::MatchRegex,
-        );
+        let regex_expr = ScalarExpr::literal(Datum::cow_from_str("foo"), col_type(String))
+            .call_binary(
+                ScalarExpr::literal(Datum::cow_from_str("f?oo"), col_type(String)),
+                BinaryFunc::MatchRegex,
+            );
         assert_eq!(
             regex_expr.to_doc().pretty(72).to_string(),
             r#""foo" ~ "f?oo""#
