@@ -2171,7 +2171,7 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
                 )
             }
         }
-        Value::SingleQuotedString(s) => (Datum::from_str(s), ScalarType::String),
+        Value::SingleQuotedString(s) => (Datum::cow_from_str(s), ScalarType::String),
         Value::NationalStringLiteral(_) => {
             bail!("n'' string literals are not supported: {}", l.to_string())
         }

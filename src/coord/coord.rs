@@ -294,7 +294,7 @@ where
                 send_immediate_rows(
                     sources
                         .iter()
-                        .map(|s| Row::pack(&[Datum::from_str(&s.0.to_string())]))
+                        .map(|s| Row::pack(&[Datum::cow_from_str(&s.0.to_string())]))
                         .collect(),
                 )
             }

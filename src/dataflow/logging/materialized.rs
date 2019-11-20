@@ -174,7 +174,7 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(name, worker)| {
                     packer.pack(&[
-                        Datum::from_str(&name.to_string()),
+                        Datum::cow_from_str(&name.to_string()),
                         Datum::Int64(worker as i64),
                     ])
                 }
@@ -192,8 +192,8 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(dataflow, source, worker)| {
                     packer.pack(&[
-                        Datum::from_str(&dataflow.to_string()),
-                        Datum::from_str(&source.to_string()),
+                        Datum::cow_from_str(&dataflow.to_string()),
+                        Datum::cow_from_str(&source.to_string()),
                         Datum::Int64(worker as i64),
                     ])
                 }
@@ -211,9 +211,9 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(peek, worker)| {
                     packer.pack(&[
-                        Datum::from_str(&format!("{}", peek.conn_id)),
+                        Datum::cow_from_str(&format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
-                        Datum::from_str(&peek.id.to_string()),
+                        Datum::cow_from_str(&peek.id.to_string()),
                         Datum::Int64(peek.time as i64),
                     ])
                 }
@@ -231,7 +231,7 @@ pub fn construct<A: Allocate>(
                 let mut packer = RowPacker::new();
                 move |(name, logical)| {
                     packer.pack(&[
-                        Datum::from_str(&name.to_string()),
+                        Datum::cow_from_str(&name.to_string()),
                         Datum::Int64(logical as i64),
                     ])
                 }

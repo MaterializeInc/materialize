@@ -460,7 +460,6 @@ mod tests {
 
     use super::*;
     use crate::id::test_utils::DummyHumanizer;
-    use crate::GlobalId;
 
     fn trace(label: &str, expr: &RelationExpr) {
         println!(

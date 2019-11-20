@@ -423,7 +423,7 @@ impl Decoder {
                     Significand::from_twos_complement_be(&unscaled)?,
                 )),
                 Value::Bytes(b) => Ok(Datum::Bytes(b)),
-                Value::String(s) => Ok(Datum::from_str(s)),
+                Value::String(s) => Ok(Datum::cow_from_str(s)),
                 Value::Union(v) => value_to_datum(v),
                 other @ Value::Fixed(..)
                 | other @ Value::Enum(..)

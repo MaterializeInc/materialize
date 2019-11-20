@@ -240,7 +240,7 @@ impl Row {
                     std::slice::from_raw_parts(self.data.as_ptr().add(*offset), len as usize);
                 let string = std::str::from_utf8_unchecked(bytes);
                 *offset += len;
-                Datum::from_str(string)
+                Datum::cow_from_str(string)
             }
         }
     }
@@ -488,8 +488,8 @@ mod tests {
             }),
             Datum::Bytes(&[]),
             Datum::Bytes(&[0, 2, 1]),
-            Datum::String(Cow::from("")),
-            Datum::String(Cow::from("العَرَبِيَّة")),
+            Datum::cow_from_str(""),
+            Datum::cow_from_str("العَرَبِيَّة"),
         ]);
     }
 }

@@ -498,10 +498,11 @@ mod tests {
         let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
         assert_eq!(plus_expr.to_doc().pretty(72).to_string(), "1 + 2");
 
-        let regex_expr = ScalarExpr::literal(Datum::String("foo"), col_type(String)).call_binary(
-            ScalarExpr::literal(Datum::String("f?oo"), col_type(String)),
-            BinaryFunc::MatchRegex,
-        );
+        let regex_expr = ScalarExpr::literal(Datum::cow_from_str("foo"), col_type(String))
+            .call_binary(
+                ScalarExpr::literal(Datum::cow_from_str("f?oo"), col_type(String)),
+                BinaryFunc::MatchRegex,
+            );
         assert_eq!(
             regex_expr.to_doc().pretty(72).to_string(),
             r#""foo" ~ "f?oo""#

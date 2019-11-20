@@ -89,7 +89,7 @@ pub fn construct<A: Allocate>(
                                     packer.pack(&[
                                         Datum::Int64(event.id as i64),
                                         Datum::Int64(worker as i64),
-                                        Datum::from_str(&event.name),
+                                        Datum::cow_from_str(&event.name),
                                     ]),
                                     time_ms,
                                     1,
@@ -153,7 +153,7 @@ pub fn construct<A: Allocate>(
                                         packer.pack(&[
                                             Datum::Int64(event.id as i64),
                                             Datum::Int64(worker as i64),
-                                            Datum::from_str(&event.name),
+                                            Datum::cow_from_str(&event.name),
                                         ]),
                                         time_ms,
                                         -1,
