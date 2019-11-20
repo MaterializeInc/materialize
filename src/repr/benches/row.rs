@@ -134,7 +134,7 @@ impl OwnedDatum {
             OwnedDatum::Interval(i) => Datum::Interval(*i),
             OwnedDatum::Decimal(s) => Datum::Decimal(*s),
             OwnedDatum::Bytes(bs) => Datum::Bytes(&**bs),
-            OwnedDatum::String(s) => Datum::String(Cow::from(&**s)),
+            OwnedDatum::String(s) => Datum::from_str(&**s),
         }
     }
 }

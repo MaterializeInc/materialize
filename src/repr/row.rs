@@ -398,7 +398,6 @@ impl RowUnpacker {
                 //   nothing else can access buffer.datums while unpacked is alive
                 //   unpacked can't live longer than self
                 //   when unpacked is dropped, it clears buffer.datums
-
                 transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
             },
         };
