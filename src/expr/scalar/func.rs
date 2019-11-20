@@ -18,6 +18,7 @@ use repr::{ColumnType, Datum, Interval, ScalarType};
 
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
+use std::borrow::Cow;
 
 pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match (&a, &b) {
@@ -1276,11 +1277,11 @@ pub fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     datums
         .iter()
         .find(|d| !d.is_null())
-        .copied()
+        .cloned()
         .unwrap_or(Datum::Null)
 }
 
-pub fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+pub fn substr<'a, 'b>(datums: &'b [Datum<'a>]) -> Datum<'a> {
     if datums.iter().any(|d| d.is_null()) {
         return Datum::Null;
     }
@@ -1305,9 +1306,11 @@ pub fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
         for _ in 0..cmp::max(length_in_chars, 0) {
             length_in_bytes += chars.next().map(|char| char.len_utf8()).unwrap_or(0);
         }
-        Datum::from(&string[start_in_bytes..start_in_bytes + length_in_bytes])
+        Datum::String(Cow::from(
+            (&string[start_in_bytes..start_in_bytes + length_in_bytes]).to_string(),
+        ))
     } else {
-        Datum::from(&string[start_in_bytes..])
+        Datum::String(Cow::from((&string[start_in_bytes..]).to_string()))
     }
 }
 

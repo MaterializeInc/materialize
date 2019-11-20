@@ -9,7 +9,7 @@ use crate::Datum;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::mem::{size_of, transmute};
 
 /// A packed representation for `Datum`s.
@@ -239,7 +239,7 @@ impl Row {
                     std::slice::from_raw_parts(self.data.as_ptr().add(*offset), len as usize);
                 let string = std::str::from_utf8_unchecked(bytes);
                 *offset += len;
-                Datum::String(string)
+                Datum::String(Cow::from(string))
             }
         }
     }
@@ -362,7 +362,7 @@ impl<'a> PackableRow<'a> {
         D: Borrow<Datum<'b>>,
     {
         for datum in iter {
-            self.push(*(datum.borrow()));
+            self.push(datum.borrow().clone());
         }
     }
 
@@ -397,10 +397,11 @@ impl RowUnpacker {
                 //   nothing else can access buffer.datums while unpacked is alive
                 //   unpacked can't live longer than self
                 //   when unpacked is dropped, it clears buffer.datums
+
                 transmute::<&'a mut Vec<Datum<'static>>, &'a mut Vec<Datum<'a>>>(inner)
             },
         };
-        unpacked.extend(iter.into_iter().map(|d| *(d.borrow())));
+        unpacked.extend(iter.into_iter().map(|d| d.borrow().clone()));
         unpacked
     }
 }

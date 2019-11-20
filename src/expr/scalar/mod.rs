@@ -257,15 +257,18 @@ impl ScalarExpr {
                         Datum::Null => {
                             ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null))
                         }
-                        Datum::String(string) => match func::build_like_regex_from_string(string) {
-                            Ok(regex) => ScalarExpr::MatchCachedRegex {
-                                expr: Box::new(expr1.take()),
-                                regex: Regex(regex),
-                            },
-                            Err(_) => {
-                                ScalarExpr::literal(Datum::Null, ColumnType::new(ScalarType::Null))
+                        Datum::String(string) => {
+                            match func::build_like_regex_from_string(&string) {
+                                Ok(regex) => ScalarExpr::MatchCachedRegex {
+                                    expr: Box::new(expr1.take()),
+                                    regex: Regex(regex),
+                                },
+                                Err(_) => ScalarExpr::literal(
+                                    Datum::Null,
+                                    ColumnType::new(ScalarType::Null),
+                                ),
                             }
-                        },
+                        }
                         _ => unreachable!(),
                     }
                 } else if *func == BinaryFunc::And && (expr1.is_literal() || expr2.is_literal()) {
@@ -375,7 +378,7 @@ impl ScalarExpr {
 
     pub fn eval<'a>(&'a self, datums: &[Datum<'a>]) -> Datum<'a> {
         match self {
-            ScalarExpr::Column(index) => datums[*index],
+            ScalarExpr::Column(index) => datums[*index].clone(),
             ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
             ScalarExpr::CallUnary { func, expr } => {
                 let eval = expr.eval(datums);

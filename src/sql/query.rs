@@ -46,6 +46,7 @@ use super::expr::{
 };
 use super::names;
 use super::scope::{Scope, ScopeItem, ScopeItemName};
+use std::borrow::Cow;
 
 /// Plans a top-level query, returning the `RelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
@@ -2146,7 +2147,7 @@ fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Er
                 )
             }
         }
-        Value::SingleQuotedString(s) => (Datum::String(s), ScalarType::String),
+        Value::SingleQuotedString(s) => (Datum::String(Cow::from(s)), ScalarType::String),
         Value::NationalStringLiteral(_) => {
             bail!("n'' string literals are not supported: {}", l.to_string())
         }

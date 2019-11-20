@@ -16,10 +16,11 @@ use std::hash::{Hash, Hasher};
 
 use self::decimal::Significand;
 use crate::ColumnType;
+use std::borrow::Cow;
 
 /// A literal value.
 #[serde(rename_all = "snake_case")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum Datum<'a> {
     /// An unknown value.
     Null,
@@ -51,7 +52,7 @@ pub enum Datum<'a> {
     /// A sequence of untyped bytes.
     Bytes(&'a [u8]),
     /// A sequence of Unicode codepoints encoded as UTF-8.
-    String(&'a str),
+    String(Cow<'a, str>),
 }
 
 impl<'a> Datum<'a> {
@@ -224,7 +225,7 @@ impl<'a> Datum<'a> {
         }
     }
 
-    pub fn unwrap_str(&self) -> &'a str {
+    pub fn unwrap_str(&'a self) -> &'a str {
         match self {
             Datum::String(s) => s,
             _ => panic!("Datum::unwrap_string called on {:?}", self),
@@ -363,7 +364,7 @@ impl From<SqlInterval> for Datum<'static> {
 
 impl<'a> From<&'a str> for Datum<'a> {
     fn from(s: &'a str) -> Datum<'a> {
-        Datum::String(s)
+        Datum::String(Cow::from(s))
     }
 }
 
