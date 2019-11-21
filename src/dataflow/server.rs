@@ -329,17 +329,21 @@ where
                         .reported_frontiers
                         .get_mut(&id)
                         .expect("Frontier missing!");
-                    let mut changes = ChangeBatch::new();
-                    for time in lower.elements().iter() {
-                        changes.update(time.clone(), -1);
+                    if lower != &upper {
+                        let mut changes = ChangeBatch::new();
+                        for time in lower.elements().iter() {
+                            changes.update(time.clone(), -1);
+                        }
+                        for time in upper.elements().iter() {
+                            changes.update(time.clone(), 1);
+                        }
+                        let lower = self.reported_frontiers.get_mut(&id).unwrap();
+                        changes.compact();
+                        if !changes.is_empty() {
+                            progress.push((id, changes));
+                        }
+                        lower.clone_from(&upper);
                     }
-                    for time in upper.elements().iter() {
-                        changes.update(time.clone(), 1);
-                    }
-                    let lower = self.reported_frontiers.get_mut(&id).unwrap();
-                    changes.compact();
-                    progress.push((id, changes));
-                    lower.clone_from(&upper);
                 }
             }
             feedback_tx
