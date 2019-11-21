@@ -1,3 +1,8 @@
+// Copyright 2019 Materialize, Inc. All rights reserved.
+//
+// This file is part of Materialize. Materialize may not be used or
+// distributed without the express permission of Materialize, Inc.
+
 module github.com/materializeinc/materialize/doc/user/util/rr-diagram-gen
 
 go 1.13

@@ -1,22 +1,22 @@
-# Go parameters
-GOCMD=go
-GOBUILD=$(GOCMD) build
-GOCLEAN=$(GOCMD) clean
-BINARY_NAME=rr-diagram-gen
-BINARY_UNIX=$(BINARY_NAME)_unix
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
 
-src_default=../../layouts/partials/sql-grammar/bnf/
-dst_default=../../layouts/partials/sql-grammar/rr-diagrams/
+GO = go
 
-all: clean build run
+SRC = ../../layouts/partials/sql-grammar/bnf
+DST = ../../layouts/partials/sql-grammar/rr-diagrams
 
-build :
-	$(GOBUILD) -o $(BINARY_NAME) -v
+.PHONY: run
+run: rr-diagram-gen
+	./rr-diagram-gen $(SRC) $(DST)
 
-clean :
-	$(GOCLEAN)
-	rm -f $(BINARY_NAME)
-	rm -f $(BINARY_UNIX)
+rr-diagram-gen: *.go
+	$(GO) build -v -o $@ $(GOFLAGS)
 
-run :
-	./$(BINARY_NAME) $(src_default) $(dst_default)
+.PHONY: clean
+clean:
+	$(GO) clean $(GOFLAGS)
+	rm -f rr-diagram-gen
+

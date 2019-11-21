@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -168,9 +169,9 @@ func ConvertBNFtoSVG(srcDir string, dstDir string) {
 
 		if bnfFilename.Match([]byte(f.Name())) {
 
-			bnf, err := ioutil.ReadFile(srcDir + f.Name())
+			bnf, err := ioutil.ReadFile(filepath.Join(srcDir, f.Name()))
 			if err != nil {
-				log.Fatalf(fmt.Sprintf("Cannot read %s\n", f.Name()))
+				log.Fatalf("Cannot read %s: %s\n", f.Name(), err)
 			}
 
 			xhtml, err := EBNFtoXHTML(bnf)
@@ -188,7 +189,7 @@ func ConvertBNFtoSVG(srcDir string, dstDir string) {
 				panic(fmt.Sprintf("Extracting SVG from HTML failed for %s: %v", f.Name(), err))
 			}
 
-			dstFilename := bnfFilename.ReplaceAllString(f.Name(), dstDir+"$1.html")
+			dstFilename := bnfFilename.ReplaceAllString(f.Name(), filepath.Join(dstDir, "$1.html"))
 			err = ioutil.WriteFile(dstFilename, []byte(svg), 0644)
 			if err != nil {
 				panic(fmt.Sprintf("Failed to write %s: %v", dstFilename, err))
