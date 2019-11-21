@@ -17,8 +17,8 @@ $ set schema={
             "name": "row",
             "type": "record",
             "fields": [
-              {"name": "X", "type": "long"},
-              {"name": "Y", "type": "string"}
+              {"name": "x", "type": "long"},
+              {"name": "y", "type": "string"}
             ]
           },
           "null"
@@ -31,10 +31,10 @@ $ set schema={
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
-{"before": null, "after": {"X": 1, "Y": "mouse"}}
-{"before": null, "after": {"X": 2, "Y": "keyboard"}}
-{"before": null, "after": {"X": 3, "Y": "monitor"}}
-{"before": null, "after": {"X": 1, "Y": "keyboard"}}
+{"before": null, "after": {"x": 1, "y": "mouse"}}
+{"before": null, "after": {"x": 2, "y": "keyboard"}}
+{"before": null, "after": {"x": 3, "y": "monitor"}}
+{"before": null, "after": {"x": 1, "y": "keyboard"}}
 
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
 {"before": null, "after": null}
@@ -112,42 +112,123 @@ catalog item 'test4' does not exist
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
 catalog item 's1' is a sink and so cannot be depended upon
 
-# Test that dependent indexes prevent view deletion when restrict is specified
-
-> CREATE MATERIALIZED VIEW v2 AS SELECT 1 as a;
-
-> CREATE INDEX i1 ON v2(a);
-
-! DROP VIEW v2;
-cannot delete v2: still depended upon by catalog item 'i1'
-
-# Test that dependent indexes prevent source deletion when restrict is specified
-
 > CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
 
-> CREATE INDEX i2 ON s("X");
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
+{"before": null, "after": {"x": 1, "y": "mouse"}}
+{"before": null, "after": {"x": 2, "y": "keyboard"}}
+{"before": null, "after": {"x": 3, "y": "monitor"}}
+{"before": null, "after": {"x": 1, "y": "keyboard"}}
 
-! DROP SOURCE s;
-cannot delete s: still depended upon by catalog item 'i2'
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
+{"before": null, "after": null}
+
+> CREATE MATERIALIZED VIEW v2 AS SELECT X from s;
+
+> CREATE INDEX i1 ON v2(x);
 
 # Test that indexes cannot be depended upon
 
 ! CREATE MATERIALIZED VIEW v3 as SELECT * FROM i1;
 catalog item 'i1' is an index and so cannot be depended upon
 
-# Test cascade delete associated indexes
-> DROP VIEW v2 CASCADE;
+> CREATE INDEX i2 ON s(y);
+
+> SHOW INDEX in s;
+View  Key_name     Column_name Expression Null  Seq_in_index
+------------------------------------------------------------
+s     i2           y           <null>     false 1
+
+> SHOW INDEX in v2;
+View  Key_name     Column_name Expression Null  Seq_in_index
+------------------------------------------------------------
+v2    i1           x           <null>     false 1
+
+# Test that dependent indexes do not prevent view deletion when restrict is specified
+# but do not cause deletion of dependent views
+> DROP VIEW v2;
 
 ! DROP VIEW v2;
 catalog item 'v2' does not exist
 
+> SHOW INDEX in s;
+View  Key_name     Column_name Expression Null  Seq_in_index
+------------------------------------------------------------
+s     i2           y           <null>     false 1
+
 ! DROP INDEX i1;
 catalog item 'i1' does not exist
 
-> DROP SOURCE s CASCADE;
+# Test that dependent indexes do not prevent source deletion when restrict is specified
+> DROP SOURCE s;
 
 ! DROP SOURCE s;
 catalog item 's' does not exist
 
 ! DROP INDEX i2;
 catalog item 'i2' does not exist
+
+> CREATE SOURCE s FROM 'kafka://${testdrive.kafka-addr}/testdrive-data-${testdrive.seed}' USING SCHEMA '${schema}'
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=33
+{"before": null, "after": {"x": 1, "y": "mouse"}}
+{"before": null, "after": {"x": 2, "y": "keyboard"}}
+{"before": null, "after": {"x": 3, "y": "monitor"}}
+{"before": null, "after": {"x": 1, "y": "keyboard"}}
+
+$ kafka-ingest format=avro topic=data schema=${schema} timestamp=34
+{"before": null, "after": null}
+
+> CREATE MATERIALIZED VIEW v4 AS SELECT y from s;
+
+> CREATE INDEX i3 ON v4(y);
+
+> SHOW INDEX in v4;
+View  Key_name     Column_name Expression Null  Seq_in_index
+------------------------------------------------------------
+v4    i3           y           <null>     false 1
+
+> CREATE INDEX i4 ON s(x);
+
+> SHOW INDEX in s;
+View  Key_name     Column_name Expression Null  Seq_in_index
+------------------------------------------------------------
+s     i4           x           <null>     false 1
+
+# Test cascade deletes associated indexes as well
+> DROP VIEW v4 CASCADE;
+
+! DROP VIEW v4;
+catalog item 'v4' does not exist
+
+! DROP INDEX i3;
+catalog item 'i3' does not exist
+
+> SHOW INDEX in s;
+View  Key_name     Column_name Expression Null  Seq_in_index
+------------------------------------------------------------
+s     i4           x           <null>     false 1
+
+> CREATE MATERIALIZED VIEW v5 AS SELECT substr(y, 3, 2) as substr from s;
+
+> CREATE INDEX i5 ON v5(substr);
+
+> SHOW INDEX in v5;
+View  Key_name     Column_name Expression Null  Seq_in_index
+------------------------------------------------------------
+v5    i5           substr      <null>     true 1
+
+# Test cascade deletes all indexes associated with cascaded views
+> DROP SOURCE s CASCADE;
+
+! DROP SOURCE s;
+catalog item 's' does not exist
+
+! DROP INDEX i5;
+catalog item 'i5' does not exist
+
+! DROP VIEW v5;
+catalog item 'v5' does not exist
+
+! DROP INDEX i4;
+catalog item 'i4' does not exist

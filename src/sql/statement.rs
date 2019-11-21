@@ -106,7 +106,7 @@ pub fn describe_statement(
                     ColumnType::new(ScalarType::Int64),
                 ]),
                 vec![
-                    "Table",
+                    "View",
                     "Key_name",
                     "Column_name",
                     "Expression",
