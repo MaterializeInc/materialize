@@ -165,7 +165,7 @@ pub struct DataflowDesc {
     /// Sinks internal to the dataflow.
     pub sinks: Vec<(GlobalId, Sink)>,
     /// Indexes used by the dataflow.
-    pub indexes: Vec<(GlobalId, Index)>,
+    pub indexes: Vec<(GlobalId, IndexDesc)>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// This is logically equivalent to a timely dataflow `Antichain`,
@@ -211,7 +211,7 @@ impl DataflowDesc {
         self
     }
 
-    pub fn add_index(mut self, id: GlobalId, index: Index) -> Self {
+    pub fn add_index(mut self, id: GlobalId, index: IndexDesc) -> Self {
         self.indexes.push((id, index));
         self
     }
@@ -298,21 +298,35 @@ pub struct TailSinkConnector {
     pub since: Timestamp,
 }
 
-/// An index is an arrangement of a dataflow
-#[serde(rename_all = "snake_case")]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Index {
+pub struct KeySql {
+    pub raw_sql: String,
+    /// true if the raw_sql is a column name, false if it is a function
+    pub is_column_name: bool,
+    /// true if the raw_sql evaluates to a nullable expression
+    pub nullable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Types of the columns of the `on_id` collection.
     pub relation_type: RelationType,
     /// Numbers of the columns to be arranged, in order of decreasing primacy.
-    /// Includes the numbers of extra columns defined in `fxns`.
-    pub keys: Vec<usize>,
-    /// Functions of the columns to evaluate and arrange on.
-    pub funcs: Vec<ScalarExpr>,
+    /// the columns to evaluate and arrange on.
+    pub keys: Vec<ScalarExpr>,
     /// The evaluation environment for the expressions in `funcs`.
     pub eval_env: EvalEnv,
+}
+
+/// An index is an arrangement of a dataflow
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Index {
+    pub desc: IndexDesc,
+    /// the human-friendly description on each column for `SHOW INDEXES` to show
+    pub raw_keys: Vec<KeySql>,
 }
 
 #[cfg(test)]

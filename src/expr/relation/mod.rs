@@ -137,7 +137,7 @@ pub enum RelationExpr {
         /// The source collection
         input: Box<RelationExpr>,
         /// Columns to arrange `input` by, in order of decreasing primacy
-        keys: Vec<usize>,
+        keys: Vec<ScalarExpr>,
     },
 }
 
@@ -481,10 +481,10 @@ impl RelationExpr {
     }
 
     /// Arranges the collection by the specified columns
-    pub fn arrange_by(self, keys: &[usize]) -> Self {
+    pub fn arrange_by(self, keys: &[ScalarExpr]) -> Self {
         RelationExpr::ArrangeBy {
             input: Box::new(self),
-            keys: keys.to_vec(),
+            keys: keys.to_owned(),
         }
     }
 
@@ -838,7 +838,10 @@ impl RelationExpr {
                 .append(right.to_doc(alloc, id_humanizer))
                 .embrace("Union {", "}"),
             RelationExpr::ArrangeBy { input, keys } => alloc
-                .compact_intersperse(tighten_outputs(keys), alloc.text(",").append(alloc.line()))
+                .intersperse(
+                    keys.iter().map(|k| k.to_doc(alloc)),
+                    alloc.text(",").append(alloc.line()),
+                )
                 .tightly_embrace("columns: [", "]")
                 .append(",")
                 .append(alloc.line())

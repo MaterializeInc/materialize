@@ -97,7 +97,7 @@ impl CatalogEntry {
             }
             CatalogItem::Index(idx) => {
                 let mut out = Vec::new();
-                out.push(idx.on_id);
+                out.push(idx.desc.on_id);
                 out
             }
         }

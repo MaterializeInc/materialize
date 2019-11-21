@@ -18,6 +18,8 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::Collection;
 use differential_dataflow::Data;
 
+use expr::ScalarExpr;
+
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 
@@ -49,10 +51,10 @@ where
     /// Dataflow local collections.
     pub collections: HashMap<P, Collection<S, V, Diff>>,
     /// Dataflow local arrangements.
-    pub local: HashMap<P, HashMap<Vec<usize>, Arrangement<S, V>>>,
+    pub local: HashMap<P, HashMap<Vec<ScalarExpr>, Arrangement<S, V>>>,
     /// Imported arrangements.
     #[allow(clippy::type_complexity)] // TODO(fms): fix or ignore lint globally.
-    pub trace: HashMap<P, HashMap<Vec<usize>, ArrangementImport<S, V, T>>>,
+    pub trace: HashMap<P, HashMap<Vec<ScalarExpr>, ArrangementImport<S, V, T>>>,
 }
 
 impl<S: Scope, P, V: Data, T> Context<S, P, V, T>
@@ -114,8 +116,21 @@ where
     pub fn get_all_local(
         &self,
         relation_expr: &P,
-    ) -> Option<&HashMap<Vec<usize>, Arrangement<S, V>>> {
+    ) -> Option<&HashMap<Vec<ScalarExpr>, Arrangement<S, V>>> {
         self.local.get(relation_expr)
+    }
+
+    /// Convenience method for accessing `arrangement` when all keys are plain columns
+    pub fn arrangement_columns(
+        &self,
+        relation_expr: &P,
+        columns: &[usize],
+    ) -> Option<ArrangementFlavor<S, V, T>> {
+        let mut keys = Vec::new();
+        for column in columns {
+            keys.push(ScalarExpr::Column(*column));
+        }
+        self.arrangement(relation_expr, &keys)
     }
 
     /// Produces an arrangement if available.
@@ -125,7 +140,7 @@ where
     pub fn arrangement(
         &self,
         relation_expr: &P,
-        keys: &[usize],
+        keys: &[ScalarExpr],
     ) -> Option<ArrangementFlavor<S, V, T>> {
         if let Some(local) = self.get_local(relation_expr, keys) {
             Some(ArrangementFlavor::Local(local.clone()))
@@ -137,12 +152,31 @@ where
     }
 
     /// Retrieves a local arrangement from a relation_expr and keys.
-    pub fn get_local(&self, relation_expr: &P, keys: &[usize]) -> Option<&Arrangement<S, V>> {
+    pub fn get_local(&self, relation_expr: &P, keys: &[ScalarExpr]) -> Option<&Arrangement<S, V>> {
         self.local.get(relation_expr).and_then(|x| x.get(keys))
     }
 
+    /// Convenience method for `set_local` when all keys are plain columns
+    pub fn set_local_columns(
+        &mut self,
+        relation_expr: &P,
+        columns: &[usize],
+        arranged: Arrangement<S, V>,
+    ) {
+        let mut keys = Vec::new();
+        for column in columns {
+            keys.push(ScalarExpr::Column(*column));
+        }
+        self.set_local(relation_expr, &keys, arranged);
+    }
+
     /// Binds a relation_expr and keys to a local arrangement.
-    pub fn set_local(&mut self, relation_expr: &P, keys: &[usize], arranged: Arrangement<S, V>) {
+    pub fn set_local(
+        &mut self,
+        relation_expr: &P,
+        keys: &[ScalarExpr],
+        arranged: Arrangement<S, V>,
+    ) {
         self.local
             .entry(relation_expr.clone())
             .or_insert_with(|| HashMap::new())
@@ -153,7 +187,7 @@ where
     pub fn get_trace(
         &self,
         relation_expr: &P,
-        keys: &[usize],
+        keys: &[ScalarExpr],
     ) -> Option<&ArrangementImport<S, V, T>> {
         self.trace.get(relation_expr).and_then(|x| x.get(keys))
     }
@@ -163,7 +197,7 @@ where
     pub fn set_trace(
         &mut self,
         relation_expr: &P,
-        keys: &[usize],
+        keys: &[ScalarExpr],
         arranged: ArrangementImport<S, V, T>,
     ) {
         self.trace

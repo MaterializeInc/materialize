@@ -1468,7 +1468,7 @@ impl BinaryFunc {
             FloorDecimal | CeilDecimal => match input1_type.scalar_type {
                 ScalarType::Null => ColumnType::new(ScalarType::Null),
                 ScalarType::Decimal(prec, scale) => {
-                    ColumnType::new(ScalarType::Decimal(prec, scale)).nullable(false)
+                    ColumnType::new(ScalarType::Decimal(prec, scale)).nullable(input1_type.nullable)
                 }
                 _ => unreachable!("Got invalid type as first argument of floor/ceil decimal"),
             },
