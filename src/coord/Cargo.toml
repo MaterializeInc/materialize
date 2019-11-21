@@ -19,6 +19,7 @@ comm = { path = "../comm" }
 chrono = "0.4"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
+differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }
 failure = "0.1.5"
 futures = "0.1"

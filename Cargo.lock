@@ -430,6 +430,7 @@ dependencies = [
  "comm",
  "dataflow",
  "dataflow-types",
+ "differential-dataflow",
  "expr",
  "failure",
  "futures",
