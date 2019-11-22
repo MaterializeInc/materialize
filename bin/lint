@@ -60,7 +60,7 @@ copyright_files=$(grep -vE \
     -e '^rust-toolchain$' \
     -e '^rustfmt.toml$' \
     -e '\.(md|json|asc|png|jpe?g|svg|eot|ttf|woff2?)$' \
-    -e '^www/.*(\.html|\.scss|\.bnf|\.toml)$' \
+    -e '^www/.*(\.html|\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^misc/docker/ci-builder/ssh_known_hosts$' \
     <<< "$files"
 )
