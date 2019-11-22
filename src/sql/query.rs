@@ -1598,6 +1598,29 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "date_trunc" => {
+                if sql_func.args.len() != 2 {
+                    bail!("date_trunc() requires exactly two arguments");
+                }
+
+                let precision_field =
+                    plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::String))?;
+                let source_timestamp =
+                    plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::Timestamp))?;
+                let typ = ecx.column_type(&source_timestamp);
+                if typ != ScalarType::Timestamp {
+                    bail!("date_trunc() is currently only implemented for TIMESTAMPs");
+                }
+
+                let expr = ScalarExpr::CallBinary {
+                    func: BinaryFunc::DateTrunc,
+                    expr1: Box::new(precision_field),
+                    expr2: Box::new(source_timestamp),
+                };
+
+                Ok(expr)
+            }
+
             _ => bail!("unsupported function: {}", ident),
         }
     }
