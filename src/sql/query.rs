@@ -1608,7 +1608,7 @@ fn plan_function<'a>(
                 let source_timestamp =
                     plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::Timestamp))?;
                 let typ = ecx.column_type(&source_timestamp);
-                if typ != ScalarType::Timestamp {
+                if typ.scalar_type != ScalarType::Timestamp {
                     bail!("date_trunc() is currently only implemented for TIMESTAMPs");
                 }
 
