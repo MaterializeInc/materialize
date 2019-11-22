@@ -34,11 +34,14 @@ Int | Float
 Int | Decimal
 Float | Float
 Float | Int
+Float | Decimal<sup>1</sup>
 Decimal | Decimal
 Decimal | Int
 Decimal | Float
 Date | Timestamp
 Date | TimestampTZ
+
+<sup>1</sup> Casting a `FLOAT` to a `DECIMAL` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
 ## Examples
 
