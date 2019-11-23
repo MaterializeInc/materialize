@@ -27,9 +27,9 @@ run() {
 # runv PROGRAM [ARGS...]
 #
 # Like run, but prints a more verbose informational message to stderr of the
-# form ">run PROGRAM ARGS...".
+# form "🚀$ PROGRAM ARGS...".
 runv() {
-    echo "run> $*" >&2
+    echo "🚀$ $*" >&2
     "$@"
 }
 
