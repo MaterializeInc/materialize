@@ -197,6 +197,14 @@ pub fn cast_decimal_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
 
+pub fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
+    Datum::from(val.ok())
+}
+
 pub fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
@@ -1198,6 +1206,7 @@ pub enum UnaryFunc {
     CastDecimalToInt64,
     CastDecimalToFloat32,
     CastDecimalToFloat64,
+    CastStringToFloat64,
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastTimestampToTimestampTz,
@@ -1251,6 +1260,7 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
             UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
             UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
+            UnaryFunc::CastStringToFloat64 => cast_string_to_float64,
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
             UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz,
             UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz,
@@ -1316,6 +1326,7 @@ impl UnaryFunc {
             CastDecimalToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
             CastDecimalToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
             CastDecimalToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
             CastDateToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(in_nullable),
             CastDateToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable),
             CastTimestampToTimestampTz => {
@@ -1378,6 +1389,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
+            UnaryFunc::CastStringToFloat64 => f.write_str("stringtof64"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
             UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),

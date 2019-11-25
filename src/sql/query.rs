@@ -2434,6 +2434,7 @@ where
         (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
         (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
         (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
+        (String, Float64) => expr.call_unary(CastStringToFloat64),
         (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
         (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
         (Decimal(_, s), Float32) => {
