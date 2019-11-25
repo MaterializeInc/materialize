@@ -2453,11 +2453,18 @@ where
         (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
         (Date, TimestampTz) => expr.call_unary(CastDateToTimestampTz),
         (Timestamp, TimestampTz) => expr.call_unary(CastTimestampToTimestampTz),
+        (Decimal(_, _), String) | (Bytes, String) => {
+            bail!(
+                "{} does not support casting from decimal or bytes to string",
+                name,
+            );
+        }
         (Null, _) => {
             // assert_eq!(expr, ScalarExpr::Literal(Datum::Null, ColumnType::new(ScalarType::Null)));
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
         (from, to) if from == to => expr,
+        (_, String) => expr.call_unary(CastDatumToString),
         (from, to) => {
             bail!(
                 "{} does not support casting from {:?} to {:?}",
