@@ -2884,9 +2884,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.41"
+version = "1.0.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f72eb2a68a7dc3f9a691bfda9305a1c017a6215e5a4545c258500d2099a37c2"
+checksum = "1a3351dcbc1f067e2c92ab7c3c1f288ad1a4cffc470b5aaddb4c2e0a3ae80043"
 dependencies = [
  "indexmap",
  "itoa",
@@ -3037,7 +3037,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
- "byteorder 0.5.3",
+ "byteorder 1.3.2",
  "chrono",
  "comm",
  "coord",
