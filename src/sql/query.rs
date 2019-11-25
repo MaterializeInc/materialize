@@ -38,7 +38,7 @@ use ::expr::Id;
 use catalog::{Catalog, CatalogEntry};
 use dataflow_types::RowSetFinishing;
 use ore::iter::{FallibleIteratorExt, IteratorExt};
-use repr::decimal::MAX_DECIMAL_PRECISION;
+use repr::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{ColumnName, ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
 use super::expr::{
@@ -2168,48 +2168,19 @@ fn plan_case<'a>(
 fn plan_literal<'a>(_: &Catalog, l: &'a Value) -> Result<ScalarExpr, failure::Error> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
-            let mut significand: i128 = 0;
-            let mut precision = 0;
-            let mut scale = 0;
-            let mut seen_decimal = false;
-            for c in s.chars() {
-                if c == '.' {
-                    if seen_decimal {
-                        bail!("more than one decimal point in numeric literal: {}", s)
-                    }
-                    seen_decimal = true;
-                    continue;
-                }
-
-                precision += 1;
-                if seen_decimal {
-                    scale += 1;
-                }
-
-                let digit = c
-                    .to_digit(10)
-                    .ok_or_else(|| format_err!("invalid digit in numeric literal: {}", s))?;
-                significand = significand
-                    .checked_mul(10)
-                    .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
-                significand = significand
-                    .checked_add(i128::from(digit))
-                    .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
-            }
-            if precision > MAX_DECIMAL_PRECISION {
-                bail!("numeric literal exceeds maximum precision: {}", s)
-            } else if scale == 0 {
-                match significand.try_into() {
+            let d: Decimal = s.parse()?;
+            if d.scale() == 0 {
+                match d.significand().try_into() {
                     Ok(n) => (Datum::Int64(n), ScalarType::Int64),
                     Err(_) => (
-                        Datum::from(significand),
-                        ScalarType::Decimal(precision as u8, scale as u8),
+                        Datum::from(d.significand()),
+                        ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
                     ),
                 }
             } else {
                 (
-                    Datum::from(significand),
-                    ScalarType::Decimal(precision as u8, scale as u8),
+                    Datum::from(d.significand()),
+                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
                 )
             }
         }

@@ -43,7 +43,7 @@
 //! [bigdecimal]: https://crates.io/crates/bigdecimal
 //! [fixed-point arithmetic]: https://en.wikipedia.org/wiki/Fixed-point_arithmetic
 
-use failure::bail;
+use failure::{bail, format_err};
 use serde::{Deserialize, Serialize};
 
 use std::cmp::PartialEq;
@@ -51,6 +51,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::Sum;
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub};
+use std::str::FromStr;
 
 /// The significand of a decimal number with up to 38 digits of precision.
 ///
@@ -277,10 +278,10 @@ impl Neg for Significand {
 
 /// A decimal number, which bundles a significand and its scale.
 ///
-/// At present, the only useful operation that `Decimal`s support is
-/// stringification. This support is thought to be complete, however; even
-/// esoteric format string options, like padding characters and width, are
-/// properly handled.
+/// At present, the only useful operations that `Decimal`s support are
+/// conversions to and from strings. This support is thought to be complete,
+/// however; even esoteric format string options, like padding characters and
+/// width, are properly handled.
 #[derive(Debug)]
 pub struct Decimal {
     significand: i128,
@@ -296,6 +297,45 @@ impl Decimal {
     /// Returns the scale of the decimal.
     pub fn scale(&self) -> u8 {
         self.scale
+    }
+}
+
+impl FromStr for Decimal {
+    type Err = failure::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut significand: i128 = 0;
+        let mut precision = 0;
+        let mut scale = 0;
+        let mut seen_decimal = false;
+        for c in s.chars() {
+            if c == '.' {
+                if seen_decimal {
+                    bail!("more than one decimal point in numeric literal: {}", s)
+                }
+                seen_decimal = true;
+                continue;
+            }
+
+            precision += 1;
+            if seen_decimal {
+                scale += 1;
+            }
+
+            let digit = c
+                .to_digit(10)
+                .ok_or_else(|| format_err!("invalid digit in numeric literal: {}", s))?;
+            significand = significand
+                .checked_mul(10)
+                .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+            significand = significand
+                .checked_add(i128::from(digit))
+                .ok_or_else(|| format_err!("numeric literal overflows i128: {}", s))?;
+        }
+        if precision > MAX_DECIMAL_PRECISION {
+            bail!("numeric literal exceeds maximum precision: {}", s);
+        }
+        Ok(Decimal { scale, significand })
     }
 }
 
