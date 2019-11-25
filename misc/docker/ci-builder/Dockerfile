@@ -7,7 +7,6 @@ FROM ubuntu:bionic
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    clang \
     cmake \
     curl \
     gcc \
@@ -15,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gnupg2 \
     jq \
-    libclang-dev \
     libssl-dev \
     libz-dev \
     openssh-client \
