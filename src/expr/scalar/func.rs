@@ -839,9 +839,7 @@ pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
                 source_timestamp.hour(),
                 source_timestamp.minute(),
                 source_timestamp.second(),
-                source_timestamp.nanosecond().to_string()[0..6]
-                    .parse()
-                    .unwrap(),
+                source_timestamp.nanosecond() / 1_000,
             );
             Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
         }
@@ -850,9 +848,7 @@ pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
                 source_timestamp.hour(),
                 source_timestamp.minute(),
                 source_timestamp.second(),
-                source_timestamp.nanosecond().to_string()[0..3]
-                    .parse()
-                    .unwrap(),
+                source_timestamp.nanosecond() / 1_000_000,
             );
             Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
         }
