@@ -19,7 +19,7 @@ interchange = { path = "../interchange" }
 ore = { path = "../ore" }
 repr = { path = "../repr" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
-unicase = "2.5.1"
+unicase = "2.6.0"
 url = "1.7.2"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 
