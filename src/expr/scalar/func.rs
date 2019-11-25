@@ -7,7 +7,7 @@ use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
 
-use chrono::{DateTime, Datelike, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
@@ -829,6 +829,116 @@ pub fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(s + ns)
 }
 
+pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let precision_field = a.unwrap_str();
+    let source_timestamp = b.unwrap_timestamp();
+
+    match precision_field {
+        "microseconds" => {
+            let time = NaiveTime::from_hms_micro(
+                source_timestamp.hour(),
+                source_timestamp.minute(),
+                source_timestamp.second(),
+                source_timestamp.nanosecond() / 1_000,
+            );
+            Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+        }
+        "milliseconds" => {
+            let time = NaiveTime::from_hms_milli(
+                source_timestamp.hour(),
+                source_timestamp.minute(),
+                source_timestamp.second(),
+                source_timestamp.nanosecond() / 1_000_000,
+            );
+            Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+        }
+        "second" => Datum::Timestamp(NaiveDateTime::new(
+            source_timestamp.date(),
+            NaiveTime::from_hms(
+                source_timestamp.hour(),
+                source_timestamp.minute(),
+                source_timestamp.second(),
+            ),
+        )),
+        "minute" => Datum::Timestamp(NaiveDateTime::new(
+            source_timestamp.date(),
+            NaiveTime::from_hms(source_timestamp.hour(), source_timestamp.minute(), 0),
+        )),
+        "hour" => Datum::Timestamp(NaiveDateTime::new(
+            source_timestamp.date(),
+            NaiveTime::from_hms(source_timestamp.hour(), 0, 0),
+        )),
+        "day" => Datum::Timestamp(NaiveDateTime::new(
+            source_timestamp.date(),
+            NaiveTime::from_hms(0, 0, 0),
+        )),
+        "week" => {
+            let num_days_from_monday = source_timestamp.date().weekday().num_days_from_monday();
+            Datum::Timestamp(NaiveDateTime::new(
+                NaiveDate::from_ymd(
+                    source_timestamp.year(),
+                    source_timestamp.month(),
+                    source_timestamp.day() - num_days_from_monday,
+                ),
+                NaiveTime::from_hms(0, 0, 0),
+            ))
+        }
+        "month" => Datum::Timestamp(NaiveDateTime::new(
+            NaiveDate::from_ymd(source_timestamp.year(), source_timestamp.month(), 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )),
+        "quarter" => {
+            let month = source_timestamp.month();
+            let quarter = if month <= 3 {
+                1
+            } else if month <= 6 {
+                4
+            } else if month <= 9 {
+                7
+            } else {
+                10
+            };
+
+            Datum::Timestamp(NaiveDateTime::new(
+                NaiveDate::from_ymd(source_timestamp.year(), quarter, 1),
+                NaiveTime::from_hms(0, 0, 0),
+            ))
+        }
+        "year" => Datum::Timestamp(NaiveDateTime::new(
+            NaiveDate::from_ymd(source_timestamp.year(), 1, 1),
+            NaiveTime::from_hms(0, 0, 0),
+        )),
+        "decade" => Datum::Timestamp(NaiveDateTime::new(
+            NaiveDate::from_ymd(
+                source_timestamp.year() - (source_timestamp.year() % 10),
+                1,
+                1,
+            ),
+            NaiveTime::from_hms(0, 0, 0),
+        )),
+        "century" => {
+            // Expects the first year of the century, meaning 2001 instead of 2000.
+            let century = source_timestamp.year() - ((source_timestamp.year() % 100) - 1);
+            Datum::Timestamp(NaiveDateTime::new(
+                NaiveDate::from_ymd(century, 1, 1),
+                NaiveTime::from_hms(0, 0, 0),
+            ))
+        }
+        "millennium" => {
+            // Expects the first year of the millennium, meaning 2001 instead of 2000.
+            let millennium = source_timestamp.year() - ((source_timestamp.year() % 1000) - 1);
+            Datum::Timestamp(NaiveDateTime::new(
+                NaiveDate::from_ymd(millennium, 1, 1),
+                NaiveTime::from_hms(0, 0, 0),
+            ))
+        }
+        _ => {
+            // TODO: return an error when we support that
+            Datum::Null
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum BinaryFunc {
     And,
@@ -870,6 +980,7 @@ pub enum BinaryFunc {
     Gte,
     MatchRegex,
     ToChar,
+    DateTrunc,
 }
 
 impl BinaryFunc {
@@ -914,6 +1025,7 @@ impl BinaryFunc {
             BinaryFunc::Gte => gte,
             BinaryFunc::MatchRegex => match_regex,
             BinaryFunc::ToChar => to_char,
+            BinaryFunc::DateTrunc => date_trunc,
         }
     }
 
@@ -995,6 +1107,8 @@ impl BinaryFunc {
             | SubTimestampInterval
             | AddTimestampTzInterval
             | SubTimestampTzInterval => input1_type,
+
+            DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(false),
         }
     }
 }
@@ -1041,6 +1155,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gte => f.write_str(">="),
             BinaryFunc::MatchRegex => f.write_str("~"),
             BinaryFunc::ToChar => f.write_str("to_char"),
+            BinaryFunc::DateTrunc => f.write_str("date_trunc"),
         }
     }
 }

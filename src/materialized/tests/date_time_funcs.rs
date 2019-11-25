@@ -3,12 +3,12 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 
 mod util;
 
 #[test]
-fn test_now() -> util::TestResult {
+fn test_current_timestamp_and_now() -> util::TestResult {
     ore::log::init();
 
     let data_dir = None;
