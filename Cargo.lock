@@ -1382,7 +1382,7 @@ dependencies = [
 [[package]]
 name = "libfuzzer-sys"
 version = "0.1.0"
-source = "git+https://github.com/rust-fuzz/libfuzzer-sys.git#4ad88ec54fa2e7a0c877b6477cc86ea0de14a90d"
+source = "git+https://github.com/rust-fuzz/libfuzzer-sys.git#2542ae41f2ac52a6baa58417a8ad8903fef231f9"
 dependencies = [
  "arbitrary",
  "cc",
