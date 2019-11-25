@@ -32,7 +32,7 @@ This repo contains Materialize's user documentation and documentation site at
 Materialize's developers can find docs at [doc/developer](doc/developer),
 including:
 
-- [Developer guide](doc/deverloper/develop.md)
+- [Developer guide](doc/developer/develop.md)
 - [Demo instructions](doc/developer/demo.md)
 
 API documentation is hosted at <https://mtrlz.dev/api/>.
