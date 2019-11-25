@@ -3065,7 +3065,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#f5812b4b7ebe838043fc0c3aebd5a6fad7aa1098"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#2eedfb235ada3f0557666f2781088391b2fa5db1"
 dependencies = [
  "log 0.4.8",
 ]
@@ -3316,8 +3316,8 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#db7efb8e63dcfa184262ce0cffabad3c41eed0c0"
+version = "0.11.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#2b2a777fbf3d3981c32f4d474bb3c9d890d38b3f"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3330,13 +3330,13 @@ dependencies = [
 
 [[package]]
 name = "timely_bytes"
-version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#db7efb8e63dcfa184262ce0cffabad3c41eed0c0"
+version = "0.11.0"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#2b2a777fbf3d3981c32f4d474bb3c9d890d38b3f"
 
 [[package]]
 name = "timely_communication"
-version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#db7efb8e63dcfa184262ce0cffabad3c41eed0c0"
+version = "0.11.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#2b2a777fbf3d3981c32f4d474bb3c9d890d38b3f"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3350,8 +3350,8 @@ dependencies = [
 
 [[package]]
 name = "timely_logging"
-version = "0.10.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#db7efb8e63dcfa184262ce0cffabad3c41eed0c0"
+version = "0.11.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#2b2a777fbf3d3981c32f4d474bb3c9d890d38b3f"
 
 [[package]]
 name = "timely_sort"
