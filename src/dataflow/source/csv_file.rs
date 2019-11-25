@@ -34,17 +34,18 @@ where
             let task = tokio::fs::File::open(path)
                 .map(|f| FramedRead::new(f, LinesCodec::new()))
                 .and_then(move |lines| {
-                    lines.map(|line| FileReaderMessage::Line(line))
+                    lines
+                        .map(|line| FileReaderMessage::Line(line))
                         .chain(futures::stream::once(Ok(FileReaderMessage::Eof)))
                         .for_each(move |msg| {
-                                tx.send(msg)
-                                    .expect("Internal error - CSV line receiver hung up.");
-                                activator
-                                    .lock()
-                                    .expect("Internal error (csv) - lock poisoned.")
-                                    .activate()
-                                    .unwrap();
-                                Ok(())
+                            tx.send(msg)
+                                .expect("Internal error - CSV line receiver hung up.");
+                            activator
+                                .lock()
+                                .expect("Internal error (csv) - lock poisoned.")
+                                .activate()
+                                .unwrap();
+                            Ok(())
                         })
                 })
                 .map_err(|e| eprintln!("Error reading file: {}", e));

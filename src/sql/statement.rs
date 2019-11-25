@@ -35,6 +35,7 @@ use relationexpr::Id;
 use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
 use crate::names;
+use std::path::PathBuf;
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -51,11 +52,6 @@ pub fn describe_statement(
         | Statement::Rollback { .. }
         | Statement::Commit { .. }
         | Statement::Tail { .. } => (None, vec![]),
-
-        Statement::ReadCsv { .. } => (
-            Some(RelationDesc::empty().add_column("Source", ScalarType::String)),
-            vec![],
-        ),
 
         Statement::CreateSources { .. } => (
             Some(RelationDesc::empty().add_column("Topic", ScalarType::String)),
@@ -164,8 +160,7 @@ pub fn handle_statement(
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::CreateSources { .. }
-        | Statement::CreateIndex { .. }
-        | Statement::ReadCsv { .. } => match portal_name {
+        | Statement::CreateIndex { .. } => match portal_name {
             Some(portal_name) => {
                 handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
             }
@@ -441,13 +436,51 @@ fn handle_create_dataflow(
             schema,
             with_options,
         } => {
-            if !with_options.is_empty() {
-                bail!("WITH options are not yet supported");
-            }
             let name: QualName = (&*name).try_into()?;
-            let (addr, topic) = parse_kafka_topic_url(url)?;
-            let source = build_source(schema, addr, topic)?;
-            Ok(Plan::CreateSource(name, source))
+            let source_url = parse_source_url(url)?;
+            match source_url {
+                SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
+                    if !with_options.is_empty() {
+                        bail!("WITH options on Kafka sources are not yet supported");
+                    }
+                    if let Some(topic) = topic {
+                        if let Some(schema) = schema {
+                            let source = build_kafka_source(schema, addr, topic)?;
+                            Ok(Plan::CreateSource(name, source))
+                        } else {
+                            bail!("Kafka sources require a schema.");
+                        }
+                    } else {
+                        bail!("source URL missing topic path: {}", url);
+                    }
+                }
+                SourceUrl::CsvPath(path) => {
+                    if schema.is_some() {
+                        bail!("csv file sources do not support schemas.");
+                    }
+                    if with_options.len() != 1 || with_options[0].name.value != "columns" {
+                        bail!("csv file sources must have exactly one WITH option: `columns`");
+                    }
+                    let n_cols = &with_options[0].value;
+                    let n_cols: usize = match n_cols {
+                        Value::Number(s) => s.parse()?,
+                        _ => bail!("`columns` must be a number."),
+                    };
+                    let name = name.try_into()?;
+                    let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                        .take(n_cols)
+                        .collect();
+                    let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
+                    let source = Source {
+                        connector: SourceConnector::File(FileSourceConnector {
+                            path: path.clone().try_into()?,
+                            format: FileFormat::Csv(n_cols),
+                        }),
+                        desc: RelationDesc::new(RelationType::new(cols), names),
+                    };
+                    Ok(Plan::CreateSource(name, source))
+                }
+            }
         }
         Statement::CreateSources {
             like,
@@ -483,7 +516,8 @@ fn handle_create_dataflow(
                     }
                 })
                 .filter(|(_tn, sn)| catalog.try_get(sn).is_none());
-            let (addr, topic) = parse_kafka_url(url)?;
+            let url: Url = url.parse()?;
+            let (addr, topic) = parse_kafka_url(&url)?;
             if let Some(s) = topic {
                 bail!(
                     "CREATE SOURCES statement should not take a topic path: {}",
@@ -494,7 +528,7 @@ fn handle_create_dataflow(
                 .map(|(topic_name, sql_name)| {
                     Ok((
                         sql_name,
-                        build_source(
+                        build_kafka_source(
                             &SourceSchema::Registry(schema_registry.to_owned()),
                             addr,
                             topic_name.to_owned(),
@@ -549,21 +583,6 @@ fn handle_create_dataflow(
                     .collect(),
             };
             Ok(Plan::CreateIndex(name, index))
-        }
-        Statement::ReadCsv { name, path, n_cols } => {
-            let name = name.try_into()?;
-            let cols = iter::repeat(ColumnType::new(ScalarType::String))
-                .take(*n_cols)
-                .collect();
-            let names = (1..=*n_cols).map(|i| Some(format!("column{}", i)));
-            let source = Source {
-                connector: SourceConnector::File(FileSourceConnector {
-                    path: path.clone().try_into()?,
-                    format: FileFormat::Csv(*n_cols),
-                }),
-                desc: RelationDesc::new(RelationType::new(cols), names),
-            };
-            Ok(Plan::CreateSources(vec![(name, source)]))
         }
         other => bail!("Unsupported statement: {:?}", other),
     }
@@ -718,7 +737,7 @@ fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data
     };
 }
 
-fn build_source(
+fn build_kafka_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
     topic: String,
@@ -767,8 +786,40 @@ fn build_source(
     })
 }
 
-fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::Error> {
+struct KafkaUrl {
+    addr: SocketAddr,
+    topic: Option<String>,
+}
+
+enum SourceUrl {
+    Kafka(KafkaUrl),
+    CsvPath(PathBuf),
+}
+
+fn parse_source_url(url: &str) -> Result<SourceUrl, failure::Error> {
     let url: Url = url.parse()?;
+    let url = match url.scheme().to_lowercase().as_str() {
+        "kafka" => {
+            let (addr, topic) = parse_kafka_url(&url)?;
+            SourceUrl::Kafka(KafkaUrl { addr, topic })
+        }
+        "file+csv" => {
+            if url.has_host() && !url.host_str().unwrap().is_empty() {
+                bail!(
+                    "No hostname allowed in file URL: {}. Found: {}",
+                    url,
+                    url.host_str().unwrap()
+                );
+            }
+            let pb: PathBuf = url.path().parse()?;
+            SourceUrl::CsvPath(pb)
+        }
+        bad => bail!("Unrecognized source URL schema: {}", bad),
+    };
+    Ok(url)
+}
+
+fn parse_kafka_url(url: &Url) -> Result<(SocketAddr, Option<String>), failure::Error> {
     if url.scheme() != "kafka" {
         bail!("only kafka:// sources are supported: {}", url);
     } else if !url.has_host() {
@@ -800,11 +851,12 @@ fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::E
 }
 
 fn parse_kafka_topic_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
-    let (addr, topic) = parse_kafka_url(url)?;
+    let url: Url = url.parse()?;
+    let (addr, topic) = parse_kafka_url(&url)?;
     if let Some(topic) = topic {
         Ok((addr, topic))
     } else {
-        bail!("source URL missing topic path: {}")
+        bail!("source URL missing topic path: {}", url)
     }
 }
 
