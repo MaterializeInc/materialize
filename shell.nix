@@ -16,8 +16,6 @@ in pkgs.stdenv.mkDerivation rec {
   buildInputs = with pkgs; [
     openssl
     zlib.static
-    clang
-    llvmPackages.libclang
     cmake
     pkgconfig
     rustup
@@ -31,7 +29,6 @@ in pkgs.stdenv.mkDerivation rec {
     darwin.apple_sdk.frameworks.CoreServices
     ] else []);
   shellHook = ''
-    export LIBCLANG_PATH=${pkgs.llvmPackages.clang-unwrapped.lib}/lib
     # TODO(jamii) using $(pwd) is fragile
     export PATH=$(pwd)/bin/:$PATH
     ulimit -m $((8*1024*1024))
