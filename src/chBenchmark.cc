@@ -490,10 +490,6 @@ static int run(int argc, char* argv[]) {
         errx(1, "analytic threads cannot be negative");
     if (transactionalThreads < 0)
         errx(1, "transactional threads cannot be negative");
-    if (analyticThreads == 0 && transactionalThreads == 0)
-        errx(
-            1,
-            "at least one analytic or transactional thread must be configured");
     if (warmupSeconds < 0)
         errx(1, "warmup seconds cannot be negative");
     if (runSeconds < 0)
