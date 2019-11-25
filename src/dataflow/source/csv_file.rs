@@ -58,11 +58,6 @@ where
             while let Ok(msg) = rx.try_recv() {
                 match msg {
                     FileReaderMessage::Line(s) => output.session(cap.as_ref().unwrap()).give(s),
-                    // The below should be:
-                    // FileReaderMessage::EOF => cap = None
-                    // but that causes peeks to hang forever,
-                    // presumably due to other bugs.
-                    //FileReaderMessage::Eof => cap.as_mut().unwrap().downgrade(&std::u64::MAX),
                     FileReaderMessage::Eof => cap = None,
                 }
             }
