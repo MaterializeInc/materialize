@@ -72,19 +72,17 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                         (stream, None)
                     }
                     SourceConnector::File(c) => match c.format {
-                        FileFormat::CSV(n_cols) => {
-                            let region = &*region;
-                            (
-                                source::csv(
-                                    region,
-                                    format!("kafka-{}", src_id),
-                                    c.path,
-                                    n_cols,
-                                    executor.clone(),
-                                    worker_index == 0,
-                                ),
-                                None,
-                            )
+                        FileFormat::Csv(n_cols) => {
+                            let read_file = worker_index == 0;
+                            let stream = source::csv(
+                                region,
+                                format!("csv-{}", src_id),
+                                c.path,
+                                n_cols,
+                                executor.clone(),
+                                read_file,
+                            );
+                            (stream, None)
                         }
                     },
                 };

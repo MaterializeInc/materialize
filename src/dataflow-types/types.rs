@@ -227,7 +227,7 @@ pub struct FileSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum FileFormat {
-    CSV(usize),
+    Csv(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

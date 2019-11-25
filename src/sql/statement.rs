@@ -368,7 +368,7 @@ fn handle_show_create_source(
                 }
                 SourceConnector::File(c) => {
                     let format_str = match c.format {
-                        FileFormat::CSV(_) => "csv",
+                        FileFormat::Csv(_) => "csv",
                     };
                     format!("{}+file://{}", format_str, c.path.to_string_lossy())
                 }
@@ -559,7 +559,7 @@ fn handle_create_dataflow(
             let source = Source {
                 connector: SourceConnector::File(FileSourceConnector {
                     path: path.clone().try_into()?,
-                    format: FileFormat::CSV(*n_cols),
+                    format: FileFormat::Csv(*n_cols),
                 }),
                 desc: RelationDesc::new(RelationType::new(cols), names),
             };

@@ -12,7 +12,7 @@ use tokio::codec::{FramedRead, LinesCodec};
 
 enum FileReaderMessage {
     Line(String),
-    EOF,
+    Eof,
 }
 
 pub fn csv<G, E>(
@@ -31,35 +31,26 @@ where
         let (tx, rx) = std::sync::mpsc::channel::<FileReaderMessage>();
         if read_file {
             let activator = Arc::new(Mutex::new(region.sync_activator_for(&info.address[..])));
-            let ac2 = activator.clone();
-            let tx2 = tx.clone();
             let task = tokio::fs::File::open(path)
                 .map(|f| FramedRead::new(f, LinesCodec::new()))
                 .and_then(move |lines| {
-                    let tx2 = tx2.clone();
-                    lines.for_each(move |line| {
-                        tx2.send(FileReaderMessage::Line(line))
-                            .expect("Internal error - CSV line receiver hung up.");
-                        activator
-                            .lock()
-                            .expect("Internal error (csv) - lock poisoned.")
-                            .activate()
-                            .unwrap();
-                        Ok(())
-                    })
+                    lines.map(|line| FileReaderMessage::Line(line))
+                        .chain(futures::stream::once(Ok(FileReaderMessage::Eof)))
+                        .for_each(move |msg| {
+                                tx.send(msg)
+                                    .expect("Internal error - CSV line receiver hung up.");
+                                activator
+                                    .lock()
+                                    .expect("Internal error (csv) - lock poisoned.")
+                                    .activate()
+                                    .unwrap();
+                                Ok(())
+                        })
                 })
-                .map_err(|e| eprintln!("Error reading file: {}", e))
-                .and_then(move |_| {
-                    tx.send(FileReaderMessage::EOF).unwrap();
-                    ac2.lock()
-                        .expect("Internal error (csv) - lock poisoned.")
-                        .activate()
-                        .unwrap();
-                    Ok(())
-                });
+                .map_err(|e| eprintln!("Error reading file: {}", e));
             executor.spawn(Box::new(task)).unwrap();
         } else {
-            tx.send(FileReaderMessage::EOF)
+            tx.send(FileReaderMessage::Eof)
                 .expect("Internal error - CSV line receiver hung up.");
         }
         let mut cap = Some(cap);
@@ -71,7 +62,8 @@ where
                     // FileReaderMessage::EOF => cap = None
                     // but that causes peeks to hang forever,
                     // presumably due to other bugs.
-                    FileReaderMessage::EOF => cap.as_mut().unwrap().downgrade(&std::u64::MAX),
+                    //FileReaderMessage::Eof => cap.as_mut().unwrap().downgrade(&std::u64::MAX),
+                    FileReaderMessage::Eof => cap = None,
                 }
             }
         }
@@ -85,13 +77,13 @@ where
                     let mut session = output.session(&cap);
                     // TODO: There is extra work going on here:
                     // LinesCodec is already splitting our input into lines,
-                    // but the CvsReader *itself* searches for line breaks.
+                    // but the CsvReader *itself* searches for line breaks.
                     // This is mainly an aesthetic/performance-golfing
                     // issue as I doubt it will ever be a bottleneck.
                     for line in &*lines {
                         let mut csv_reader = csv::ReaderBuilder::new()
                             .has_headers(false)
-                            .from_reader(stringreader::StringReader::new(line));
+                            .from_reader(line.as_bytes());
                         for result in csv_reader.records() {
                             let record = result.unwrap();
                             if record.len() != n_cols {
