@@ -21,7 +21,7 @@ dataflow-types = { path = "../dataflow-types" }
 failure = "0.1.6"
 futures = "0.1"
 getopts = "0.2"
-itertools = "0.8.1"
+itertools = "0.8.2"
 lazy_static = "1"
 md5 = "*"
 ordered-float = "*"

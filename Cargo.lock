@@ -1378,9 +1378,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87fa75c9dea7b07be3138c49abbb83fd4bea199b5cdc76f9804458edc5da0d6e"
+checksum = "f56a2d0bc861f9165be4eb3442afd3c236d8a98afd426f65d92324ae1091a484"
 dependencies = [
  "either",
 ]
@@ -3037,7 +3037,7 @@ dependencies = [
 name = "sqllogictest"
 version = "0.0.1"
 dependencies = [
- "byteorder 0.5.3",
+ "byteorder 1.3.2",
  "chrono",
  "comm",
  "coord",
@@ -3065,7 +3065,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#f5812b4b7ebe838043fc0c3aebd5a6fad7aa1098"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#2eedfb235ada3f0557666f2781088391b2fa5db1"
 dependencies = [
  "log 0.4.8",
 ]
