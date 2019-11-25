@@ -1605,6 +1605,11 @@ fn plan_function<'a>(
 
                 let precision_field =
                     plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::String))?;
+                let typ = ecx.column_type(&precision_field);
+                if typ.scalar_type != ScalarType::String {
+                    bail!("date_trunc() can only be formatted with strings");
+                }
+
                 let source_timestamp =
                     plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::Timestamp))?;
                 let typ = ecx.column_type(&source_timestamp);

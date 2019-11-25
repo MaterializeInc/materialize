@@ -1,0 +1,77 @@
+# Copyright 2019 Materialize, Inc. All rights reserved.
+#
+# This file is part of Materialize. Materialize may not be used or
+# distributed without the express permission of Materialize, Inc.
+
+mode cockroach
+
+# Test date_trunc()
+
+# TODO: PostgreSQL truncates trailing zeros from seconds, we do not.
+# This test should return:  2019-11-26 15:56:46.24115
+query T
+SELECT date_trunc('microseconds', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-26 15:56:46.241150
+
+query T
+SELECT date_trunc('milliseconds', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-26 15:56:46.241
+
+query T
+SELECT date_trunc('second', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-26 15:56:46
+
+query T
+SELECT date_trunc('minute', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-26 15:56:00
+
+query T
+SELECT date_trunc('hour', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-26 15:00:00
+
+query T
+SELECT date_trunc('day', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-26 00:00:00
+
+query T
+SELECT date_trunc('week', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-25 00:00:00
+
+query T
+SELECT date_trunc('month', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-11-01 00:00:00
+
+query T
+SELECT date_trunc('quarter', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-10-01 00:00:00
+
+query T
+SELECT date_trunc('year', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2019-01-01 00:00:00
+
+query T
+SELECT date_trunc('decade', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2010-01-01 00:00:00
+
+# Expects the first year of the century, meaning 2001 instead of 2000.
+query T
+SELECT date_trunc('century', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2001-01-01 00:00:00
+
+# Expects the first year of the millennium, meaning 2001 instead of 2000.
+query T
+SELECT date_trunc('millennium', TIMESTAMP '2019-11-26 15:56:46.241150')
+----
+2001-01-01 00:00:00

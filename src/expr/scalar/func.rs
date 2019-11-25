@@ -834,16 +834,28 @@ pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let source_timestamp = b.unwrap_timestamp();
 
     match precision_field {
-        "microseconds" => Datum::Timestamp(source_timestamp),
-        "milliseconds" => Datum::Timestamp(NaiveDateTime::new(
-            source_timestamp.date(),
-            NaiveTime::from_hms_milli(
+        "microseconds" => {
+            let time = NaiveTime::from_hms_micro(
                 source_timestamp.hour(),
                 source_timestamp.minute(),
                 source_timestamp.second(),
-                source_timestamp.timestamp_millis() as u32,
-            ),
-        )),
+                source_timestamp.nanosecond().to_string()[0..6]
+                    .parse()
+                    .unwrap(),
+            );
+            Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+        }
+        "milliseconds" => {
+            let time = NaiveTime::from_hms_milli(
+                source_timestamp.hour(),
+                source_timestamp.minute(),
+                source_timestamp.second(),
+                source_timestamp.nanosecond().to_string()[0..3]
+                    .parse()
+                    .unwrap(),
+            );
+            Datum::Timestamp(NaiveDateTime::new(source_timestamp.date(), time))
+        }
         "second" => Datum::Timestamp(NaiveDateTime::new(
             source_timestamp.date(),
             NaiveTime::from_hms(
@@ -884,11 +896,11 @@ pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             let quarter = if month <= 3 {
                 1
             } else if month <= 6 {
-                2
-            } else if month <= 9 {
-                3
-            } else {
                 4
+            } else if month <= 9 {
+                7
+            } else {
+                10
             };
 
             Datum::Timestamp(NaiveDateTime::new(
@@ -924,7 +936,10 @@ pub fn date_trunc<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
                 NaiveTime::from_hms(0, 0, 0),
             ))
         }
-        _ => Datum::Null,
+        _ => {
+            // TODO: return an error when we support that
+            Datum::Null
+        }
     }
 }
 
