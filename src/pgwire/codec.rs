@@ -640,6 +640,10 @@ impl RawParameterBytes {
         let as_str = str::from_utf8(bytes)?;
         Ok(match typ {
             ScalarType::Null => Datum::Null,
+            ScalarType::Bool => match as_str {
+                "0" => Datum::False,
+                _ => Datum::True, // Note: anything non-zero is true!
+            },
             ScalarType::Int32 => Datum::Int32(as_str.parse::<i32>().unwrap()),
             ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>().unwrap()),
             ScalarType::Float32 => {
@@ -651,7 +655,7 @@ impl RawParameterBytes {
             ScalarType::Bytes => Datum::Bytes(as_str.as_bytes()),
             ScalarType::String => Datum::cow_from_str(as_str),
             _ => {
-                // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
+                // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(
                     "Generating datum from text not implemented for ScalarType: {:#?}",
                     typ
