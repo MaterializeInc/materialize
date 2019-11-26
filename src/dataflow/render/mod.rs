@@ -18,6 +18,7 @@ use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use timely::worker::Worker as TimelyWorker;
+use tokio;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, RelationExpr};
@@ -32,13 +33,14 @@ use crate::server::LocalInput;
 mod context;
 use context::{ArrangementFlavor, Context};
 
-pub(crate) fn build_dataflow<A: Allocate>(
+pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
     dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: &mut HashMap<GlobalId, LocalInput>,
     logger: &mut Option<Logger>,
+    executor: &mut E,
 ) {
     let worker_index = worker.index();
     let worker_peers = worker.peers();
@@ -69,6 +71,20 @@ pub(crate) fn build_dataflow<A: Allocate>(
                         }
                         (stream, None)
                     }
+                    SourceConnector::File(c) => match c.format {
+                        FileFormat::Csv(n_cols) => {
+                            let read_file = worker_index == 0;
+                            let stream = source::csv(
+                                region,
+                                format!("csv-{}", src_id),
+                                c.path,
+                                n_cols,
+                                executor.clone(),
+                                read_file,
+                            );
+                            (stream, None)
+                        }
+                    },
                 };
 
                 // Introduce the stream by name, as an unarranged collection.

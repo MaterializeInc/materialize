@@ -175,14 +175,16 @@ where
             sink_tokens: HashMap::new(),
             local_inputs: HashMap::new(),
             reported_frontiers: HashMap::new(),
+            executor: executor.clone(),
         }
         .run()
     })
 }
 
-struct Worker<'w, A>
+struct Worker<'w, A, E>
 where
     A: Allocate,
+    E: tokio::executor::Executor,
 {
     inner: &'w mut TimelyWorker<A>,
     pending_peeks: Vec<PendingPeek>,
@@ -194,11 +196,13 @@ where
     sink_tokens: HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: HashMap<GlobalId, LocalInput>,
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    executor: E,
 }
 
-impl<'w, A> Worker<'w, A>
+impl<'w, A, E> Worker<'w, A, E>
 where
     A: Allocate + 'w,
+    E: tokio::executor::Executor + Clone,
 {
     /// Initializes timely dataflow logging and publishes as a view.
     ///
@@ -382,6 +386,7 @@ where
                         &mut self.sink_tokens,
                         &mut self.local_inputs,
                         &mut self.materialized_logger,
+                        &mut self.executor,
                     );
                 }
             }

@@ -683,6 +683,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "comm",
+ "csv",
  "dataflow-types",
  "differential-dataflow",
  "expr",
@@ -2950,7 +2951,7 @@ dependencies = [
 [[package]]
 name = "sqlparser"
 version = "0.4.1-alpha.0"
-source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#2eedfb235ada3f0557666f2781088391b2fa5db1"
+source = "git+ssh://git@github.com/MaterializeInc/sqlparser.git#ea9e81c985582803fe41c5fe2503f8fe570eb416"
 dependencies = [
  "log",
 ]

@@ -18,23 +18,24 @@ use sqlparser::ast::{
 };
 use url::Url;
 
+use crate::expr as sqlexpr;
+use crate::expr::like::build_like_regex_from_string;
+use crate::query;
+use crate::session::{Portal, Session};
+use crate::Plan;
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
-    Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen, RowSetFinishing, Sink,
-    SinkConnector, Source, SourceConnector, View,
+    FileFormat, FileSourceConnector, Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
+    RowSetFinishing, Sink, SinkConnector, Source, SourceConnector, View,
 };
 use expr as relationexpr;
 use interchange::avro;
 use ore::option::OptionExt;
 use relationexpr::Id;
-use repr::{ColumnType, Datum, QualName, RelationDesc, Row, ScalarType};
+use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
-use crate::expr as sqlexpr;
-use crate::expr::like::build_like_regex_from_string;
 use crate::names;
-use crate::query;
-use crate::session::{Portal, Session};
-use crate::Plan;
+use std::path::PathBuf;
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -360,11 +361,14 @@ fn handle_show_create_source(
                 SourceConnector::Kafka(KafkaSourceConnector { addr, topic, .. }) => {
                     format!("kafka://{}/{}", addr, topic)
                 }
+                SourceConnector::File(c) => {
+                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                    format!("file://{}", c.path.to_string_lossy())
+                }
             }
         } else {
             bail!("{} is not a source", name);
         };
-
     Ok(Plan::SendRows(vec![Row::pack(&[
         Datum::cow_from_str(&name.to_string()),
         Datum::cow_from_str(&source_url),
@@ -430,13 +434,78 @@ fn handle_create_dataflow(
             schema,
             with_options,
         } => {
-            if !with_options.is_empty() {
-                bail!("WITH options are not yet supported");
-            }
             let name: QualName = (&*name).try_into()?;
-            let (addr, topic) = parse_kafka_topic_url(url)?;
-            let source = build_source(schema, addr, topic)?;
-            Ok(Plan::CreateSource(name, source))
+            let source_url = parse_source_url(url)?;
+            match source_url {
+                SourceUrl::Kafka(KafkaUrl { addr, topic }) => {
+                    if !with_options.is_empty() {
+                        bail!("WITH options on Kafka sources are not yet supported");
+                    }
+                    if let Some(topic) = topic {
+                        if let Some(schema) = schema {
+                            let source = build_kafka_source(schema, addr, topic)?;
+                            Ok(Plan::CreateSource(name, source))
+                        } else {
+                            bail!("Kafka sources require a schema.");
+                        }
+                    } else {
+                        bail!("source URL missing topic path: {}", url);
+                    }
+                }
+                SourceUrl::Path(path) => {
+                    if schema.is_some() {
+                        bail!("csv file sources do not support schemas.");
+                    }
+                    let mut format = None;
+                    let mut n_cols: Option<usize> = None;
+                    for with_op in with_options {
+                        match with_op.name.value.as_str() {
+                            "columns" => {
+                                n_cols = Some(match &with_op.value {
+                                    Value::Number(s) => s.parse()?,
+                                    _ => bail!("`columns` must be a number."),
+                                });
+                            }
+                            "format" => {
+                                format = Some(match &with_op.value {
+                                    Value::SingleQuotedString(s) => match s.as_ref() {
+                                        "csv" => SourceFileFormat::Csv,
+                                        _ => bail!("Unrecognized file format: {}", s),
+                                    },
+                                    _ => bail!("File format must be a string, e.g. 'csv'."),
+                                });
+                            }
+                            _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
+                        }
+                    }
+
+                    let format = match format {
+                        Some(f) => f,
+                        None => bail!("File source requires a `format` WITH option."),
+                    };
+                    match format {
+                        SourceFileFormat::Csv => {
+                            let n_cols = match n_cols {
+                                Some(n) => n,
+                                None => bail!("Csv source requires a `columns` WITH option."),
+                            };
+                            let name = name.try_into()?;
+                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                                .take(n_cols)
+                                .collect();
+                            let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
+                            let source = Source {
+                                connector: SourceConnector::File(FileSourceConnector {
+                                    path: path.clone().try_into()?,
+                                    format: FileFormat::Csv(n_cols),
+                                }),
+                                desc: RelationDesc::new(RelationType::new(cols), names),
+                            };
+                            Ok(Plan::CreateSource(name, source))
+                        }
+                    }
+                }
+            }
         }
         Statement::CreateSources {
             like,
@@ -472,7 +541,8 @@ fn handle_create_dataflow(
                     }
                 })
                 .filter(|(_tn, sn)| catalog.try_get(sn).is_none());
-            let (addr, topic) = parse_kafka_url(url)?;
+            let url: Url = url.parse()?;
+            let (addr, topic) = parse_kafka_url(&url)?;
             if let Some(s) = topic {
                 bail!(
                     "CREATE SOURCES statement should not take a topic path: {}",
@@ -483,7 +553,7 @@ fn handle_create_dataflow(
                 .map(|(topic_name, sql_name)| {
                     Ok((
                         sql_name,
-                        build_source(
+                        build_kafka_source(
                             &SourceSchema::Registry(schema_registry.to_owned()),
                             addr,
                             topic_name.to_owned(),
@@ -692,7 +762,7 @@ fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data
     };
 }
 
-fn build_source(
+fn build_kafka_source(
     schema: &SourceSchema,
     kafka_addr: SocketAddr,
     topic: String,
@@ -741,8 +811,44 @@ fn build_source(
     })
 }
 
-fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::Error> {
+enum SourceFileFormat {
+    Csv,
+}
+
+struct KafkaUrl {
+    addr: SocketAddr,
+    topic: Option<String>,
+}
+
+enum SourceUrl {
+    Kafka(KafkaUrl),
+    Path(PathBuf),
+}
+
+fn parse_source_url(url: &str) -> Result<SourceUrl, failure::Error> {
     let url: Url = url.parse()?;
+    let url = match url.scheme().to_lowercase().as_str() {
+        "kafka" => {
+            let (addr, topic) = parse_kafka_url(&url)?;
+            SourceUrl::Kafka(KafkaUrl { addr, topic })
+        }
+        "file" => {
+            if url.has_host() {
+                bail!(
+                    "No hostname allowed in file URL: {}. Found: {}",
+                    url,
+                    url.host_str().unwrap()
+                );
+            }
+            let pb: PathBuf = url.path().parse()?;
+            SourceUrl::Path(pb)
+        }
+        bad => bail!("Unrecognized source URL schema: {}", bad),
+    };
+    Ok(url)
+}
+
+fn parse_kafka_url(url: &Url) -> Result<(SocketAddr, Option<String>), failure::Error> {
     if url.scheme() != "kafka" {
         bail!("only kafka:// sources are supported: {}", url);
     } else if !url.has_host() {
@@ -774,11 +880,12 @@ fn parse_kafka_url(url: &str) -> Result<(SocketAddr, Option<String>), failure::E
 }
 
 fn parse_kafka_topic_url(url: &str) -> Result<(SocketAddr, String), failure::Error> {
-    let (addr, topic) = parse_kafka_url(url)?;
+    let url: Url = url.parse()?;
+    let (addr, topic) = parse_kafka_url(&url)?;
     if let Some(topic) = topic {
         Ok((addr, topic))
     } else {
-        bail!("source URL missing topic path: {}")
+        bail!("source URL missing topic path: {}", url)
     }
 }
 
