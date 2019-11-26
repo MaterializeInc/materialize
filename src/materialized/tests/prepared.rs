@@ -44,9 +44,6 @@ fn test_partial_read() -> util::TestResult {
         if simpler.len() >= expected_rows {
             break;
         }
-        if i > 8 {
-            println!("WAT: got zero dataflows after 8 tries");
-        }
         std::thread::sleep(std::time::Duration::from_millis(20));
         simpler = conn.query(query, &[])?;
     }
