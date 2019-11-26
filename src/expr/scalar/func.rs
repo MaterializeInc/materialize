@@ -160,6 +160,25 @@ pub fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
+pub fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    let f = a.unwrap_float32();
+    let scale = b.unwrap_int32();
+
+    // If errors were returnable, this would be:
+    // "ERROR:  numeric field overflow
+    // DETAIL:  A field with precision {},
+    //   scale {} must round to an absolute value less than 10^{}.",
+    //  MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale
+    if f > 10_f32.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
+        return Datum::Null;
+    }
+
+    Datum::from((f * 10_f32.powi(scale)) as i128)
+}
+
 pub fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
@@ -167,6 +186,24 @@ pub fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float64() as i64)
+}
+pub fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
+    let f = a.unwrap_float64();
+    let scale = b.unwrap_int32();
+
+    // If errors were returnable, this would be:
+    // "ERROR:  numeric field overflow
+    // DETAIL:  A field with precision {},
+    //   scale {} must round to an absolute value less than 10^{}.",
+    //  MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale
+    if f > 10_f64.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
+        return Datum::Null;
+    }
+
+    Datum::from((f * 10_f64.powi(scale)) as i128)
 }
 
 pub fn cast_datum_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1011,6 +1048,8 @@ pub enum BinaryFunc {
     MatchRegex,
     ToChar,
     DateTrunc,
+    CastFloat32ToDecimal,
+    CastFloat64ToDecimal,
 }
 
 impl BinaryFunc {
@@ -1056,6 +1095,8 @@ impl BinaryFunc {
             BinaryFunc::MatchRegex => match_regex,
             BinaryFunc::ToChar => to_char,
             BinaryFunc::DateTrunc => date_trunc,
+            BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
+            BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
         }
     }
 
@@ -1132,6 +1173,13 @@ impl BinaryFunc {
                 let s = s1 - s2;
                 ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
             }
+            CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
+                ScalarType::Null => ColumnType::new(ScalarType::Null),
+                ScalarType::Decimal(_, s) => {
+                    ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
+                }
+                _ => unreachable!(),
+            },
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -1186,6 +1234,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MatchRegex => f.write_str("~"),
             BinaryFunc::ToChar => f.write_str("to_char"),
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
+            BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
+            BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
         }
     }
 }

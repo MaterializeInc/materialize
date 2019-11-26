@@ -211,3 +211,41 @@ query R
 SELECT 1.0 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1
 ----
 1.000000000000
+
+### float64 to decimal ###
+
+query R
+select cast(3.141529::float as decimal(38,6));
+----
+3.141529
+
+# Truncation
+query R
+select cast(3.141529::float as decimal(38,5));
+----
+3.14152
+
+# Floating point imprecision
+# Note that this result differs from PostgreSQL
+query R
+select cast(3.141529::float as decimal(38,7));
+----
+3.1415289
+
+# Expansion with 0s
+query R
+select cast(3.141529::float as decimal(38,8));
+----
+3.14152900
+
+# Numeric overflow
+query R
+select cast(100::float as decimal(38,37));
+----
+NULL
+
+# Null input
+query R
+select cast(null::float as decimal(38,7));
+----
+NULL

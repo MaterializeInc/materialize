@@ -2476,7 +2476,15 @@ where
         (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
         (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
         (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
+        (Float32, Decimal(_, s)) => {
+            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
+            expr.call_binary(s, BinaryFunc::CastFloat32ToDecimal)
+        }
         (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
+        (Float64, Decimal(_, s)) => {
+            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
+            expr.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
+        }
         (String, Float64) => expr.call_unary(CastStringToFloat64),
         (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
         (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
