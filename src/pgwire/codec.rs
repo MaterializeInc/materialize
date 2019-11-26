@@ -653,8 +653,9 @@ impl RawParameterBytes {
             _ => {
                 // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(
-                    "Generating datum from text not implemented for ScalarType: {:#?}",
-                    typ
+                    "Generating datum from text not implemented for ScalarType: {:#?} {:#?}",
+                    typ,
+                    as_str
                 )
             }
         })
