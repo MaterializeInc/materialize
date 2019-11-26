@@ -66,7 +66,7 @@ fn main() -> Result<(), failure::Error> {
 
 fn measure_peek_times(config: &Config) -> ! {
     let postgres_connection = create_postgres_connection(config);
-    create_view_ignore_errors(&postgres_connection);
+    try_initialize(&postgres_connection);
 
     thread::spawn(move || {
         let query = "SELECT * FROM q01;";
@@ -81,7 +81,7 @@ fn measure_peek_times(config: &Config) -> ! {
 
             if let Err(err) = query_result {
                 print_error_and_backoff(&mut backoff, err.to_string());
-                create_view_ignore_errors(&postgres_connection);
+                try_initialize(&postgres_connection);
             }
         }
     });
@@ -141,7 +141,10 @@ fn create_histogram(query: &str) -> Histogram {
     hist_vec.with_label_values(&[query])
 }
 
-fn create_view_ignore_errors(postgres_connection: &Connection) {
+/// Try to build the views that are needed for this script
+///
+/// This ignores errors (just logging them), and can just be run multiple times.
+fn try_initialize(postgres_connection: &Connection) {
     if let Err(err) = postgres_connection.execute(
         "CREATE VIEW q01 as SELECT
                  ol_number,
