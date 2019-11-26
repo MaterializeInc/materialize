@@ -35,6 +35,11 @@ main() {
             else
                 dc_stop "$@"
             fi ;;
+        logs)
+            if [[ $# -eq 0 ]]; then
+              usage
+            fi
+            dc_logs "$@" ;;
         nuke) nuke_docker ;;
         load-test) load_test;;
         run)
@@ -69,11 +74,13 @@ Possible COMMANDs:
 
  Individual service commands:
 
-    `us run SERVICE \[ARGS..\]`     Equivalent of 'docker-compose run ..ARGS' -- leaves the terminal
-                               connected and running
-    `us restart \(SERVICE\|all\)`    Restart either SERVICE or all services. This preserves data in
-                               volumes (kafka, debezium, etc)
-    `us load-test`                Run a long-running load test, modify this file to change parameters
+    `us run SERVICE \[ARGS..\]`          Equivalent of 'docker-compose run ..ARGS' -- leaves the terminal
+                                    connected and running
+    `us restart \(SERVICE\|all\)`         Restart either SERVICE or all services. This preserves data in
+                                    volumes (kafka, debezium, etc)
+    `us load-test`                     Run a long-running load test, modify this file to change parameters
+    `us logs SERVICE \[NUM LINES..\]`    Equivalent of 'docker-compose logs SERVICE'. To print a limited number of
+                                    log messages, enter the number after the SERVICE.
 
  Danger Zone:
 
@@ -116,6 +123,14 @@ bring_up() {
 
 dc_run() {
     runv docker-compose run --service-ports "$@"
+}
+
+dc_logs() {
+  if [[ $# -eq 1 ]]; then
+    runv docker-compose logs "$1"
+  elif [[ $# -eq 2 ]]; then
+    runv docker-compose logs --tail "$2" "$1"
+  fi
 }
 
 shut_down() {
