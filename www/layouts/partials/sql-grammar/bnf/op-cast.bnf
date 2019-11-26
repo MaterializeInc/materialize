@@ -1,0 +1,2 @@
+op_cast ::=
+  val '::' type

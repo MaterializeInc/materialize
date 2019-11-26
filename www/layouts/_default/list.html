@@ -4,4 +4,12 @@
 
 {{ partial "content-parser.html" .Content }}
 
-{{end}}
+{{ if not (.Params.disable_list) }}
+{{ range .Pages.ByWeight }}
+<li>
+  <a href="{{.Permalink}}">{{.Title}}</a>
+</li>
+{{ end }}{{/*  {{ range .Pages.ByWeight }} */}}
+{{ end }}{{/*  {{ if not (.Params.disable_list) }} */}}
+
+{{ end }}{{/*  {{ define "main"}} */}}
