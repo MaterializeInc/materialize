@@ -11,14 +11,16 @@
 #[macro_use]
 extern crate prometheus;
 
+use std::cmp::min;
 use std::collections::HashMap;
 use std::thread;
+use std::time::Duration;
 
 use chrono::Utc;
+use env_logger::{Builder as LogBuilder, Env, Target};
+use log::{error, info};
 use postgres::Connection;
 use prometheus::Histogram;
-use std::cmp::min;
-use std::time::Duration;
 
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -29,7 +31,10 @@ struct Config {
 }
 
 fn main() -> Result<(), failure::Error> {
-    println!("startup {}", Utc::now());
+    LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
+        .target(Target::Stdout)
+        .init();
+    info!("startup {}", Utc::now());
 
     let args: Vec<_> = std::env::args().collect();
 
@@ -91,6 +96,7 @@ fn measure_peek_times(config: &Config) -> ! {
         }
     });
 
+    let mut count = 0;
     loop {
         if let Err(err) = prometheus::push_metrics(
             "mz_client_peek",
@@ -99,7 +105,12 @@ fn measure_peek_times(config: &Config) -> ! {
             prometheus::gather(),
             None,
         ) {
-            println!("Error pushing metrics: {}", err.to_string())
+            error!("Error pushing metrics: {}", err.to_string())
+        } else {
+            count += 1;
+        }
+        if count % 60 == 0 {
+            info!("pushed metrics {} times", count);
         }
         thread::sleep(Duration::from_secs(1));
     }
@@ -160,6 +171,6 @@ fn try_initialize(postgres_connection: &Connection) {
                  ol_number;",
         &[],
     ) {
-        println!("IGNORING CREATE VIEW error: {}", err)
+        error!("IGNORING CREATE VIEW error: {}", err)
     }
 }
