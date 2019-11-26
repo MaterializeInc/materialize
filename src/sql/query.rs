@@ -1799,13 +1799,12 @@ fn plan_function<'a>(
             }
 
             // Currently only implement this specific case from Metabase:
-            // to_char(current_timestamp(), 'YYYY-MM-DD HH24:MI:SS.MS TZ')
+            // to_char(<timestamptz>, 'YYYY-MM-DD HH24:MI:SS.MS TZ')
             "to_char" => {
                 if sql_func.args.len() != 2 {
                     bail!("to_char requires exactly two arguments");
                 }
 
-                // &sql_func.args[0] should be current_timestamp()/now()
                 let timestamp_func = plan_expr(
                     catalog,
                     ecx,
@@ -1815,7 +1814,7 @@ fn plan_function<'a>(
                 let typ = ecx.column_type(&timestamp_func);
                 if typ.scalar_type != ScalarType::TimestampTz && typ.scalar_type != ScalarType::Null
                 {
-                    bail!("to_char() currently only implemented for timestamps");
+                    bail!("to_char() currently only implemented for timestamptz");
                 }
 
                 let format_string =

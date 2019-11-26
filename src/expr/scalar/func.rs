@@ -1025,7 +1025,7 @@ pub fn to_char<'a>(
     // to unblock Metabase progress. Will have to revisit formatting strings and
     // other versions of to_char() in the future.
     if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
-        let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
+        let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%3f %Z";
         Datum::String(
             temp_storage.push_string(datetime.format(interpreted_format_string).to_string()),
         )

@@ -685,3 +685,16 @@ query RR
 SELECT EXTRACT(doy FROM DATE '2000-01-01'), EXTRACT(doy FROM DATE '2000-12-31')
 ----
 1 366
+
+query T
+SELECT to_char(TIMESTAMPTZ '1997-02-03 11:12:59.9', 'YYYY-MM-DD HH24:MI:SS.MS TZ')
+----
+1997-02-03 11:12:59.900 UTC
+
+# Test that fractional milliseconds are not rounded, which matches Postgres's
+# behavior.
+
+query T
+SELECT to_char(TIMESTAMPTZ '1997-02-03 11:12:59.7777', 'YYYY-MM-DD HH24:MI:SS.MS TZ')
+----
+1997-02-03 11:12:59.777 UTC
