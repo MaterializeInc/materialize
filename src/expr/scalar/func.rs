@@ -1490,11 +1490,24 @@ pub fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     }
 }
 
+pub fn replace<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
+    if datums.iter().any(|d| d.is_null()) {
+        return Datum::Null;
+    }
+
+    Datum::String(Cow::Owned(
+        datums[0]
+            .unwrap_str()
+            .replace(datums[1].unwrap_str(), datums[2].unwrap_str()),
+    ))
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
     Substr,
     Length,
+    Replace,
 }
 
 impl VariadicFunc {
@@ -1503,6 +1516,7 @@ impl VariadicFunc {
             VariadicFunc::Coalesce => coalesce,
             VariadicFunc::Substr => substr,
             VariadicFunc::Length => length,
+            VariadicFunc::Replace => replace,
         }
     }
 
@@ -1520,6 +1534,7 @@ impl VariadicFunc {
             }
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             Length => ColumnType::new(ScalarType::Int32).nullable(true),
+            Replace => ColumnType::new(ScalarType::String).nullable(true),
         }
     }
 }
@@ -1530,6 +1545,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Length => f.write_str("length"),
+            VariadicFunc::Replace => f.write_str("replace"),
         }
     }
 }
