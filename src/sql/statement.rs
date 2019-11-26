@@ -465,16 +465,16 @@ fn handle_create_dataflow(
                                     Value::Number(s) => s.parse()?,
                                     _ => bail!("`columns` must be a number."),
                                 });
-                            },
+                            }
                             "format" => {
                                 format = Some(match &with_op.value {
                                     Value::SingleQuotedString(s) => match s.as_ref() {
                                         "csv" => SourceFileFormat::Csv,
                                         _ => bail!("Unrecognized file format: {}", s),
                                     },
-                                    _ => bail!("File format must be a string, e.g. 'csv'.")
+                                    _ => bail!("File format must be a string, e.g. 'csv'."),
                                 });
-                            },
+                            }
                             _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
                         }
                     }
