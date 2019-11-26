@@ -620,6 +620,11 @@ impl RawParameterBytes {
     fn generate_datum_from_bytes(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {
         Ok(match typ {
             ScalarType::Null => Datum::Null,
+            ScalarType::Bool => match bytes[0] {
+                // Rust bools are 1 byte in size.
+                0 => Datum::False,
+                _ => Datum::True,
+            },
             ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(bytes)),
             ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(bytes)),
             ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(bytes).into()),
