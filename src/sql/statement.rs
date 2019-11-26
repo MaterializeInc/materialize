@@ -362,10 +362,8 @@ fn handle_show_create_source(
                     format!("kafka://{}/{}", addr, topic)
                 }
                 SourceConnector::File(c) => {
-                    let format_str = match c.format {
-                        FileFormat::Csv(_) => "csv",
-                    };
-                    format!("{}+file://{}", format_str, c.path.to_string_lossy())
+                    // TODO https://github.com/MaterializeInc/materialize/issues/1093
+                    format!("file://{}", c.path.to_string_lossy())
                 }
             }
         } else {
