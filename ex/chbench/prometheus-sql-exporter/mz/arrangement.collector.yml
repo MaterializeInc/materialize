@@ -35,19 +35,60 @@ metrics:
     key_labels:
       - operator
       - worker
-  - metric_name: mz_perf_peek_durations
+  # durations histogram
+  # histogram_quantile(1.0, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le, worker))
+  - metric_name: mz_perf_peek_durations_bucket
     query: |
       SELECT
-          worker, duration_ns, percent
+          worker, le, count
       FROM
-          mz_perf_peek_durations
+          mz_perf_peek_durations_bucket
     help: evolving histogram of peek durations
     type: gauge
     values:
-      - percent
+      - count
+    key_labels:
+      - worker
+      - le
+  - metric_name: mz_perf_peek_durations
+    query: |
+      SELECT
+          worker, duration_ns, count
+      FROM
+          logs_peek_durations
+    help: evolving histogram of peek durations
+    type: gauge
+    values:
+      - count
     key_labels:
       - worker
       - duration_ns
+  - metric_name: mz_perf_peek_durations_sum
+    query: |
+      SELECT
+          worker, sum
+      FROM
+          mz_perf_peek_durations_aggregates
+    help: evolving histogram of peek durations
+    type: gauge
+    values:
+      - sum
+    key_labels:
+      - worker
+  - metric_name: mz_perf_peek_durations_count
+    query: |
+      SELECT
+          worker, count
+      FROM
+          mz_perf_peek_durations_aggregates
+    help: evolving histogram of peek durations
+    type: gauge
+    values:
+      - sum
+    key_labels:
+      - worker
+
+  # Share Arrangements
   - metric_name: mz_perf_shared_arrangements
     help: how many operators are using each arrangement
     query: |
