@@ -1986,6 +1986,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "log",
+ "ordered-float",
  "ore",
  "prometheus",
  "rand 0.7.2",

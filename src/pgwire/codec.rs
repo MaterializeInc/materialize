@@ -644,14 +644,10 @@ impl RawParameterBytes {
                 "0" => Datum::False,
                 _ => Datum::True, // Note: anything non-zero is true!
             },
-            ScalarType::Int32 => Datum::Int32(as_str.parse::<i32>().unwrap()),
-            ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>().unwrap()),
-            ScalarType::Float32 => {
-                Datum::Float32(OrderedFloat::from(as_str.parse::<f32>().unwrap()))
-            }
-            ScalarType::Float64 => {
-                Datum::Float64(OrderedFloat::from(as_str.parse::<f64>().unwrap()))
-            }
+            ScalarType::Int32 => Datum::Int32(as_str.parse::<i32>()?),
+            ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>()?),
+            ScalarType::Float32 => Datum::Float32(OrderedFloat::from(as_str.parse::<f32>()?)),
+            ScalarType::Float64 => Datum::Float64(OrderedFloat::from(as_str.parse::<f64>()?)),
             ScalarType::Bytes => Datum::Bytes(as_str.as_bytes()),
             ScalarType::String => Datum::cow_from_str(as_str),
             _ => {
