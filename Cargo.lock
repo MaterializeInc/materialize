@@ -1547,6 +1547,8 @@ name = "metrics"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "failure",
+ "getopts",
  "postgres",
  "prometheus",
  "regex",
