@@ -17,6 +17,7 @@ use std::str;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{BufMut, BytesMut, IntoBuf};
 use log::trace;
+use ordered_float::OrderedFloat;
 use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
@@ -606,7 +607,9 @@ impl RawParameterBytes {
                     FieldFormat::Binary => {
                         RawParameterBytes::generate_datum_from_bytes(bytes.as_ref(), typs[i])?
                     }
-                    FieldFormat::Text => failure::bail!("Can't currently decode text parameters."),
+                    FieldFormat::Text => {
+                        RawParameterBytes::generate_datum_from_text(bytes.as_ref(), typs[i])?
+                    }
                 },
                 None => Datum::Null,
             });
@@ -628,6 +631,31 @@ impl RawParameterBytes {
                 failure::bail!(
                     "Generating datum not implemented for ScalarType: {:#?}",
                     typ
+                )
+            }
+        })
+    }
+
+    fn generate_datum_from_text(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {
+        let as_str = str::from_utf8(bytes)?;
+        Ok(match typ {
+            ScalarType::Null => Datum::Null,
+            ScalarType::Bool => match as_str {
+                "0" => Datum::False,
+                _ => Datum::True, // Note: anything non-zero is true!
+            },
+            ScalarType::Int32 => Datum::Int32(as_str.parse::<i32>()?),
+            ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>()?),
+            ScalarType::Float32 => Datum::Float32(OrderedFloat::from(as_str.parse::<f32>()?)),
+            ScalarType::Float64 => Datum::Float64(OrderedFloat::from(as_str.parse::<f64>()?)),
+            ScalarType::Bytes => Datum::Bytes(as_str.as_bytes()),
+            ScalarType::String => Datum::cow_from_str(as_str),
+            _ => {
+                // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval
+                failure::bail!(
+                    "Generating datum from text not implemented for ScalarType: {:#?} {:#?}",
+                    typ,
+                    as_str
                 )
             }
         })
