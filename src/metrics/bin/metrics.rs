@@ -72,6 +72,7 @@ fn measure_peek_times(config: &Config) -> ! {
         let query = "SELECT * FROM q01;";
         let histogram = create_histogram(query);
         let mut backoff = get_baseline_backoff();
+        let mut last_was_failure = false;
         loop {
             let query_result = {
                 // Drop is observe for prometheus::Histogram
@@ -80,8 +81,12 @@ fn measure_peek_times(config: &Config) -> ! {
             };
 
             if let Err(err) = query_result {
+                last_was_failure = true;
                 print_error_and_backoff(&mut backoff, err.to_string());
                 try_initialize(&postgres_connection);
+            }
+            if !last_was_failure {
+                backoff = get_baseline_backoff();
             }
         }
     });
