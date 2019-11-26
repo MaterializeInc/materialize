@@ -11,14 +11,16 @@
 #[macro_use]
 extern crate prometheus;
 
+use std::cmp::min;
 use std::collections::HashMap;
 use std::thread;
+use std::time::Duration;
 
 use chrono::Utc;
+use env_logger::{Builder as LogBuilder, Env, Target};
+use log::{error, info};
 use postgres::Connection;
 use prometheus::Histogram;
-use std::cmp::min;
-use std::time::Duration;
 
 static MAX_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -29,7 +31,10 @@ struct Config {
 }
 
 fn main() -> Result<(), failure::Error> {
-    println!("startup {}", Utc::now());
+    LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
+        .target(Target::Stdout)
+        .init();
+    info!("startup {}", Utc::now());
 
     let args: Vec<_> = std::env::args().collect();
 
@@ -66,12 +71,13 @@ fn main() -> Result<(), failure::Error> {
 
 fn measure_peek_times(config: &Config) -> ! {
     let postgres_connection = create_postgres_connection(config);
-    create_view_ignore_errors(&postgres_connection);
+    try_initialize(&postgres_connection);
 
     thread::spawn(move || {
         let query = "SELECT * FROM q01;";
         let histogram = create_histogram(query);
         let mut backoff = get_baseline_backoff();
+        let mut last_was_failure = false;
         loop {
             let query_result = {
                 // Drop is observe for prometheus::Histogram
@@ -80,12 +86,17 @@ fn measure_peek_times(config: &Config) -> ! {
             };
 
             if let Err(err) = query_result {
+                last_was_failure = true;
                 print_error_and_backoff(&mut backoff, err.to_string());
-                create_view_ignore_errors(&postgres_connection);
+                try_initialize(&postgres_connection);
+            }
+            if !last_was_failure {
+                backoff = get_baseline_backoff();
             }
         }
     });
 
+    let mut count = 0;
     loop {
         if let Err(err) = prometheus::push_metrics(
             "mz_client_peek",
@@ -94,7 +105,12 @@ fn measure_peek_times(config: &Config) -> ! {
             prometheus::gather(),
             None,
         ) {
-            println!("Error pushing metrics: {}", err.to_string())
+            error!("Error pushing metrics: {}", err.to_string())
+        } else {
+            count += 1;
+        }
+        if count % 60 == 0 {
+            info!("pushed metrics {} times", count);
         }
         thread::sleep(Duration::from_secs(1));
     }
@@ -129,19 +145,16 @@ fn create_histogram(query: &str) -> Histogram {
         "mz_client_peek_seconds",
         "how long peeks took",
         &["query"],
-        vec![
-            0.001, 0.003, 0.005, 0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,
-            0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0, 2.5,
-            3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0,
-            45.0, 50.0, 55.0, 60.0, 70.0, 80.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 270.0,
-            300.0
-        ]
+        vec![0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250, 0.500, 1.0]
     )
     .expect("can create histogram");
     hist_vec.with_label_values(&[query])
 }
 
-fn create_view_ignore_errors(postgres_connection: &Connection) {
+/// Try to build the views that are needed for this script
+///
+/// This ignores errors (just logging them), and can just be run multiple times.
+fn try_initialize(postgres_connection: &Connection) {
     if let Err(err) = postgres_connection.execute(
         "CREATE VIEW q01 as SELECT
                  ol_number,
@@ -158,6 +171,6 @@ fn create_view_ignore_errors(postgres_connection: &Connection) {
                  ol_number;",
         &[],
     ) {
-        println!("IGNORING CREATE VIEW error: {}", err)
+        error!("IGNORING CREATE VIEW error: {}", err)
     }
 }

@@ -26,11 +26,34 @@ SELECT DISTINCT
   JOIN logs_frontiers lf_source ON ldd.source = lf_source.name
   JOIN logs_frontiers lf_df ON ldd.dataflow=lf_df.name;'
 
-exec_sql 'CREATE VIEW mz_perf_peek_durations AS
+# There are three steps required for a prometheus histogram from the logs_peek_durations
+# logs:
+#
+#   1. Create some values that all represent everything in them and below (_core)
+#   2. Find the max value and alias that with +Inf (_bucket)
+#   3. calculate a couple aggregates (_aggregates)
+exec_sql 'CREATE VIEW mz_perf_peek_durations_core AS
 SELECT
-    lpd.worker,
-    lpd.duration_ns,
-    CAST(lpd.count AS float) / total.val * 100 AS percent
+    d_upper.worker,
+    CAST(d_upper.duration_ns AS TEXT) AS le,
+    sum(d_summed.count) AS count
 FROM
-    logs_peek_durations AS lpd,
-    (SELECT SUM(count) AS val FROM logs_peek_durations) AS total'
+    logs_peek_durations AS d_upper,
+    logs_peek_durations AS d_summed
+WHERE
+    d_upper.worker = d_summed.worker
+  AND
+    d_upper.duration_ns >= d_summed.duration_ns
+GROUP BY d_upper.worker, d_upper.duration_ns'
+
+exec_sql "CREATE VIEW mz_perf_peek_durations_bucket AS
+(
+    SELECT * FROM mz_perf_peek_durations_core
+) UNION (
+    SELECT worker, '+Inf', max(count) AS count FROM mz_perf_peek_durations_core
+    GROUP BY worker
+)"
+exec_sql 'CREATE VIEW mz_perf_peek_durations_aggregates AS
+SELECT worker, sum(duration_ns * count) AS sum, sum(count) AS count
+FROM logs_peek_durations lpd
+GROUP BY worker'

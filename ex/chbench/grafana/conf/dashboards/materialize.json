@@ -18,95 +18,77 @@
   "links": [],
   "panels": [
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "fill": 7,
-      "fillGradient": 0,
+      "cards": {
+        "cardPadding": null,
+        "cardRound": null
+      },
+      "color": {
+        "cardColor": "#77e04c",
+        "colorScale": "sqrt",
+        "colorScheme": "interpolateGreens",
+        "exponent": 0.5,
+        "min": null,
+        "mode": "opacity"
+      },
+      "dataFormat": "tsbuckets",
+      "description": "from logs_peek_durations",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 0
       },
+      "heatmap": {},
+      "hideZeroBuckets": true,
+      "highlightCards": true,
       "id": 8,
       "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
+        "show": false
       },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "dataLinks": []
-      },
-      "percentage": false,
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": true,
-      "steppedLine": false,
+      "options": {},
+      "reverseYBuckets": false,
       "targets": [
         {
-          "expr": "mz_perf_peek_durations",
-          "legendFormat": "{{duration_ns}} w{{worker}}",
+          "expr": "sum(rate(mz_perf_peek_durations[10s])) by (duration_ns)",
+          "format": "time_series",
+          "instant": false,
+          "interval": "10s",
+          "legendFormat": "{{duration_ns}}",
           "refId": "A"
         }
       ],
-      "thresholds": [],
       "timeFrom": null,
-      "timeRegions": [],
       "timeShift": null,
-      "title": "Peek Durations",
+      "title": "Peek Latencies, server side heatmap",
       "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
         "show": true,
-        "values": []
+        "showHistogram": true
       },
-      "yaxes": [
-        {
-          "format": "percent",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "heatmap",
+      "xAxis": {
+        "show": true
+      },
+      "xBucketNumber": null,
+      "xBucketSize": null,
+      "yAxis": {
+        "decimals": null,
+        "format": "ns",
+        "logBase": 1,
+        "max": null,
+        "min": null,
+        "show": true,
+        "splitFactor": null
+      },
+      "yBucketBound": "auto",
+      "yBucketNumber": null,
+      "yBucketSize": null
     },
     {
       "aliasColors": {},
       "bars": false,
       "dashLength": 10,
       "dashes": false,
+      "description": "from logs_peek_durations",
       "fill": 1,
       "fillGradient": 0,
       "gridPos": {
@@ -141,9 +123,186 @@
       "steppedLine": false,
       "targets": [
         {
+          "expr": "histogram_quantile(1, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
+          "format": "heatmap",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "max",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
+          "hide": false,
+          "legendFormat": "p99",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
+          "hide": false,
+          "legendFormat": "p95",
+          "refId": "D"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
+          "hide": false,
+          "legendFormat": "median",
+          "refId": "C"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Peek latencies, server side",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "ns",
+          "label": null,
+          "logBase": 2,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "cards": {
+        "cardPadding": null,
+        "cardRound": null
+      },
+      "color": {
+        "cardColor": "#77e04c",
+        "colorScale": "sqrt",
+        "colorScheme": "interpolatePurples",
+        "exponent": 0.5,
+        "mode": "opacity"
+      },
+      "dataFormat": "tsbuckets",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "heatmap": {},
+      "hideZeroBuckets": true,
+      "highlightCards": true,
+      "id": 26,
+      "legend": {
+        "show": false
+      },
+      "options": {},
+      "reverseYBuckets": false,
+      "targets": [
+        {
+          "expr": "rate(mz_client_peek_seconds_bucket[30s])",
+          "format": "time_series",
+          "instant": false,
+          "interval": "10s",
+          "intervalFactor": 1,
+          "legendFormat": "{{le}}",
+          "refId": "A"
+        }
+      ],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Peek latencies, client side heatmap",
+      "tooltip": {
+        "show": true,
+        "showHistogram": true
+      },
+      "type": "heatmap",
+      "xAxis": {
+        "show": true
+      },
+      "xBucketNumber": null,
+      "xBucketSize": null,
+      "yAxis": {
+        "decimals": null,
+        "format": "s",
+        "logBase": 1,
+        "max": null,
+        "min": null,
+        "show": true,
+        "splitFactor": null
+      },
+      "yBucketBound": "auto",
+      "yBucketNumber": null,
+      "yBucketSize": null
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "description": "generated by the src/metrics crate",
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 25,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "dataLinks": []
+      },
+      "percentage": false,
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
           "expr": "histogram_quantile(1, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "max",
           "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
+          "legendFormat": "p99",
+          "refId": "D"
         },
         {
           "expr": "histogram_quantile(0.95, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
@@ -178,7 +337,7 @@
         {
           "format": "s",
           "label": null,
-          "logBase": 1,
+          "logBase": 2,
           "max": null,
           "min": null,
           "show": true
@@ -208,7 +367,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 16
       },
       "id": 6,
       "legend": {
@@ -293,7 +452,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 16
       },
       "id": 20,
       "legend": {
@@ -385,7 +544,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 16
+        "y": 24
       },
       "id": 22,
       "legend": {
@@ -471,7 +630,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 16
+        "y": 24
       },
       "id": 2,
       "legend": {
@@ -557,7 +716,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "id": 10,
       "legend": {
@@ -642,7 +801,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 24
+        "y": 32
       },
       "id": 12,
       "legend": {
@@ -726,7 +885,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 40
       },
       "id": 16,
       "legend": {
@@ -811,7 +970,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 40
       },
       "id": 24,
       "legend": {
@@ -896,7 +1055,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 48
       },
       "id": 18,
       "legend": {
@@ -988,7 +1147,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 48
       },
       "heatmap": {},
       "hideZeroBuckets": false,
@@ -1043,7 +1202,7 @@
     "list": []
   },
   "time": {
-    "from": "now-1h",
+    "from": "now-30m",
     "to": "now"
   },
   "timepicker": {
@@ -1063,5 +1222,5 @@
   "timezone": "",
   "title": "Materialize Metrics",
   "uid": "mz",
-  "version": 16
+  "version": 1
 }
