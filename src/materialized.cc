@@ -25,8 +25,7 @@ mz::createAllSources(pqxx::connection &c, std::string from, std::string registry
     from = c.quote(from);
     registry = c.quote(registry);
     auto realLike = c.quote(like ? like.value() : std::string("%"));
-    w.exec("CREATE SOURCES LIKE " + realLike + " FROM " + from + " USING SCHEMA REGISTRY " + registry);
-    auto pqResult = w.exec("SHOW SOURCES LIKE " + realLike);
+    auto pqResult = w.exec("CREATE SOURCES LIKE " + realLike + " FROM " + from + " USING SCHEMA REGISTRY " + registry);
     auto cols = pqResult.columns();
     if (cols != 1) {
         throw UnexpectedCreateSourcesResult {"Wrong number of columns: " + std::to_string(cols)};
