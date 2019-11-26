@@ -1,0 +1,2 @@
+type_date ::=
+  'DATE' "'" yyyy '-' mm '-' dd "'"

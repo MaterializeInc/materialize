@@ -16,8 +16,15 @@ pygmentsStyle = "xcode"
     weight = 2
 
     [[menu.main]]
+    identifier = "sql-types"
+    name = "Data Types"
+    url = "/docs/sql/types/"
+    weight = 1
+    parent = "sql"
+
+    [[menu.main]]
     identifier = "sql-functions"
     name = "Functions + Operators"
     url = "/docs/sql/functions/"
-    weight = 1
+    weight = 2
     parent = "sql"
