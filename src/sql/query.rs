@@ -1507,6 +1507,49 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "replace" => {
+                if sql_func.args.len() != 3 {
+                    bail!(
+                        "replace expects exactly three arguments, got: {:?}",
+                        sql_func.args.len()
+                    )
+                }
+
+                let mut exprs = Vec::new();
+                let original_string =
+                    plan_expr(catalog, ecx, &sql_func.args[0], Some(ScalarType::String))?;
+                let original_string_typ = ecx.column_type(&original_string);
+                // todo: function that will do these steps for us?
+                if original_string_typ.scalar_type != ScalarType::String {
+                    bail!(
+                        "replace first argument has non-string type {:?}",
+                        original_string_typ
+                    );
+                }
+                exprs.push(original_string);
+
+                let from = plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::String))?;
+                let from_typ = ecx.column_type(&from);
+                if from_typ.scalar_type != ScalarType::String {
+                    bail!("replace second argument has non-string type {:?}", from_typ);
+                }
+                exprs.push(from);
+
+                let to = plan_expr(catalog, ecx, &sql_func.args[2], Some(ScalarType::String))?;
+                let to_typ = ecx.column_type(&to);
+                if to_typ.scalar_type != ScalarType::String {
+                    bail!("replace third argument has non-string type {:?}", to_typ);
+                }
+                exprs.push(to);
+
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::Replace,
+                    exprs,
+                };
+
+                Ok(expr)
+            }
+
             "length" => {
                 if sql_func.args.is_empty() || sql_func.args.len() > 2 {
                     bail!(

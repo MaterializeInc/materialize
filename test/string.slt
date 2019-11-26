@@ -410,3 +410,13 @@ query I
 select length('str', null);
 ----
 NULL
+
+query T
+select replace('one', 'one', 'two');
+----
+two
+
+query T
+select replace('in a longer string', 'longer', 'shorter')
+----
+in a shorter string
