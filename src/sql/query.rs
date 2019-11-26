@@ -2434,6 +2434,7 @@ where
         (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
         (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
         (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
+        (String, Float64) => expr.call_unary(CastStringToFloat64),
         (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
         (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
         (Decimal(_, s), Float32) => {
@@ -2452,11 +2453,18 @@ where
         (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
         (Date, TimestampTz) => expr.call_unary(CastDateToTimestampTz),
         (Timestamp, TimestampTz) => expr.call_unary(CastTimestampToTimestampTz),
+        (Decimal(_, _), String) | (Bytes, String) => {
+            bail!(
+                "{} does not support casting from decimal or bytes to string",
+                name,
+            );
+        }
         (Null, _) => {
             // assert_eq!(expr, ScalarExpr::Literal(Datum::Null, ColumnType::new(ScalarType::Null)));
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
         (from, to) if from == to => expr,
+        (_, String) => expr.call_unary(CastDatumToString),
         (from, to) => {
             bail!(
                 "{} does not support casting from {:?} to {:?}",

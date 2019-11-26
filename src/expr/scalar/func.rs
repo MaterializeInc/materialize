@@ -169,6 +169,28 @@ pub fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64() as i64)
 }
 
+pub fn cast_datum_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    let owned = |v: String| Datum::String(Cow::Owned(v));
+    match a {
+        Datum::Null => Datum::cow_from_str("null"),
+        Datum::False => Datum::cow_from_str("false"),
+        Datum::True => Datum::cow_from_str("true"),
+        Datum::Int32(v) => owned(v.to_string()),
+        Datum::Int64(v) => owned(v.to_string()),
+        Datum::Float32(v) => owned(v.to_string()),
+        Datum::Float64(v) => owned(v.to_string()),
+        Datum::Date(v) => owned(v.to_string()),
+        Datum::Timestamp(v) => owned(v.to_string()),
+        Datum::TimestampTz(v) => owned(v.to_string()),
+        Datum::Interval(v) => owned(v.to_string()),
+        // TODO: pip the precision and scale from the scalartype to here
+        Datum::Decimal(_) => unreachable!("dec should be caught in the cast match"),
+        // TODO: not sure what postgres does here
+        Datum::Bytes(_) => unreachable!("bytes should be caught in the cast match"),
+        Datum::String(v) => Datum::String(v),
+    }
+}
+
 pub fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
@@ -195,6 +217,14 @@ pub fn cast_decimal_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
         return Datum::Null;
     }
     Datum::from(a.unwrap_decimal().as_i128() as f64)
+}
+
+pub fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
+    Datum::from(val.ok())
 }
 
 pub fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -1198,9 +1228,11 @@ pub enum UnaryFunc {
     CastDecimalToInt64,
     CastDecimalToFloat32,
     CastDecimalToFloat64,
+    CastStringToFloat64,
     CastDateToTimestamp,
     CastDateToTimestampTz,
     CastTimestampToTimestampTz,
+    CastDatumToString,
     Ascii,
     ExtractIntervalYear,
     ExtractIntervalMonth,
@@ -1251,9 +1283,11 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
             UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
             UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
+            UnaryFunc::CastStringToFloat64 => cast_string_to_float64,
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
             UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz,
             UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz,
+            UnaryFunc::CastDatumToString => cast_datum_to_string,
             UnaryFunc::Ascii => ascii,
             UnaryFunc::ExtractIntervalYear => extract_interval_year,
             UnaryFunc::ExtractIntervalMonth => extract_interval_month,
@@ -1316,11 +1350,13 @@ impl UnaryFunc {
             CastDecimalToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
             CastDecimalToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
             CastDecimalToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
             CastDateToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(in_nullable),
             CastDateToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable),
             CastTimestampToTimestampTz => {
                 ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
             }
+            CastDatumToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
             | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
@@ -1378,9 +1414,11 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
+            UnaryFunc::CastStringToFloat64 => f.write_str("stringtof64"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
             UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),
+            UnaryFunc::CastDatumToString => f.write_str("datumtostring"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
