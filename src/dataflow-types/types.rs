@@ -121,12 +121,16 @@ pub struct DataflowDesc {
     /// This is logically equivalent to a timely dataflow `Antichain`,
     /// which should probably be used here instead.
     pub as_of: Option<Vec<Timestamp>>,
+    /// Human readable name
+    pub debug_name: String,
     pub dont_compact: bool,
 }
 
 impl DataflowDesc {
-    pub fn new() -> Self {
-        Default::default()
+    pub fn new(name: String) -> Self {
+        let mut dd = DataflowDesc::default();
+        dd.debug_name = name;
+        dd
     }
 
     /// Collects the IDs of the dataflows that this dataflow depends upon.
@@ -276,7 +280,7 @@ mod tests {
     /// Verify that a basic relation_expr serializes and deserializes to JSON sensibly.
     #[test]
     fn test_roundtrip() -> Result<(), Box<dyn Error>> {
-        let dataflow = DataflowDesc::new().add_view(
+        let dataflow = DataflowDesc::new("none".to_string()).add_view(
             GlobalId::user(4),
             View {
                 raw_sql: "<none>".into(),
