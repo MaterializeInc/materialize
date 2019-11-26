@@ -171,10 +171,10 @@ static void materializeThread(mz::Config config, std::promise<std::vector<Histog
         auto created = mz::createAllSources(c, kafkaUrl, schemaRegistryUrl, pattern);
         for (const auto& source: created) {
             std::cout << "Created source: " << source << std::endl;
-            bool existed = expected.erase(source);
-            if (!existed) {
-                std::cout << "Unexpected source: " << source << std::endl;
-            }
+        }
+        auto allSources = mz::showAllSources(c);
+        for (const auto& source: allSources) {
+            expected.erase(source);
         }
         sleep(1);
     }

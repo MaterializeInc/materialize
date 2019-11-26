@@ -19,6 +19,24 @@ limitations under the License.
 #include "timing.h"
 
 std::vector<std::string>
+mz::showAllSources(pqxx::connection &c) {
+    std::vector<std::string> results;
+    pqxx::nontransaction w(c);
+
+    auto pqResult = w.exec("SHOW SOURCES");
+    auto cols = pqResult.columns();
+    if (cols != 1) {
+        throw UnexpectedCreateSourcesResult {"Wrong number of columns: " + std::to_string(cols)};
+    }
+
+    results.reserve(pqResult.size());
+    for (const auto& row: pqResult) {
+        results.push_back(row[0].as<std::string>());
+    }
+    return results;
+}
+
+std::vector<std::string>
 mz::createAllSources(pqxx::connection &c, std::string from, std::string registry, std::optional<std::string> like) {
     std::vector<std::string> results;
     pqxx::nontransaction w(c);

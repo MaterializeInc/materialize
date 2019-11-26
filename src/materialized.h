@@ -53,6 +53,8 @@ std::vector<std::string> createAllSources(
         std::string registry,
         std::optional<std::string> like);
 
+std::vector<std::string> showAllSources(pqxx::connection &c);
+
 void createMaterializedView(pqxx::connection& c, const std::string &name, const std::string &query);
 
 PeekResults peekView(pqxx::connection& c, const std::string& name, const std::optional<std::string>& order,
