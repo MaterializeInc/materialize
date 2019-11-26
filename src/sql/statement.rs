@@ -454,31 +454,58 @@ fn handle_create_dataflow(
                         bail!("source URL missing topic path: {}", url);
                     }
                 }
-                SourceUrl::CsvPath(path) => {
+                SourceUrl::Path(path) => {
                     if schema.is_some() {
                         bail!("csv file sources do not support schemas.");
                     }
-                    if with_options.len() != 1 || with_options[0].name.value != "columns" {
-                        bail!("csv file sources must have exactly one WITH option: `columns`");
+                    let mut format = None;
+                    let mut n_cols: Option<usize> = None;
+                    for with_op in with_options {
+                        match with_op.name.value.as_str() {
+                            "columns" => {
+                                n_cols = Some(match &with_op.value {
+                                    Value::Number(s) => s.parse()?,
+                                    _ => bail!("`columns` must be a number."),
+                                });
+                            },
+                            "format" => {
+                                format = Some(match &with_op.value {
+                                    Value::SingleQuotedString(s) => match s.as_ref() {
+                                        "csv" => SourceFileFormat::Csv,
+                                        _ => bail!("Unrecognized file format: {}", s),
+                                    },
+                                    _ => bail!("File format must be a string, e.g. 'csv'.")
+                                });
+                            },
+                            _ => bail!("Unrecognized WITH option: {}", with_op.name.value),
+                        }
                     }
-                    let n_cols = &with_options[0].value;
-                    let n_cols: usize = match n_cols {
-                        Value::Number(s) => s.parse()?,
-                        _ => bail!("`columns` must be a number."),
+
+                    let format = match format {
+                        Some(f) => f,
+                        None => bail!("File source requires a `format` WITH option."),
                     };
-                    let name = name.try_into()?;
-                    let cols = iter::repeat(ColumnType::new(ScalarType::String))
-                        .take(n_cols)
-                        .collect();
-                    let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
-                    let source = Source {
-                        connector: SourceConnector::File(FileSourceConnector {
-                            path: path.clone().try_into()?,
-                            format: FileFormat::Csv(n_cols),
-                        }),
-                        desc: RelationDesc::new(RelationType::new(cols), names),
-                    };
-                    Ok(Plan::CreateSource(name, source))
+                    match format {
+                        SourceFileFormat::Csv => {
+                            let n_cols = match n_cols {
+                                Some(n) => n,
+                                None => bail!("Csv source requires a `columns` WITH option."),
+                            };
+                            let name = name.try_into()?;
+                            let cols = iter::repeat(ColumnType::new(ScalarType::String))
+                                .take(n_cols)
+                                .collect();
+                            let names = (1..=n_cols).map(|i| Some(format!("column{}", i)));
+                            let source = Source {
+                                connector: SourceConnector::File(FileSourceConnector {
+                                    path: path.clone().try_into()?,
+                                    format: FileFormat::Csv(n_cols),
+                                }),
+                                desc: RelationDesc::new(RelationType::new(cols), names),
+                            };
+                            Ok(Plan::CreateSource(name, source))
+                        }
+                    }
                 }
             }
         }
@@ -786,6 +813,10 @@ fn build_kafka_source(
     })
 }
 
+enum SourceFileFormat {
+    Csv,
+}
+
 struct KafkaUrl {
     addr: SocketAddr,
     topic: Option<String>,
@@ -793,7 +824,7 @@ struct KafkaUrl {
 
 enum SourceUrl {
     Kafka(KafkaUrl),
-    CsvPath(PathBuf),
+    Path(PathBuf),
 }
 
 fn parse_source_url(url: &str) -> Result<SourceUrl, failure::Error> {
@@ -803,8 +834,8 @@ fn parse_source_url(url: &str) -> Result<SourceUrl, failure::Error> {
             let (addr, topic) = parse_kafka_url(&url)?;
             SourceUrl::Kafka(KafkaUrl { addr, topic })
         }
-        "file+csv" => {
-            if url.has_host() && !url.host_str().unwrap().is_empty() {
+        "file" => {
+            if url.has_host() {
                 bail!(
                     "No hostname allowed in file URL: {}. Found: {}",
                     url,
@@ -812,7 +843,7 @@ fn parse_source_url(url: &str) -> Result<SourceUrl, failure::Error> {
                 );
             }
             let pb: PathBuf = url.path().parse()?;
-            SourceUrl::CsvPath(pb)
+            SourceUrl::Path(pb)
         }
         bad => bail!("Unrecognized source URL schema: {}", bad),
     };
