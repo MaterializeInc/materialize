@@ -159,6 +159,18 @@ If you don't save the dashboard then **reloading the page will destroy your edit
 Click the save floppy disk icon and copy the resulting JSON into
 `grafana/dashboards/materialize.json`.
 
+## Running with less Docker
+
+Docker can get in the way of debugging materialized—for example, it makes
+running `perf` on the materialized binary challenging. There are two easy ways
+around this:
+
+  * Running the `materialized` process outside of Docker, as described in
+    ["Running with minimal Docker"](docker-local.md).
+  * Using the [Nix test harness][nix] in the mtrlz-setup repository.
+
+[nix]: https://github.com/MaterializeInc/mtrlz-setup/tree/master/nix
+
 ## Running on AWS EC2
 
 chbench can be run semi-automatically on AWS EC2 with the help of [Terraform],
