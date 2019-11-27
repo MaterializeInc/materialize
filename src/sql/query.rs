@@ -2466,26 +2466,31 @@ where
     use UnaryFunc::*;
     let from_scalar_type = ecx.column_type(&expr).scalar_type;
     let expr = match (from_scalar_type, to_scalar_type) {
+        (Bool, String) => expr.call_unary(CastBoolToString),
         (Int32, Float32) => expr.call_unary(CastInt32ToFloat32),
         (Int32, Float64) => expr.call_unary(CastInt32ToFloat64),
         (Int32, Int64) => expr.call_unary(CastInt32ToInt64),
         (Int32, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt32ToDecimal), 0, s),
+        (Int32, String) => expr.call_unary(CastInt32ToString),
         (Int64, Decimal(_, s)) => rescale_decimal(expr.call_unary(CastInt64ToDecimal), 0, s),
         (Int64, Float32) => expr.call_unary(CastInt64ToFloat32),
         (Int64, Float64) => expr.call_unary(CastInt64ToFloat64),
         (Int64, Int32) => expr.call_unary(CastInt64ToInt32),
+        (Int64, String) => expr.call_unary(CastInt64ToString),
         (Float32, Int64) => expr.call_unary(CastFloat32ToInt64),
         (Float32, Float64) => expr.call_unary(CastFloat32ToFloat64),
         (Float32, Decimal(_, s)) => {
             let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
             expr.call_binary(s, BinaryFunc::CastFloat32ToDecimal)
         }
+        (Float32, String) => expr.call_unary(CastFloat32ToString),
         (Float64, Int64) => expr.call_unary(CastFloat64ToInt64),
         (Float64, Decimal(_, s)) => {
             let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
             expr.call_binary(s, BinaryFunc::CastFloat64ToDecimal)
         }
         (String, Float64) => expr.call_unary(CastStringToFloat64),
+        (Float64, String) => expr.call_unary(CastFloat64ToString),
         (Decimal(_, s), Int32) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt32),
         (Decimal(_, s), Int64) => rescale_decimal(expr, s, 0).call_unary(CastDecimalToInt64),
         (Decimal(_, s), Float32) => {
@@ -2501,21 +2506,23 @@ where
                 .call_binary(factor, BinaryFunc::DivFloat64)
         }
         (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),
+        (Decimal(_, s), String) => {
+            let s = ScalarExpr::literal(Datum::from(s as i32), ColumnType::new(to_scalar_type));
+            expr.call_binary(s, BinaryFunc::CastDecimalToString)
+        }
         (Date, Timestamp) => expr.call_unary(CastDateToTimestamp),
         (Date, TimestampTz) => expr.call_unary(CastDateToTimestampTz),
+        (Date, String) => expr.call_unary(CastDateToString),
         (Timestamp, TimestampTz) => expr.call_unary(CastTimestampToTimestampTz),
-        (Decimal(_, _), String) | (Bytes, String) => {
-            bail!(
-                "{} does not support casting from decimal or bytes to string",
-                name,
-            );
-        }
+        (Timestamp, String) => expr.call_unary(CastTimestampToString),
+        (TimestampTz, String) => expr.call_unary(CastTimestampTzToString),
+        (Interval, String) => expr.call_unary(CastIntervalToString),
+        (String, Bytes) => expr.call_unary(CastStringToBytes),
+        (Bytes, String) => expr.call_unary(CastBytesToString),
         (Null, _) => {
-            // assert_eq!(expr, ScalarExpr::Literal(Datum::Null, ColumnType::new(ScalarType::Null)));
             ScalarExpr::literal(Datum::Null, ColumnType::new(to_scalar_type).nullable(true))
         }
         (from, to) if from == to => expr,
-        (_, String) => expr.call_unary(CastDatumToString),
         (from, to) => {
             bail!(
                 "{} does not support casting from {:?} to {:?}",

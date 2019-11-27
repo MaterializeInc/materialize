@@ -50,7 +50,7 @@ pub enum Datum<'a> {
     /// to 38 digits of precision.
     Decimal(Significand),
     /// A sequence of untyped bytes.
-    Bytes(&'a [u8]),
+    Bytes(Cow<'a, [u8]>),
     /// A sequence of Unicode codepoints encoded as UTF-8.
     String(Cow<'a, str>),
 }
@@ -236,6 +236,13 @@ impl<'a> Datum<'a> {
         }
     }
 
+    pub fn unwrap_bytes(&'a self) -> &'a [u8] {
+        match self {
+            Datum::Bytes(b) => b,
+            _ => panic!("Datum::unwrap_bytes called on {:?}", self),
+        }
+    }
+
     pub fn scalar_type(&self) -> ScalarType {
         match self {
             Datum::Null => ScalarType::Null,
@@ -374,7 +381,7 @@ impl<'a> From<&'a str> for Datum<'a> {
 
 impl<'a> From<&'a [u8]> for Datum<'a> {
     fn from(b: &'a [u8]) -> Datum<'a> {
-        Datum::Bytes(b)
+        Datum::Bytes(Cow::from(b))
     }
 }
 
@@ -510,7 +517,7 @@ impl<'a> ScalarType {
                 Datum::TimestampTz(DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc))
             }
             ScalarType::Interval => Datum::Interval(Interval::Months(0)),
-            ScalarType::Bytes => Datum::Bytes(&[]),
+            ScalarType::Bytes => Datum::Bytes(Cow::from(&b""[..])),
             ScalarType::String => Datum::cow_from_str(""),
         }
     }

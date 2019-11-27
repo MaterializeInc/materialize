@@ -3,11 +3,15 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::borrow::Cow;
 use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
+use std::fmt::Write;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use encoding::label::encoding_from_whatwg_label;
+use encoding::DecoderTrap;
 use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
@@ -15,10 +19,6 @@ pub use crate::like::build_like_regex_from_string;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, Interval, ScalarType};
-
-use encoding::label::encoding_from_whatwg_label;
-use encoding::DecoderTrap;
-use std::borrow::Cow;
 
 pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     match (&a, &b) {
@@ -79,6 +79,23 @@ pub fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_float64().abs())
 }
 
+pub fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    match a.unwrap_bool() {
+        true => Datum::from("true"),
+        false => Datum::from("false"),
+    }
+}
+
+pub fn cast_int32_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::String(Cow::Owned(a.unwrap_int32().to_string()))
+}
+
 pub fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
@@ -102,6 +119,13 @@ pub fn cast_int32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i64::from(a.unwrap_int32()))
 }
 
+pub fn cast_int32_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::from(i128::from(a.unwrap_int32()))
+}
+
 pub fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
@@ -111,13 +135,6 @@ pub fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     // The SQL standard says this an error, but runtime errors are complicated
     // in a streaming setting.
     Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
-}
-
-pub fn cast_int32_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
-    Datum::from(i128::from(a.unwrap_int32()))
 }
 
 pub fn cast_int64_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -141,6 +158,13 @@ pub fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     }
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f64)
+}
+
+pub fn cast_int64_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::String(Cow::Owned(a.unwrap_int64().to_string()))
 }
 
 pub fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -179,6 +203,13 @@ pub fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from((f * 10_f32.powi(scale)) as i128)
 }
 
+pub fn cast_float32_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::String(Cow::Owned(a.unwrap_float32().to_string()))
+}
+
 pub fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
@@ -187,10 +218,12 @@ pub fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float64() as i64)
 }
+
 pub fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     if a.is_null() || b.is_null() {
         return Datum::Null;
     }
+    assert!(!b.is_null());
     let f = a.unwrap_float64();
     let scale = b.unwrap_int32();
 
@@ -206,26 +239,11 @@ pub fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from((f * 10_f64.powi(scale)) as i128)
 }
 
-pub fn cast_datum_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    let owned = |v: String| Datum::String(Cow::Owned(v));
-    match a {
-        Datum::Null => Datum::cow_from_str("null"),
-        Datum::False => Datum::cow_from_str("false"),
-        Datum::True => Datum::cow_from_str("true"),
-        Datum::Int32(v) => owned(v.to_string()),
-        Datum::Int64(v) => owned(v.to_string()),
-        Datum::Float32(v) => owned(v.to_string()),
-        Datum::Float64(v) => owned(v.to_string()),
-        Datum::Date(v) => owned(v.to_string()),
-        Datum::Timestamp(v) => owned(v.to_string()),
-        Datum::TimestampTz(v) => owned(v.to_string()),
-        Datum::Interval(v) => owned(v.to_string()),
-        // TODO: pip the precision and scale from the scalartype to here
-        Datum::Decimal(_) => unreachable!("dec should be caught in the cast match"),
-        // TODO: not sure what postgres does here
-        Datum::Bytes(_) => unreachable!("bytes should be caught in the cast match"),
-        Datum::String(v) => Datum::String(v),
+pub fn cast_float64_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
     }
+    Datum::String(Cow::Owned(a.unwrap_float64().to_string()))
 }
 
 pub fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -256,12 +274,31 @@ pub fn cast_decimal_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
 
+pub fn cast_decimal_to_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    // TODO(benesch): a better way to pass the scale into the dataflow layer.
+    assert!(!b.is_null());
+    let scale = b.unwrap_int32() as u8;
+    Datum::String(Cow::Owned(
+        a.unwrap_decimal().with_scale(scale as u8).to_string(),
+    ))
+}
+
 pub fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
     }
     let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
     Datum::from(val.ok())
+}
+
+pub fn cast_string_to_bytes<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::Bytes(Cow::Owned(a.unwrap_str().as_bytes().to_vec()))
 }
 
 pub fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
@@ -281,11 +318,52 @@ pub fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
     ))
 }
 
+pub fn cast_date_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::String(Cow::Owned(a.unwrap_date().to_string()))
+}
+
 pub fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
     if a.is_null() {
         return Datum::Null;
     }
     Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
+}
+
+pub fn cast_timestamp_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::String(Cow::Owned(a.unwrap_timestamp().to_string()))
+}
+
+pub fn cast_timestamptz_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::String(Cow::Owned(a.unwrap_timestamptz().to_string()))
+}
+
+pub fn cast_interval_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    Datum::String(Cow::Owned(a.unwrap_interval().to_string()))
+}
+
+pub fn cast_bytes_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    if a.is_null() {
+        return Datum::Null;
+    }
+    let bytes = a.unwrap_bytes();
+    let mut out = String::from("\\x");
+    out.reserve(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut out, "{:x}", byte).expect("writing to string cannot fail");
+    }
+    Datum::String(Cow::Owned(out))
 }
 
 pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -1050,6 +1128,7 @@ pub enum BinaryFunc {
     DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
+    CastDecimalToString,
 }
 
 impl BinaryFunc {
@@ -1097,6 +1176,7 @@ impl BinaryFunc {
             BinaryFunc::DateTrunc => date_trunc,
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
+            BinaryFunc::CastDecimalToString => cast_decimal_to_string,
         }
     }
 
@@ -1180,6 +1260,7 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             },
+            CastDecimalToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -1236,6 +1317,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
+            BinaryFunc::CastDecimalToString => f.write_str("dectostr"),
         }
     }
 }
@@ -1263,26 +1345,36 @@ pub enum UnaryFunc {
     AbsInt64,
     AbsFloat32,
     AbsFloat64,
+    CastBoolToString,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
     CastInt32ToInt64,
+    CastInt32ToString,
     CastInt64ToInt32,
     CastInt32ToDecimal,
     CastInt64ToDecimal,
     CastInt64ToFloat32,
     CastInt64ToFloat64,
+    CastInt64ToString,
     CastFloat32ToInt64,
     CastFloat32ToFloat64,
+    CastFloat32ToString,
     CastFloat64ToInt64,
+    CastFloat64ToString,
     CastDecimalToInt32,
     CastDecimalToInt64,
     CastDecimalToFloat32,
     CastDecimalToFloat64,
+    CastStringToBytes,
     CastStringToFloat64,
     CastDateToTimestamp,
     CastDateToTimestampTz,
+    CastDateToString,
     CastTimestampToTimestampTz,
-    CastDatumToString,
+    CastTimestampToString,
+    CastTimestampTzToString,
+    CastIntervalToString,
+    CastBytesToString,
     Ascii,
     ExtractIntervalYear,
     ExtractIntervalMonth,
@@ -1318,26 +1410,36 @@ impl UnaryFunc {
             UnaryFunc::AbsInt64 => abs_int64,
             UnaryFunc::AbsFloat32 => abs_float32,
             UnaryFunc::AbsFloat64 => abs_float64,
+            UnaryFunc::CastBoolToString => cast_bool_to_string,
             UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32,
             UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64,
             UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64,
-            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
             UnaryFunc::CastInt32ToDecimal => cast_int32_to_decimal,
+            UnaryFunc::CastInt32ToString => cast_int32_to_string,
+            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
             UnaryFunc::CastInt64ToDecimal => cast_int64_to_decimal,
             UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32,
             UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64,
+            UnaryFunc::CastInt64ToString => cast_int64_to_string,
             UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64,
             UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64,
+            UnaryFunc::CastFloat32ToString => cast_float32_to_string,
             UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64,
+            UnaryFunc::CastFloat64ToString => cast_float64_to_string,
             UnaryFunc::CastDecimalToInt32 => cast_decimal_to_int32,
             UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
             UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
             UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64,
+            UnaryFunc::CastStringToBytes => cast_string_to_bytes,
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
             UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz,
+            UnaryFunc::CastDateToString => cast_date_to_string,
             UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz,
-            UnaryFunc::CastDatumToString => cast_datum_to_string,
+            UnaryFunc::CastTimestampToString => cast_timestamp_to_string,
+            UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string,
+            UnaryFunc::CastIntervalToString => cast_interval_to_string,
+            UnaryFunc::CastBytesToString => cast_bytes_to_string,
             UnaryFunc::Ascii => ascii,
             UnaryFunc::ExtractIntervalYear => extract_interval_year,
             UnaryFunc::ExtractIntervalMonth => extract_interval_month,
@@ -1385,28 +1487,44 @@ impl UnaryFunc {
 
             Ascii => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
 
-            CastInt32ToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
-            CastInt32ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastInt64ToInt32 => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
-            CastInt32ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
-            CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
-            CastInt64ToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
-            CastInt64ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastFloat32ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastFloat32ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastFloat64ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastDecimalToInt32 => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
-            CastDecimalToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastDecimalToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
-            CastDecimalToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastStringToBytes => ColumnType::new(ScalarType::Bytes).nullable(in_nullable),
+
+            CastBoolToString
+            | CastInt32ToString
+            | CastInt64ToString
+            | CastFloat32ToString
+            | CastFloat64ToString
+            | CastDateToString
+            | CastTimestampToString
+            | CastTimestampTzToString
+            | CastIntervalToString
+            | CastBytesToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
+
+            CastInt32ToFloat32 | CastInt64ToFloat32 | CastDecimalToFloat32 => {
+                ColumnType::new(ScalarType::Float32).nullable(in_nullable)
+            }
+
+            CastInt32ToFloat64 | CastInt64ToFloat64 | CastFloat32ToFloat64
+            | CastDecimalToFloat64 | CastStringToFloat64 => {
+                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
+            }
+
+            CastInt64ToInt32 | CastDecimalToInt32 => {
+                ColumnType::new(ScalarType::Int32).nullable(in_nullable)
+            }
+
+            CastInt32ToInt64 | CastDecimalToInt64 | CastFloat32ToInt64 | CastFloat64ToInt64 => {
+                ColumnType::new(ScalarType::Int64).nullable(in_nullable)
+            }
+
+            CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
+            CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
+
             CastDateToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(in_nullable),
-            CastDateToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable),
-            CastTimestampToTimestampTz => {
+
+            CastDateToTimestampTz | CastTimestampToTimestampTz => {
                 ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
             }
-            CastDatumToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
             | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
@@ -1449,26 +1567,36 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsInt64 => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
+            UnaryFunc::CastBoolToString => f.write_str("booltostr"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
             UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),
             UnaryFunc::CastInt32ToInt64 => f.write_str("i32toi64"),
-            UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
+            UnaryFunc::CastInt32ToString => f.write_str("i32tostr"),
             UnaryFunc::CastInt32ToDecimal => f.write_str("i32todec"),
+            UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
             UnaryFunc::CastInt64ToDecimal => f.write_str("i64todec"),
             UnaryFunc::CastInt64ToFloat32 => f.write_str("i64tof32"),
             UnaryFunc::CastInt64ToFloat64 => f.write_str("i64tof64"),
+            UnaryFunc::CastInt64ToString => f.write_str("i64tostr"),
             UnaryFunc::CastFloat32ToInt64 => f.write_str("f32toi64"),
             UnaryFunc::CastFloat32ToFloat64 => f.write_str("f32tof64"),
+            UnaryFunc::CastFloat32ToString => f.write_str("f32tostr"),
             UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
+            UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
             UnaryFunc::CastDecimalToInt32 => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
-            UnaryFunc::CastStringToFloat64 => f.write_str("stringtof64"),
+            UnaryFunc::CastStringToBytes => f.write_str("strtobytes"),
+            UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
+            UnaryFunc::CastDateToString => f.write_str("datetostr"),
             UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),
-            UnaryFunc::CastDatumToString => f.write_str("datumtostring"),
+            UnaryFunc::CastTimestampToString => f.write_str("tstostr"),
+            UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
+            UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
+            UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),

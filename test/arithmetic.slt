@@ -291,3 +291,23 @@ query T
 select cast(cast(1 as int) AS TEXT)
 ----
 1
+
+query TT
+SELECT false::text, true::text
+----
+false  true
+
+query TTTTT
+SELECT 1::smallint::text, 1::bigint::text, 1.0::text, 1.0::float::text, 1.0::double::text
+----
+1  1  1.0  1  1
+
+query TTTTT
+SELECT (-1)::smallint::text, (-1)::bigint::text, (-1.0)::text, (-1.0)::float::text, (-1.0)::double::text
+----
+-1  -1  -1.0  -1  -1
+
+query TTT
+SELECT 1.1::text, 1.1::float::text, 1.1::double::text
+----
+1.1  1.1  1.1
