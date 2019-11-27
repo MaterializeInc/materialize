@@ -84,7 +84,13 @@
       "yBucketSize": null
     },
     {
-      "aliasColors": {},
+      "aliasColors": {
+        "max": "purple",
+        "median": "blue",
+        "p001": "green",
+        "p95": "orange",
+        "p99": "red"
+      },
       "bars": false,
       "dashLength": 10,
       "dashes": false,
@@ -123,30 +129,36 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(1, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
-          "format": "heatmap",
+          "expr": "histogram_quantile(1, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le))",
+          "format": "time_series",
           "hide": false,
           "instant": false,
           "legendFormat": "max",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
-          "hide": false,
-          "legendFormat": "p99",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le))",
+          "hide": false,
+          "legendFormat": "p99",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le))",
           "hide": false,
           "legendFormat": "p95",
+          "refId": "C"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le))",
+          "hide": false,
+          "legendFormat": "median",
           "refId": "D"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(mz_perf_peek_durations_bucket[1m])) by (le))",
+          "expr": "histogram_quantile(0.001, sum(rate(mz_perf_peek_durations_bucket[30s])) by (le))",
           "hide": false,
-          "legendFormat": "median",
-          "refId": "C"
+          "legendFormat": "p001",
+          "refId": "E"
         }
       ],
       "thresholds": [],
@@ -256,7 +268,13 @@
       "yBucketSize": null
     },
     {
-      "aliasColors": {},
+      "aliasColors": {
+        "max": "purple",
+        "median": "blue",
+        "p001": "green",
+        "p95": "orange",
+        "p99": "red"
+      },
       "bars": false,
       "dashLength": 10,
       "dashes": false,
@@ -297,22 +315,27 @@
         {
           "expr": "histogram_quantile(1, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "max",
-          "refId": "B"
+          "refId": "A"
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "p99",
-          "refId": "D"
+          "refId": "B"
         },
         {
           "expr": "histogram_quantile(0.95, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "p95",
-          "refId": "A"
+          "refId": "C"
         },
         {
           "expr": "histogram_quantile(0.5, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
           "legendFormat": "median",
-          "refId": "C"
+          "refId": "D"
+        },
+        {
+          "expr": "histogram_quantile(0.001, sum(rate(mz_client_peek_seconds_bucket[30s])) by (le))",
+          "legendFormat": "p001",
+          "refId": "E"
         }
       ],
       "thresholds": [],
@@ -422,7 +445,7 @@
         {
           "format": "ms",
           "label": "Lag (from -> to)",
-          "logBase": 1,
+          "logBase": 2,
           "max": null,
           "min": null,
           "show": true
@@ -1092,7 +1115,7 @@
       "timeFrom": null,
       "timeRegions": [],
       "timeShift": null,
-      "title": "MySQL TPCCH Tables",
+      "title": "MySQL TPCCH Table Row Counts",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1194,7 +1217,7 @@
       "yBucketSize": null
     }
   ],
-  "refresh": "5s",
+  "refresh": "",
   "schemaVersion": 19,
   "style": "dark",
   "tags": [],
@@ -1222,5 +1245,5 @@
   "timezone": "",
   "title": "Materialize Metrics",
   "uid": "mz",
-  "version": 1
+  "version": 13
 }
