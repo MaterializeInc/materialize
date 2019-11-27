@@ -1217,7 +1217,7 @@
       "yBucketSize": null
     }
   ],
-  "refresh": "",
+  "refresh": "30s",
   "schemaVersion": 19,
   "style": "dark",
   "tags": [],
