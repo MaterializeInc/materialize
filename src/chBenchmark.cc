@@ -360,6 +360,7 @@ enum LongOnlyOpts {
     PEEK_MAX_DELAY,
     FLUSH_EVERY,
     MZ_URL,
+    KAFKA_URL,
     SCHEMA_REGISTRY_URL,
 };
 
@@ -384,6 +385,7 @@ static int run(int argc, char* argv[]) {
         {"peek-max-delay", required_argument, &longopt_idx, PEEK_MAX_DELAY},
         {"flush-every", required_argument, &longopt_idx, FLUSH_EVERY},
         {"mz-url", required_argument, &longopt_idx, MZ_URL},
+        {"kafka-url", required_argument, &longopt_idx, KAFKA_URL},
         {"schema-registry-url", required_argument, &longopt_idx, SCHEMA_REGISTRY_URL},
         {nullptr, 0, nullptr, 0}};
 
@@ -436,6 +438,9 @@ static int run(int argc, char* argv[]) {
             break;
         case MZ_URL:
             mzCfg.materializedUrl = optarg;
+            break;
+        case KAFKA_URL:
+            mzCfg.kafkaUrl = optarg;
             break;
         case SCHEMA_REGISTRY_URL:
             mzCfg.schemaRegistryUrl = optarg;
