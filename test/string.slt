@@ -420,3 +420,8 @@ query T
 select replace('in a longer string', 'longer', 'shorter')
 ----
 in a shorter string
+
+query T
+SELECT 'hello'::bytea::text
+----
+\x68656c6c6f

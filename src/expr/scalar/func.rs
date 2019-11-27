@@ -3,11 +3,15 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
+use std::borrow::Cow;
 use std::cmp;
 use std::convert::TryFrom;
 use std::fmt;
+use std::fmt::Write;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use encoding::label::encoding_from_whatwg_label;
+use encoding::DecoderTrap;
 use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
@@ -16,96 +20,78 @@ use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, Interval, ScalarType};
 
-use encoding::label::encoding_from_whatwg_label;
-use encoding::DecoderTrap;
-use std::borrow::Cow;
-
 pub fn and<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    match (&a, &b) {
+    match (a, b) {
         (Datum::False, _) => Datum::False,
         (_, Datum::False) => Datum::False,
         (Datum::Null, _) => Datum::Null,
         (_, Datum::Null) => Datum::Null,
         (Datum::True, Datum::True) => Datum::True,
-        _ => panic!("Cannot compute {:?} AND {:?}", a, b),
+        _ => unreachable!(),
     }
 }
 
 pub fn or<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    match (&a, &b) {
+    match (a, b) {
         (Datum::True, _) => Datum::True,
         (_, Datum::True) => Datum::True,
         (Datum::Null, _) => Datum::Null,
         (_, Datum::Null) => Datum::Null,
         (Datum::False, Datum::False) => Datum::False,
-        _ => panic!("Cannot compute {:?} OR {:?}", a, b),
+        _ => unreachable!(),
     }
 }
 
 pub fn not<'a>(a: Datum<'a>) -> Datum<'a> {
-    match &a {
-        Datum::False => Datum::True,
-        Datum::True => Datum::False,
-        Datum::Null => Datum::Null,
-        _ => panic!("Cannot compute NOT {:?}", a),
-    }
+    Datum::from(!a.unwrap_bool())
 }
 
 pub fn abs_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_int32().abs())
 }
 
 pub fn abs_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_int64().abs())
 }
 
 pub fn abs_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float32().abs())
 }
 
 pub fn abs_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float64().abs())
 }
 
-pub fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
+pub fn cast_bool_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    match a.unwrap_bool() {
+        true => Datum::from("true"),
+        false => Datum::from("false"),
     }
+}
+
+pub fn cast_int32_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_int32().to_string()))
+}
+
+pub fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int32() as f32)
 }
 
 pub fn cast_int32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_int32()))
 }
 
 pub fn cast_int32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(i64::from(a.unwrap_int32()))
 }
 
+pub fn cast_int32_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(i128::from(a.unwrap_int32()))
+}
+
 pub fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     // TODO(benesch): we need to do something better than panicking if the
     // datum doesn't fit in an int32, but what? Poison the whole dataflow?
     // The SQL standard says this an error, but runtime errors are complicated
@@ -113,57 +99,36 @@ pub fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(i32::try_from(a.unwrap_int64()).unwrap())
 }
 
-pub fn cast_int32_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
-    Datum::from(i128::from(a.unwrap_int32()))
-}
-
 pub fn cast_int64_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(i128::from(a.unwrap_int64()))
 }
 
 pub fn cast_int64_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f32)
 }
 
 pub fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f64)
 }
 
+pub fn cast_int64_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_int64().to_string()))
+}
+
 pub fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float32() as i64)
 }
 
 pub fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
 pub fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let f = a.unwrap_float32();
     let scale = b.unwrap_int32();
 
@@ -179,18 +144,17 @@ pub fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from((f * 10_f32.powi(scale)) as i128)
 }
 
+pub fn cast_float32_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_float32().to_string()))
+}
+
 pub fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
     // i64 (https://github.com/rust-lang/rust/issues/10184).
     Datum::from(a.unwrap_float64() as i64)
 }
+
 pub fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let f = a.unwrap_float64();
     let scale = b.unwrap_int32();
 
@@ -206,121 +170,101 @@ pub fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from((f * 10_f64.powi(scale)) as i128)
 }
 
-pub fn cast_datum_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
-    let owned = |v: String| Datum::String(Cow::Owned(v));
-    match a {
-        Datum::Null => Datum::cow_from_str("null"),
-        Datum::False => Datum::cow_from_str("false"),
-        Datum::True => Datum::cow_from_str("true"),
-        Datum::Int32(v) => owned(v.to_string()),
-        Datum::Int64(v) => owned(v.to_string()),
-        Datum::Float32(v) => owned(v.to_string()),
-        Datum::Float64(v) => owned(v.to_string()),
-        Datum::Date(v) => owned(v.to_string()),
-        Datum::Timestamp(v) => owned(v.to_string()),
-        Datum::TimestampTz(v) => owned(v.to_string()),
-        Datum::Interval(v) => owned(v.to_string()),
-        // TODO: pip the precision and scale from the scalartype to here
-        Datum::Decimal(_) => unreachable!("dec should be caught in the cast match"),
-        // TODO: not sure what postgres does here
-        Datum::Bytes(_) => unreachable!("bytes should be caught in the cast match"),
-        Datum::String(v) => Datum::String(v),
-    }
+pub fn cast_float64_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_float64().to_string()))
 }
 
 pub fn cast_decimal_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_decimal().as_i128() as i32)
 }
 
 pub fn cast_decimal_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_decimal().as_i128() as i64)
 }
 
 pub fn cast_decimal_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_decimal().as_i128() as f32)
 }
 
 pub fn cast_decimal_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
 
+pub fn cast_decimal_to_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    // TODO(benesch): a better way to pass the scale into the dataflow layer.
+    let scale = b.unwrap_int32() as u8;
+    Datum::String(Cow::Owned(
+        a.unwrap_decimal().with_scale(scale as u8).to_string(),
+    ))
+}
+
 pub fn cast_string_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     let val: Result<f64, _> = a.unwrap_str().to_lowercase().parse();
     Datum::from(val.ok())
 }
 
+pub fn cast_string_to_bytes<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::Bytes(Cow::Owned(a.unwrap_str().as_bytes().to_vec()))
+}
+
 pub fn cast_date_to_timestamp<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::Timestamp(a.unwrap_date().and_hms(0, 0, 0))
 }
 
 pub fn cast_date_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::TimestampTz(DateTime::<Utc>::from_utc(
         a.unwrap_date().and_hms(0, 0, 0),
         Utc,
     ))
 }
 
+pub fn cast_date_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_date().to_string()))
+}
+
 pub fn cast_timestamp_to_timestamptz<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::TimestampTz(DateTime::<Utc>::from_utc(a.unwrap_timestamp(), Utc))
 }
 
-pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
+pub fn cast_timestamp_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_timestamp().to_string()))
+}
+
+pub fn cast_timestamptz_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_timestamptz().to_string()))
+}
+
+pub fn cast_interval_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::String(Cow::Owned(a.unwrap_interval().to_string()))
+}
+
+pub fn cast_bytes_to_string<'a>(a: Datum<'a>) -> Datum<'a> {
+    let bytes = a.unwrap_bytes();
+    let mut out = String::from("\\x");
+    out.reserve(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut out, "{:x}", byte).expect("writing to string cannot fail");
     }
+    Datum::String(Cow::Owned(out))
+}
+
+pub fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_int32() + b.unwrap_int32())
 }
 
 pub fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_int64() + b.unwrap_int64())
 }
 
 pub fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float32() + b.unwrap_float32())
 }
 
 pub fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float64() + b.unwrap_float64())
 }
 
 pub fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
-
     let dt = a.unwrap_timestamp();
     Datum::Timestamp(match b {
         Datum::Interval(Interval::Months(months)) => add_timestamp_months(dt, months),
@@ -333,10 +277,6 @@ pub fn add_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
-
     let dt = a.unwrap_timestamptz().naive_utc();
 
     let new_ndt = match b {
@@ -439,88 +379,52 @@ fn add_timestamp_duration(
 }
 
 pub fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
 pub fn sub_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_int32() - b.unwrap_int32())
 }
 
 pub fn sub_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_int64() - b.unwrap_int64())
 }
 
 pub fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float32() - b.unwrap_float32())
 }
 
 pub fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float64() - b.unwrap_float64())
 }
 
 pub fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
 }
 
 pub fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_int32() * b.unwrap_int32())
 }
 
 pub fn mul_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_int64() * b.unwrap_int64())
 }
 
 pub fn mul_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float32() * b.unwrap_float32())
 }
 
 pub fn mul_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_float64() * b.unwrap_float64())
 }
 
 pub fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
 // TODO(jamii) we don't currently have any way of reporting errors from functions, so for now we just adopt sqlite's approach 1/0 = null
 
 pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -530,9 +434,6 @@ pub fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -542,9 +443,6 @@ pub fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -554,9 +452,6 @@ pub fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -566,9 +461,6 @@ pub fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -578,9 +470,6 @@ pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_int32();
     if b == 0 {
         Datum::Null
@@ -590,9 +479,6 @@ pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_int64();
     if b == 0 {
         Datum::Null
@@ -602,9 +488,6 @@ pub fn mod_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_float32();
     if b == 0.0 {
         Datum::Null
@@ -614,9 +497,6 @@ pub fn mod_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_float64();
     if b == 0.0 {
         Datum::Null
@@ -626,9 +506,6 @@ pub fn mod_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let b = b.unwrap_decimal();
     if b == 0 {
         Datum::Null
@@ -638,103 +515,66 @@ pub fn mod_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn neg_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(-a.unwrap_int32())
 }
 
 pub fn neg_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(-a.unwrap_int64())
 }
 
 pub fn neg_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(-a.unwrap_float32())
 }
 
 pub fn neg_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(-a.unwrap_float64())
 }
 
 pub fn neg_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(-a.unwrap_decimal())
 }
 
 pub fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a == b)
 }
 
 pub fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a != b)
 }
 
 pub fn lt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a < b)
 }
 
 pub fn lte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a <= b)
 }
 
 pub fn gt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a > b)
 }
 
 pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a >= b)
 }
 
 pub fn to_char<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if let Datum::TimestampTz(datetime) = a {
-        if let Datum::String(format_string) = b {
-            // PostgreSQL parses this weird format string, hand-interpret for now
-            // to unblock Metabase progress. Will have to revisit formatting strings and
-            // other versions of to_char() in the future.
-            if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
-                let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
-                return Datum::String(Cow::Owned(
-                    datetime.format(interpreted_format_string).to_string(),
-                ));
-            }
-        }
+    let datetime = a.unwrap_timestamptz();
+    let format_string = b.unwrap_str();
+    // PostgreSQL parses this weird format string, hand-interpret for now
+    // to unblock Metabase progress. Will have to revisit formatting strings and
+    // other versions of to_char() in the future.
+    if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
+        let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
+        Datum::String(Cow::Owned(
+            datetime.format(interpreted_format_string).to_string(),
+        ))
+    } else {
+        Datum::Null
     }
-    Datum::Null
 }
 
 pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
     let haystack = a.unwrap_str();
     match build_like_regex_from_string(b.unwrap_str()) {
         Ok(needle) => Datum::from(needle.is_match(haystack)),
@@ -747,17 +587,11 @@ pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn match_cached_regex<'a>(a: Datum<'a>, needle: &Regex) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     let haystack = a.unwrap_str();
     Datum::from(needle.is_match(haystack))
 }
 
 pub fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     match a.unwrap_str().chars().next() {
         None => Datum::Int32(0),
         Some(v) => Datum::Int32(v as i32),
@@ -765,121 +599,70 @@ pub fn ascii<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn extract_interval_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_interval().years())
 }
 
 pub fn extract_interval_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_interval().months())
 }
 
 pub fn extract_interval_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_interval().days())
 }
 
 pub fn extract_interval_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_interval().hours())
 }
 
 pub fn extract_interval_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_interval().minutes())
 }
 
 pub fn extract_interval_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(a.unwrap_interval().seconds())
 }
 
 pub fn extract_timestamp_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamp().year()))
 }
 
 pub fn extract_timestamptz_year<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamptz().year()))
 }
 
 pub fn extract_timestamp_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamp().month()))
 }
 
 pub fn extract_timestamptz_month<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamptz().month()))
 }
 
 pub fn extract_timestamp_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamp().day()))
 }
 
 pub fn extract_timestamptz_day<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamptz().day()))
 }
 
 pub fn extract_timestamp_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamp().hour()))
 }
 
 pub fn extract_timestamptz_hour<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamptz().hour()))
 }
 
 pub fn extract_timestamp_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamp().minute()))
 }
 
 pub fn extract_timestamptz_minute<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     Datum::from(f64::from(a.unwrap_timestamptz().minute()))
 }
 
 pub fn extract_timestamp_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     let a = a.unwrap_timestamp();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
@@ -887,9 +670,6 @@ pub fn extract_timestamp_second<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn extract_timestamptz_second<'a>(a: Datum<'a>) -> Datum<'a> {
-    if a.is_null() {
-        return Datum::Null;
-    }
     let a = a.unwrap_timestamptz();
     let s = f64::from(a.second());
     let ns = f64::from(a.nanosecond()) / 1e9;
@@ -1050,6 +830,7 @@ pub enum BinaryFunc {
     DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
+    CastDecimalToString,
 }
 
 impl BinaryFunc {
@@ -1097,6 +878,7 @@ impl BinaryFunc {
             BinaryFunc::DateTrunc => date_trunc,
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
+            BinaryFunc::CastDecimalToString => cast_decimal_to_string,
         }
     }
 
@@ -1180,6 +962,7 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             },
+            CastDecimalToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -1187,6 +970,14 @@ impl BinaryFunc {
             | SubTimestampTzInterval => input1_type,
 
             DateTrunc => ColumnType::new(ScalarType::Timestamp).nullable(false),
+        }
+    }
+
+    /// Whether the function output is NULL if any of its inputs are NULL.
+    pub fn propagates_nulls(self) -> bool {
+        match self {
+            BinaryFunc::And | BinaryFunc::Or => false,
+            _ => true,
         }
     }
 }
@@ -1236,6 +1027,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
+            BinaryFunc::CastDecimalToString => f.write_str("dectostr"),
         }
     }
 }
@@ -1263,26 +1055,36 @@ pub enum UnaryFunc {
     AbsInt64,
     AbsFloat32,
     AbsFloat64,
+    CastBoolToString,
     CastInt32ToFloat32,
     CastInt32ToFloat64,
     CastInt32ToInt64,
+    CastInt32ToString,
     CastInt64ToInt32,
     CastInt32ToDecimal,
     CastInt64ToDecimal,
     CastInt64ToFloat32,
     CastInt64ToFloat64,
+    CastInt64ToString,
     CastFloat32ToInt64,
     CastFloat32ToFloat64,
+    CastFloat32ToString,
     CastFloat64ToInt64,
+    CastFloat64ToString,
     CastDecimalToInt32,
     CastDecimalToInt64,
     CastDecimalToFloat32,
     CastDecimalToFloat64,
+    CastStringToBytes,
     CastStringToFloat64,
     CastDateToTimestamp,
     CastDateToTimestampTz,
+    CastDateToString,
     CastTimestampToTimestampTz,
-    CastDatumToString,
+    CastTimestampToString,
+    CastTimestampTzToString,
+    CastIntervalToString,
+    CastBytesToString,
     Ascii,
     ExtractIntervalYear,
     ExtractIntervalMonth,
@@ -1318,26 +1120,36 @@ impl UnaryFunc {
             UnaryFunc::AbsInt64 => abs_int64,
             UnaryFunc::AbsFloat32 => abs_float32,
             UnaryFunc::AbsFloat64 => abs_float64,
+            UnaryFunc::CastBoolToString => cast_bool_to_string,
             UnaryFunc::CastInt32ToFloat32 => cast_int32_to_float32,
             UnaryFunc::CastInt32ToFloat64 => cast_int32_to_float64,
             UnaryFunc::CastInt32ToInt64 => cast_int32_to_int64,
-            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
             UnaryFunc::CastInt32ToDecimal => cast_int32_to_decimal,
+            UnaryFunc::CastInt32ToString => cast_int32_to_string,
+            UnaryFunc::CastInt64ToInt32 => cast_int64_to_int32,
             UnaryFunc::CastInt64ToDecimal => cast_int64_to_decimal,
             UnaryFunc::CastInt64ToFloat32 => cast_int64_to_float32,
             UnaryFunc::CastInt64ToFloat64 => cast_int64_to_float64,
+            UnaryFunc::CastInt64ToString => cast_int64_to_string,
             UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64,
             UnaryFunc::CastFloat32ToFloat64 => cast_float32_to_float64,
+            UnaryFunc::CastFloat32ToString => cast_float32_to_string,
             UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64,
+            UnaryFunc::CastFloat64ToString => cast_float64_to_string,
             UnaryFunc::CastDecimalToInt32 => cast_decimal_to_int32,
             UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
             UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
             UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64,
+            UnaryFunc::CastStringToBytes => cast_string_to_bytes,
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
             UnaryFunc::CastDateToTimestampTz => cast_date_to_timestamptz,
+            UnaryFunc::CastDateToString => cast_date_to_string,
             UnaryFunc::CastTimestampToTimestampTz => cast_timestamp_to_timestamptz,
-            UnaryFunc::CastDatumToString => cast_datum_to_string,
+            UnaryFunc::CastTimestampToString => cast_timestamp_to_string,
+            UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string,
+            UnaryFunc::CastIntervalToString => cast_interval_to_string,
+            UnaryFunc::CastBytesToString => cast_bytes_to_string,
             UnaryFunc::Ascii => ascii,
             UnaryFunc::ExtractIntervalYear => extract_interval_year,
             UnaryFunc::ExtractIntervalMonth => extract_interval_month,
@@ -1385,28 +1197,44 @@ impl UnaryFunc {
 
             Ascii => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
 
-            CastInt32ToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
-            CastInt32ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastInt64ToInt32 => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
-            CastInt32ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
-            CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
-            CastInt64ToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
-            CastInt64ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastFloat32ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastFloat32ToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastFloat64ToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastDecimalToInt32 => ColumnType::new(ScalarType::Int32).nullable(in_nullable),
-            CastDecimalToInt64 => ColumnType::new(ScalarType::Int64).nullable(in_nullable),
-            CastDecimalToFloat32 => ColumnType::new(ScalarType::Float32).nullable(in_nullable),
-            CastDecimalToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
-            CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
+            CastStringToBytes => ColumnType::new(ScalarType::Bytes).nullable(in_nullable),
+
+            CastBoolToString
+            | CastInt32ToString
+            | CastInt64ToString
+            | CastFloat32ToString
+            | CastFloat64ToString
+            | CastDateToString
+            | CastTimestampToString
+            | CastTimestampTzToString
+            | CastIntervalToString
+            | CastBytesToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
+
+            CastInt32ToFloat32 | CastInt64ToFloat32 | CastDecimalToFloat32 => {
+                ColumnType::new(ScalarType::Float32).nullable(in_nullable)
+            }
+
+            CastInt32ToFloat64 | CastInt64ToFloat64 | CastFloat32ToFloat64
+            | CastDecimalToFloat64 | CastStringToFloat64 => {
+                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
+            }
+
+            CastInt64ToInt32 | CastDecimalToInt32 => {
+                ColumnType::new(ScalarType::Int32).nullable(in_nullable)
+            }
+
+            CastInt32ToInt64 | CastDecimalToInt64 | CastFloat32ToInt64 | CastFloat64ToInt64 => {
+                ColumnType::new(ScalarType::Int64).nullable(in_nullable)
+            }
+
+            CastInt32ToDecimal => ColumnType::new(ScalarType::Decimal(10, 0)).nullable(in_nullable),
+            CastInt64ToDecimal => ColumnType::new(ScalarType::Decimal(20, 0)).nullable(in_nullable),
+
             CastDateToTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(in_nullable),
-            CastDateToTimestampTz => ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable),
-            CastTimestampToTimestampTz => {
+
+            CastDateToTimestampTz | CastTimestampToTimestampTz => {
                 ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
             }
-            CastDatumToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
             | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
@@ -1433,6 +1261,14 @@ impl UnaryFunc {
             }
         }
     }
+
+    /// Whether the function output is NULL if any of its inputs are NULL.
+    pub fn propagates_nulls(self) -> bool {
+        match self {
+            UnaryFunc::IsNull => false,
+            _ => true,
+        }
+    }
 }
 
 impl fmt::Display for UnaryFunc {
@@ -1449,26 +1285,36 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::AbsInt64 => f.write_str("abs"),
             UnaryFunc::AbsFloat32 => f.write_str("abs"),
             UnaryFunc::AbsFloat64 => f.write_str("abs"),
+            UnaryFunc::CastBoolToString => f.write_str("booltostr"),
             UnaryFunc::CastInt32ToFloat32 => f.write_str("i32tof32"),
             UnaryFunc::CastInt32ToFloat64 => f.write_str("i32tof64"),
             UnaryFunc::CastInt32ToInt64 => f.write_str("i32toi64"),
-            UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
+            UnaryFunc::CastInt32ToString => f.write_str("i32tostr"),
             UnaryFunc::CastInt32ToDecimal => f.write_str("i32todec"),
+            UnaryFunc::CastInt64ToInt32 => f.write_str("i64toi32"),
             UnaryFunc::CastInt64ToDecimal => f.write_str("i64todec"),
             UnaryFunc::CastInt64ToFloat32 => f.write_str("i64tof32"),
             UnaryFunc::CastInt64ToFloat64 => f.write_str("i64tof64"),
+            UnaryFunc::CastInt64ToString => f.write_str("i64tostr"),
             UnaryFunc::CastFloat32ToInt64 => f.write_str("f32toi64"),
             UnaryFunc::CastFloat32ToFloat64 => f.write_str("f32tof64"),
+            UnaryFunc::CastFloat32ToString => f.write_str("f32tostr"),
             UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
+            UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
             UnaryFunc::CastDecimalToInt32 => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
-            UnaryFunc::CastStringToFloat64 => f.write_str("stringtof64"),
+            UnaryFunc::CastStringToBytes => f.write_str("strtobytes"),
+            UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
             UnaryFunc::CastDateToTimestampTz => f.write_str("datetotstz"),
+            UnaryFunc::CastDateToString => f.write_str("datetostr"),
             UnaryFunc::CastTimestampToTimestampTz => f.write_str("tstotstz"),
-            UnaryFunc::CastDatumToString => f.write_str("datumtostring"),
+            UnaryFunc::CastTimestampToString => f.write_str("tstostr"),
+            UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
+            UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
+            UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),
@@ -1507,9 +1353,6 @@ pub fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 }
 
 pub fn substr<'a, 'b>(datums: &'b [Datum<'a>]) -> Datum<'a> {
-    if datums.iter().any(|d| d.is_null()) {
-        return Datum::Null;
-    }
     let string = datums[0].unwrap_str();
     let mut chars = string.chars();
 
@@ -1540,10 +1383,6 @@ pub fn substr<'a, 'b>(datums: &'b [Datum<'a>]) -> Datum<'a> {
 }
 
 pub fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    if datums.iter().any(|d| d.is_null()) {
-        return Datum::Null;
-    }
-
     let string = datums[0].unwrap_str();
 
     if datums.len() == 2 {
@@ -1579,10 +1418,6 @@ pub fn length<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 }
 
 pub fn replace<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    if datums.iter().any(|d| d.is_null()) {
-        return Datum::Null;
-    }
-
     Datum::String(Cow::Owned(
         datums[0]
             .unwrap_str()
@@ -1623,6 +1458,14 @@ impl VariadicFunc {
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             Length => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
+        }
+    }
+
+    /// Whether the function output is NULL if any of its inputs are NULL.
+    pub fn propagates_nulls(self) -> bool {
+        match self {
+            VariadicFunc::Coalesce => false,
+            _ => true,
         }
     }
 }

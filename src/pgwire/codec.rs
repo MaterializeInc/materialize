@@ -629,7 +629,7 @@ impl RawParameterBytes {
             ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(bytes)),
             ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(bytes).into()),
             ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(bytes).into()),
-            ScalarType::Bytes => Datum::Bytes(bytes),
+            ScalarType::Bytes => Datum::Bytes(Cow::from(bytes)),
             ScalarType::String => Datum::cow_from_str(str::from_utf8(bytes)?),
             _ => {
                 // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
@@ -653,7 +653,7 @@ impl RawParameterBytes {
             ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>()?),
             ScalarType::Float32 => Datum::Float32(OrderedFloat::from(as_str.parse::<f32>()?)),
             ScalarType::Float64 => Datum::Float64(OrderedFloat::from(as_str.parse::<f64>()?)),
-            ScalarType::Bytes => Datum::Bytes(as_str.as_bytes()),
+            ScalarType::Bytes => Datum::Bytes(Cow::from(as_str.as_bytes())),
             ScalarType::String => Datum::cow_from_str(as_str),
             _ => {
                 // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval

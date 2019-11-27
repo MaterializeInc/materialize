@@ -3,7 +3,7 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::fmt;
 use std::mem::{size_of, transmute};
 
@@ -243,7 +243,7 @@ impl Row {
                 let bytes =
                     std::slice::from_raw_parts(self.data.as_ptr().add(*offset), len as usize);
                 *offset += len;
-                Datum::Bytes(bytes)
+                Datum::Bytes(Cow::from(bytes))
             }
             Tag::String => {
                 let len = self.read_copy::<usize>(offset);
@@ -357,7 +357,7 @@ impl<'a> PackableRow<'a> {
             Datum::Bytes(bytes) => {
                 data.push(Tag::Bytes as u8);
                 data.extend(&bytes.len().to_le_bytes());
-                data.extend(bytes);
+                data.extend(&*bytes);
             }
             Datum::String(string) => {
                 data.push(Tag::String as u8);
@@ -496,8 +496,8 @@ mod tests {
                 is_positive: true,
                 duration: std::time::Duration::from_nanos(1012312),
             }),
-            Datum::Bytes(&[]),
-            Datum::Bytes(&[0, 2, 1]),
+            Datum::Bytes(Cow::from(&[][..])),
+            Datum::Bytes(Cow::from(&[0, 2, 1][..])),
             Datum::cow_from_str(""),
             Datum::cow_from_str("العَرَبِيَّة"),
         ]);

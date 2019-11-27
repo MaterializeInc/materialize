@@ -382,16 +382,28 @@ impl ScalarExpr {
             ScalarExpr::Literal(row, _column_type) => row.unpack_first(),
             ScalarExpr::CallUnary { func, expr } => {
                 let eval = expr.eval(datums);
-                (func.func())(eval)
+                if func.propagates_nulls() && eval.is_null() {
+                    Datum::Null
+                } else {
+                    (func.func())(eval)
+                }
             }
             ScalarExpr::CallBinary { func, expr1, expr2 } => {
                 let eval1 = expr1.eval(datums);
                 let eval2 = expr2.eval(datums);
-                (func.func())(eval1, eval2)
+                if func.propagates_nulls() && (eval1.is_null() || eval2.is_null()) {
+                    Datum::Null
+                } else {
+                    (func.func())(eval1, eval2)
+                }
             }
             ScalarExpr::CallVariadic { func, exprs } => {
                 let evals = exprs.iter().map(|e| e.eval(datums)).collect::<Vec<_>>();
-                (func.func())(&evals)
+                if func.propagates_nulls() && evals.iter().any(|e| e.is_null()) {
+                    Datum::Null
+                } else {
+                    (func.func())(&evals)
+                }
             }
             ScalarExpr::If { cond, then, els } => match cond.eval(datums) {
                 Datum::True => then.eval(datums),
