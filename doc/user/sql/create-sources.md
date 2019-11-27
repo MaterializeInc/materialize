@@ -81,12 +81,12 @@ After creating the source and connecting to Kafka, Materialize receives all of t
 Materialize requires that the data it receives from Kafka have a structure that
 contains both the old and new values for any fields within a record (a "diff
 envelope"), which lets Differential dataflow process arbitrary changes to the
-underlying data, e.g. expressing a record's deletion. 
+underlying data, e.g. expressing a record's deletion.
 
 The only tool that we're aware of that provide data to Kafka in this form is
 Debezium through its envelope structure that contains a `before` and `after`
 field (although CockroachDB's change data capture feature is close to
-operational, as well). 
+operational, as well).
 
 Ultimately, this means that the only sources that you can create must originate
 from Debezium, which must be published through Kafka.
@@ -96,7 +96,7 @@ from Debezium, which must be published through Kafka.
 When creating a source, Materialize looks up stream's structure using a
 Confluent Schema Registry or with the Avro schema you define. The stream's
 schema is then used to create the source within Materialize, which is
-essentially equivalent to a table in the language of RDBMSes. 
+essentially equivalent to a table in the language of RDBMSes.
 
 Once Materialize has determined the structure of the stream, it connects the
 underlying Kafka stream directly to its Differential dataflow engine.
@@ -120,16 +120,16 @@ from their sources that are available from the arrangements within Differential.
 ### Using a Confluent schema registry
 
 ```sql
-CREATE SOURCES 
-LIKE 'mysql.simple.%' 
-FROM 'kafka://kafka:9092' 
+CREATE SOURCES
+LIKE 'mysql.simple.%'
+FROM 'kafka://kafka:9092'
 USING SCHEMA REGISTRY 'http://schema-registry:8081';
 ```
 
 ### Manually defining Avro schema
 
 ```sql
-CREATE SOURCE 'mysql.simple.user' 
+CREATE SOURCE 'mysql.simple.user'
 FROM 'kafka://kafka:9092'
 USING SCHEMA '{
   "type": "record",

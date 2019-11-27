@@ -19,4 +19,3 @@ rr-diagram-gen: *.go
 clean:
 	$(GO) clean $(GOFLAGS)
 	rm -f rr-diagram-gen
-

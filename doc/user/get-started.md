@@ -35,7 +35,7 @@ overview and doesn't contain any actual instruction.
 1. Materialize needs to understand your Kafka topics' schemas, so you'll need to
    have your topics reports their schema to a Confluent Schema Registry, or know
    the topics' Avro schemas.
-   
+
     Note that if you are using Debezium (and you should be), all of this happens automatically.
 
 ### Using Materialize

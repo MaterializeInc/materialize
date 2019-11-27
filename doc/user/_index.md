@@ -1,5 +1,5 @@
 ---
-title: "Materialize Docs" 
+title: "Materialize Docs"
 disable_toc: true
 disable_list: true
 ---

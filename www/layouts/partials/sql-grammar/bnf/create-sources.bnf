@@ -1,2 +1,2 @@
 create_sources ::=
-  'CREATE SOURCES' ('LIKE' schema_expr)? 'FROM' kafka_src 'USING SCHEMA' ( 'REGISTRY' registry_src | avro_schema ) 
+  'CREATE SOURCES' ('LIKE' schema_expr)? 'FROM' kafka_src 'USING SCHEMA' ( 'REGISTRY' registry_src | avro_schema )

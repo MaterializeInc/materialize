@@ -50,7 +50,7 @@ func main() {
 	// simple.region.time is a workaround for the fact that Materialize requires
 	// some activity on row after source is created to ingest it. Will be
 	// removed in future version.
-	doExec(db, `CREATE TABLE IF NOT EXISTS simple.region 
+	doExec(db, `CREATE TABLE IF NOT EXISTS simple.region
 		(
 			id SERIAL PRIMARY KEY,
 			time TIMESTAMP
@@ -59,14 +59,14 @@ func main() {
 	// simple.user.time is a workaround for the fact that Materialize requires
 	// some activity on row after source is created to ingest it. Will be
 	// removed in future version.
-	doExec(db, `CREATE TABLE IF NOT EXISTS simple.user 
+	doExec(db, `CREATE TABLE IF NOT EXISTS simple.user
 		(
-			id SERIAL PRIMARY KEY, 
-			region_id BIGINT UNSIGNED REFERENCES region(id), 
+			id SERIAL PRIMARY KEY,
+			region_id BIGINT UNSIGNED REFERENCES region(id),
 			time TIMESTAMP
 		);`)
 
-	doExec(db, `CREATE TABLE IF NOT EXISTS simple.purchase 
+	doExec(db, `CREATE TABLE IF NOT EXISTS simple.purchase
 		(
 			user_id BIGINT UNSIGNED REFERENCES user(id),
 			amount DECIMAL(12,2)

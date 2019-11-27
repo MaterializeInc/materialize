@@ -59,7 +59,7 @@ For more detail about how different clauses impact memory usage, check out our
 ```sql
 CREATE VIEW purchase_sum_by_region
 AS
-    SELECT  sum(purchase.amount) AS region_sum, 
+    SELECT  sum(purchase.amount) AS region_sum,
             region.id AS region_id
     FROM mysql_simple_region AS region
     INNER JOIN mysql_simple_user AS user

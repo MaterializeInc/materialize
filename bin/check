@@ -121,7 +121,7 @@ disabled_lints=(
     clippy::needless_range_loop
 
     # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#cognitive_complexity
-    # 
+    #
     # Clippy's cognitive complexity is too easily reached.
     clippy::cognitive-complexity
 

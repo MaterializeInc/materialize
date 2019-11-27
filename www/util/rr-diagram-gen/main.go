@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/yosssi/gohtml"
 	"golang.org/x/net/html"
 	"golang.org/x/sys/unix"
 )
@@ -122,7 +123,6 @@ func XHTMLtoHTML(xhtml []byte) (string, error) {
 
 // ExtractSVGDiagram extracts the embedded SVG diagram.
 func ExtractSVGDiagram(html string) (string, error) {
-
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return "", err
@@ -140,15 +140,7 @@ func ExtractSVGDiagram(html string) (string, error) {
 		}
 	})
 
-	svgString, err := goquery.OuterHtml(svgSelection)
-
-	if err != nil {
-		return "", err
-	}
-
-	svgString += "\n"
-
-	return svgString, nil
+	return goquery.OuterHtml(svgSelection)
 }
 
 // ConvertBNFtoSVG finds all .bnf files in srcDir,
@@ -189,6 +181,8 @@ func ConvertBNFtoSVG(srcDir string, dstDir string) {
 				panic(fmt.Sprintf("Extracting SVG from HTML failed for %s: %v", f.Name(), err))
 			}
 
+			svg = formatHTML(svg)
+
 			dstFilename := bnfFilename.ReplaceAllString(f.Name(), filepath.Join(dstDir, "$1.html"))
 			err = ioutil.WriteFile(dstFilename, []byte(svg), 0644)
 			if err != nil {
@@ -199,8 +193,19 @@ func ConvertBNFtoSVG(srcDir string, dstDir string) {
 	}
 }
 
-func main() {
+func formatHTML(s string) string {
+	defer func(oldCondense bool) {
+		gohtml.Condense = oldCondense
+	}(gohtml.Condense)
+	gohtml.Condense = true
+	s = gohtml.Format(s)
+	if !strings.HasSuffix(s, "\n") {
+		s += "\n"
+	}
+	return s
+}
 
+func main() {
 	if len(os.Args) != 3 {
 		log.Fatalf("USAGE: rr-diagram-gen <srcDir> <dstDir>\n")
 	}
@@ -221,5 +226,4 @@ func main() {
 	}
 
 	ConvertBNFtoSVG(srcDir, dstDir)
-
 }
