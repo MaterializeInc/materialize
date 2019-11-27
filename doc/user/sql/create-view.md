@@ -7,7 +7,8 @@ menu:
 ---
 
 `CREATE VIEW` creates a materialized view, which lets you retrieve incrementally
-updated results of a `SELECT` query very quickly. Despite the simplicity of creating a view, it's Materialize's most powerful feature.
+updated results of a `SELECT` query very quickly. Despite the simplicity of
+creating a view, it's Materialize's most powerful feature.
 
 ## Conceptual framework
 
@@ -44,12 +45,15 @@ As data continues to stream in from Kafka, Differential passes the data to the
 appropriate dataflows, which are then responsible for making any necessary
 updates to maintain the views you've defined.
 
-When reading from a view (e.g. `SELECT * FROM some_view`), Materialize simply returns the current result set for the persisted dataflow.
+When reading from a view (e.g. `SELECT * FROM some_view`), Materialize simply
+returns the current result set for the persisted dataflow.
 
 ### Memory
 
-Views are maintained in memory. Because of this, one must be sure that all intermediate stages of the query, as well as its result set can fit in the memory of a single machine, while also understanding
-the rate at which the query's result set will grow.
+Views are maintained in memory. Because of this, one must be sure that all
+intermediate stages of the query, as well as its result set can fit in the
+memory of a single machine, while also understanding the rate at which the
+query's result set will grow.
 
 For more detail about how different clauses impact memory usage, check out our
 [`SELECT`](../select) documentation.

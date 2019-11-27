@@ -13,13 +13,14 @@ the outside world by interfacing with:
 
 - **SQL shells** for interacting with clients, including defining sources,
   creating views, and querying data.
-- **Kafka** to ingest data, i.e. writes.
+- **Sources** to ingest data, i.e. writes. We'll focus on streaming sources like
+  Kafka, though Materialize also supports static sources.
 
 ## Diagrams
 
 ![Materialize deployment diagram](/images/architecture_deployment.png)
 
-_Above: Materialize deployed with multiple Kafka feeds._
+_Above: Materialize deployed with multiple Kafka feeds as sources._
 
 _Below: Zooming in on Materialize's internal structure in the above deployment._
 
@@ -46,7 +47,8 @@ Broadly, there are three classes of statements in Materialize:
 
 ### Creating sources
 
-When Materialize receives a `CREATE SOURCES...` statement, it attempts to
+When Materialize receives a `CREATE SOURCES...` statement, it connects to some
+destination to read data. In the case of streaming sources, it attempts to
 connect to a Kafka stream, which it plumbs into its local instance of
 Differential. You can find more information about how that works in the
 **Kafka** section below.
@@ -76,7 +78,7 @@ something much smarter than repeatedly ask Materialize to tabulate the answer
 from a blank slate––instead, you can create a view of the query, which
 Materialize will persist and continually keep up to date.
 
-When users define views '(i.e. `CREATE MATERIALIZED VIEW some_view AS
+When users define views (i.e. `CREATE MATERIALIZED VIEW some_view AS
 SELECT...`), the internal `SELECT` statement is parsed––just as it is for ad hoc
 queries––but instead of only executing a single time, the generated dataflow
 persists. Then, as data comes in from Kafka, Differential workers collaborate to
@@ -105,10 +107,18 @@ The only "wrinkle" in the above explanation is when you perform reads on views:
 no dataflow gets created, and Materialize instead serves the result from an
 existing dataflow.'
 
-## Kafka: Ingesting data
+## Sources: Ingesting data
 
-Materialize subscribes to Kafka topics and monitors the stream for data it
-should ingest; this is how writes happen in Materialize.
+For Materialize to ingest data, it must read it from a source, of which there
+are two varieties:
+
+- Streaming sources, like Kakfa
+- Static sources, like CSV files
+
+Static sources are more straightforward, so we'll focus on streaming sources.
+
+When using a streaming source, Materialize subscribes to Kafka topics and
+monitors the stream for data it should ingest.
 
 As this data streams in, all Differential workers receive updates and determine
 which––if any––of their dataflows should process this new data. This works
@@ -126,8 +136,10 @@ Implicit in this design are a few key points:
 
 - State is all in totally volatile memory; if `materialized` dies, so too does
   all of the data.
-- There is no way to "prime" `materialized` with data; it must all come in from
-  Kafka.
+- Streaming sources must receive all of their data from the stream itself; there
+  is no way to "seed" a streaming source with static data. However, you can
+  union streaming and static sources in views, which accomplishes a similar
+  outcome.
 
 ## Learn more
 
@@ -135,7 +147,6 @@ Check out:
 
 - [Get started](../get-started)
 - [`CREATE SOURCES`](../sql/create-sources)
-
 
 [1]:
 https://paper.dropbox.com/doc/Materialize-Product--AbHSqqXlN5YNKHiYEXm3EKyNAg-eMbfh2QTOCPrU7drExDCm

@@ -6,28 +6,48 @@ menu:
     parent: 'sql'
 ---
 
-`CREATE SOURCES` connects Materialize to Kafka streams and lets you interact
-with the stream's data as if it were in a SQL table.
+`CREATE SOURCES` connects Materialize to some data source, and lets you interact
+with its data as if it were in a SQL table.
 
 ## Conceptual framework
 
-To provide data to Materialze, you must create "sources", which are Kafka topics
-that you have set up to publish a change feed from an underlying relational
-database. In Materialize's current iteration, this only works with databases set
-up to publish a change feed to Kafka through [Debezium](https://debezium.io), a
-change data capture (CDC) tool for relational databases.
+To provide data to Materialze, you must create "sources", which is a catchall
+term for a resource Materialize can read data from.
+
+There are two types of sources within Materialize:
+
+- Streaming sources like Kafka
+- Static sources like CSV files
+
+### Streaming sources
+
+Materialize can ingest data from Kafka topics that publish a change feed from an
+underlying relational database, e.g. MySQL. In Materialize's current iteration,
+this only works with databases set up to publish a change feed to Kafka through
+[Debezium](https://debezium.io), a change data capture (CDC) tool for relational
+databases.
 
 Materialize also needs to understand the structure of the source, so it relies
 on receiving the topic's schema from either a Confluent Schema Registry or a
 user-supplied Avro schema. Debezium handles this automatically by using
-Confluent Schema Registry, so most users do not need to do anything for this step.
+Confluent Schema Registry, so most users do not need to do anything for this
+step.
 
 After you create the source, Materialize automatically collects all of the data
 that streams in, which is then used to supply your queries and views with data.
 
+### Static sources
+
+Materialize can ingest a static data set from a source like a `.csv` file. In
+doing this, Materialize simply reads the file, and writes the contents to its
+underlying Differential dataflow engine. Once the data's been ingested, you can
+query it as you would any normal relational data.
+
 ## Syntax
 
 ### Create multiple sources
+
+`CREATE SOURCES` can only be used to create streaming sources.
 
 {{< diagram "create-sources.html" >}}
 
@@ -40,22 +60,37 @@ _avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/sp
 
 ### Create single source
 
+`CREATE SOURCE` can be used to create streaming or static sources.
+
 {{< diagram "create-source.html" >}}
 
 Field | Use
 ------|-----
 _src&lowbar;name_ | The name for the source, which is used as its table name within SQL.
-**FROM** _kafka&lowbar;src_ | The Kafka source you want to use (begins with `kafka://`)
-**REGISTRY** _registry&lowbar;src_ | Use the Confluent schema registry at _registry&lowbar;src_ to define the structure of the Kafka source
+**FROM** _kafka&lowbar;src_ | The Kafka source you want to use (begins with `kafka://`).
+**FROM** _local&lowbar;file_ | The absolute path to the local file you want to use as a source (begins with `file://`).
+**REGISTRY** _registry&lowbar;src_ | Use the Confluent schema registry at _registry&lowbar;src_ to define the structure of the Kafka source.
 _avro&lowbar;schema_ | The [Avro schema](https://avro.apache.org/docs/current/spec.html) for the topic.
+**WITH (** _option&lowbar;list_ **)** | Instructions for parsing your static source file. For more detail, see [`WITH` options](#with-options).
 
-## Details
+#### `WITH` options
+
+The following options are valid within the `WITH` clause.
+
+Field | Value
+------|-----
+`format` | _(Required)_ The static source's format. Currently, `csv` is the only supported format.
+`columns` | _(Required)_ The number of columns to read from the source.
+
+All field names are case-sensitive.
+
+## Streaming source details
 
 ### Overview
 
-Materialize receives data from Kafka sources, which are set up
-to publish a change feed from a relational database (also known as "change data
-capture" or CDC).
+Materialize receives data from Kafka sources, which are set up to publish a
+change feed from a relational database (also known as "change data capture" or
+CDC).
 
 For Materialize to meaningfully process arbitrary changes from the upstream
 database, it requires a "diff envelope", which describes records' old and new
@@ -74,7 +109,8 @@ This means to create sources within Materialize, you must:
 
    Note that this is handled automatically through Debezium.
 
-After creating the source and connecting to Kafka, Materialize receives all of the data published to the Kafka topic.
+After creating the source and connecting to Kafka, Materialize receives all of
+the data published to the Kafka topic.
 
 ### Source requirements
 
@@ -103,17 +139,33 @@ underlying Kafka stream directly to its Differential dataflow engine.
 
 ### Data storage
 
-As data streams in from Kafka, Materialize's internal Differential instance builds an arrangement (which is
-roughly equivalent to an index in the language of RDBMSes). When the source is
-initially created this will receive all of the data that the Kafka stream
-contains for the topic, e.g. the last 24 hours of data, and construct its
-initial arrangement from that. As new data streams in, Materialize will collect that, as well.
+As data streams in from Kafka, Materialize's internal Differential instance
+builds an arrangement (which is roughly equivalent to an index in the language
+of RDBMSes). When the source is initially created this will receive all of the
+data that the Kafka stream contains for the topic, e.g. the last 24 hours of
+data, and construct its initial arrangement from that. As new data streams in,
+Materialize will collect that, as well.
 
 However, Materialize has a separate garbage collection period for arrangements,
 which works independently from the Kafka stream's retention period.
 
 When [creating views](../create-views), they are populated with all of the data
 from their sources that are available from the arrangements within Differential.
+
+## Static source details
+
+Creating static sources is more straightforward than streaming ones, though
+there are still a number of caveats.
+
+### CSV sources
+
+- File path must be prefixed with `file://`, and be the file's absolute path.
+- Every line of the CSV is treated as a row, i.e. there is no concept of
+  headers.
+- All data in the CSV are treated as `STRING`.
+- Columns in the source are named `column1`, `column2`, etc.
+- You must specify the number of columns. Any row with a different number of
+  columns gets discarded, though Materialize will log an error.
 
 ## Examples
 
@@ -153,6 +205,16 @@ USING SCHEMA '{
   ]
 }';
 ```
+
+### Creating CSV source
+
+```sql
+CREATE SOURCE test FROM 'file:///test.csv' WITH ( format='csv', columns=5 );
+```
+
+- The prefix for the file is `file://`, which is followed by the absolute path
+  to the file (`/test.csv` in this example), resulting in `file:///test.csv`.
+- The `WITH` clause's `format` and `csv` fields are required and case-sensitive.
 
 ## Related pages
 

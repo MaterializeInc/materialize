@@ -13,12 +13,26 @@ main {
   }
 
   h2 {
+    font-size: 1.3rem;
     margin-top: 3rem;
+    a {
+      color: black !important;
+    }
   }
 
   h3 {
-    font-size: 0.85rem;
+    font-size: 1.2rem;
     margin-top: 2rem;
+    a {
+      color: #666666 !important;
+    }
+  }
+
+  h4 {
+    font-size: 1rem;
+    a {
+      color: black !important;
+    }
   }
 
   a {
@@ -39,7 +53,6 @@ main {
   }
 
   .headline-hash {
-    color: black;
     &:hover {
       opacity: 0.75;
     }
