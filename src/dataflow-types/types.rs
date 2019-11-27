@@ -163,7 +163,6 @@ pub struct DataflowDesc {
     pub as_of: Option<Vec<Timestamp>>,
     /// Human readable name
     pub debug_name: String,
-    pub dont_compact: bool,
 }
 
 impl DataflowDesc {
@@ -209,11 +208,6 @@ impl DataflowDesc {
 
     pub fn as_of(mut self, as_of: Option<Vec<Timestamp>>) -> Self {
         self.as_of = as_of;
-        self
-    }
-
-    pub fn dont_compact(mut self) -> Self {
-        self.dont_compact = true;
         self
     }
 }
