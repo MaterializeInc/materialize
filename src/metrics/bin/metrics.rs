@@ -151,11 +151,20 @@ fn create_histogram(query: &str) -> Histogram {
     hist_vec.with_label_values(&[query])
 }
 
-/// Try to build the views that are needed for this script
+/// Try to build the views and sources that are needed for this script
 ///
 /// This ignores errors (just logging them), and can just be run multiple times.
 fn try_initialize(postgres_connection: &Connection) {
-    if let Err(err) = postgres_connection.execute(
+    match postgres_connection.execute(
+        "CREATE SOURCES LIKE 'mysql.tpcch.%' \
+         FROM 'kafka://kafka:9092' \
+         USING SCHEMA REGISTRY 'http://schema-registry:8081'",
+        &[],
+    ) {
+        Ok(_) => info!("Created sources"),
+        Err(err) => error!("IGNORING CREATE VIEW error: {}", err),
+    }
+    match postgres_connection.execute(
         "CREATE VIEW q01 as SELECT
                  ol_number,
                  sum(ol_quantity) as sum_qty,
@@ -171,6 +180,7 @@ fn try_initialize(postgres_connection: &Connection) {
                  ol_number;",
         &[],
     ) {
-        error!("IGNORING CREATE VIEW error: {}", err)
+        Ok(_) => info!("created view q01"),
+        Err(err) => error!("IGNORING CREATE VIEW error: {}", err),
     }
 }
