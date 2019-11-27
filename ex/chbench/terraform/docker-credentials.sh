@@ -21,4 +21,3 @@ elif ! echo "https://index.docker.io/v1/" | docker-credential-desktop get; then
     echo "try: \`terraform apply -var=docker_username=USERNAME -var=docker_password=PASSWORD\`" >&2
     exit 1
 fi
-

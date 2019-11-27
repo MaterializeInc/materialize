@@ -41,8 +41,8 @@ You can find any updates on this behavior in [this GitHub issue](https://github.
 ### Encoding details
 
 - Materialize uses the [`encoding`](https://crates.io/crates/encoding) crate. See the [list of supported encodings](https://lifthrasiir.github.io/rust-encoding/encoding/index.html#supported-encodings), as well as their names [within the API](https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs).
-- Materialize attempts to convert [PostgreSQL-style encoding names](https://www.postgresql.org/docs/9.5/multibyte.html) into the [WHATWG-style encoding names](https://encoding.spec.whatwg.org/) used by the API. 
-    
+- Materialize attempts to convert [PostgreSQL-style encoding names](https://www.postgresql.org/docs/9.5/multibyte.html) into the [WHATWG-style encoding names](https://encoding.spec.whatwg.org/) used by the API.
+
     For example, you can refer to `iso-8859-5` (WHATWG-style) as `ISO_8859_5` (PostrgreSQL-style).
 
     However, there are some differences in the names of the same encodings that we do not convert. For example, the [windows-874](https://encoding.spec.whatwg.org/#windows-1252) encoding is referred to as `WIN874` in PostgreSQL; Materialize does not perform a conversion for these names.

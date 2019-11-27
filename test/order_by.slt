@@ -102,7 +102,7 @@ statement ok
 create table baz (val1 int, val2 int);
 
 statement ok
-insert into baz values (12345, 1735), (12345, 1735), (12345, 1735), (1735, 24223), 
+insert into baz values (12345, 1735), (12345, 1735), (12345, 1735), (1735, 24223),
 (12345, 12345), (2079, 24223), (1735, 2079), (1735, 2079), (1735, 2079);
 
 #offset
@@ -248,7 +248,7 @@ CREATE VIEW fizzoffsetview2 as SELECT b, a from fizz ORDER BY b desc, a OFFSET 3
 query TI rowsort
 PEEK fizzoffsetview2
 ----
-four     21243 
+four     21243
 four     24223
 five     6745
 one      12345
@@ -304,10 +304,10 @@ query TI rowsort
 PEEK fizzoffsetview2
 ----
 five     6745
-four     21243 
+four     21243
 four     24223
 one      12345
-three    12345 
+three    12345
 
 query RT rowsort
 PEEK fizzlimitoffsetview2;
@@ -364,7 +364,7 @@ SELECT count(b), count(a) FROM fizzoffsetview;
 query TI rowsort
 PEEK fizzoffsetview2
 ----
-four     21243 
+four     21243
 four     24223
 fourteen 21758
 one      12345

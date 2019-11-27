@@ -1,2 +1,2 @@
 create_source ::=
-  'CREATE SOURCE' src_name 'FROM' kafka_src 'USING SCHEMA' ( 'REGISTRY' registry_src | avro_schema ) 
+  'CREATE SOURCE' src_name 'FROM' kafka_src 'USING SCHEMA' ( 'REGISTRY' registry_src | avro_schema )

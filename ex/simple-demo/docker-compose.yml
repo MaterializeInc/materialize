@@ -98,4 +98,3 @@ services:
   inspect:
     image: ubuntu:bionic
     command: "true"
-

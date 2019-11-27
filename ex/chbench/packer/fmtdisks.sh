@@ -9,4 +9,3 @@ set -euxo pipefail
 
 mkswap /dev/nvme0n1
 mkfs.ext4 /dev/nvme1n1
-

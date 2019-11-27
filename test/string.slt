@@ -46,7 +46,7 @@ CREATE TABLE substrtest (strcol CHAR(15), vccol VARCHAR(15), smicol SMALLINT, in
 statement ok
 INSERT INTO substrtest VALUES ('Mg', 'Mn', 1, 1), ('magnesium', 'manganese', 3, null),
     (null, null, 0, 0), ('24.31', '54.94', 2, 3), ('长久不见', '爱不释手', null, 2),
-    ('', '', -1, 2) 
+    ('', '', -1, 2)
 
 #invalid input
 statement error

@@ -94,7 +94,7 @@ val    quote
 ----------------------------------------------------------------------------
 25040  "New York is real.  The rest is done with mirrors."
 1735   "Ring around the collar."
-21243  "Yes, but every time I try to see things your way, I get a headache." 
+21243  "Yes, but every time I try to see things your way, I get a headache."
 24223  "You are magnetic in your bearing."
 
 > SELECT val, quote FROM foobar ORDER BY quote LIMIT 4 OFFSET 0 ROWS
