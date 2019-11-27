@@ -559,20 +559,19 @@ pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 pub fn to_char<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if let Datum::TimestampTz(datetime) = a {
-        if let Datum::String(format_string) = b {
-            // PostgreSQL parses this weird format string, hand-interpret for now
-            // to unblock Metabase progress. Will have to revisit formatting strings and
-            // other versions of to_char() in the future.
-            if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
-                let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
-                return Datum::String(Cow::Owned(
-                    datetime.format(interpreted_format_string).to_string(),
-                ));
-            }
-        }
+    let datetime = a.unwrap_timestamptz();
+    let format_string = b.unwrap_str();
+    // PostgreSQL parses this weird format string, hand-interpret for now
+    // to unblock Metabase progress. Will have to revisit formatting strings and
+    // other versions of to_char() in the future.
+    if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
+        let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%f";
+        Datum::String(Cow::Owned(
+            datetime.format(interpreted_format_string).to_string(),
+        ))
+    } else {
+        Datum::Null
     }
-    Datum::Null
 }
 
 pub fn match_regex<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
