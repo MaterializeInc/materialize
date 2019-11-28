@@ -832,34 +832,41 @@ impl fmt::Display for Interval {
                 is_positive,
                 duration,
             } => {
-                if !*is_positive {
-                    f.write_char('-')?;
-                }
                 let mut secs = duration.as_secs();
-                let nanos = duration.subsec_nanos();
-                let mut hours = secs / 3600;
-                let mut days = 0;
-                if hours > 0 {
-                    secs %= 3600;
-                    if hours >= 24 {
-                        days = hours / 24;
-                        hours %= 24;
-                        write!(f, "{} day", days)?;
-                        if days > 1 {
-                            f.write_char('s')?;
-                        }
+                let mut nanos = duration.subsec_nanos();
+                let days = secs / (24 * 60 * 60);
+                secs %= 24 * 60 * 60;
+                let hours = secs / (60 * 60);
+                secs %= 60 * 60;
+                let minutes = secs / 60;
+                secs %= 60;
+
+                if days > 0 {
+                    if !*is_positive {
+                        f.write_char('-')?;
+                    }
+                    write!(f, "{} day", days)?;
+                    if days != 1 || !*is_positive {
+                        f.write_char('s')?;
+                    }
+                }
+
+                if days == 0 || hours > 0 || minutes > 0 || secs > 0 || nanos > 0 {
+                    if days > 0 {
                         f.write_char(' ')?;
                     }
-                    write!(f, "{:02}:", hours)?;
-                }
-                let minutes = secs / 60;
-                if minutes > 0 || hours > 0 || days > 0 {
-                    secs %= 60;
-                    write!(f, "{:02}:", minutes)?;
-                }
-                write!(f, "{:02}", secs)?;
-                if nanos > 0 {
-                    write!(f, ".{}", nanos)?;
+                    if !*is_positive {
+                        f.write_char('-')?;
+                    }
+                    write!(f, "{:02}:{:02}:{:02}", hours, minutes, secs)?;
+                    if nanos > 0 {
+                        let mut width = 9;
+                        while nanos % 10 == 0 {
+                            width -= 1;
+                            nanos /= 10;
+                        }
+                        write!(f, ".{:0width$}", nanos, width = width)?;
+                    }
                 }
             }
         }
@@ -888,7 +895,7 @@ mod test {
             }
             .to_string()
         }
-        assert_eq!(&dur(true, 86_400 * 2), "2 days 00:00:00");
+        assert_eq!(&dur(true, 86_400 * 2), "2 days");
         assert_eq!(&dur(true, 86_400 * 2 + 3_600 * 3), "2 days 03:00:00");
         assert_eq!(
             &dur(true, 86_400 * 2 + 3_600 * 3 + 60 * 45 + 6),
@@ -904,18 +911,20 @@ mod test {
         assert_eq!(&dur(true, 3_600 * 3 + 60 * 45 + 6), "03:45:06");
         assert_eq!(&dur(true, 3_600 * 3 + 6), "03:00:06");
         assert_eq!(&dur(true, 3_600 * 3), "03:00:00");
-        assert_eq!(&dur(true, 60 * 45 + 6), "45:06");
-        assert_eq!(&dur(true, 60 * 45), "45:00");
-        assert_eq!(&dur(true, 6), "06");
+        assert_eq!(&dur(true, 60 * 45 + 6), "00:45:06");
+        assert_eq!(&dur(true, 60 * 45), "00:45:00");
+        assert_eq!(&dur(true, 6), "00:00:06");
 
-        assert_eq!(&dur(false, 86_400 * 2 + 6), "-2 days 00:00:06");
-        assert_eq!(&dur(false, 86_400 * 2 + 60 * 45 + 6), "-2 days 00:45:06");
-        assert_eq!(&dur(false, 86_400 * 2 + 3_600 * 3 + 6), "-2 days 03:00:06");
+        assert_eq!(&dur(false, 86_400 * 2 + 6), "-2 days -00:00:06");
+        assert_eq!(&dur(false, 86_400 * 2 + 60 * 45 + 6), "-2 days -00:45:06");
+        assert_eq!(&dur(false, 86_400 * 2 + 3_600 * 3 + 6), "-2 days -03:00:06");
         assert_eq!(&dur(false, 3_600 * 3 + 60 * 45 + 6), "-03:45:06");
         assert_eq!(&dur(false, 3_600 * 3 + 6), "-03:00:06");
         assert_eq!(&dur(false, 3_600 * 3), "-03:00:00");
-        assert_eq!(&dur(false, 60 * 45 + 6), "-45:06");
-        assert_eq!(&dur(false, 60 * 45), "-45:00");
-        assert_eq!(&dur(false, 6), "-06");
+        assert_eq!(&dur(false, 60 * 45 + 6), "-00:45:06");
+        assert_eq!(&dur(false, 60 * 45), "-00:45:00");
+        assert_eq!(&dur(false, 6), "-00:00:06");
+
+        assert_eq!(&dur(true, 0), "00:00:00");
     }
 }
