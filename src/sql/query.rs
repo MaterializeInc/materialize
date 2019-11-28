@@ -1593,6 +1593,30 @@ fn plan_function<'a>(
                 })
             }
 
+            "make_timestamp" => {
+                if sql_func.args.len() != 6 {
+                    bail!("make_timestamp requires exactly six arguments");
+                }
+
+                let mut exprs = Vec::new();
+                for arg in &sql_func.args[..5] {
+                    let expr = plan_expr(catalog, ecx, arg, Some(ScalarType::Int64))?;
+                    let expr = promote_int_int64(ecx, "make_timestamp", expr)?;
+                    exprs.push(expr);
+                }
+                {
+                    let expr =
+                        plan_expr(catalog, ecx, &sql_func.args[5], Some(ScalarType::Float64))?;
+                    let expr = promote_decimal_float64(ecx, "make_timestamp", expr)?;
+                    exprs.push(expr);
+                }
+                let expr = ScalarExpr::CallVariadic {
+                    func: VariadicFunc::MakeTimestamp,
+                    exprs,
+                };
+                Ok(expr)
+            }
+
             "mod" => {
                 if sql_func.args.len() != 2 {
                     bail!("mod requires exactly two arguments");
@@ -2923,6 +2947,23 @@ where
             plan_cast_internal(ecx, name, expr, ScalarType::Int64)?
         }
         other => bail!("{} has non-integer type {:?}", name, other,),
+    })
+}
+
+fn promote_decimal_float64<'a, S>(
+    ecx: &ExprContext<'a>,
+    name: S,
+    expr: ScalarExpr,
+) -> Result<ScalarExpr, failure::Error>
+where
+    S: fmt::Display + Copy,
+{
+    Ok(match ecx.column_type(&expr).scalar_type {
+        ScalarType::Null | ScalarType::Float64 => expr,
+        ScalarType::Float32 | ScalarType::Decimal(_, _) => {
+            plan_cast_internal(ecx, name, expr, ScalarType::Float64)?
+        }
+        other => bail!("{} has non-decimal type {:?}", name, other,),
     })
 }
 

@@ -4,7 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::cmp;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::fmt::Write;
 use std::str::FromStr;
@@ -594,8 +594,6 @@ pub fn sub_timestamptz_interval<'a>(
 }
 
 fn add_timestamp_months(dt: NaiveDateTime, months: i64) -> NaiveDateTime {
-    use std::convert::TryInto;
-
     if months == 0 {
         return dt;
     }
@@ -2213,9 +2211,45 @@ pub fn replace<'a>(datums: &[Datum<'a>], _: &EvalEnv, temp_storage: &'a RowArena
     )
 }
 
+pub fn make_timestamp<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+    let year: i32 = match datums[0].unwrap_int64().try_into() {
+        Ok(year) => year,
+        Err(_) => return Datum::Null,
+    };
+    let month: u32 = match datums[1].unwrap_int64().try_into() {
+        Ok(month) => month,
+        Err(_) => return Datum::Null,
+    };
+    let day: u32 = match datums[2].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let hour: u32 = match datums[3].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let minute: u32 = match datums[4].unwrap_int64().try_into() {
+        Ok(day) => day,
+        Err(_) => return Datum::Null,
+    };
+    let second_float = datums[5].unwrap_float64();
+    let second = second_float as u32;
+    let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
+    let date = match NaiveDate::from_ymd_opt(year, month, day) {
+        Some(date) => date,
+        None => return Datum::Null,
+    };
+    let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
+        Some(timestamp) => timestamp,
+        None => return Datum::Null,
+    };
+    Datum::Timestamp(timestamp)
+}
+
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum VariadicFunc {
     Coalesce,
+    MakeTimestamp,
     Substr,
     Length,
     Replace,
@@ -2225,6 +2259,7 @@ impl VariadicFunc {
     pub fn func(self) -> for<'a> fn(&[Datum<'a>], &EvalEnv, &'a RowArena) -> Datum<'a> {
         match self {
             VariadicFunc::Coalesce => coalesce,
+            VariadicFunc::MakeTimestamp => make_timestamp,
             VariadicFunc::Substr => substr,
             VariadicFunc::Length => length,
             VariadicFunc::Replace => replace,
@@ -2243,6 +2278,7 @@ impl VariadicFunc {
                 }
                 ColumnType::new(ScalarType::Null)
             }
+            MakeTimestamp => ColumnType::new(ScalarType::Timestamp).nullable(true),
             Substr => ColumnType::new(ScalarType::String).nullable(true),
             Length => ColumnType::new(ScalarType::Int32).nullable(true),
             Replace => ColumnType::new(ScalarType::String).nullable(true),
@@ -2262,6 +2298,7 @@ impl fmt::Display for VariadicFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             VariadicFunc::Coalesce => f.write_str("coalesce"),
+            VariadicFunc::MakeTimestamp => f.write_str("makets"),
             VariadicFunc::Substr => f.write_str("substr"),
             VariadicFunc::Length => f.write_str("length"),
             VariadicFunc::Replace => f.write_str("replace"),
