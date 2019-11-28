@@ -666,6 +666,14 @@ pub fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena)
     Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
 }
 
+pub fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
+}
+
+pub fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
+    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
+}
+
 pub fn mul_int32<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     Datum::from(a.unwrap_int32() * b.unwrap_int32())
 }
@@ -1376,6 +1384,8 @@ pub enum BinaryFunc {
     SubInt64,
     SubFloat32,
     SubFloat64,
+    SubTimestamp,
+    SubTimestampTz,
     SubTimestampInterval,
     SubTimestampTzInterval,
     SubDecimal,
@@ -1486,6 +1496,8 @@ impl BinaryFunc {
             BinaryFunc::SubInt64 => sub_int64,
             BinaryFunc::SubFloat32 => sub_float32,
             BinaryFunc::SubFloat64 => sub_float64,
+            BinaryFunc::SubTimestamp => sub_timestamp,
+            BinaryFunc::SubTimestampTz => sub_timestamptz,
             BinaryFunc::SubTimestampInterval => sub_timestamp_interval,
             BinaryFunc::SubTimestampTzInterval => sub_timestamptz_interval,
             BinaryFunc::SubDecimal => sub_decimal,
@@ -1562,6 +1574,10 @@ impl BinaryFunc {
 
             AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
                 ColumnType::new(ScalarType::Float64).nullable(in_nullable || is_div_mod)
+            }
+
+            SubTimestamp | SubTimestampTz => {
+                ColumnType::new(ScalarType::Interval).nullable(in_nullable)
             }
 
             // TODO(benesch): we correctly compute types for decimal scale, but
@@ -1659,6 +1675,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubInt64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
+            BinaryFunc::SubTimestamp => f.write_str("-"),
+            BinaryFunc::SubTimestampTz => f.write_str("-"),
             BinaryFunc::SubTimestampInterval => f.write_str("-"),
             BinaryFunc::SubTimestampTzInterval => f.write_str("-"),
             BinaryFunc::SubDecimal => f.write_str("-"),
@@ -2211,7 +2229,7 @@ pub fn replace<'a>(datums: &[Datum<'a>], _: &EvalEnv, temp_storage: &'a RowArena
     )
 }
 
-pub fn make_timestamp<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &mut RowArena<'a>) -> Datum<'a> {
+pub fn make_timestamp<'a>(datums: &[Datum<'a>], _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let year: i32 = match datums[0].unwrap_int64().try_into() {
         Ok(year) => year,
         Err(_) => return Datum::Null,

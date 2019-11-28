@@ -2245,6 +2245,8 @@ fn plan_arithmetic_op<'a>(
             (Int64, Int64) => SubInt64,
             (Float32, Float32) => SubFloat32,
             (Float64, Float64) => SubFloat64,
+            (Timestamp, Timestamp) => SubTimestamp,
+            (TimestampTz, TimestampTz) => SubTimestampTz,
             (Timestamp, Interval) => SubTimestampInterval,
             (TimestampTz, Interval) => SubTimestampTzInterval,
             (Jsonb, Int32) => {
