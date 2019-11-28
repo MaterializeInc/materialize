@@ -1907,7 +1907,12 @@ fn plan_arithmetic_op<'a>(
             let rexpr = plan_expr(catalog, ecx, right, Some(type_hint))?;
             let rtype = ecx.column_type(&rexpr);
 
-            (lexpr, ltype, rexpr, rtype)
+            // Swap back, if necessary.
+            if swap {
+                (rexpr, rtype, lexpr, ltype)
+            } else {
+                (lexpr, ltype, rexpr, rtype)
+            }
         }
     };
 
