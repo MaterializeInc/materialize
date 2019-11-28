@@ -243,25 +243,6 @@ impl<'a> Datum<'a> {
         }
     }
 
-    pub fn scalar_type(&self) -> ScalarType {
-        match self {
-            Datum::Null => ScalarType::Null,
-            Datum::False => ScalarType::Bool,
-            Datum::True => ScalarType::Bool,
-            Datum::Int32(_) => ScalarType::Int32,
-            Datum::Int64(_) => ScalarType::Int64,
-            Datum::Float32(_) => ScalarType::Float32,
-            Datum::Float64(_) => ScalarType::Float64,
-            Datum::Date(_) => ScalarType::Date,
-            Datum::Timestamp(_) => ScalarType::Timestamp,
-            Datum::TimestampTz(_) => ScalarType::TimestampTz,
-            Datum::Interval(_) => ScalarType::Interval,
-            Datum::Decimal(_) => panic!("don't support decimal"), // todo: figure out what to do here
-            Datum::Bytes(_) => ScalarType::Bytes,
-            Datum::String(_) => ScalarType::String,
-        }
-    }
-
     pub fn is_instance_of(&self, column_type: ColumnType) -> bool {
         match (self, &column_type.scalar_type) {
             (Datum::Null, _) if column_type.nullable => true,

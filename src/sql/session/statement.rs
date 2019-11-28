@@ -35,7 +35,7 @@
 //! [eqf]: https://www.postgresql.org/docs/12/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
 //! [m]: https://www.postgresql.org/docs/12/protocol-message-formats.html#Parse
 
-use repr::{RelationDesc, Row, ScalarType};
+use repr::{Datum, RelationDesc, Row, ScalarType};
 
 /// A prepared statement.
 #[derive(Debug)]
@@ -82,7 +82,7 @@ impl PreparedStatement {
 pub struct Portal {
     pub statement_name: String,
     /// Row containing parameter values to be bound.
-    pub parameters: Option<Row>,
+    pub parameters: Vec<(Datum<'static>, ScalarType)>,
     /// A vec of "encoded" `materialize::pgwire::message::FieldFormat`s
     pub return_field_formats: Vec<bool>,
     /// The number of rows to be returned in _this_ execute call

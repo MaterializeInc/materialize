@@ -477,51 +477,49 @@ impl RelationExpr {
     where
         F: FnMut(&mut ColumnRef),
     {
-        match self {
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
-
-            RelationExpr::Project { input, .. }
-            | RelationExpr::Distinct { input }
-            | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input }
-            | RelationExpr::TopK { input, .. } => input.visit_columns(f),
-
-            RelationExpr::Union { left, right } => {
-                left.visit_columns(f);
-                right.visit_columns(f);
-            }
-
-            RelationExpr::Join {
-                left, right, on, ..
-            } => {
-                left.visit_columns(f);
-                right.visit_columns(f);
-                on.visit_columns(f);
-            }
-
-            RelationExpr::Reduce {
-                input, aggregates, ..
-            } => {
-                input.visit_columns(f);
-                for aggregate in aggregates {
-                    aggregate.visit_columns(f);
-                }
-            }
-
-            RelationExpr::Map { input, scalars } => {
-                input.visit_columns(f);
+        self.visit_mut(&mut |e| match e {
+            RelationExpr::Join { on, .. } => on.visit_columns(f),
+            RelationExpr::Map { scalars, .. } => {
                 for scalar in scalars {
                     scalar.visit_columns(f);
                 }
             }
-
-            RelationExpr::Filter { input, predicates } => {
-                input.visit_columns(f);
+            RelationExpr::Filter { predicates, .. } => {
                 for predicate in predicates {
                     predicate.visit_columns(f);
                 }
             }
-        }
+            RelationExpr::Reduce { aggregates, .. } => {
+                for aggregate in aggregates {
+                    aggregate.visit_columns(f);
+                }
+            }
+            _ => (),
+        })
+    }
+
+    /// Replaces any parameter references in the expression with the
+    /// corresponding datum from `parameters`.
+    pub fn bind_parameters(&mut self, parameters: &[(Datum<'static>, ScalarType)]) {
+        self.visit_mut(&mut |e| match e {
+            RelationExpr::Join { on, .. } => on.bind_parameters(parameters),
+            RelationExpr::Map { scalars, .. } => {
+                for scalar in scalars {
+                    scalar.bind_parameters(parameters);
+                }
+            }
+            RelationExpr::Filter { predicates, .. } => {
+                for predicate in predicates {
+                    predicate.bind_parameters(parameters);
+                }
+            }
+            RelationExpr::Reduce { aggregates, .. } => {
+                for aggregate in aggregates {
+                    aggregate.bind_parameters(parameters);
+                }
+            }
+            _ => (),
+        })
     }
 
     /// Constructs a constant collection from specific rows and schema.
@@ -746,6 +744,38 @@ impl ScalarExpr {
         }
     }
 
+    /// Replaces any parameter references in the expression with the
+    /// corresponding datum in `parameters`.
+    pub fn bind_parameters(&mut self, parameters: &[(Datum<'static>, ScalarType)]) {
+        match self {
+            ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) => (),
+            ScalarExpr::Parameter(n) => {
+                let (datum, scalar_type) = &parameters[*n - 1];
+                let row = Row::pack(vec![datum]);
+                let column_type = ColumnType::new(*scalar_type).nullable(datum.is_null());
+                mem::replace(self, ScalarExpr::Literal(row, column_type));
+            }
+            ScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(parameters),
+            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.bind_parameters(parameters);
+                expr2.bind_parameters(parameters);
+            }
+            ScalarExpr::CallVariadic { exprs, .. } => {
+                for expr in exprs {
+                    expr.bind_parameters(parameters);
+                }
+            }
+            ScalarExpr::If { cond, then, els } => {
+                cond.bind_parameters(parameters);
+                then.bind_parameters(parameters);
+                els.bind_parameters(parameters);
+            }
+            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+                expr.bind_parameters(parameters);
+            }
+        }
+    }
+
     pub fn literal(datum: Datum, column_type: ColumnType) -> ScalarExpr {
         let row = Row::pack(&[datum]);
         ScalarExpr::Literal(row, column_type)
@@ -922,6 +952,12 @@ impl AggregateExpr {
         F: FnMut(&mut ColumnRef),
     {
         self.expr.visit_columns(f);
+    }
+
+    /// Replaces any parameter references in the expression with the
+    /// corresponding datum from `parameters`.
+    pub fn bind_parameters(&mut self, parameters: &[(Datum<'static>, ScalarType)]) {
+        self.expr.bind_parameters(parameters);
     }
 }
 

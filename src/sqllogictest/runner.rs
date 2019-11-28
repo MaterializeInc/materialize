@@ -687,7 +687,7 @@ impl State {
             .desc()
             .cloned();
         self.session
-            .set_portal(portal_name.clone(), statement_name, None, vec![])?;
+            .set_portal(portal_name.clone(), statement_name, vec![], vec![])?;
 
         // Execute.
         {

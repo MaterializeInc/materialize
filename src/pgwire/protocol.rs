@@ -474,16 +474,16 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                 let stmt = session.get_prepared_statement(&statement_name).unwrap();
                 let param_types = stmt.param_types();
                 match raw_parameter_bytes.decode_parameters(param_types) {
-                    Ok(row) => {
+                    Ok(parameters) => {
                         trace!(
-                            "cid={} handle bind statement={:?} portal={:?} row={:?} return_field_formats={:?}",
+                            "cid={} handle bind statement={:?} portal={:?} parameters={:?} return_field_formats={:?}",
                             cx.conn_id,
                             statement_name,
                             portal_name,
-                            row,
+                            parameters,
                             return_field_formats
                         );
-                        session.set_portal(portal_name, statement_name, Some(row), fmts)?;
+                        session.set_portal(portal_name, statement_name, parameters, fmts)?;
                         transition!(send_simple_complete(
                             conn,
                             session,
@@ -749,9 +749,10 @@ impl<A: Conn> PollStateMachine<A> for StateMachine<A> {
                         .expect("unnamed statement to be present during simple query flow");
                     let row_desc = stmt.desc().cloned();
                     let portal_name = String::from("");
+                    let params = vec![];
                     let fmts = vec![];
                     session
-                        .set_portal(portal_name.clone(), statement_name, None, fmts)
+                        .set_portal(portal_name.clone(), statement_name, params, fmts)
                         .expect("unnamed statement to be present during simple query flow");
                     let (tx, rx) = futures::sync::oneshot::channel();
                     cx.cmdq_tx.unbounded_send(coord::Command::Execute {

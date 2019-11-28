@@ -18,7 +18,6 @@ use sqlparser::ast::{
 };
 use url::Url;
 
-use crate::expr as sqlexpr;
 use crate::expr::like::build_like_regex_from_string;
 use crate::query;
 use crate::session::{Portal, Session};
@@ -722,44 +721,9 @@ fn handle_query(
 ) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
     if let Some(portal) = portal {
-        if let Some(row) = &portal.parameters {
-            let parameter_data = row.unpack();
-            if !parameter_data.is_empty() {
-                bind_parameters(&mut expr, parameter_data.as_ref())
-            }
-        }
+        expr.bind_parameters(&portal.parameters);
     }
     Ok((expr.decorrelate()?, desc, finishing))
-}
-
-fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: &[Datum]) {
-    expr.visit_mut(&mut |e| match e {
-        sqlexpr::RelationExpr::Map { scalars, .. } => {
-            for s in scalars {
-                replace_parameter_with_datum(s, &parameter_data);
-            }
-        }
-        sqlexpr::RelationExpr::Filter { predicates, .. } => {
-            for p in predicates {
-                replace_parameter_with_datum(p, &parameter_data);
-            }
-        }
-        sqlexpr::RelationExpr::Join { on, .. } => {
-            replace_parameter_with_datum(on, &parameter_data);
-        }
-        _ => (),
-    });
-}
-
-fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data: &[Datum]) {
-    if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
-        let datum = &parameter_data[*position - 1];
-        let scalar_type = datum.scalar_type();
-        std::mem::replace(
-            scalar,
-            sqlexpr::ScalarExpr::Literal(Row::pack(vec![datum]), ColumnType::new(scalar_type)),
-        );
-    };
 }
 
 fn build_kafka_source(
