@@ -3,14 +3,13 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-mod util;
+pub mod util;
 
 #[test]
 fn test_prepared_statements() -> util::TestResult {
     ore::log::init();
 
-    let data_dir = None;
-    let (_server, conn) = util::start_server(data_dir)?;
+    let (_server, conn) = util::start_server(util::Config::default())?;
 
     let rows: Vec<String> = conn
         .query("SELECT $1", &[&String::from("42")])?
@@ -48,7 +47,7 @@ fn test_partial_read() -> util::TestResult {
     use fallible_iterator::FallibleIterator;
 
     ore::log::init();
-    let (_server, conn) = util::start_server(None)?;
+    let (_server, conn) = util::start_server(util::Config::default())?;
 
     // TODO(#1039): we can clean this up using symbiosis mode
     let expected_rows = 3;

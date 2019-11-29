@@ -5,14 +5,13 @@
 
 use std::error::Error;
 
-mod util;
+pub mod util;
 
 #[test]
 fn test_to_char() -> Result<(), Box<dyn Error>> {
     ore::log::init();
 
-    let data_dir = None;
-    let (_server, conn) = util::start_server(data_dir)?;
+    let (_server, conn) = util::start_server(util::Config::default())?;
 
     // Only works for these two specific examples:
     //     1. select to_char(current_timestamp(), 'YYYY-MM-DD HH24:MI:SS.MS TZ')
