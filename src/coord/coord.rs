@@ -172,9 +172,12 @@ where
             // the first connection ID used is 1. As long as that remains the case,
             // 0 is safe to use here.
             let conn_id = 0;
+            let params = vec![];
             let mut session = sql::Session::default();
             for stmt in sql::parse(config.bootstrap_sql)? {
-                coord.handle_statement(&mut session, stmt, None, conn_id)?;
+                coord
+                    .handle_statement(&session, stmt, &params)
+                    .and_then(|plan| coord.sequence_plan(&mut session, plan, conn_id))?;
             }
         }
 
@@ -1109,23 +1112,20 @@ where
 
     fn handle_statement(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         stmt: sql::Statement,
-        portal_name: Option<String>,
-        conn_id: u32,
-    ) -> Result<ExecuteResponse, failure::Error> {
-        sql::plan(&self.catalog, session, stmt.clone(), portal_name)
-            .or_else(|err| {
-                // Executing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it.
-                match self.symbiosis {
-                    Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                        postgres.execute(&self.catalog, &stmt)
-                    }
-                    _ => Err(err),
+        params: &sql::Params,
+    ) -> Result<sql::Plan, failure::Error> {
+        sql::plan(&self.catalog, session, stmt.clone(), params).or_else(|err| {
+            // Executing the query failed. If we're running in symbiosis with
+            // Postgres, see if Postgres can handle it.
+            match self.symbiosis {
+                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
+                    postgres.execute(&self.catalog, &stmt)
                 }
-            })
-            .and_then(|plan| self.sequence_plan(session, plan, conn_id))
+                _ => Err(err),
+            }
+        })
     }
 
     fn handle_execute(
@@ -1147,10 +1147,9 @@ where
                 )
             })?;
         match prepared.sql() {
-            Some(stmt) => {
-                let stmt = stmt.clone();
-                self.handle_statement(session, stmt, Some(portal_name), conn_id)
-            }
+            Some(stmt) => self
+                .handle_statement(session, stmt.clone(), &portal.parameters)
+                .and_then(|plan| self.sequence_plan(session, plan, conn_id)),
             None => Ok(ExecuteResponse::EmptyQuery),
         }
     }
