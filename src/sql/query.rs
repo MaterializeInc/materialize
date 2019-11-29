@@ -1595,7 +1595,10 @@ fn plan_function<'a>(
 
             "make_timestamp" => {
                 if sql_func.args.len() != 6 {
-                    bail!("make_timestamp requires exactly six arguments");
+                    bail!(
+                        "make_timestamp expects six arguments, got {}",
+                        sql_func.args.len()
+                    );
                 }
 
                 let mut exprs = Vec::new();
@@ -1822,38 +1825,44 @@ fn plan_function<'a>(
                 plan_cast_internal(ecx, "internal.avg_promotion", expr, output_type)
             }
 
-            // Currently only implement this specific case from Metabase:
-            // to_char(<timestamptz>, 'YYYY-MM-DD HH24:MI:SS.MS TZ')
             "to_char" => {
                 if sql_func.args.len() != 2 {
                     bail!("to_char requires exactly two arguments");
                 }
 
-                let timestamp_func = plan_expr(
+                let ts_expr = plan_expr(
                     catalog,
                     ecx,
                     &sql_func.args[0],
                     Some(ScalarType::TimestampTz),
                 )?;
-                let typ = ecx.column_type(&timestamp_func);
-                if typ.scalar_type != ScalarType::TimestampTz && typ.scalar_type != ScalarType::Null
-                {
-                    bail!("to_char() currently only implemented for timestamptz");
+                let ts_type = ecx.column_type(&ts_expr);
+                match ts_type.scalar_type {
+                    ScalarType::Timestamp | ScalarType::TimestampTz | ScalarType::Null => (),
+                    other => bail!("to_char requires a timestamp or timestamptz as its first argument, but got: {}", other)
                 }
 
-                let format_string =
+                let fmt_expr =
                     plan_expr(catalog, ecx, &sql_func.args[1], Some(ScalarType::String))?;
-                let typ = ecx.column_type(&format_string);
-                if typ.scalar_type != ScalarType::String && typ.scalar_type != ScalarType::Null {
-                    bail!("to_char() requires a format string as the second parameter");
+                let fmt_typ = ecx.column_type(&fmt_expr);
+                if fmt_typ.scalar_type != ScalarType::String
+                    && fmt_typ.scalar_type != ScalarType::Null
+                {
+                    bail!(
+                        "to_char requires a string as its second arugment, but got: {}",
+                        fmt_typ.scalar_type
+                    );
                 }
 
-                let expr = ScalarExpr::CallBinary {
-                    func: BinaryFunc::ToChar,
-                    expr1: Box::new(timestamp_func),
-                    expr2: Box::new(format_string),
-                };
-                Ok(expr)
+                Ok(ScalarExpr::CallBinary {
+                    func: if ts_type.scalar_type == ScalarType::Timestamp {
+                        BinaryFunc::ToCharTimestamp
+                    } else {
+                        BinaryFunc::ToCharTimestampTz
+                    },
+                    expr1: Box::new(ts_expr),
+                    expr2: Box::new(fmt_expr),
+                })
             }
 
             "date_trunc" => {

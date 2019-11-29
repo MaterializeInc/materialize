@@ -9,11 +9,14 @@ publish = false
 path = "lib.rs"
 
 [dependencies]
+aho-corasick = "0.7.6"
 chrono = "0.4"
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 encoding = "0.2"
+enum-iterator = "0.5.0"
 failure = "0.1.6"
 indexmap = "1.2.0"
+num_enum = "0.4.2"
 ordered-float = { version = "1.0.2", features = ["serde"] }
 ore = { path = "../ore" }
 pretty = "0.7.1"

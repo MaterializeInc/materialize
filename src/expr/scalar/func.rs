@@ -16,11 +16,15 @@ use failure::bail;
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 
-pub use crate::like::build_like_regex_from_string;
-use crate::EvalEnv;
 use repr::decimal::MAX_DECIMAL_PRECISION;
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, Interval, RowArena, RowPacker, ScalarType};
+
+use self::format::DateTimeFormat;
+pub use crate::like::build_like_regex_from_string;
+use crate::EvalEnv;
+
+mod format;
 
 #[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum NullaryFunc {
@@ -858,6 +862,26 @@ pub fn gte<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datu
     Datum::from(a >= b)
 }
 
+pub fn to_char_timestamp<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamp())))
+}
+
+pub fn to_char_timestamptz<'a>(
+    a: Datum<'a>,
+    b: Datum<'a>,
+    _: &EvalEnv,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
+    let fmt = DateTimeFormat::compile(b.unwrap_str());
+    Datum::String(temp_storage.push_string(fmt.render(a.unwrap_timestamptz())))
+}
+
 pub fn jsonb_get_int64<'a>(a: Datum<'a>, b: Datum<'a>, _: &EvalEnv, _: &'a RowArena) -> Datum<'a> {
     let i = b.unwrap_int64();
     match a {
@@ -1016,27 +1040,6 @@ pub fn jsonb_delete_string<'a>(
             temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }
         _ => Datum::Null,
-    }
-}
-
-pub fn to_char<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    _: &EvalEnv,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    let datetime = a.unwrap_timestamptz();
-    let format_string = b.unwrap_str();
-    // PostgreSQL parses this weird format string, hand-interpret for now
-    // to unblock Metabase progress. Will have to revisit formatting strings and
-    // other versions of to_char() in the future.
-    if format_string == "YYYY-MM-DD HH24:MI:SS.MS TZ" {
-        let interpreted_format_string = "%Y-%m-%d %H:%M:%S.%3f %Z";
-        Datum::String(
-            temp_storage.push_string(datetime.format(interpreted_format_string).to_string()),
-        )
-    } else {
-        Datum::Null
     }
 }
 
@@ -1413,7 +1416,8 @@ pub enum BinaryFunc {
     Gt,
     Gte,
     MatchRegex,
-    ToChar,
+    ToCharTimestamp,
+    ToCharTimestampTz,
     DateTrunc,
     CastFloat32ToDecimal,
     CastFloat64ToDecimal,
@@ -1525,7 +1529,8 @@ impl BinaryFunc {
             BinaryFunc::Gt => gt,
             BinaryFunc::Gte => gte,
             BinaryFunc::MatchRegex => match_regex,
-            BinaryFunc::ToChar => to_char,
+            BinaryFunc::ToCharTimestamp => to_char_timestamp,
+            BinaryFunc::ToCharTimestampTz => to_char_timestamptz,
             BinaryFunc::DateTrunc => date_trunc,
             BinaryFunc::CastFloat32ToDecimal => cast_float32_to_decimal,
             BinaryFunc::CastFloat64ToDecimal => cast_float64_to_decimal,
@@ -1558,7 +1563,9 @@ impl BinaryFunc {
                 ColumnType::new(ScalarType::Bool).nullable(true)
             }
 
-            ToChar => ColumnType::new(ScalarType::String).nullable(false),
+            ToCharTimestamp | ToCharTimestampTz => {
+                ColumnType::new(ScalarType::String).nullable(false)
+            }
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable || is_div_mod)
@@ -1704,7 +1711,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gt => f.write_str(">"),
             BinaryFunc::Gte => f.write_str(">="),
             BinaryFunc::MatchRegex => f.write_str("~"),
-            BinaryFunc::ToChar => f.write_str("to_char"),
+            BinaryFunc::ToCharTimestamp => f.write_str("tocharts"),
+            BinaryFunc::ToCharTimestampTz => f.write_str("tochartstz"),
             BinaryFunc::DateTrunc => f.write_str("date_trunc"),
             BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
             BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
