@@ -100,6 +100,10 @@
                 "signature": "EXTRACT(extract_expr) -> Float",
                 "description": "Specified time component from value",
                 "url": "extract"
+            },
+            {
+                "signature": "NOW() -> TimestampTZ",
+                "description": "The TimestampTZ representing the time at which this dataflow was created."
             }
         ]
     }
