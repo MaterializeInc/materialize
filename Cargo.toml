@@ -8,7 +8,6 @@ members = [
     "src/dataflow-types",
     "src/expr",
     "src/interchange",
-    "src/metastore",
     "src/metrics",
     "src/materialized",
     "src/ore",
