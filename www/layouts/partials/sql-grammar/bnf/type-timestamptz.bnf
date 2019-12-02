@@ -1,0 +1,2 @@
+type_timestamptz ::=
+  'TIMESTAMPTZ' "'" yyyy-mm-dd hh-mm-ss ( ('+' | '-' ) tz_offset )? "'"

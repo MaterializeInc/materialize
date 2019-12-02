@@ -1,0 +1,2 @@
+type_decimal_val ::=
+  int ( '.' frac )?

@@ -11,5 +11,13 @@
     "../../layouts/partials/sql-grammar/bnf/join-type.bnf": "52aa952f2f4b0d8eed26bee16a5e9275",
     "../../layouts/partials/sql-grammar/bnf/op-cast.bnf": "34a9f1178571efab6c55ed65123d1d54",
     "../../layouts/partials/sql-grammar/bnf/select_stmt.bnf": "66afc175e36b1102f95ca916e603e132",
-    "../../layouts/partials/sql-grammar/bnf/time-component.bnf": "9fafeb51d906a54b58c6d03f4586f151"
+    "../../layouts/partials/sql-grammar/bnf/time-component.bnf": "9fafeb51d906a54b58c6d03f4586f151",
+    "../../layouts/partials/sql-grammar/bnf/type-bool.bnf": "ec73a7e6ca4104f6213ca2273893deb6",
+    "../../layouts/partials/sql-grammar/bnf/type-date.bnf": "5d157b0d3a7bf3071c2e07141c77556d",
+    "../../layouts/partials/sql-grammar/bnf/type-decimal-def.bnf": "21b654dadf189ecc813da4457d698fb1",
+    "../../layouts/partials/sql-grammar/bnf/type-decimal-val.bnf": "f4be5b8feaa8dc166f7ed3b0d2deedff",
+    "../../layouts/partials/sql-grammar/bnf/type-float.bnf": "a142b71b1f845a96683fe0c5c8c37616",
+    "../../layouts/partials/sql-grammar/bnf/type-string.bnf": "d718434c6b7ef78bfc7a39c2442d4797",
+    "../../layouts/partials/sql-grammar/bnf/type-timestamp.bnf": "a81f3042fa1c3a2b4ec58c3533c1257b",
+    "../../layouts/partials/sql-grammar/bnf/type-timestamptz.bnf": "04ec3fd74e47c52cebeb99b007f8429e"
 }
