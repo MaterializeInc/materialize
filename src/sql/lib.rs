@@ -11,7 +11,7 @@ use dataflow_types::{Index, PeekWhen, RowSetFinishing, Sink, Source, View};
 
 use ::expr::GlobalId;
 use catalog::{Catalog, CatalogEntry};
-use repr::{QualName, RelationDesc, Row, ScalarType};
+use repr::{Datum, QualName, RelationDesc, Row, ScalarType};
 use sqlparser::dialect::AnsiDialect;
 use sqlparser::parser::Parser as SqlParser;
 
@@ -84,6 +84,9 @@ pub enum MutationKind {
     Delete,
 }
 
+/// A vector of values to which parameter references should be bound.
+pub type Params = [(Datum<'static>, ScalarType)];
+
 /// Parses a raw SQL string into a [`Statement`].
 pub fn parse(sql: String) -> Result<Vec<Statement>, failure::Error> {
     Ok(SqlParser::parse_sql(&AnsiDialect {}, sql)?)
@@ -94,9 +97,9 @@ pub fn plan(
     catalog: &Catalog,
     session: &Session,
     stmt: Statement,
-    portal_name: Option<String>,
+    params: &Params,
 ) -> Result<Plan, failure::Error> {
-    statement::handle_statement(catalog, session, stmt, portal_name)
+    statement::handle_statement(catalog, session, stmt, params)
 }
 
 /// Determines the type of the rows that will be returned by `stmt` and the type

@@ -10,6 +10,7 @@
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::path::PathBuf;
 
 use failure::{bail, ResultExt};
 use sqlparser::ast::{
@@ -18,11 +19,6 @@ use sqlparser::ast::{
 };
 use url::Url;
 
-use crate::expr as sqlexpr;
-use crate::expr::like::build_like_regex_from_string;
-use crate::query;
-use crate::session::{Portal, Session};
-use crate::Plan;
 use catalog::{Catalog, CatalogItem, RemoveMode};
 use dataflow_types::{
     FileFormat, FileSourceConnector, Index, KafkaSinkConnector, KafkaSourceConnector, PeekWhen,
@@ -34,8 +30,9 @@ use ore::option::OptionExt;
 use relationexpr::Id;
 use repr::{ColumnType, Datum, QualName, RelationDesc, RelationType, Row, ScalarType};
 
-use crate::names;
-use std::path::PathBuf;
+use crate::expr::like::build_like_regex_from_string;
+use crate::session::Session;
+use crate::{names, query, Params, Plan};
 
 pub fn describe_statement(
     catalog: &Catalog,
@@ -148,7 +145,7 @@ pub fn handle_statement(
     catalog: &Catalog,
     session: &Session,
     stmt: Statement,
-    portal_name: Option<String>,
+    params: &Params,
 ) -> Result<Plan, failure::Error> {
     match stmt {
         Statement::Peek { name, immediate } => handle_peek(catalog, name.try_into()?, immediate),
@@ -160,17 +157,9 @@ pub fn handle_statement(
         | Statement::CreateSink { .. }
         | Statement::CreateView { .. }
         | Statement::CreateSources { .. }
-        | Statement::CreateIndex { .. } => match portal_name {
-            Some(portal_name) => {
-                handle_create_dataflow(catalog, stmt, session.get_portal(&portal_name))
-            }
-            None => bail!("tried to create a dataflow without a portal"),
-        },
+        | Statement::CreateIndex { .. } => handle_create_dataflow(catalog, stmt, params),
         Statement::Drop { .. } => handle_drop_dataflow(catalog, stmt),
-        Statement::Query(query) => match portal_name {
-            Some(portal_name) => handle_select(catalog, *query, session.get_portal(&portal_name)),
-            None => bail!("tried to query without a portal"),
-        },
+        Statement::Query(query) => handle_select(catalog, *query, params),
         Statement::SetVariable {
             local,
             variable,
@@ -199,12 +188,7 @@ pub fn handle_statement(
         Statement::ShowCreateSource { source_name } => {
             handle_show_create_source(catalog, source_name)
         }
-        Statement::Explain { stage, query } => match portal_name {
-            Some(portal_name) => {
-                handle_explain(catalog, stage, *query, session.get_portal(&portal_name))
-            }
-            None => bail!("tried to explain without a portal"),
-        },
+        Statement::Explain { stage, query } => handle_explain(catalog, stage, *query, params),
 
         _ => bail!("unsupported SQL statement: {:?}", stmt),
     }
@@ -378,7 +362,7 @@ fn handle_show_create_source(
 fn handle_create_dataflow(
     catalog: &Catalog,
     mut stmt: Statement,
-    portal: Option<&Portal>,
+    params: &Params,
 ) -> Result<Plan, failure::Error> {
     match &mut stmt {
         Statement::CreateView {
@@ -392,7 +376,7 @@ fn handle_create_dataflow(
                 bail!("WITH options are not yet supported");
             }
             let (mut relation_expr, mut desc, finishing) =
-                handle_query(catalog, *query.clone(), portal)?;
+                handle_query(catalog, *query.clone(), params)?;
             if !finishing.is_trivial() {
                 //TODO: materialize#724 - persist finishing information with the view?
                 relation_expr = relationexpr::RelationExpr::Project {
@@ -685,9 +669,9 @@ fn handle_peek(catalog: &Catalog, name: QualName, immediate: bool) -> Result<Pla
 pub fn handle_select(
     catalog: &Catalog,
     query: Query,
-    portal: Option<&Portal>,
+    params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _, finishing) = handle_query(catalog, query, portal)?;
+    let (relation_expr, _, finishing) = handle_query(catalog, query, params)?;
     Ok(Plan::Peek {
         source: relation_expr,
         when: PeekWhen::Immediately,
@@ -699,9 +683,9 @@ pub fn handle_explain(
     catalog: &Catalog,
     stage: Stage,
     query: Query,
-    portal: Option<&Portal>,
+    params: &Params,
 ) -> Result<Plan, failure::Error> {
-    let (relation_expr, _desc, _finishing) = handle_query(catalog, query, portal)?;
+    let (relation_expr, _desc, _finishing) = handle_query(catalog, query, params)?;
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
@@ -718,48 +702,11 @@ pub fn handle_explain(
 fn handle_query(
     catalog: &Catalog,
     query: Query,
-    portal: Option<&Portal>,
+    params: &Params,
 ) -> Result<(relationexpr::RelationExpr, RelationDesc, RowSetFinishing), failure::Error> {
     let (mut expr, desc, finishing, _param_types) = query::plan_root_query(catalog, query)?;
-    if let Some(portal) = portal {
-        if let Some(row) = &portal.parameters {
-            let parameter_data = row.unpack();
-            if !parameter_data.is_empty() {
-                bind_parameters(&mut expr, parameter_data.as_ref())
-            }
-        }
-    }
+    expr.bind_parameters(&params);
     Ok((expr.decorrelate()?, desc, finishing))
-}
-
-fn bind_parameters(expr: &mut sqlexpr::RelationExpr, parameter_data: &[Datum]) {
-    expr.visit_mut(&mut |e| match e {
-        sqlexpr::RelationExpr::Map { scalars, .. } => {
-            for s in scalars {
-                replace_parameter_with_datum(s, &parameter_data);
-            }
-        }
-        sqlexpr::RelationExpr::Filter { predicates, .. } => {
-            for p in predicates {
-                replace_parameter_with_datum(p, &parameter_data);
-            }
-        }
-        sqlexpr::RelationExpr::Join { on, .. } => {
-            replace_parameter_with_datum(on, &parameter_data);
-        }
-        _ => (),
-    });
-}
-
-fn replace_parameter_with_datum(scalar: &mut sqlexpr::ScalarExpr, parameter_data: &[Datum]) {
-    if let sqlexpr::ScalarExpr::Parameter(position) = scalar {
-        let datum = &parameter_data[*position - 1];
-        let scalar_type = datum.scalar_type();
-        std::mem::replace(
-            scalar,
-            sqlexpr::ScalarExpr::Literal(Row::pack(vec![datum]), ColumnType::new(scalar_type)),
-        );
-    };
 }
 
 fn build_kafka_source(

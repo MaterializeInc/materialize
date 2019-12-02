@@ -20,6 +20,8 @@ use crate::sql::SqlVal;
 
 mod sql;
 
+const APPLICATION_ID: i32 = 0x1854_47dc;
+
 /// A `Catalog` keeps track of the SQL objects known to the planner.
 ///
 /// For each object, it keeps track of both forward and reverse dependencies:
@@ -33,6 +35,7 @@ pub struct Catalog {
     by_name: HashMap<QualName, GlobalId>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     sqlite: rusqlite::Connection,
+    bootstrapped: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -104,18 +107,42 @@ impl CatalogEntry {
 }
 
 impl Catalog {
-    /// Constructs a new `Catalog`.
-    pub fn open(path: Option<&Path>) -> Result<Catalog, failure::Error> {
+    /// Opens or creates a `Catalog` that stores data at `path`. Initial
+    /// catalog items in `items` will be inserted into the catalog before any
+    /// persisted catalog items are loaded.
+    pub fn open<I>(path: Option<&Path>, items: I) -> Result<Catalog, failure::Error>
+    where
+        I: Iterator<Item = (GlobalId, QualName, CatalogItem)>,
+    {
         let sqlite = match path {
             Some(path) => rusqlite::Connection::open(path)?,
             None => rusqlite::Connection::open_in_memory()?,
         };
+
+        let app_id: i32 = sqlite.query_row("PRAGMA application_id", params![], |row| row.get(0))?;
+        let bootstrapped = if app_id == 0 {
+            sqlite.execute(
+                &format!("PRAGMA application_id = {}", APPLICATION_ID),
+                params![],
+            )?;
+            true
+        } else if app_id == APPLICATION_ID {
+            false
+        } else {
+            bail!("incorrect application_id in catalog");
+        };
+
         let mut catalog = Catalog {
             id: 0,
             by_name: HashMap::new(),
             by_id: BTreeMap::new(),
             sqlite,
+            bootstrapped,
         };
+
+        for (id, name, item) in items {
+            catalog.insert_id(id, name, item)?;
+        }
 
         // Create the on-disk schema, if it doesn't already exist.
         const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS catalog (
@@ -184,7 +211,7 @@ impl Catalog {
         Ok(id)
     }
 
-    pub fn insert_id(
+    fn insert_id(
         &mut self,
         id: GlobalId,
         name: QualName,
@@ -313,6 +340,11 @@ impl Catalog {
     /// Iterates over the items in the catalog in order of increasing ID.
     pub fn iter(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.by_id.iter().map(|(_id, entry)| entry)
+    }
+
+    /// Whether this catalog instance bootstrapped its on-disk state.
+    pub fn bootstrapped(&self) -> bool {
+        self.bootstrapped
     }
 }
 

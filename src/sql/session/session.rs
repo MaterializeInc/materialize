@@ -24,7 +24,7 @@ use crate::session::var::{
     APPLICATION_NAME, CLIENT_ENCODING, DATABASE, DATE_STYLE, EXTRA_FLOAT_DIGITS, SERVER_VERSION,
     SQL_SAFE_UPDATES,
 };
-use repr::Row;
+use repr::{Datum, ScalarType};
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
@@ -262,7 +262,7 @@ impl Session {
         &mut self,
         portal_name: String,
         statement_name: String,
-        row: Option<Row>,
+        parameters: Vec<(Datum<'static>, ScalarType)>,
         return_field_formats: Vec<bool>,
     ) -> Result<(), failure::Error> {
         if self.prepared_statements.contains_key(&statement_name) {
@@ -270,7 +270,7 @@ impl Session {
                 portal_name,
                 Portal {
                     statement_name,
-                    parameters: row,
+                    parameters,
                     return_field_formats,
                     max_rows: None,
                     remaining_rows: None,

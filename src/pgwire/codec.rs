@@ -25,7 +25,7 @@ use crate::message::{
     BackendMessage, FieldFormat, FrontendMessage, TransactionStatus, VERSION_CANCEL,
 };
 use ore::netio;
-use repr::{Datum, Row, ScalarType};
+use repr::{Datum, ScalarType};
 
 #[derive(Debug)]
 enum CodecError {
@@ -599,25 +599,32 @@ impl RawParameterBytes {
         }
     }
 
-    pub fn decode_parameters(&self, typs: &[ScalarType]) -> Result<Row, failure::Error> {
-        let mut datums: Vec<Datum> = Vec::new();
-        for i in 0..self.parameters.len() {
-            datums.push(match &self.parameters[i] {
+    pub fn decode_parameters(
+        self,
+        typs: &[ScalarType],
+    ) -> Result<Vec<(Datum<'static>, ScalarType)>, failure::Error> {
+        let mut parameters = Vec::new();
+        for (i, parameter) in self.parameters.into_iter().enumerate() {
+            let datum = match parameter {
                 Some(bytes) => match self.parameter_format_codes[i] {
                     FieldFormat::Binary => {
-                        RawParameterBytes::generate_datum_from_bytes(bytes.as_ref(), typs[i])?
+                        RawParameterBytes::generate_datum_from_bytes(bytes, typs[i])?
                     }
                     FieldFormat::Text => {
-                        RawParameterBytes::generate_datum_from_text(bytes.as_ref(), typs[i])?
+                        RawParameterBytes::generate_datum_from_text(bytes, typs[i])?
                     }
                 },
                 None => Datum::Null,
-            });
+            };
+            parameters.push((datum, typs[i]));
         }
-        Ok(Row::pack(datums))
+        Ok(parameters)
     }
 
-    fn generate_datum_from_bytes(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {
+    fn generate_datum_from_bytes(
+        bytes: Vec<u8>,
+        typ: ScalarType,
+    ) -> Result<Datum<'static>, failure::Error> {
         Ok(match typ {
             ScalarType::Null => Datum::Null,
             ScalarType::Bool => match bytes[0] {
@@ -625,12 +632,12 @@ impl RawParameterBytes {
                 0 => Datum::False,
                 _ => Datum::True,
             },
-            ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(bytes)),
-            ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(bytes)),
-            ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(bytes).into()),
-            ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(bytes).into()),
-            ScalarType::Bytes => Datum::Bytes(Cow::from(bytes)),
-            ScalarType::String => Datum::cow_from_str(str::from_utf8(bytes)?),
+            ScalarType::Int32 => Datum::Int32(NetworkEndian::read_i32(&bytes)),
+            ScalarType::Int64 => Datum::Int64(NetworkEndian::read_i64(&bytes)),
+            ScalarType::Float32 => Datum::Float32(NetworkEndian::read_f32(&bytes).into()),
+            ScalarType::Float64 => Datum::Float64(NetworkEndian::read_f64(&bytes).into()),
+            ScalarType::Bytes => Datum::Bytes(Cow::Owned(bytes)),
+            ScalarType::String => Datum::String(Cow::Owned(String::from_utf8(bytes)?)),
             _ => {
                 // todo(jldlaughlin): implement Bool, Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(
@@ -641,11 +648,14 @@ impl RawParameterBytes {
         })
     }
 
-    fn generate_datum_from_text(bytes: &[u8], typ: ScalarType) -> Result<Datum, failure::Error> {
-        let as_str = str::from_utf8(bytes)?;
+    fn generate_datum_from_text(
+        bytes: Vec<u8>,
+        typ: ScalarType,
+    ) -> Result<Datum<'static>, failure::Error> {
+        let as_str = String::from_utf8(bytes)?;
         Ok(match typ {
             ScalarType::Null => Datum::Null,
-            ScalarType::Bool => match as_str {
+            ScalarType::Bool => match &*as_str {
                 "0" => Datum::False,
                 _ => Datum::True, // Note: anything non-zero is true!
             },
@@ -653,8 +663,8 @@ impl RawParameterBytes {
             ScalarType::Int64 => Datum::Int64(as_str.parse::<i64>()?),
             ScalarType::Float32 => Datum::Float32(OrderedFloat::from(as_str.parse::<f32>()?)),
             ScalarType::Float64 => Datum::Float64(OrderedFloat::from(as_str.parse::<f64>()?)),
-            ScalarType::Bytes => Datum::Bytes(Cow::from(as_str.as_bytes())),
-            ScalarType::String => Datum::cow_from_str(as_str),
+            ScalarType::Bytes => Datum::Bytes(Cow::Owned(as_str.into_bytes())),
+            ScalarType::String => Datum::String(Cow::Owned(as_str)),
             _ => {
                 // todo(jldlaughlin): implement Decimal, Date, Time, Timestamp, Interval
                 failure::bail!(

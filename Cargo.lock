@@ -1468,6 +1468,7 @@ dependencies = [
  "futures",
  "getopts",
  "hyper",
+ "itertools",
  "jemallocator",
  "lazy_static",
  "log",

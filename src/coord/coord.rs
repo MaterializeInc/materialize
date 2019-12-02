@@ -113,12 +113,31 @@ where
             None
         };
 
+        let catalog_path = catalog_path.mz_as_deref();
+        let catalog = if let Some(logging_config) = config.logging {
+            Catalog::open(
+                catalog_path,
+                logging_config.active_logs().iter().map(|log| {
+                    (
+                        log.id(),
+                        log.name(),
+                        CatalogItem::Source(Source {
+                            connector: SourceConnector::Local,
+                            desc: log.schema(),
+                        }),
+                    )
+                }),
+            )?
+        } else {
+            Catalog::open(catalog_path, iter::empty())?
+        };
+
         let mut coord = Self {
             switchboard: config.switchboard,
             broadcast_tx,
             num_timely_workers: u64::try_from(config.num_timely_workers).unwrap(),
             optimizer: Default::default(),
-            catalog: Catalog::open(catalog_path.mz_as_deref())?,
+            catalog,
             symbiosis,
             views: HashMap::new(),
             sources: HashMap::new(),
@@ -138,7 +157,13 @@ where
         for (id, item) in catalog_entries {
             match item {
                 CatalogItem::Source(source) => {
-                    coord.create_sources_id(vec![(id, source)]);
+                    match id {
+                        GlobalId::User(_) => coord.create_sources_id(vec![(id, source)]),
+                        GlobalId::System(_) => {
+                            // Insert with 1 second compaction latency.
+                            coord.insert_source(id, Some(1_000));
+                        }
+                    }
                 }
                 CatalogItem::View(view) => {
                     let dataflow = DataflowDesc::new().add_view(id, view.clone());
@@ -152,29 +177,20 @@ where
             }
         }
 
-        if let Some(logging_config) = config.logging {
-            for log in logging_config.active_logs().iter() {
-                coord.catalog.insert_id(
-                    log.id(),
-                    log.name(),
-                    CatalogItem::Source(Source {
-                        connector: SourceConnector::Local,
-                        desc: log.schema(),
-                    }),
-                )?;
-                // Insert with 1 second compaction latency.
-                coord.insert_source(log.id(), Some(1_000));
-            }
-        }
-
-        {
+        if coord.catalog.bootstrapped() {
             // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
             // the first connection ID used is 1. As long as that remains the case,
             // 0 is safe to use here.
             let conn_id = 0;
+            let params = vec![];
             let mut session = sql::Session::default();
+            // TODO(benesch): these bootstrap statements should be run in a
+            // single transaction, so that we don't leave the catalog in a
+            // partially-bootstrapped state if one fails.
             for stmt in sql::parse(config.bootstrap_sql)? {
-                coord.handle_statement(&mut session, stmt, None, conn_id)?;
+                coord
+                    .handle_statement(&session, stmt, &params)
+                    .and_then(|plan| coord.sequence_plan(&mut session, plan, conn_id))?;
             }
         }
 
@@ -1109,23 +1125,20 @@ where
 
     fn handle_statement(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         stmt: sql::Statement,
-        portal_name: Option<String>,
-        conn_id: u32,
-    ) -> Result<ExecuteResponse, failure::Error> {
-        sql::plan(&self.catalog, session, stmt.clone(), portal_name)
-            .or_else(|err| {
-                // Executing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it.
-                match self.symbiosis {
-                    Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                        postgres.execute(&self.catalog, &stmt)
-                    }
-                    _ => Err(err),
+        params: &sql::Params,
+    ) -> Result<sql::Plan, failure::Error> {
+        sql::plan(&self.catalog, session, stmt.clone(), params).or_else(|err| {
+            // Executing the query failed. If we're running in symbiosis with
+            // Postgres, see if Postgres can handle it.
+            match self.symbiosis {
+                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
+                    postgres.execute(&self.catalog, &stmt)
                 }
-            })
-            .and_then(|plan| self.sequence_plan(session, plan, conn_id))
+                _ => Err(err),
+            }
+        })
     }
 
     fn handle_execute(
@@ -1147,10 +1160,9 @@ where
                 )
             })?;
         match prepared.sql() {
-            Some(stmt) => {
-                let stmt = stmt.clone();
-                self.handle_statement(session, stmt, Some(portal_name), conn_id)
-            }
+            Some(stmt) => self
+                .handle_statement(session, stmt.clone(), &portal.parameters)
+                .and_then(|plan| self.sequence_plan(session, plan, conn_id)),
             None => Ok(ExecuteResponse::EmptyQuery),
         }
     }

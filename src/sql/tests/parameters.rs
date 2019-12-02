@@ -4,6 +4,7 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::error::Error;
+use std::iter;
 
 use catalog::Catalog;
 use ore::collections::CollectionExt;
@@ -11,7 +12,7 @@ use repr::ScalarType;
 
 #[test]
 fn test_parameter_type_inference() -> Result<(), Box<dyn Error>> {
-    let catalog = Catalog::open(None)?;
+    let catalog = Catalog::open(None, iter::empty())?;
     let test_cases = vec![
         (
             "SELECT $1, $2, $3",

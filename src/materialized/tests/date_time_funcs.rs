@@ -5,14 +5,13 @@
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 
-mod util;
+pub mod util;
 
 #[test]
 fn test_current_timestamp_and_now() -> util::TestResult {
     ore::log::init();
 
-    let data_dir = None;
-    let (_server, conn) = util::start_server(data_dir)?;
+    let (_server, conn) = util::start_server(util::Config::default())?;
 
     let rows = &conn.query("SELECT now()", &[])?;
     assert_eq!(1, rows.len());
