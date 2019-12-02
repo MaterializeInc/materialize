@@ -44,8 +44,10 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
 ) {
     let worker_index = worker.index();
     let worker_peers = worker.peers();
+    let worker_logging = worker.log_register().get("timely");
+    let name = format!("Dataflow: {}", &dataflow.debug_name);
 
-    worker.dataflow::<Timestamp, _, _>(|scope| {
+    worker.dataflow_core::<Timestamp, _, _, _>(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird

@@ -35,7 +35,7 @@ use dataflow_types::{
     compare_columns, DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source,
     SourceConnector, TailSinkConnector, Timestamp, Update, View,
 };
-use expr::{GlobalId, Id, RelationExpr};
+use expr::{GlobalId, Id, IdHumanizer, RelationExpr};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::option::OptionExt;
@@ -152,9 +152,9 @@ where
         let catalog_entries: Vec<_> = coord
             .catalog
             .iter()
-            .map(|entry| (entry.id(), entry.item().clone()))
+            .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
             .collect();
-        for (id, item) in catalog_entries {
+        for (id, name, item) in catalog_entries {
             match item {
                 CatalogItem::Source(source) => {
                     match id {
@@ -166,14 +166,14 @@ where
                     }
                 }
                 CatalogItem::View(view) => {
-                    let dataflow = DataflowDesc::new().add_view(id, view.clone());
+                    let dataflow = DataflowDesc::new(name.to_string()).add_view(id, view.clone());
                     coord.create_dataflows(vec![dataflow]);
                 }
                 CatalogItem::Sink(sink) => {
-                    let dataflow = DataflowDesc::new().add_sink(id, sink.clone());
+                    let dataflow = DataflowDesc::new(name.to_string()).add_sink(id, sink.clone());
                     coord.create_dataflows(vec![dataflow]);
                 }
-                CatalogItem::Index(index) => coord.create_index(id, index),
+                CatalogItem::Index(index) => coord.create_index(id, &name, index),
             }
         }
 
@@ -316,22 +316,26 @@ where
             }
 
             Plan::CreateSink(name, sink) => {
-                let id = self.catalog.insert(name, CatalogItem::Sink(sink.clone()))?;
-                self.create_dataflows(vec![DataflowDesc::new().add_sink(id, sink)]);
+                let id = self
+                    .catalog
+                    .insert(name.clone(), CatalogItem::Sink(sink.clone()))?;
+                self.create_dataflows(vec![DataflowDesc::new(name.to_string()).add_sink(id, sink)]);
                 ExecuteResponse::CreatedSink
             }
 
             Plan::CreateView(name, view) => {
-                let id = self.catalog.insert(name, CatalogItem::View(view.clone()))?;
-                self.create_dataflows(vec![DataflowDesc::new().add_view(id, view)]);
+                let id = self
+                    .catalog
+                    .insert(name.clone(), CatalogItem::View(view.clone()))?;
+                self.create_dataflows(vec![DataflowDesc::new(name.to_string()).add_view(id, view)]);
                 ExecuteResponse::CreatedView
             }
 
             Plan::CreateIndex(name, index) => {
                 let id = self
                     .catalog
-                    .insert(name, CatalogItem::Index(index.clone()))?;
-                self.create_index(id, index);
+                    .insert(name.clone(), CatalogItem::Index(index.clone()))?;
+                self.create_index(id, &name, index);
                 ExecuteResponse::CreatedIndex
             }
 
@@ -475,7 +479,7 @@ where
                         relation_expr: source,
                         desc,
                     };
-                    let dataflow = DataflowDesc::new()
+                    let dataflow = DataflowDesc::new(format!("temp-view-{}", view_id))
                         .add_view(view_id, view)
                         .as_of(Some(vec![timestamp.clone()]));
 
@@ -576,7 +580,13 @@ where
                     from: (source_id, source.desc()?.clone()),
                     connector: SinkConnector::Tail(TailSinkConnector { tx, since }),
                 };
-                let dataflow = DataflowDesc::new().add_sink(sink_id, sink);
+                let dataflow = DataflowDesc::new(format!(
+                    "tail-source-{}",
+                    self.catalog
+                        .humanize_id(Id::Global(source_id))
+                        .expect("Source id is known to exist in catalog")
+                ))
+                .add_sink(sink_id, sink);
                 broadcast(
                     &mut self.broadcast_tx,
                     SequencedCommand::CreateDataflows(vec![dataflow]),
@@ -674,7 +684,8 @@ where
                 let view_id = self.catalog.allocate_id();
                 self.sources
                     .insert(source_id, (source.clone(), Some(view_id)));
-                let mut desc = DataflowDesc::new()
+                let dataflow_name = self.catalog.humanize_id(Id::Global(source_id)).unwrap();
+                let mut desc = DataflowDesc::new(dataflow_name)
                     .add_view(
                         view_id,
                         View {
@@ -713,7 +724,7 @@ where
         }
     }
 
-    fn create_index(&mut self, idx_id: GlobalId, mut idx: dataflow_types::Index) {
+    fn create_index(&mut self, idx_id: GlobalId, name: &QualName, mut idx: dataflow_types::Index) {
         // Rewrite the source used.
         if let Some((_source, new_id)) = self.sources.get(&idx.on_id) {
             // If the source has a corresponding view, use its name instead.
@@ -732,7 +743,7 @@ where
             return;
         }
         self.indexes.insert(trace_key, 1);
-        let dataflows = vec![DataflowDesc::new().add_index(idx_id, idx)];
+        let dataflows = vec![DataflowDesc::new(name.to_string()).add_index(idx_id, idx)];
         broadcast(
             &mut self.broadcast_tx,
             SequencedCommand::CreateDataflows(dataflows),
