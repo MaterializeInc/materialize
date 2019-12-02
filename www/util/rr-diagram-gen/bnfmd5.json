@@ -1,0 +1,15 @@
+{
+    "../../layouts/partials/sql-grammar/bnf/create-source.bnf": "61ae48ead0df2116384c05554b490b6b",
+    "../../layouts/partials/sql-grammar/bnf/create-sources.bnf": "58dbcd5833b8580295e9d1dddf761f30",
+    "../../layouts/partials/sql-grammar/bnf/create-view.bnf": "d0f09bbd5765c052d0d5c7a310e1a4ea",
+    "../../layouts/partials/sql-grammar/bnf/func-cast.bnf": "e15c6abbae0d94a22ac3c8c09c788680",
+    "../../layouts/partials/sql-grammar/bnf/func-coalesce.bnf": "f992f1a5be145ba29718b92db7b0d134",
+    "../../layouts/partials/sql-grammar/bnf/func-extract.bnf": "ffbbeaa4ddc1b902e7e5a476ebde30dc",
+    "../../layouts/partials/sql-grammar/bnf/func-length.bnf": "68e862af19e516ab89a5a884a6565291",
+    "../../layouts/partials/sql-grammar/bnf/func-substring.bnf": "a29241e80cb437214ee7507e7f90aa66",
+    "../../layouts/partials/sql-grammar/bnf/join-expr.bnf": "25cb18ccc233c2a5558988ebfe66ede1",
+    "../../layouts/partials/sql-grammar/bnf/join-type.bnf": "52aa952f2f4b0d8eed26bee16a5e9275",
+    "../../layouts/partials/sql-grammar/bnf/op-cast.bnf": "34a9f1178571efab6c55ed65123d1d54",
+    "../../layouts/partials/sql-grammar/bnf/select_stmt.bnf": "66afc175e36b1102f95ca916e603e132",
+    "../../layouts/partials/sql-grammar/bnf/time-component.bnf": "9fafeb51d906a54b58c6d03f4586f151"
+}
