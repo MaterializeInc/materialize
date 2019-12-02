@@ -1014,9 +1014,9 @@ dependencies = [
 
 [[package]]
 name = "float-cmp"
-version = "0.4.0"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "134a8fa843d80a51a5b77d36d42bc2def9edcb0262c914861d08129fd1926600"
+checksum = "75224bec9bfe1a65e2d34132933f2de7fe79900c96a0174307554244ece8150e"
 dependencies = [
  "num-traits",
 ]
@@ -2079,9 +2079,9 @@ checksum = "e3cbf9f658cdb5000fcf6f362b8ea2ba154b9f146a61c7a20d647034c6b6561b"
 
 [[package]]
 name = "predicates"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e09015b0d3f5a0ec2d4428f7559bb7b3fff341b4e159fedd1d57fac8b939ff"
+checksum = "a9bfe52247e5cc9b2f943682a85a5549fb9662245caf094504e69a2f03fe64d4"
 dependencies = [
  "difference",
  "float-cmp",
