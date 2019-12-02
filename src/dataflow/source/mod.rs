@@ -16,4 +16,9 @@ pub use csv_file::csv;
 pub use csv_file::FileReadStyle;
 pub use kafka::kafka;
 
-pub type SharedCapability = Rc<RefCell<Capability<Timestamp>>>;
+pub type SharedCapability = Rc<RefCell<Option<Capability<Timestamp>>>>;
+
+pub enum SourceStatus {
+    ScheduleAgain,
+    Done,
+}

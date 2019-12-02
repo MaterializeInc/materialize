@@ -3,14 +3,16 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-use comm::Switchboard;
-use futures::{stream, Future, Sink, Stream};
-use ore::future::StreamExt;
 use std::error::Error;
-use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+use futures::sink::SinkExt;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
+
+use comm::Switchboard;
+use ore::future::{OreStreamExt, OreTryStreamExt};
 
 /// Verifies that MPSC channels receive messages from all streams
 /// simultaneously. The original implementation had a bug in which streams were
@@ -18,52 +20,55 @@ use tokio::runtime::Runtime;
 /// presented after the first stream was closed.
 #[test]
 fn test_mpsc_select() -> Result<(), Box<dyn Error>> {
-    let (switchboard, _runtime) = Switchboard::local()?;
+    let (switchboard, mut runtime) = Switchboard::local()?;
+    runtime.block_on(async {
+        let (tx, mut rx) = switchboard.mpsc();
+        let mut tx1 = tx.clone().connect().await?;
+        let mut tx2 = tx.connect().await?;
 
-    let (tx, mut rx) = switchboard.mpsc();
-    let mut tx1 = tx.clone().connect().wait()?;
-    let mut tx2 = tx.connect().wait()?;
+        tx1.send(1).await?;
+        tx2.send(2).await?;
+        let msgs = rx.by_ref().take(2).try_collect::<Vec<_>>().await?;
+        if msgs != &[1, 2] && msgs != [2, 1] {
+            panic!("received unexpected messages: {:#?}", msgs);
+        }
 
-    tx1 = tx1.send(1).wait()?;
-    tx2 = tx2.send(2).wait()?;
-    let msgs = rx.by_ref().take(2).collect().wait()?;
-    if msgs != &[1, 2] && msgs != [2, 1] {
-        panic!("received unexpected messages: {:#?}", msgs);
-    }
+        tx1.send(3).await?;
+        tx2.send(4).await?;
+        let msgs = rx.take(2).try_collect::<Vec<_>>().await?;
+        if msgs != &[3, 4] && msgs != [4, 3] {
+            panic!("received unexpected messages: {:#?}", msgs);
+        }
 
-    tx1.send(3).wait()?;
-    tx2.send(4).wait()?;
-    let msgs = rx.by_ref().take(2).collect().wait()?;
-    if msgs != &[3, 4] && msgs != [4, 3] {
-        panic!("received unexpected messages: {:#?}", msgs);
-    }
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Verifies that `mpsc_limited` will close the receiver after the expected
 /// number of producers have connected and then disconnected.
 #[test]
 fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
-    let (switchboard, _runtime) = Switchboard::local()?;
+    let (switchboard, mut runtime) = Switchboard::local()?;
+    runtime.block_on(async {
+        let (tx, rx) = switchboard.mpsc_limited(2);
+        let mut tx1 = tx.clone().connect().await?;
+        let mut tx2 = tx.clone().connect().await?;
 
-    let (tx, rx) = switchboard.mpsc_limited(2);
-    let tx1 = tx.clone().connect().wait()?;
-    let tx2 = tx.clone().connect().wait()?;
+        tx1.send_all(&mut stream::iter(vec![Ok(1), Ok(2)])).await?;
+        tx2.send_all(&mut stream::iter(vec![Ok(3), Ok(4), Ok(5)]))
+            .await?;
+        drop(tx1);
+        drop(tx2);
 
-    let _ = tx1
-        .send_all(stream::iter_ok::<_, io::Error>(vec![1, 2]))
-        .wait()?;
-    let _ = tx2
-        .send_all(stream::iter_ok::<_, io::Error>(vec![3, 4, 5]))
-        .wait()?;
-    // If had created an unlimited channel, or specified more than two expected
-    // producers, we'd be here forever waiting for the channel to close.
-    let mut msgs = rx.collect().wait()?;
-    msgs.sort();
-    assert_eq!(msgs, &[1, 2, 3, 4, 5]);
+        // If had created an unlimited channel, or specified more than two
+        // expected producers, we'd be here forever waiting for the channel to
+        // close.
+        let mut msgs = rx.try_collect::<Vec<_>>().await?;
+        msgs.sort();
+        assert_eq!(msgs, &[1, 2, 3, 4, 5]);
 
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Verifies that TCP connections are reused by repeatedly connecting the same
@@ -73,38 +78,47 @@ fn test_mpsc_limited_close() -> Result<(), Box<dyn Error>> {
 fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
     ore::log::init();
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-    let listener = TcpListener::bind(&addr)?;
     let mut runtime = Runtime::new()?;
-    let switchboard = Switchboard::new(vec![listener.local_addr()?], 0, runtime.executor());
-    runtime.spawn({
-        let switchboard = switchboard.clone();
-        listener
-            .incoming()
-            .map_err(|err| panic!("switchboard: accept: {}", err))
-            .for_each(move |conn| switchboard.handle_connection(conn))
-            .map_err(|err| panic!("switchboard: handle connection: {}", err))
-    });
+    let executor = runtime.handle().clone();
+    runtime.block_on(async {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+        let mut listener = TcpListener::bind(&addr).await?;
 
-    let (tx, rx) = switchboard.mpsc();
-    let (result_tx, result_rx) = futures::sync::oneshot::channel();
+        let switchboard = Switchboard::new(vec![listener.local_addr()?], 0, executor.clone());
+        executor.spawn({
+            let switchboard = switchboard.clone();
+            async move {
+                let mut incoming = listener.incoming();
+                while let Some(conn) = incoming.next().await {
+                    let conn = conn.expect("test switchboard: accept failed");
+                    switchboard
+                        .handle_connection(conn)
+                        .await
+                        .expect("test switchboard: handle connection failed");
+                }
+            }
+        });
 
-    // This is the empirically-determined number that exhausts ports on macOS
-    // without connection reuse.
-    const N: u64 = 1 << 14;
+        let (tx, rx) = switchboard.mpsc();
+        let (result_tx, result_rx) = futures::channel::oneshot::channel();
 
-    runtime.spawn(rx.take(N).drain().then(|res| {
-        result_tx.send(res).unwrap();
+        // This is the empirically-determined number that exhausts ports on macOS
+        // without connection reuse.
+        const N: usize = 1 << 14;
+
+        executor.spawn(async {
+            let res = rx.take(N).drain().await;
+            result_tx.send(res).unwrap();
+        });
+
+        for i in 0..N {
+            let mut tx = tx.connect().await?;
+            tx.send(i).await?;
+        }
+
+        result_rx.await?;
         Ok(())
-    }));
-
-    for i in 0..N {
-        let tx = tx.connect().wait()?;
-        tx.send(i).wait()?;
-    }
-
-    result_rx.wait()??;
-    Ok(())
+    })
 }
 
 /// Test that we can send a largeish frame (64MiB) over the channel. The true
@@ -115,17 +129,18 @@ fn test_mpsc_connection_reuse() -> Result<(), Box<dyn Error>> {
 fn test_mpsc_big_frame() -> Result<(), Box<dyn Error>> {
     const BIG_LEN: usize = 64 * 1 << 20; // 64MiB
     let (switchboard, mut runtime) = Switchboard::local()?;
-    let (tx, rx) = switchboard.mpsc::<String>();
+    runtime.block_on(async {
+        let (tx, mut rx) = switchboard.mpsc::<String>();
 
-    runtime.spawn(
-        rx.recv()
-            .map(|(msg, _stream)| assert_eq!(msg.len(), BIG_LEN))
-            .map_err(|err| panic!("{}", err)),
-    );
+        tokio::spawn(async move {
+            let msg = rx.try_recv().await.expect("recv failed");
+            assert_eq!(msg.len(), BIG_LEN);
+        });
 
-    let msg = " ".repeat(BIG_LEN);
-    let tx = tx.clone().connect().wait()?;
-    tx.send(msg).wait()?;
+        let msg = " ".repeat(BIG_LEN);
+        let mut tx = tx.clone().connect().await?;
+        tx.send(msg).await?;
 
-    Ok(())
+        Ok(())
+    })
 }

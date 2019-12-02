@@ -8,21 +8,22 @@
 //! This module provides future and stream combinators that are missing from
 //! the [`futures`](futures) crate.
 
-use futures::future::{Either, Map};
-use futures::stream::{Fuse, FuturesUnordered, StreamFuture};
-use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, StartSend, Stream};
-use std::io;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-pub mod sync;
+use futures::future::{Either, MapOk, TryFuture, TryFutureExt};
+use futures::sink::Sink;
+use futures::stream::{
+    Fuse, FuturesUnordered, Stream, StreamExt, StreamFuture, TryStream, TryStreamExt,
+};
+use futures::{io, ready};
+
+pub mod channel;
 
 /// Extension methods for futures.
-pub trait FutureExt {
-    /// Boxes this future.
-    fn boxed(self) -> Box<dyn Future<Item = Self::Item, Error = Self::Error> + Send>
-    where
-        Self: Future + Send + 'static;
-
+pub trait OreFutureExt {
     /// Wraps this future an [`Either`] future, with this future becoming the
     /// left variant.
     fn left<U>(self) -> Either<Self, U>
@@ -52,39 +53,18 @@ pub trait FutureExt {
     fn either_c<U, V>(self) -> Either3<U, V, Self>
     where
         Self: Sized;
-
-    /// Discards the successful result of this future by producing unit instead.
-    /// Errors are passed through.
-    fn discard(self) -> Map<Self, fn(Self::Item) -> ()>
-    where
-        Self: Sized + Future;
-
-    /// Wraps this future in a future that will abort the underlying future if
-    /// `signal` completes. In other words, allows the underlying future to
-    /// be canceled.
-    fn watch_for_cancel<S>(self, signal: S) -> Cancelable<Self, S>
-    where
-        Self: Sized + Future<Item = ()>,
-        S: Future<Item = ()>;
 }
 
-impl<T> FutureExt for T
+impl<T> OreFutureExt for T
 where
     T: Future,
 {
-    fn boxed(self) -> Box<dyn Future<Item = T::Item, Error = T::Error> + Send>
-    where
-        T: Send + 'static,
-    {
-        Box::new(self)
-    }
-
     fn left<U>(self) -> Either<T, U> {
-        Either::A(self)
+        Either::Left(self)
     }
 
     fn right<U>(self) -> Either<U, T> {
-        Either::B(self)
+        Either::Right(self)
     }
 
     fn either_a<U, V>(self) -> Either3<T, U, V> {
@@ -98,16 +78,23 @@ where
     fn either_c<U, V>(self) -> Either3<U, V, T> {
         Either3::C(self)
     }
+}
 
-    fn discard(self) -> Map<Self, fn(T::Item) -> ()> {
-        self.map(discard)
-    }
+/// Extension methods for [`Result`]-returning futures.
+pub trait OreTryFutureExt: TryFuture {
+    /// Discards the successful result of this future by producing unit instead.
+    /// Errors are passed through.
+    fn discard(self) -> MapOk<Self, fn(Self::Ok) -> ()>
+    where
+        Self: Sized + Future;
+}
 
-    fn watch_for_cancel<S>(self, signal: S) -> Cancelable<Self, S> {
-        Cancelable {
-            future: self,
-            signal,
-        }
+impl<T> OreTryFutureExt for T
+where
+    T: TryFuture,
+{
+    fn discard(self) -> MapOk<Self, fn(T::Ok) -> ()> {
+        self.map_ok(discard)
     }
 }
 
@@ -130,87 +117,37 @@ pub enum Either3<A, B, C> {
 impl<A, B, C> Future for Either3<A, B, C>
 where
     A: Future,
-    B: Future<Item = A::Item, Error = A::Error>,
-    C: Future<Item = A::Item, Error = A::Error>,
+    B: Future<Output = A::Output>,
+    C: Future<Output = A::Output>,
 {
-    type Item = A::Item;
-    type Error = A::Error;
+    type Output = A::Output;
 
-    fn poll(&mut self) -> Poll<A::Item, A::Error> {
-        match *self {
-            Either3::A(ref mut a) => a.poll(),
-            Either3::B(ref mut b) => b.poll(),
-            Either3::C(ref mut c) => c.poll(),
-        }
-    }
-}
-
-/// The future returned by [`FutureExt::watch_for_cancel`].
-#[derive(Debug)]
-pub struct Cancelable<F, S> {
-    future: F,
-    signal: S,
-}
-
-impl<F, S> Future for Cancelable<F, S>
-where
-    F: Future<Item = ()>,
-    S: Future<Item = ()>,
-{
-    type Item = F::Item;
-    type Error = F::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.signal.poll() {
-            Ok(Async::Ready(())) | Err(_) => Ok(Async::Ready(())),
-            Ok(Async::NotReady) => self.future.poll(),
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<A::Output> {
+        // It is safe to project enum variants here because we promise not to
+        // move out of any of the variants. Based on the `Either` type in the
+        // futures crate.
+        // See: https://github.com/rust-lang/futures-rs/blob/06098e452/futures-util/src/future/either.rs#L59-L67
+        unsafe {
+            match self.get_unchecked_mut() {
+                Either3::A(a) => Pin::new_unchecked(a).poll(cx),
+                Either3::B(b) => Pin::new_unchecked(b).poll(cx),
+                Either3::C(c) => Pin::new_unchecked(c).poll(cx),
+            }
         }
     }
 }
 
 /// Extension methods for streams.
-pub trait StreamExt: Stream {
-    /// Boxes this stream.
-    fn boxed(self) -> Box<dyn Stream<Item = Self::Item, Error = Self::Error> + Send>
-    where
-        Self: Sized + Send + 'static,
-    {
-        Box::new(self)
-    }
-
+pub trait OreStreamExt: Stream {
     /// Discards all items produced by the stream.
     ///
     /// The returned future will resolve successfully when the entire stream is
-    /// exhausted, or resolve with an error, if the stream returns an error.
+    /// exhausted.
     fn drain(self) -> Drain<Self>
     where
         Self: Sized,
     {
         Drain(self)
-    }
-
-    /// Consumes this stream, returning an future that resolves with the pair
-    /// of the next element of the stream and the remaining stream.
-    ///
-    /// This is like [`Stream::into_future`]. There are two reasons to prefer
-    /// this method:
-    ///
-    ///   1. `into_future` is a terrible name. `recv` is far more descriptive
-    ///      and discoverable, and is symmetric with
-    ///      [`Sink::send`](futures::sink::Sink::send).
-    ///
-    ///   2. `recv` treats EOF as an error, and so does not need to wrap the
-    ///      next item in an option type. Specifically, `into_future` has an
-    ///      item type of `(Option<S::Item>, S)`, while `recv` has an item type
-    ///      of `(S::Item, S)`. If EOF will not be handled differently than
-    ///      any other exceptional condition, callers of `into_future` will need
-    ///      to write more boilerplate.
-    fn recv(self) -> Recv<Self>
-    where
-        Self: Stream + Sized,
-        Self::Error: From<io::Error>,
-    {
-        Recv { inner: Some(self) }
     }
 
     /// Flattens a stream of streams into one continuous stream, but does not
@@ -222,8 +159,7 @@ pub trait StreamExt: Stream {
     fn select_flatten(self) -> SelectFlatten<Self>
     where
         Self: Stream + Sized,
-        Self::Item: Stream,
-        <Self::Item as Stream>::Error: From<Self::Error>,
+        Self::Item: Stream + Unpin,
     {
         SelectFlatten {
             incoming_streams: self.fuse(),
@@ -232,53 +168,38 @@ pub trait StreamExt: Stream {
     }
 }
 
-impl<S: Stream> StreamExt for S {}
+impl<S: Stream> OreStreamExt for S {}
 
-/// The stream returned by [`StreamExt::drain`].
+/// Extension methods for [`Result`]-producing streams.
+pub trait OreTryStreamExt: TryStream {
+    /// Returns the next element of the stream or EOF.
+    ///
+    /// This is like [`Stream::try_next`], but `try_recv` treats EOF as an
+    /// error, and so does not need to wrap the next item in an option type.
+    fn try_recv(&mut self) -> TryRecv<'_, Self>
+    where
+        Self: TryStream + Unpin + Sized,
+        Self::Error: From<io::Error>,
+    {
+        TryRecv(self)
+    }
+}
+
+impl<S: TryStream> OreTryStreamExt for S {}
+
+/// The stream returned by [`OreStreamExt::drain`].
 #[derive(Debug)]
 pub struct Drain<S>(S);
 
 impl<S> Future for Drain<S>
 where
-    S: Stream,
+    S: Stream + Unpin,
 {
-    type Item = ();
-    type Error = S::Error;
+    type Output = ();
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        while let Some(_) = try_ready!(self.0.poll()) {}
-        Ok(Async::Ready(()))
-    }
-}
-
-/// The future returned by [`StreamExt::recv`].
-#[derive(Debug)]
-pub struct Recv<S> {
-    inner: Option<S>,
-}
-
-impl<S> Future for Recv<S>
-where
-    S: Stream,
-    S::Error: From<io::Error>,
-{
-    type Item = (S::Item, S);
-    type Error = S::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let item = {
-            let s = self.inner.as_mut().expect("polling Recv twice");
-            match s.poll() {
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Ok(Async::Ready(Some(r))) => Ok(r),
-                Ok(Async::Ready(None)) => {
-                    Err(io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof").into())
-                }
-                Err(e) => Err(e),
-            }
-        };
-        let stream = self.inner.take().unwrap();
-        item.map(|v| Async::Ready((v, stream)))
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        while let Some(_) = ready!(Pin::new(&mut self.0).poll_next(cx)) {}
+        Poll::Ready(())
     }
 }
 
@@ -298,70 +219,90 @@ where
 
 impl<S> Stream for SelectFlatten<S>
 where
-    S: Stream,
-    S::Item: Stream,
-    <S::Item as Stream>::Error: From<S::Error>,
+    S: Stream + Unpin,
+    S::Item: Stream + Unpin,
 {
     type Item = <S::Item as Stream>::Item;
-    type Error = <S::Item as Stream>::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // First, drain the incoming stream queue.
         loop {
-            match self.incoming_streams.poll() {
-                Ok(Async::Ready(Some(stream))) => {
+            match self.incoming_streams.poll_next_unpin(cx) {
+                Poll::Ready(Some(stream)) => {
                     // New stream available. Add it to the set of active
                     // streams. Then look for more incoming streams.
                     self.active_streams.push(stream.into_future())
                 }
-                Ok(Async::Ready(None)) | Ok(Async::NotReady) => {
+                Poll::Ready(None) | Poll::Pending => {
                     // The incoming stream queue is drained, at least for now.
                     // Move on to checking for ready items.
                     break;
                 }
-                Err(err) => return Err(err.into()),
             }
         }
 
         // Second, try to find an item from a ready stream.
         loop {
-            match self.active_streams.poll() {
-                Ok(Async::Ready(Some((Some(item), stream)))) => {
+            match self.active_streams.poll_next_unpin(cx) {
+                Poll::Ready(Some((Some(item), stream))) => {
                     // An active stream yielded an item. Arrange to receive the
                     // next item from the stream, then propagate the received
                     // item.
                     self.active_streams.push(stream.into_future());
-                    return Ok(Async::Ready(Some(item)));
+                    return Poll::Ready(Some(item));
                 }
-                Ok(Async::Ready(Some((None, _stream)))) => {
+                Poll::Ready(Some((None, _stream))) => {
                     // An active stream yielded a `None`, which means it has
                     // terminated. Drop it on the floor. Then go around the loop
                     // to see if another stream is ready.
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     if self.incoming_streams.is_done() {
                         // There are no remaining active streams, and our
                         // incoming stream queue is done too. We're good and
                         // truly finished, so propagate the termination event.
-                        return Ok(Async::Ready(None));
+                        return Poll::Ready(None);
                     } else {
                         // There are no remaining active streams, but we might
                         // yet get another stream from the incoming stream
                         // queue. Indicate that we're not yet ready.
-                        return Ok(Async::NotReady);
+                        return Poll::Pending;
                     }
                 }
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err((err, _stream)) => return Err(err),
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
 }
 
+/// The future returned by [`StreamExt::try_recv`].
+#[derive(Debug)]
+pub struct TryRecv<'a, S>(&'a mut S);
+
+impl<'a, S> Future for TryRecv<'a, S>
+where
+    S: TryStream + Unpin,
+    S::Error: From<io::Error>,
+{
+    type Output = Result<S::Ok, S::Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        match ready!(self.0.try_poll_next_unpin(cx)) {
+            Some(Ok(r)) => Poll::Ready(Ok(r)),
+            Some(Err(err)) => Poll::Ready(Err(err)),
+            None => Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected eof",
+            )
+            .into())),
+        }
+    }
+}
+
 /// Extension methods for sinks.
-pub trait SinkExt: Sink {
+pub trait OreSinkExt<T>: Sink<T> {
     /// Boxes this sink.
-    fn boxed(self) -> Box<dyn Sink<SinkItem = Self::SinkItem, SinkError = Self::SinkError> + Send>
+    fn boxed(self) -> Box<dyn Sink<T, Error = Self::Error> + Send>
     where
         Self: Sized + Send + 'static,
     {
@@ -369,7 +310,7 @@ pub trait SinkExt: Sink {
     }
 }
 
-impl<S: Sink> SinkExt for S {}
+impl<S, T> OreSinkExt<T> for S where S: Sink<T> {}
 
 /// Constructs a sink that consumes its input and sends it nowhere.
 pub fn dev_null<T, E>() -> DevNull<T, E> {
@@ -383,15 +324,22 @@ pub fn dev_null<T, E>() -> DevNull<T, E> {
 #[derive(Debug)]
 pub struct DevNull<T, E>(PhantomData<T>, PhantomData<E>);
 
-impl<T, E> Sink for DevNull<T, E> {
-    type SinkItem = T;
-    type SinkError = E;
+impl<T, E> Sink<T> for DevNull<T, E> {
+    type Error = E;
 
-    fn start_send(&mut self, _: T) -> StartSend<Self::SinkItem, Self::SinkError> {
-        Ok(AsyncSink::Ready)
+    fn poll_ready(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        Ok(Async::Ready(()))
+    fn start_send(self: Pin<&mut Self>, _: T) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 }

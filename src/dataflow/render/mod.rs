@@ -34,14 +34,14 @@ use crate::server::LocalInput;
 mod context;
 use context::{ArrangementFlavor, Context};
 
-pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
+pub(crate) fn build_dataflow<A: Allocate>(
     dataflow: DataflowDesc,
     manager: &mut TraceManager,
     worker: &mut TimelyWorker<A>,
     dataflow_drops: &mut HashMap<GlobalId, Box<dyn Any>>,
     local_inputs: &mut HashMap<GlobalId, LocalInput>,
     logger: &mut Option<Logger>,
-    executor: &mut E,
+    executor: &tokio::runtime::Handle,
 ) {
     let worker_index = worker.index();
     let worker_peers = worker.peers();
@@ -88,7 +88,7 @@ pub(crate) fn build_dataflow<A: Allocate, E: tokio::executor::Executor + Clone>(
                                 format!("csv-{}", src_id),
                                 c.path,
                                 n_cols,
-                                executor.clone(),
+                                executor,
                                 read_style,
                             )
                         }

@@ -22,7 +22,7 @@
 //!
 //! ```no_run
 //! use comm::Switchboard;
-//! use futures::{Future, Stream};
+//! use futures::stream::StreamExt;
 //! use std::net::Ipv4Addr;
 //! use std::time::Duration;
 //! use tokio::net::TcpListener;
@@ -33,14 +33,16 @@
 //! ];
 //! let node_id = 0;
 //! let mut runtime = tokio::runtime::Runtime::new()?;
-//! let switchboard = Switchboard::new(nodes, node_id, runtime.executor());
-//! let listener = TcpListener::bind(&"0.0.0.0:1234".parse()?)?;
+//! let switchboard = Switchboard::new(nodes, node_id, runtime.handle().clone());
+//! let mut listener = runtime.block_on(TcpListener::bind("0.0.0.0:1234"))?;
 //! runtime.spawn({
 //!     let switchboard = switchboard.clone();
-//!     listener
-//!         .incoming()
-//!         .for_each(move |conn| switchboard.handle_connection(conn))
-//!         .map_err(|err| panic!(err))
+//!     async move {
+//!         let mut incoming = listener.incoming();
+//!         while let Some(conn) = incoming.next().await {
+//!             switchboard.handle_connection(conn.expect("accept failed"));
+//!         }
+//!     }
 //! });
 //!
 //! // Wait for other nodes to become available.
@@ -80,6 +82,7 @@
 
 #![deny(missing_docs)]
 
+mod error;
 mod router;
 
 pub mod broadcast;
@@ -88,5 +91,6 @@ pub mod protocol;
 pub mod switchboard;
 pub mod util;
 
+pub use error::Error;
 pub use protocol::Connection;
 pub use switchboard::Switchboard;

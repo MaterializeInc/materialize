@@ -5,12 +5,15 @@
 
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::BatchReader;
-use futures::{Future, Sink};
+
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::order::PartialOrder;
 use timely::Data;
+
+use futures::executor::block_on;
+use futures::sink::SinkExt;
 
 use dataflow_types::{Diff, TailSinkConnector, Timestamp, Update};
 use expr::GlobalId;
@@ -21,7 +24,7 @@ where
     G: Scope<Timestamp = Timestamp>,
     B: Data + BatchReader<Row, Row, Timestamp, Diff>,
 {
-    let mut tx = connector.tx.connect().wait().unwrap();
+    let mut tx = block_on(connector.tx.connect()).expect("tail transmitter failed");
     stream.sink(Pipeline, &format!("tail-{}", id), move |input| {
         input.for_each(|_, batches| {
             let mut results: Vec<Update> = Vec::new();
@@ -48,7 +51,7 @@ where
             // completes. Hopefully it's just a quick write to a kernel buffer,
             // but perhaps not if the batch gets too large? We may need to do
             // something smarter, like offloading to a networking thread.
-            (&mut tx).send(results).wait().unwrap();
+            block_on(tx.send(results)).expect("tail send failed");
         });
     })
 }

@@ -17,7 +17,9 @@ use std::fmt;
 
 use failure::bail;
 
-use crate::session::statement::{Portal, PreparedStatement};
+use repr::{Datum, Row, ScalarType};
+
+use crate::session::statement::{FieldFormat, Portal, PreparedStatement};
 use crate::session::transaction::TransactionStatus;
 use crate::session::var::{ServerVar, SessionVar, Var};
 use crate::session::var::{
@@ -25,7 +27,6 @@ use crate::session::var::{
     SQL_SAFE_UPDATES,
 };
 use crate::Params;
-use repr::{Datum, Row, ScalarType};
 
 /// A `Session` holds SQL state that is attached to a session.
 pub struct Session {
@@ -263,32 +264,31 @@ impl Session {
         &mut self,
         portal_name: String,
         statement_name: String,
-        parameters: Vec<(Datum<'a>, ScalarType)>,
-        return_field_formats: Vec<bool>,
+        params: Vec<(Datum<'a>, ScalarType)>,
+        result_formats: Vec<impl Into<FieldFormat>>,
     ) -> Result<(), failure::Error> {
-        if self.prepared_statements.contains_key(&statement_name) {
-            self.portals.insert(
-                portal_name,
-                Portal {
-                    statement_name,
-                    parameters: Params {
-                        datums: Row::pack(parameters.iter().map(|(d, _t)| d)),
-                        types: parameters.into_iter().map(|(_d, t)| t).collect(),
-                    },
-                    return_field_formats,
-                    max_rows: None,
-                    remaining_rows: None,
-                },
-            );
-            Ok(())
-        } else {
-            failure::bail!(
+        if !self.prepared_statements.contains_key(&statement_name) {
+            bail!(
                 "statement does not exist for portal creation: \
                  statement={:?} portal={:?}",
                 statement_name,
                 portal_name
             );
         }
+
+        self.portals.insert(
+            portal_name,
+            Portal {
+                statement_name,
+                parameters: Params {
+                    datums: Row::pack(params.iter().map(|(d, _t)| d)),
+                    types: params.into_iter().map(|(_d, t)| t).collect(),
+                },
+                result_formats: result_formats.into_iter().map(Into::into).collect(),
+                remaining_rows: None,
+            },
+        );
+        Ok(())
     }
 
     /// Remove the portal, doing nothing if the portal does not exist

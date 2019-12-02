@@ -13,21 +13,23 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-//! Extensions for future-aware synchronization from the [`futures::sync`]
+//! Extensions for future-aware channels from the [`futures::channel`]
 //! module.
 
 pub mod mpsc {
     //! Extensions for future-aware MPSC channels from the
-    //! [`futures::sync::mpsc`] module.
+    //! [`futures::channel::mpsc`] module.
 
-    use futures::sink::SinkMapErr;
-    use futures::stream::Fuse;
-    use futures::sync::mpsc::{unbounded, SendError, UnboundedReceiver, UnboundedSender};
-    use futures::{try_ready, Async, AsyncSink, Future, Poll, Sink, Stream};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
     use std::thread::{self, Thread};
-    use tokio::executor::{Executor, SpawnError};
 
-    /// Extension methods for [`futures::sync::mpsc::UnboundedReceiver`].
+    use futures::channel::mpsc::{unbounded, SendError, UnboundedReceiver, UnboundedSender};
+    use futures::stream::Fuse;
+    use futures::{ready, FutureExt, Sink, Stream, StreamExt};
+
+    /// Extension methods for [`futures::channel::mpsc::UnboundedReceiver`].
     pub trait ReceiverExt {
         /// Request that the current thread be unparked whenever a message is
         /// sent over the channel.
@@ -38,19 +40,20 @@ pub mod mpsc {
         /// is unparked, even if another thread holds the receiver.
         ///
         /// TODO(benesch): `impl !Send` once anti-traits land.
-        fn request_unparks(self, executor: impl Executor) -> Result<Self, SpawnError>
+        fn request_unparks(self, executor: &tokio::runtime::Handle) -> Self
         where
             Self: Sized;
     }
 
     impl<T> ReceiverExt for UnboundedReceiver<T>
     where
-        T: Send + 'static,
+        T: Unpin + Send + 'static,
     {
-        fn request_unparks(self, mut executor: impl Executor) -> Result<Self, SpawnError> {
+        fn request_unparks(self, executor: &tokio::runtime::Handle) -> Self {
             let (tx, rx) = unbounded();
-            executor.spawn(Box::new(UnparkingForward::new(tx, self, thread::current())))?;
-            Ok(rx)
+            let fut = UnparkingForward::new(tx, self, thread::current()).map(|_| ());
+            let _ = executor.spawn(fut);
+            rx
         }
     }
 
@@ -58,62 +61,76 @@ pub mod mpsc {
     // Whenever a message is received on the contained `tx`, it is forwarded
     // to `rx`, and then the contained `thread` is unparked.
     #[derive(Debug)]
-    #[must_use = "futures do nothing unless polled"]
     struct UnparkingForward<T> {
-        tx: SinkMapErr<UnboundedSender<T>, fn(SendError<T>) -> ()>,
+        tx: UnboundedSender<T>,
         rx: Fuse<UnboundedReceiver<T>>,
         buffered: Option<T>,
         thread: Thread,
     }
 
-    impl<T> UnparkingForward<T> {
+    impl<T> UnparkingForward<T>
+    where
+        T: Unpin,
+    {
         fn new(
             tx: UnboundedSender<T>,
             rx: UnboundedReceiver<T>,
             thread: Thread,
         ) -> UnparkingForward<T> {
             UnparkingForward {
-                // Send errors will cause this future to resolve, which will in
-                // turn cause the upstream sender to receive a send error.
-                tx: tx.sink_map_err(crate::future::discard),
+                tx,
                 rx: rx.fuse(),
                 buffered: None,
                 thread,
             }
         }
 
-        fn try_start_send(&mut self, item: T) -> Poll<(), ()> {
+        fn tx_pin(&mut self) -> Pin<&mut UnboundedSender<T>> {
+            Pin::new(&mut self.tx)
+        }
+
+        fn rx_pin(&mut self) -> Pin<&mut Fuse<UnboundedReceiver<T>>> {
+            Pin::new(&mut self.rx)
+        }
+
+        fn try_start_send(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context,
+            item: T,
+        ) -> Poll<Result<(), SendError>> {
             debug_assert!(self.buffered.is_none());
-            if let AsyncSink::NotReady(item) = self.tx.start_send(item)? {
-                self.buffered = Some(item);
-                return Ok(Async::NotReady);
+            if self.tx_pin().poll_ready(cx).is_ready() {
+                self.tx_pin().start_send(item)?;
+                self.thread.unpark();
+                return Poll::Ready(Ok(()));
             }
-            self.thread.unpark();
-            Ok(Async::Ready(()))
+            Poll::Pending
         }
     }
 
-    impl<T> Future for UnparkingForward<T> {
-        type Item = ();
-        type Error = ();
+    impl<T> Future for UnparkingForward<T>
+    where
+        T: Unpin,
+    {
+        type Output = Result<(), SendError>;
 
-        fn poll(&mut self) -> Poll<(), ()> {
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
             // If we've got an item buffered already, we need to write it to the
             // sink before we can do anything else
             if let Some(item) = self.buffered.take() {
-                try_ready!(self.try_start_send(item))
+                ready!(self.as_mut().try_start_send(cx, item))?;
             }
 
             loop {
-                match self.rx.poll()? {
-                    Async::Ready(Some(item)) => try_ready!(self.try_start_send(item)),
-                    Async::Ready(None) => {
-                        try_ready!(self.tx.close());
-                        return Ok(Async::Ready(()));
+                match self.rx_pin().poll_next(cx) {
+                    Poll::Ready(Some(item)) => ready!(self.as_mut().try_start_send(cx, item))?,
+                    Poll::Ready(None) => {
+                        let _ = ready!(self.tx_pin().poll_close(cx));
+                        return Poll::Ready(Ok(()));
                     }
-                    Async::NotReady => {
-                        try_ready!(self.tx.poll_complete());
-                        return Ok(Async::NotReady);
+                    Poll::Pending => {
+                        let _ = ready!(self.tx_pin().poll_flush(cx));
+                        return Poll::Pending;
                     }
                 }
             }

@@ -15,7 +15,7 @@ use super::types::PgType;
 use crate::codec::RawParameterBytes;
 use repr::decimal::Decimal;
 use repr::{ColumnName, ColumnType, Datum, Interval, RelationDesc, RelationType, Row, ScalarType};
-use sql::TransactionStatus as SqlTransactionStatus;
+use sql::{FieldFormat as SqlFieldFormat, TransactionStatus as SqlTransactionStatus};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -149,9 +149,8 @@ pub enum FrontendMessage {
         /// Struct holding the raw bytes representing parameter values passed
         /// from Postgres and their format codes
         raw_parameter_bytes: RawParameterBytes,
-        /// The format of each field. If a field is missing from the vector,
-        /// then `FieldFormat::Text` should be assumed.
-        return_field_formats: Vec<FieldFormat>,
+        /// The desired formats for the columns in the result set.
+        result_formats: Vec<FieldFormat>,
     },
 
     /// Execute a bound portal.
@@ -185,6 +184,27 @@ pub enum FrontendMessage {
     Terminate,
 }
 
+impl FrontendMessage {
+    pub fn name(&self) -> &'static str {
+        match self {
+            FrontendMessage::Startup { .. } => "startup",
+            FrontendMessage::SslRequest => "ssl_request",
+            FrontendMessage::GssEncRequest => "gssenc_request",
+            FrontendMessage::CancelRequest { .. } => "cancel_request",
+            FrontendMessage::Query { .. } => "query",
+            FrontendMessage::Parse { .. } => "parse",
+            FrontendMessage::DescribeStatement { .. } => "describe_statement",
+            FrontendMessage::DescribePortal { .. } => "describe_portal",
+            FrontendMessage::Bind { .. } => "bind",
+            FrontendMessage::Execute { .. } => "execute",
+            FrontendMessage::Sync => "sync",
+            FrontendMessage::CloseStatement { .. } => "close_statement",
+            FrontendMessage::ClosePortal { .. } => "close_portal",
+            FrontendMessage::Terminate => "terminate",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum EncryptionType {
     None,
@@ -205,7 +225,7 @@ pub enum BackendMessage {
     EncryptionResponse(EncryptionType),
     ReadyForQuery(TransactionStatus),
     RowDescription(Vec<FieldDescription>),
-    DataRow(Vec<Option<FieldValue>>, FieldFormatIter),
+    DataRow(Vec<Option<FieldValue>>, Arc<Vec<FieldFormat>>),
     ParameterStatus(&'static str, String),
     BackendKeyData {
         conn_id: u32,
@@ -319,70 +339,21 @@ impl TryFrom<i16> for FieldFormat {
     }
 }
 
-impl From<&FieldFormat> for bool {
-    fn from(source: &FieldFormat) -> bool {
+impl From<&SqlFieldFormat> for FieldFormat {
+    fn from(source: &SqlFieldFormat) -> FieldFormat {
         match source {
-            FieldFormat::Text => false,
-            FieldFormat::Binary => true,
+            SqlFieldFormat::Text => FieldFormat::Text,
+            SqlFieldFormat::Binary => FieldFormat::Binary,
         }
     }
 }
 
-impl From<&bool> for FieldFormat {
-    fn from(source: &bool) -> FieldFormat {
-        match source {
-            false => FieldFormat::Text,
-            true => FieldFormat::Binary,
+impl Into<SqlFieldFormat> for FieldFormat {
+    fn into(self) -> SqlFieldFormat {
+        match self {
+            FieldFormat::Text => SqlFieldFormat::Text,
+            FieldFormat::Binary => SqlFieldFormat::Binary,
         }
-    }
-}
-
-/// Retrieve all the [`FieldFormat`]s, repeatably
-///
-/// Any extended query can request that individual fields come back encoded either as
-/// text or binary.
-///
-/// This implements the following rules:
-///
-/// * Default is `Text` if no formats are specified
-/// * If a single field is provided then that is used for every column
-/// * Otherwise use the specified fields
-/// * Returns Text and logs a warning if we ever go past the end of the
-///   client-provided format list
-#[derive(Debug)]
-pub struct FieldFormatIter {
-    formats: Option<Arc<Vec<FieldFormat>>>,
-    idx: usize,
-}
-
-impl FieldFormatIter {
-    pub fn new(formats: Option<Arc<Vec<FieldFormat>>>) -> FieldFormatIter {
-        FieldFormatIter { formats, idx: 0 }
-    }
-
-    /// Get a fresh iterator over the same values
-    pub fn fresh(&self) -> FieldFormatIter {
-        FieldFormatIter::new(self.formats.as_ref().map(Arc::clone))
-    }
-}
-
-impl Iterator for FieldFormatIter {
-    type Item = FieldFormat;
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(match &mut self.formats {
-            Some(values) if values.is_empty() => FieldFormat::Text,
-            Some(values) if values.len() == 1 => values[0],
-            Some(values) => {
-                self.idx += 1;
-                values.get(self.idx - 1).copied().unwrap_or_else(|| {
-                    // It's unclear what the default should be here, if this actually
-                    // comes up maybe we should return an error
-                    log::warn!("requested a FieldFormat that was not specified, returning Text");
-                    FieldFormat::Text
-                })
-            }
-            None => FieldFormat::Text,
-        })
     }
 }
 

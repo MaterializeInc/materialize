@@ -19,7 +19,7 @@ dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 failure = "0.1.6"
-futures = "0.1"
+futures = "0.3"
 getopts = "0.2"
 itertools = "0.8.2"
 lazy_static = "1"
@@ -32,6 +32,6 @@ serde_json = "1"
 sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
-tokio = "0.1"
+tokio = "0.2"
 uuid = "0.8"
 walkdir = "2"

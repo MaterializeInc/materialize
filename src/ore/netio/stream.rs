@@ -4,11 +4,13 @@
 // distributed without the express permission of Materialize, Inc.
 
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use futures::Poll;
+use futures::ready;
 use smallvec::{smallvec, SmallVec};
-use tokio::io::{AsyncRead, AsyncWrite, Read, Write};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 const INLINE_BUF_LEN: usize = 8;
 
@@ -31,15 +33,18 @@ const INLINE_BUF_LEN: usize = 8;
 /// # Examples
 ///
 /// ```
-/// # fn handle_http<S: Read + Write>(stream: S) -> std::io::Result<()> { Ok(()) }
-/// # fn handle_foo<S: Read + Write>(stream: S) -> std::io::Result<()> { Ok(()) }
-/// # use std::io::{Read, Write};
+/// # fn handle_http<S>(stream: S) -> std::io::Result<()> { Ok(()) }
+/// # fn handle_foo<S>(stream: S) -> std::io::Result<()> { Ok(()) }
+/// # use tokio::io::{AsyncRead, AsyncReadExt};
 /// # use ore::netio::SniffingStream;
 ///
-/// fn handle_connection<S: Read + Write>(stream: S) -> std::io::Result<()> {
+/// async fn handle_connection<S>(stream: S) -> std::io::Result<()>
+/// where
+///     S: AsyncRead + Unpin
+/// {
 ///     let mut ss = SniffingStream::new(stream);
 ///     let mut buf = [0; 4];
-///     ss.read_exact(&mut buf)?;
+///     ss.read_exact(&mut buf).await?;
 ///     if &buf == b"GET " {
 ///         handle_http(ss.into_sniffed())
 ///     } else {
@@ -47,14 +52,14 @@ const INLINE_BUF_LEN: usize = 8;
 ///     }
 /// }
 /// ```
-pub struct SniffingStream<S> {
-    inner: S,
+pub struct SniffingStream<A> {
+    inner: A,
     buf: SmallVec<[u8; INLINE_BUF_LEN]>,
     off: usize,
     len: usize,
 }
 
-impl<S> fmt::Debug for SniffingStream<S> {
+impl<A> fmt::Debug for SniffingStream<A> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("SniffingStream")
             .field("buf_size", &self.buf.len())
@@ -64,9 +69,12 @@ impl<S> fmt::Debug for SniffingStream<S> {
     }
 }
 
-impl<S> SniffingStream<S> {
+impl<A> SniffingStream<A>
+where
+    A: Unpin,
+{
     /// Creates a new `SniffingStream` that wraps an underlying stream.
-    pub fn new(inner: S) -> SniffingStream<S> {
+    pub fn new(inner: A) -> SniffingStream<A> {
         SniffingStream {
             inner,
             buf: smallvec![0; INLINE_BUF_LEN],
@@ -80,7 +88,7 @@ impl<S> SniffingStream<S> {
     /// by the `SniffingStream`.
     ///
     /// The `SniffingStream` is consumed by this method.
-    pub fn into_sniffed(mut self) -> SniffedStream<S> {
+    pub fn into_sniffed(mut self) -> SniffedStream<A> {
         self.buf.truncate(self.len);
         SniffedStream {
             inner: self.inner,
@@ -88,50 +96,68 @@ impl<S> SniffingStream<S> {
             off: 0,
         }
     }
+
+    fn inner_pin(&mut self) -> Pin<&mut A> {
+        Pin::new(&mut self.inner)
+    }
 }
 
-impl<R: Read> Read for SniffingStream<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.off == self.len {
-            if self.len == self.buf.len() {
-                self.buf.resize(self.buf.len() << 1, 0);
+impl<A> AsyncRead for SniffingStream<A>
+where
+    A: AsyncRead + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        let me = &mut *self;
+        if me.off == me.len {
+            if me.len == me.buf.len() {
+                me.buf.resize(me.buf.len() << 1, 0);
             }
-            self.len += self.inner.read(&mut self.buf[self.len..])?;
+            me.len += ready!(Pin::new(&mut me.inner).poll_read(cx, &mut me.buf[me.len..]))?;
         }
-        let ncopied = (&self.buf[self.off..self.len]).read(buf)?;
-        self.off += ncopied;
-        Ok(ncopied)
+        let ncopied = (&me.buf[me.off..me.len]).read(buf)?;
+        me.off += ncopied;
+        Poll::Ready(Ok(ncopied))
     }
 }
 
-impl<W: Write> Write for SniffingStream<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write(buf)
+impl<A> AsyncWrite for SniffingStream<A>
+where
+    A: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        self.inner_pin().poll_write(cx, buf)
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), io::Error>> {
+        self.inner_pin().poll_flush(cx)
     }
-}
 
-impl<A: AsyncRead> AsyncRead for SniffingStream<A> {}
-
-impl<A: AsyncWrite> AsyncWrite for SniffingStream<A> {
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.inner.shutdown()
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), io::Error>> {
+        self.inner_pin().poll_shutdown(cx)
     }
 }
 
 /// A [`SniffingStream`] that has relinquished its capability to sniff bytes.
-pub struct SniffedStream<S> {
-    inner: S,
+pub struct SniffedStream<A> {
+    inner: A,
     buf: SmallVec<[u8; INLINE_BUF_LEN]>,
     off: usize,
 }
 
-impl<S> SniffedStream<S> {
+impl<A> SniffedStream<A>
+where
+    A: Unpin,
+{
     /// Returns a reference to the underlying stream.
-    pub fn get_ref(&self) -> &S {
+    pub fn get_ref(&self) -> &A {
         &self.inner
     }
 
@@ -139,12 +165,16 @@ impl<S> SniffedStream<S> {
     /// careful with this function! The underlying stream pointer will have been
     /// advanced past any bytes sniffed from the [`SniffingStream`] that created
     /// this [`SniffedStream`].
-    pub fn into_inner(self) -> S {
+    pub fn into_inner(self) -> A {
         self.inner
+    }
+
+    fn inner_pin(&mut self) -> Pin<&mut A> {
+        Pin::new(&mut self.inner)
     }
 }
 
-impl<S> fmt::Debug for SniffedStream<S> {
+impl<A> fmt::Debug for SniffedStream<A> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("SniffedStream")
             .field("buf_size", &self.buf.len())
@@ -153,30 +183,41 @@ impl<S> fmt::Debug for SniffedStream<S> {
     }
 }
 
-impl<R: Read> Read for SniffedStream<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+impl<A> AsyncRead for SniffedStream<A>
+where
+    A: AsyncRead + Unpin,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<Result<usize, io::Error>> {
         if self.off == self.buf.len() {
-            return self.inner.read(buf);
+            return self.inner_pin().poll_read(cx, buf);
         }
         let ncopied = (&self.buf[self.off..]).read(buf)?;
         self.off += ncopied;
-        Ok(ncopied)
+        Poll::Ready(Ok(ncopied))
     }
 }
 
-impl<W: Write> Write for SniffedStream<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write(buf)
+impl<A> AsyncWrite for SniffedStream<A>
+where
+    A: AsyncWrite + Unpin,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        self.inner_pin().poll_write(cx, buf)
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), io::Error>> {
+        self.inner_pin().poll_flush(cx)
     }
-}
 
-impl<A: AsyncRead> AsyncRead for SniffedStream<A> {}
-impl<A: AsyncWrite> AsyncWrite for SniffedStream<A> {
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.inner.shutdown()
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), io::Error>> {
+        self.inner_pin().poll_shutdown(cx)
     }
 }

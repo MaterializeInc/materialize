@@ -17,13 +17,15 @@
 #![allow(clippy::clone_on_copy)]
 
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
 use std::fs;
 use std::iter;
 use std::path::Path;
 
 use failure::bail;
-use futures::{sink, stream, Future, Sink as FuturesSink, Stream};
+use futures::executor::block_on;
+use futures::future::{self, TryFutureExt};
+use futures::sink::SinkExt;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 
@@ -37,7 +39,6 @@ use dataflow_types::{
 };
 use expr::{EvalEnv, GlobalId, Id, IdHumanizer, RelationExpr, ScalarExpr};
 use ore::collections::CollectionExt;
-use ore::future::FutureExt;
 use ore::option::OptionExt;
 use repr::{ColumnName, Datum, QualName, RelationDesc, Row};
 use sql::{MutationKind, ObjectType, Plan, Session};
@@ -61,6 +62,7 @@ where
     pub logging: Option<&'a LoggingConfig>,
     pub bootstrap_sql: String,
     pub data_directory: Option<&'a Path>,
+    pub executor: &'a tokio::runtime::Handle,
 }
 
 /// Glues the external world to the Timely workers.
@@ -69,8 +71,8 @@ where
     C: comm::Connection,
 {
     switchboard: comm::Switchboard<C>,
-    broadcast_tx: sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
-    num_timely_workers: u64,
+    broadcast_tx: comm::broadcast::Sender<SequencedCommand>,
+    num_timely_workers: usize,
     optimizer: expr::transform::Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
@@ -88,6 +90,7 @@ where
     active_tails: HashMap<u32, GlobalId>,
     local_input_time: Timestamp,
     log: bool,
+    executor: Option<tokio::runtime::Handle>,
 }
 
 impl<C> Coordinator<C>
@@ -95,10 +98,7 @@ where
     C: comm::Connection,
 {
     pub fn new(config: Config<C>) -> Result<Self, failure::Error> {
-        let broadcast_tx = config
-            .switchboard
-            .broadcast_tx(dataflow::BroadcastToken)
-            .wait();
+        let broadcast_tx = config.switchboard.broadcast_tx(dataflow::BroadcastToken);
 
         let symbiosis = if let Some(symbiosis_url) = config.symbiosis_url {
             Some(symbiosis::Postgres::open_and_erase(symbiosis_url)?)
@@ -135,7 +135,7 @@ where
         let mut coord = Self {
             switchboard: config.switchboard,
             broadcast_tx,
-            num_timely_workers: u64::try_from(config.num_timely_workers).unwrap(),
+            num_timely_workers: config.num_timely_workers,
             optimizer: Default::default(),
             catalog,
             symbiosis,
@@ -147,163 +147,178 @@ where
             active_tails: HashMap::new(),
             local_input_time: 1,
             log: config.logging.is_some(),
+            executor: Some(config.executor.clone()),
         };
 
-        let catalog_entries: Vec<_> = coord
-            .catalog
-            .iter()
-            .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
-            .collect();
-        for (id, name, item) in catalog_entries {
-            match item {
-                CatalogItem::Source(source) => {
-                    match id {
-                        GlobalId::User(_) => coord.create_sources_id(vec![(id, source)]),
-                        GlobalId::System(_) => {
-                            // Insert with 1 second compaction latency.
-                            coord.insert_source(id, Some(1_000));
+        let executor = config.executor;
+        let bootstrap_sql = config.bootstrap_sql;
+        let logging = config.logging;
+        executor.enter(move || {
+            let catalog_entries: Vec<_> = coord
+                .catalog
+                .iter()
+                .map(|entry| (entry.id(), entry.name().clone(), entry.item().clone()))
+                .collect();
+            for (id, name, item) in catalog_entries {
+                match item {
+                    CatalogItem::Source(source) => {
+                        match id {
+                            GlobalId::User(_) => coord.create_sources_id(vec![(id, source)]),
+                            GlobalId::System(_) => {
+                                // Insert with 1 second compaction latency.
+                                coord.insert_source(id, Some(1_000));
+                            }
+                        }
+                    }
+                    CatalogItem::View(view) => {
+                        let dataflow =
+                            DataflowDesc::new(name.to_string()).add_view(id, view.clone());
+                        coord.create_dataflows(vec![dataflow]);
+                    }
+                    CatalogItem::Sink(sink) => {
+                        let dataflow =
+                            DataflowDesc::new(name.to_string()).add_sink(id, sink.clone());
+                        coord.create_dataflows(vec![dataflow]);
+                    }
+                    CatalogItem::Index(index) => coord.create_index(id, &name, index.desc),
+                }
+            }
+
+            if coord.catalog.bootstrapped() {
+                // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
+                // the first connection ID used is 1. As long as that remains the case,
+                // 0 is safe to use here.
+                let conn_id = 0;
+                let params = Params {
+                    datums: Row::pack(&[]),
+                    types: vec![],
+                };
+                let mut session = sql::Session::default();
+                // TODO(benesch): these bootstrap statements should be run in a
+                // single transaction, so that we don't leave the catalog in a
+                // partially-bootstrapped state if one fails.
+                for stmt in sql::parse(bootstrap_sql)? {
+                    coord
+                        .handle_statement(&session, stmt, &params)
+                        .and_then(|plan| coord.sequence_plan(&mut session, plan, conn_id))?;
+                }
+            }
+
+            // Announce primary and foreign key relationships.
+            if let Some(logging_config) = logging {
+                for log in logging_config.active_logs().iter() {
+                    coord.report_catalog_update(
+                        log.id(),
+                        coord
+                            .catalog
+                            .humanize_id(expr::Id::Global(log.id()))
+                            .unwrap(),
+                        true,
+                    );
+                    for (index, key) in log.schema().typ().keys.iter().enumerate() {
+                        broadcast(
+                            &mut coord.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
+                                coord
+                                    .catalog
+                                    .humanize_id(expr::Id::Global(log.id()))
+                                    .unwrap_or_else(|| "NO_NAME".to_string()),
+                                log.id(),
+                                key.clone(),
+                                index,
+                            )),
+                        );
+                    }
+                    for (index, (parent, pairs)) in log.foreign_keys().into_iter().enumerate() {
+                        broadcast(
+                            &mut coord.broadcast_tx,
+                            SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
+                                coord
+                                    .catalog
+                                    .humanize_id(expr::Id::Global(log.id()))
+                                    .unwrap_or_else(|| "NO_NAME".to_string()),
+                                log.id(),
+                                coord
+                                    .catalog
+                                    .humanize_id(expr::Id::Global(parent))
+                                    .unwrap_or_else(|| "NO_NAME".to_string()),
+                                pairs,
+                                index,
+                            )),
+                        );
+                    }
+                }
+            }
+
+            Ok(coord)
+        })
+    }
+
+    pub fn serve(&mut self, cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>) {
+        self.executor
+            .take()
+            .expect("serve called twice on coordinator")
+            .enter(|| {
+                let feedback_rx = self.enable_feedback();
+                let mut messages = stream::select(
+                    cmd_rx
+                        .map(Message::Command)
+                        .chain(stream::once(future::ready(Message::Shutdown)))
+                        .map(Ok),
+                    feedback_rx.map_ok(Message::Worker),
+                );
+                while let Some(msg) = block_on(messages.next()) {
+                    match msg.expect("coordinator message receiver failed") {
+                        Message::Command(Command::Execute {
+                            portal_name,
+                            mut session,
+                            conn_id,
+                            tx,
+                        }) => {
+                            let result = self.handle_execute(&mut session, portal_name, conn_id);
+                            let _ = tx.send(Response { result, session });
+                        }
+
+                        Message::Command(Command::Parse {
+                            name,
+                            sql,
+                            mut session,
+                            tx,
+                        }) => {
+                            let result = self.handle_parse(&mut session, name, sql);
+                            let _ = tx.send(Response { result, session });
+                        }
+
+                        Message::Command(Command::CancelRequest { conn_id }) => {
+                            self.sequence_cancel(conn_id);
+                        }
+
+                        Message::Shutdown => {
+                            self.shutdown();
+                            break;
+                        }
+
+                        Message::Worker(WorkerFeedbackWithMeta {
+                            worker_id: _,
+                            message: WorkerFeedback::FrontierUppers(updates),
+                        }) => {
+                            for (name, changes) in updates {
+                                self.update_upper(&name, changes);
+                            }
+                            self.maintenance();
                         }
                     }
                 }
-                CatalogItem::View(view) => {
-                    let dataflow = DataflowDesc::new(name.to_string()).add_view(id, view.clone());
-                    coord.create_dataflows(vec![dataflow]);
-                }
-                CatalogItem::Sink(sink) => {
-                    let dataflow = DataflowDesc::new(name.to_string()).add_sink(id, sink.clone());
-                    coord.create_dataflows(vec![dataflow]);
-                }
-                CatalogItem::Index(index) => coord.create_index(id, &name, index.desc),
-            }
-        }
 
-        if coord.catalog.bootstrapped() {
-            // Per https://github.com/MaterializeInc/materialize/blob/5d85615ba8608f4f6d7a8a6a676c19bb2b37db55/src/pgwire/lib.rs#L52,
-            // the first connection ID used is 1. As long as that remains the case,
-            // 0 is safe to use here.
-            let conn_id = 0;
-            let params = Params {
-                datums: Row::pack(&[]),
-                types: vec![],
-            };
-            let mut session = sql::Session::default();
-            // TODO(benesch): these bootstrap statements should be run in a
-            // single transaction, so that we don't leave the catalog in a
-            // partially-bootstrapped state if one fails.
-            for stmt in sql::parse(config.bootstrap_sql)? {
-                coord
-                    .handle_statement(&session, stmt, &params)
-                    .and_then(|plan| coord.sequence_plan(&mut session, plan, conn_id))?;
-            }
-        }
-
-        // Announce primary and foreign key relationships.
-        if let Some(logging_config) = config.logging {
-            for log in logging_config.active_logs().iter() {
-                coord.report_catalog_update(
-                    log.id(),
-                    coord
-                        .catalog
-                        .humanize_id(expr::Id::Global(log.id()))
-                        .unwrap(),
-                    true,
-                );
-                for (index, key) in log.schema().typ().keys.iter().enumerate() {
-                    broadcast(
-                        &mut coord.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::PrimaryKey(
-                            coord
-                                .catalog
-                                .humanize_id(expr::Id::Global(log.id()))
-                                .unwrap_or_else(|| "NO_NAME".to_string()),
-                            log.id(),
-                            key.clone(),
-                            index,
-                        )),
-                    );
-                }
-                for (index, (parent, pairs)) in log.foreign_keys().into_iter().enumerate() {
-                    broadcast(
-                        &mut coord.broadcast_tx,
-                        SequencedCommand::AppendLog(MaterializedEvent::ForeignKey(
-                            coord
-                                .catalog
-                                .humanize_id(expr::Id::Global(log.id()))
-                                .unwrap_or_else(|| "NO_NAME".to_string()),
-                            log.id(),
-                            coord
-                                .catalog
-                                .humanize_id(expr::Id::Global(parent))
-                                .unwrap_or_else(|| "NO_NAME".to_string()),
-                            pairs,
-                            index,
-                        )),
-                    );
-                }
-            }
-        }
-        Ok(coord)
-    }
-
-    pub fn serve(&mut self, cmd_rx: futures::sync::mpsc::UnboundedReceiver<Command>) {
-        let feedback_rx = self.enable_feedback();
-        let messages = cmd_rx
-            .map(Message::Command)
-            .map_err(|()| unreachable!())
-            .chain(stream::once(Ok(Message::Shutdown)))
-            .select(feedback_rx.map(Message::Worker));
-        let mut messages = messages.wait();
-        for msg in messages.by_ref() {
-            match msg.expect("coordinator message receiver failed") {
-                Message::Command(Command::Execute {
-                    portal_name,
-                    mut session,
-                    conn_id,
-                    tx,
-                }) => {
-                    let result = self.handle_execute(&mut session, portal_name, conn_id);
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::Parse {
-                    name,
-                    sql,
-                    mut session,
-                    tx,
-                }) => {
-                    let result = self.handle_parse(&mut session, name, sql);
-                    let _ = tx.send(Response { result, session });
-                }
-
-                Message::Command(Command::CancelRequest { conn_id }) => {
-                    self.sequence_cancel(conn_id);
-                }
-
-                Message::Shutdown => {
-                    self.shutdown();
-                    break;
-                }
-
-                Message::Worker(WorkerFeedbackWithMeta {
-                    worker_id: _,
-                    message: WorkerFeedback::FrontierUppers(updates),
-                }) => {
-                    for (name, changes) in updates {
-                        self.update_upper(&name, changes);
+                // Cleanly drain any pending messages from the worker before shutting
+                // down.
+                while let Some(msg) = block_on(messages.next()) {
+                    match msg.expect("coordinator message receiver failed") {
+                        Message::Command(_) | Message::Shutdown => unreachable!(),
+                        Message::Worker(_) => (),
                     }
-                    self.maintenance();
                 }
-            }
-        }
-
-        // Cleanly drain any pending messages from the worker before shutting
-        // down.
-        for msg in messages {
-            match msg.expect("coordinator message receiver failed") {
-                Message::Command(_) | Message::Shutdown => unreachable!(),
-                Message::Worker(_) => (),
-            }
-        }
+            })
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
@@ -590,27 +605,25 @@ where
                     }
 
                     let rows_rx = rows_rx
-                        .fold(PeekResponse::Rows(vec![]), |memo, resp| {
+                        .try_fold(PeekResponse::Rows(vec![]), |memo, resp| {
                             match (memo, resp) {
                                 (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
                                     memo.extend(rows);
-                                    let out: Result<_, bincode::Error> =
-                                        Ok(PeekResponse::Rows(memo));
-                                    out
+                                    let out: Result<_, comm::Error> = Ok(PeekResponse::Rows(memo));
+                                    future::ready(out)
                                 }
-                                _ => Ok(PeekResponse::Canceled),
+                                _ => future::ok(PeekResponse::Canceled),
                             }
                         })
-                        .map(move |mut resp| {
+                        .map_ok(move |mut resp| {
                             if let PeekResponse::Rows(rows) = &mut resp {
                                 finishing.finish(rows)
                             }
                             resp
                         })
-                        .from_err()
-                        .boxed();
+                        .err_into();
 
-                    ExecuteResponse::SendRows(rows_rx)
+                    ExecuteResponse::SendRows(Box::pin(rows_rx))
                 }
             }
 
@@ -1342,24 +1355,18 @@ where
     }
 }
 
-fn broadcast(
-    tx: &mut sink::Wait<comm::broadcast::Sender<SequencedCommand>>,
-    cmd: SequencedCommand,
-) {
-    // TODO(benesch): avoid flushing after every send. This will require
-    // something smarter than sink::Wait, which won't flush the sink if a send
-    // gets stuck.
-    tx.send(cmd).unwrap();
-    tx.flush().unwrap();
+fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
+    // TODO(benesch): avoid flushing after every send.
+    block_on(tx.send(cmd)).unwrap();
 }
 
 /// Constructs an [`ExecuteResponse`] that that will send some rows to the
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    let (tx, rx) = futures::sync::oneshot::channel();
+    let (tx, rx) = futures::channel::oneshot::channel();
     tx.send(PeekResponse::Rows(rows)).unwrap();
-    ExecuteResponse::SendRows(Box::new(rx.from_err()))
+    ExecuteResponse::SendRows(Box::pin(rx.err_into()))
 }
 
 /// Per-view state.
@@ -1388,7 +1395,7 @@ pub struct ViewState {
 
 impl ViewState {
     /// Creates an empty view state from a number of workers.
-    pub fn new(workers: u64) -> Self {
+    pub fn new(workers: usize) -> Self {
         let mut upper = MutableAntichain::new();
         upper.update_iter(Some((0, workers as i64)));
         Self {
@@ -1401,7 +1408,7 @@ impl ViewState {
     }
 
     /// Creates view state from a view, and number of workers.
-    pub fn from_view(view: &View, workers: u64) -> Self {
+    pub fn from_view(view: &View, workers: usize) -> Self {
         let mut view_state = Self::new(workers);
         let mut out = Vec::new();
         view.relation_expr.global_uses(&mut out);

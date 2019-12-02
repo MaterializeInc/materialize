@@ -9,18 +9,19 @@
 //!
 //! ```
 //! use comm::Switchboard;
-//! use futures::{Future, Sink, Stream};
+//! use futures::sink::SinkExt;
+//! use futures::stream::StreamExt;
 //! use tokio::net::UnixStream;
 //!
-//! let (switchboard, _runtime) = Switchboard::local()?;
-//! let (tx, rx) = switchboard.mpsc();
-//! std::thread::spawn(move || -> Result<(), bincode::Error> {
+//! let (switchboard, mut runtime) = Switchboard::local()?;
+//! let (tx, mut rx) = switchboard.mpsc();
+//! runtime.spawn(async move {
 //!     // Do work.
 //!     let answer = 42;
-//!     tx.connect().wait()?.send(answer).wait()?;
-//!     Ok(())
+//!     tx.connect().await?.send(answer).await?;
+//!     Ok::<_, comm::Error>(())
 //! });
-//! assert_eq!(rx.wait().next().transpose()?, Some(42));
+//! assert_eq!(runtime.block_on(rx.next()).transpose()?, Some(42));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -32,16 +33,20 @@
 //! Receivers and connected senders are less flexible, but still implement
 //! [`Send`] and so can be freely sent between threads.
 
-use futures::{Future, Poll, Stream};
-use ore::future::{FutureExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use futures::{Future, Stream, StreamExt};
+use serde::{Deserialize, Serialize};
 use tokio::io;
-use tokio::net::unix::UnixStream;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UnixStream};
 use uuid::Uuid;
 
+use ore::future::{OreFutureExt, OreStreamExt};
+
+use crate::error::Error;
 use crate::protocol::{self, Addr, SendSink};
 use crate::switchboard::Switchboard;
 
@@ -73,13 +78,17 @@ impl<D> Sender<D> {
     /// will be delivered to the receiving end of this channel, potentially on
     /// another process. See the [`futures::Sink`] documentation for details
     /// about the API for sending messages to a sink.
-    pub fn connect(&self) -> impl Future<Item = SendSink<D>, Error = io::Error>
+    pub fn connect(&self) -> impl Future<Output = Result<SendSink<D>, io::Error>>
     where
-        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+        D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
     {
         match &self.addr {
-            Addr::Tcp(addr) => protocol::connect_channel::<TcpStream, _>(addr, self.uuid).left(),
-            Addr::Unix(addr) => protocol::connect_channel::<UnixStream, _>(addr, self.uuid).right(),
+            Addr::Tcp(addr) => {
+                protocol::connect_channel::<TcpStream, _>(addr.clone(), self.uuid).left()
+            }
+            Addr::Unix(addr) => {
+                protocol::connect_channel::<UnixStream, _>(addr.clone(), self.uuid).right()
+            }
         }
     }
 }
@@ -89,24 +98,23 @@ impl<D> Sender<D> {
 /// See the [`futures::Stream`] documentation for details about the API for
 /// receiving messages from a stream.
 pub struct Receiver<D>(
-    Box<dyn Stream<Item = D, Error = bincode::Error> + Send>,
+    Box<dyn Stream<Item = Result<D, Error>> + Unpin + Send>,
     Option<Box<dyn FnOnce() + Send>>,
 );
 
 impl<D> Receiver<D> {
     pub(crate) fn new<C>(
-        conn_rx: impl Stream<Item = protocol::Framed<C>, Error = ()> + Send + 'static,
+        conn_rx: impl Stream<Item = protocol::Framed<C>> + Send + Unpin + 'static,
         switchboard: Switchboard<C>,
         on_drop: Option<Box<dyn FnOnce() + Send>>,
     ) -> Receiver<D>
     where
         C: protocol::Connection,
-        D: Serialize + for<'de> Deserialize<'de> + Send + 'static,
+        D: Serialize + for<'de> Deserialize<'de> + Send + Unpin + 'static,
     {
         Receiver(
             Box::new(
                 conn_rx
-                    .map_err(|_| -> bincode::Error { unreachable!() })
                     .map(move |conn| protocol::decoder(conn, switchboard.clone()))
                     .select_flatten(),
             ),
@@ -116,11 +124,10 @@ impl<D> Receiver<D> {
 }
 
 impl<D> Stream for Receiver<D> {
-    type Item = D;
-    type Error = bincode::Error;
+    type Item = Result<D, Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.0.poll()
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        self.0.poll_next_unpin(cx)
     }
 }
 
