@@ -31,7 +31,7 @@ repr = { path = "../repr" }
 serde_json = "1"
 sql = { path = "../sql" }
 sqlparser = { git = "ssh://git@github.com/MaterializeInc/sqlparser.git" }
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { version = "0.11", features = ["bincode"] }
 tokio = "0.1"
 uuid = "0.8"
 walkdir = "2"

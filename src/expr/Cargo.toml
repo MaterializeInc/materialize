@@ -10,7 +10,7 @@ path = "lib.rs"
 
 [dependencies]
 chrono = "0.4"
-differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
+differential-dataflow = "0.11"
 encoding = "0.2"
 failure = "0.1.6"
 indexmap = "1.2.0"

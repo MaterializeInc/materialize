@@ -11,4 +11,4 @@ path = "bin/dataflow-logview.rs"
 
 [dependencies]
 getopts = "0.2"
-timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", features = ["bincode"] }
+timely = { version = "0.11", features = ["bincode"] }
