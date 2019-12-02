@@ -43,9 +43,9 @@ dependencies = [
 
 [[package]]
 name = "arbitrary"
-version = "0.1.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c7d1523aa3a127adf8b27af2404c03c12825b4c4d0698f01648d63fa9df62ee"
+checksum = "64cf76cb6e2222ed0ea86b2b0ee2f71c96ec6edd5af42e84d59160e91b836ec4"
 
 [[package]]
 name = "arrayref"
@@ -1383,7 +1383,7 @@ dependencies = [
 [[package]]
 name = "libfuzzer-sys"
 version = "0.1.0"
-source = "git+https://github.com/rust-fuzz/libfuzzer-sys.git#2542ae41f2ac52a6baa58417a8ad8903fef231f9"
+source = "git+https://github.com/rust-fuzz/libfuzzer-sys.git#ff32cf5e5fb3e79ebd2e6325d3c24877a114e370"
 dependencies = [
  "arbitrary",
  "cc",
