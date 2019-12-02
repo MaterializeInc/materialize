@@ -1,0 +1,2 @@
+drop_view ::=
+  'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?

@@ -1,0 +1,2 @@
+drop_source ::=
+  'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
