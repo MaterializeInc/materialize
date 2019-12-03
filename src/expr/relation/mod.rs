@@ -978,7 +978,7 @@ mod tests {
     use repr::ScalarType;
 
     use super::*;
-    use crate::id::test_utils::DummyHumanizer;
+    use crate::DummyHumanizer;
 
     fn constant(rows: Vec<Vec<i64>>) -> RelationExpr {
         let rows = rows

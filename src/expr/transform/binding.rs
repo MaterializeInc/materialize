@@ -459,7 +459,6 @@ mod tests {
     use repr::{ColumnType, Datum, ScalarType};
 
     use super::*;
-    use crate::id::test_utils::DummyHumanizer;
 
     fn trace(label: &str, expr: &RelationExpr) {
         println!(
@@ -467,7 +466,7 @@ mod tests {
             "━".repeat(80),
             label,
             "┈".repeat(80),
-            expr.pretty(&DummyHumanizer)
+            expr.pretty()
         );
     }
 
