@@ -77,7 +77,7 @@ SELECT date_trunc('millennium', TIMESTAMP '2019-11-26 15:56:46.241150')
 2001-01-01 00:00:00
 
 query R
-SELECT floor(cast(1.1 AS double))
+SELECT floor(cast(1.1 AS DOUBLE PRECISION))
 ----
 1
 
@@ -93,7 +93,7 @@ SELECT floor(1.1), floor(1.111), floor(100.1), floor(100.11), floor(-4.1)
 
 
 query R
-SELECT ceil(cast(1.1 AS double))
+SELECT ceil(cast(1.1 AS DOUBLE PRECISION))
 ----
 2
 
