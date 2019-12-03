@@ -428,11 +428,15 @@ impl FieldValue {
             FieldValue::Bytea(b) => b.into(),
             FieldValue::Date(d) => d.to_string().into_bytes().into(),
             FieldValue::Timestamp(ts) => ts
-                .format("%Y-%m-%dT%H:%M:%S.%f")
+                .format("%Y-%m-%d %H:%M:%S.%f")
                 .to_string()
                 .into_bytes()
                 .into(),
-            FieldValue::TimestampTz(ts) => ts.to_rfc3339().into_bytes().into(),
+            FieldValue::TimestampTz(ts) => ts
+                .format("%Y-%m-%d %H:%M:%S.%f%:z")
+                .to_string()
+                .into_bytes()
+                .into(),
             FieldValue::Interval(i) => match i {
                 repr::Interval::Months(count) => format!("{} months", count).into_bytes().into(),
                 repr::Interval::Duration {
