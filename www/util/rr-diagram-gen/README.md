@@ -21,5 +21,6 @@ appropriate directory into SVGs.
 ## Details
 
 - To avoid regenerating diagrams that haven't changed, we store a hash of the
-  `BNF` files at `./bnfmd5.json` and check them at runtime; if they're the same,
-  we skip generating the diagram.
+  `BNF` files in the `HTML` file they generate in the `data-bnfhash` attribute.
+  Whenever `rr-diagram-gen` is run, we check to see if the `BNF` file has been
+  updated by checking that hash.
