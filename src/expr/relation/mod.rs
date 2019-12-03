@@ -12,7 +12,7 @@ use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
 use self::func::AggregateFunc;
-use crate::pretty_pretty::{
+use crate::pretty::{
     compact_intersperse_doc, tighten_outputs, to_braced_doc, to_tightly_braced_doc,
 };
 use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};

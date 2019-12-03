@@ -7,14 +7,12 @@
 
 #![deny(missing_debug_implementations)]
 
-pub mod like;
-
-#[macro_use]
-pub mod pretty_pretty;
-
 mod id;
 mod relation;
 mod scalar;
+
+pub mod like;
+pub mod pretty;
 pub mod transform;
 
 pub use id::{DummyHumanizer, GlobalId, Id, IdHumanizer, LocalId};

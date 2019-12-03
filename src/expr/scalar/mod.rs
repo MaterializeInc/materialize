@@ -3,17 +3,18 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-pub mod func;
+use std::collections::HashSet;
+use std::mem;
 
 use pretty::{BoxDoc, Doc};
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::mem;
 
 use self::func::{BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::pretty_pretty::to_tightly_braced_doc;
+use crate::pretty::to_tightly_braced_doc;
+
+pub mod func;
 
 #[serde(rename_all = "snake_case")]
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]

@@ -176,7 +176,7 @@ where
 ///
 /// # Example
 /// ```rust
-/// use expr::pretty_pretty::tighten_outputs;
+/// use expr::pretty::tighten_outputs;
 /// let vector = vec![0, 1, 2, 3, 5, 6];
 /// let result = tighten_outputs(&vector[..]);
 /// assert_eq!(result, vec!["0 .. 3".to_string(), "5".to_string(), "6".to_string()]);
