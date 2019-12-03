@@ -8,6 +8,11 @@ pygmentsStyle = "xcode"
     [[menu.main]]
     identifier = "overview"
     name = "Overview"
+    weight = 5
+
+    [[menu.main]]
+    identifier = "connections"
+    name = "Connect"
     weight = 10
 
     [[menu.main]]

@@ -2,6 +2,7 @@
 title: "Materialize Docs"
 disable_toc: true
 disable_list: true
+weight: 1
 ---
 
 Materialize is a streaming SQL materialized view engine.
