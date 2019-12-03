@@ -224,7 +224,7 @@ func convertBNFtoSVG(srcDir string, dstDir string) {
 				log.Fatalf("Cannot read %s: %s\n", f.Name(), err)
 			}
 
-			oldHash := getBNFHashFromHtml(htmlFP)
+			oldHash := getBNFHashFromHTML(htmlFP)
 			newHash := getHash(bnf)
 
 			// If we've generated this file before,
