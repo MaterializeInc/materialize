@@ -1418,14 +1418,24 @@ fn plan_function<'a>(
                 }
                 let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
                 let typ = ecx.column_type(&expr);
-                let func = match typ.scalar_type {
-                    ScalarType::Float32 => UnaryFunc::CeilFloat32,
-                    ScalarType::Float64 => UnaryFunc::CeilFloat64,
-                    _ => bail!("ceil only accepts floating points, not type {:?}", typ),
-                };
-                let expr = ScalarExpr::CallUnary {
-                    func,
-                    expr: Box::new(expr),
+                let expr = match typ.scalar_type {
+                    ScalarType::Float32 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CeilFloat32,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Float64 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::CeilFloat64,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Decimal(_, scale) => ScalarExpr::CallBinary {
+                        func: BinaryFunc::CeilDecimal,
+                        expr1: Box::new(expr),
+                        expr2: Box::new(ScalarExpr::literal(
+                            Datum::from(scale as i32),
+                            ColumnType::new(ScalarType::Null), // ignored
+                        )),
+                    },
+                    _ => bail!("ceil only accepts decimals and floats, not type {:?}", typ),
                 };
                 Ok(expr)
             }
@@ -1458,14 +1468,24 @@ fn plan_function<'a>(
                 }
                 let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
                 let typ = ecx.column_type(&expr);
-                let func = match typ.scalar_type {
-                    ScalarType::Float32 => UnaryFunc::FloorFloat32,
-                    ScalarType::Float64 => UnaryFunc::FloorFloat64,
-                    _ => bail!("floor only accepts floating points, not type {:?}", typ),
-                };
-                let expr = ScalarExpr::CallUnary {
-                    func,
-                    expr: Box::new(expr),
+                let expr = match typ.scalar_type {
+                    ScalarType::Float32 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::FloorFloat32,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Float64 => ScalarExpr::CallUnary {
+                        func: UnaryFunc::FloorFloat64,
+                        expr: Box::new(expr),
+                    },
+                    ScalarType::Decimal(_, scale) => ScalarExpr::CallBinary {
+                        func: BinaryFunc::FloorDecimal,
+                        expr1: Box::new(expr),
+                        expr2: Box::new(ScalarExpr::literal(
+                            Datum::from(scale as i32),
+                            ColumnType::new(ScalarType::Null), // ignored
+                        )),
+                    },
+                    _ => bail!("floor only accepts decimals and floats, not type {:?}", typ),
                 };
                 Ok(expr)
             }

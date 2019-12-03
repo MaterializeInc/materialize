@@ -487,6 +487,24 @@ pub fn div_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     }
 }
 
+pub fn ceil_decimal<'a>(sig: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
+    Datum::from(
+        sig.unwrap_decimal()
+            .with_scale(scale.unwrap_int32() as u8)
+            .ceil()
+            .significand(),
+    )
+}
+
+pub fn floor_decimal<'a>(sig: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
+    Datum::from(
+        sig.unwrap_decimal()
+            .with_scale(scale.unwrap_int32() as u8)
+            .floor()
+            .significand(),
+    )
+}
+
 pub fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let b = b.unwrap_int32();
     if b == 0 {
@@ -832,6 +850,8 @@ pub enum BinaryFunc {
     DivFloat32,
     DivFloat64,
     DivDecimal,
+    CeilDecimal,
+    FloorDecimal,
     ModInt32,
     ModInt64,
     ModFloat32,
@@ -880,6 +900,8 @@ impl BinaryFunc {
             BinaryFunc::DivFloat32 => div_float32,
             BinaryFunc::DivFloat64 => div_float64,
             BinaryFunc::DivDecimal => div_decimal,
+            BinaryFunc::CeilDecimal => ceil_decimal,
+            BinaryFunc::FloorDecimal => floor_decimal,
             BinaryFunc::ModInt32 => mod_int32,
             BinaryFunc::ModInt64 => mod_int64,
             BinaryFunc::ModFloat32 => mod_float32,
@@ -973,6 +995,13 @@ impl BinaryFunc {
                 let s = s1 - s2;
                 ColumnType::new(ScalarType::Decimal(MAX_DECIMAL_PRECISION, s)).nullable(true)
             }
+            FloorDecimal | CeilDecimal => match input1_type.scalar_type {
+                ScalarType::Null => ColumnType::new(ScalarType::Null),
+                ScalarType::Decimal(prec, scale) => {
+                    ColumnType::new(ScalarType::Decimal(prec, scale)).nullable(false)
+                }
+                _ => unreachable!("Got invalid type as first argument of floor/ceil decimal"),
+            },
             CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
                 ScalarType::Null => ColumnType::new(ScalarType::Null),
                 ScalarType::Decimal(_, s) => {
@@ -1034,6 +1063,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ModFloat32 => f.write_str("%"),
             BinaryFunc::ModFloat64 => f.write_str("%"),
             BinaryFunc::ModDecimal => f.write_str("%"),
+            BinaryFunc::CeilDecimal => f.write_str("ceildec"),
+            BinaryFunc::FloorDecimal => f.write_str("floordec"),
             BinaryFunc::Eq => f.write_str("="),
             BinaryFunc::NotEq => f.write_str("!="),
             BinaryFunc::Lt => f.write_str("<"),

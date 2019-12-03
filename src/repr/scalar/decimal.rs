@@ -298,6 +298,58 @@ impl Decimal {
     pub fn scale(&self) -> u8 {
         self.scale
     }
+
+    /// Floor a decimal number
+    ///
+    /// ```
+    /// use repr::decimal::Decimal;
+    ///
+    /// let d: Decimal = "100.11".parse().unwrap();
+    /// assert_eq!(&d.floor().to_string(), "100.00");
+    ///
+    /// let d: Decimal = "99.0".parse().unwrap();
+    /// assert_eq!(&d.floor().to_string(), "99.0");
+    ///
+    /// let nd: Decimal = "-40.1".parse().unwrap();
+    /// assert_eq!(nd.floor().to_string(), "-41.0");
+    /// ```
+    pub fn floor(&self) -> Decimal {
+        let factor = 10_i128.pow(self.scale as u32);
+        let int = self.significand / factor;
+        let frac = self.significand % factor;
+        let sub = if int < 0 && frac != 0 { 1 } else { 0 };
+
+        Decimal {
+            significand: (int - sub) * factor,
+            scale: self.scale,
+        }
+    }
+
+    /// Ceil a decimal number
+    ///
+    /// ```
+    /// use repr::decimal::Decimal;
+    ///
+    /// let d: Decimal = "100.11".parse().unwrap();
+    /// assert_eq!(&d.ceil().to_string(), "101.00");
+    ///
+    /// let d: Decimal = "99.0".parse().unwrap();
+    /// assert_eq!(&d.ceil().to_string(), "99.0");
+    ///
+    /// let nd: Decimal = "-40.1".parse().unwrap();
+    /// assert_eq!(nd.ceil().to_string(), "-40.0")
+    /// ```
+    pub fn ceil(&self) -> Decimal {
+        let factor = 10_i128.pow(self.scale as u32);
+        let int = self.significand / factor;
+        let frac = self.significand % factor;
+        let add = if int > 0 && frac != 0 { 1 } else { 0 };
+
+        Decimal {
+            significand: (add + int) * factor,
+            scale: self.scale,
+        }
+    }
 }
 
 impl FromStr for Decimal {
