@@ -291,6 +291,22 @@ pub fn add_timestamptz_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::TimestampTz(DateTime::<Utc>::from_utc(new_ndt, Utc))
 }
 
+pub fn ceil_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_float32().ceil())
+}
+
+pub fn ceil_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_float64().ceil())
+}
+
+pub fn floor_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_float32().floor())
+}
+
+pub fn floor_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_float64().floor())
+}
+
 pub fn sub_timestamp_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     let inverse = match b {
         Datum::Interval(Interval::Months(months)) => Datum::Interval(Interval::Months(-months)),
@@ -1085,6 +1101,10 @@ pub enum UnaryFunc {
     CastTimestampTzToString,
     CastIntervalToString,
     CastBytesToString,
+    CeilFloat32,
+    CeilFloat64,
+    FloorFloat32,
+    FloorFloat64,
     Ascii,
     ExtractIntervalYear,
     ExtractIntervalMonth,
@@ -1150,6 +1170,10 @@ impl UnaryFunc {
             UnaryFunc::CastTimestampTzToString => cast_timestamptz_to_string,
             UnaryFunc::CastIntervalToString => cast_interval_to_string,
             UnaryFunc::CastBytesToString => cast_bytes_to_string,
+            UnaryFunc::CeilFloat32 => ceil_float32,
+            UnaryFunc::CeilFloat64 => ceil_float64,
+            UnaryFunc::FloorFloat32 => floor_float32,
+            UnaryFunc::FloorFloat64 => floor_float64,
             UnaryFunc::Ascii => ascii,
             UnaryFunc::ExtractIntervalYear => extract_interval_year,
             UnaryFunc::ExtractIntervalMonth => extract_interval_month,
@@ -1236,6 +1260,9 @@ impl UnaryFunc {
                 ColumnType::new(ScalarType::TimestampTz).nullable(in_nullable)
             }
 
+            CeilFloat32 | FloorFloat32 => ColumnType::new(ScalarType::Float32),
+            CeilFloat64 | FloorFloat64 => ColumnType::new(ScalarType::Float64),
+
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | AbsInt32
             | AbsInt64 | AbsFloat32 | AbsFloat64 => input_type,
 
@@ -1315,6 +1342,10 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastTimestampTzToString => f.write_str("tstztostr"),
             UnaryFunc::CastIntervalToString => f.write_str("ivtostr"),
             UnaryFunc::CastBytesToString => f.write_str("bytestostr"),
+            UnaryFunc::CeilFloat32 => f.write_str("ceilf32"),
+            UnaryFunc::CeilFloat64 => f.write_str("ceilf64"),
+            UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
+            UnaryFunc::FloorFloat64 => f.write_str("floorf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::ExtractIntervalYear => f.write_str("ivextractyear"),
             UnaryFunc::ExtractIntervalMonth => f.write_str("ivextractmonth"),

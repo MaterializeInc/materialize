@@ -1412,6 +1412,24 @@ fn plan_function<'a>(
                 Ok(expr)
             }
 
+            "ceil" => {
+                if sql_func.args.len() != 1 {
+                    bail!("ceil expects 1 argument, got {}", sql_func.args.len());
+                }
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
+                let typ = ecx.column_type(&expr);
+                let func = match typ.scalar_type {
+                    ScalarType::Float32 => UnaryFunc::CeilFloat32,
+                    ScalarType::Float64 => UnaryFunc::CeilFloat64,
+                    _ => bail!("ceil only accepts floating points, not type {:?}", typ),
+                };
+                let expr = ScalarExpr::CallUnary {
+                    func,
+                    expr: Box::new(expr),
+                };
+                Ok(expr)
+            }
+
             "coalesce" => {
                 if sql_func.args.is_empty() {
                     bail!("coalesce requires at least one argument");
@@ -1433,6 +1451,24 @@ fn plan_function<'a>(
                 Row::pack(&[Datum::TimestampTz(ecx.qcx.current_timestamp)]),
                 ColumnType::new(ScalarType::TimestampTz),
             )),
+
+            "floor" => {
+                if sql_func.args.len() != 1 {
+                    bail!("floor expects 1 argument, got {}", sql_func.args.len());
+                }
+                let expr = plan_expr(catalog, ecx, &sql_func.args[0], None)?;
+                let typ = ecx.column_type(&expr);
+                let func = match typ.scalar_type {
+                    ScalarType::Float32 => UnaryFunc::FloorFloat32,
+                    ScalarType::Float64 => UnaryFunc::FloorFloat64,
+                    _ => bail!("floor only accepts floating points, not type {:?}", typ),
+                };
+                let expr = ScalarExpr::CallUnary {
+                    func,
+                    expr: Box::new(expr),
+                };
+                Ok(expr)
+            }
 
             "mod" => {
                 if sql_func.args.len() != 2 {
