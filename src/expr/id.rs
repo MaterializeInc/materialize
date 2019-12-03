@@ -96,14 +96,6 @@ impl IdHumanizer for DummyHumanizer {
 pub mod test_utils {
     use super::*;
 
-    pub struct DummyHumanizer;
-
-    impl IdHumanizer for DummyHumanizer {
-        fn humanize_id(&self, _: Id) -> Option<String> {
-            None
-        }
-    }
-
     impl From<&LocalId> for char {
         fn from(id: &LocalId) -> char {
             id.0 as u8 as char
