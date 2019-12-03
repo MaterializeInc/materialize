@@ -32,14 +32,14 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source,
-    SourceConnector, TailSinkConnector, Timestamp, Update, View,
+    DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source, SourceConnector,
+    TailSinkConnector, Timestamp, Update, View,
 };
 use expr::{GlobalId, Id, IdHumanizer, RelationExpr};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::option::OptionExt;
-use repr::{ColumnName, Datum, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
+use repr::{ColumnName, Datum, QualName, RelationDesc, Row};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
 
@@ -433,6 +433,7 @@ where
                             results.push(row.clone());
                         }
                     }
+                    finishing.finish(&mut results);
                     send_immediate_rows(results)
                 } else {
                     let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
@@ -531,45 +532,7 @@ where
                         })
                         .map(move |mut resp| {
                             if let PeekResponse::Rows(rows) = &mut resp {
-                                let mut left_unpacker = RowUnpacker::new();
-                                let mut right_unpacker = RowUnpacker::new();
-                                let mut sort_by = |left: &Row, right: &Row| {
-                                    compare_columns(
-                                        &finishing.order_by,
-                                        &left_unpacker.unpack(left),
-                                        &right_unpacker.unpack(right),
-                                    )
-                                };
-                                let offset = finishing.offset;
-                                if offset > rows.len() {
-                                    *rows = Vec::new();
-                                } else {
-                                    if let Some(limit) = finishing.limit {
-                                        let offset_plus_limit = offset + limit;
-                                        if rows.len() > offset_plus_limit {
-                                            pdqselect::select_by(
-                                                rows,
-                                                offset_plus_limit,
-                                                &mut sort_by,
-                                            );
-                                            rows.truncate(offset_plus_limit);
-                                        }
-                                    }
-                                    if offset > 0 {
-                                        pdqselect::select_by(rows, offset, &mut sort_by);
-                                        rows.drain(..offset);
-                                    }
-                                    rows.sort_by(&mut sort_by);
-                                    let mut unpacker = RowUnpacker::new();
-                                    let mut packer = RowPacker::new();
-                                    for row in rows {
-                                        let datums = unpacker.unpack(&*row);
-                                        let new_row = packer
-                                            .pack(finishing.project.iter().map(|i| &datums[*i]));
-                                        drop(datums);
-                                        *row = new_row;
-                                    }
-                                }
+                                finishing.finish(rows)
                             }
                             resp
                         })
