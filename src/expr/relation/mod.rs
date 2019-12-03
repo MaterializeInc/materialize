@@ -784,8 +784,16 @@ impl RelationExpr {
     }
 
     /// Pretty-print this RelationExpr to a string with 70 columns maximum.
-    pub fn pretty(&self, id_humanizer: &impl IdHumanizer) -> String {
+    ///
+    /// This method allows an additional IdHumanizer which can annotate identifiers with additional
+    /// information, perhaps human-meaningful names for the identifiers.
+    pub fn pretty_humanized(&self, id_humanizer: &impl IdHumanizer) -> String {
         format!("{}", self.to_doc(id_humanizer).pretty(70))
+    }
+
+    /// Pretty-print this RelationExpr to a string with 70 columns maximum.
+    pub fn pretty(&self) -> String {
+        self.pretty_humanized(&crate::DummyHumanizer)
     }
 
     /// Take ownership of `self`, leaving an empty `RelationExpr::Constant` with the correct type.
@@ -970,7 +978,7 @@ mod tests {
     use repr::ScalarType;
 
     use super::*;
-    use crate::id::test_utils::DummyHumanizer;
+    use crate::DummyHumanizer;
 
     fn constant(rows: Vec<Vec<i64>>) -> RelationExpr {
         let rows = rows

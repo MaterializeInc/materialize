@@ -82,17 +82,19 @@ impl fmt::Display for GlobalId {
     }
 }
 
+/// Humanizer that provides no additional information.
+#[derive(Debug)]
+pub struct DummyHumanizer;
+
+impl IdHumanizer for DummyHumanizer {
+    fn humanize_id(&self, _: Id) -> Option<String> {
+        None
+    }
+}
+
 #[cfg(test)]
 pub mod test_utils {
     use super::*;
-
-    pub struct DummyHumanizer;
-
-    impl IdHumanizer for DummyHumanizer {
-        fn humanize_id(&self, _: Id) -> Option<String> {
-            None
-        }
-    }
 
     impl From<&LocalId> for char {
         fn from(id: &LocalId) -> char {

@@ -690,7 +690,7 @@ pub fn handle_explain(
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
     if stage == Stage::Dataflow {
         Ok(Plan::SendRows(vec![Row::pack(&[Datum::cow_from_str(
-            &relation_expr.pretty(catalog),
+            &relation_expr.pretty_humanized(catalog),
         )])]))
     } else {
         Ok(Plan::ExplainPlan(relation_expr))

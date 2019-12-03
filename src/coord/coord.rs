@@ -583,7 +583,7 @@ where
 
             Plan::ExplainPlan(mut relation_expr) => {
                 self.optimizer.optimize(&mut relation_expr);
-                let pretty = relation_expr.pretty(&self.catalog);
+                let pretty = relation_expr.pretty_humanized(&self.catalog);
                 let rows = vec![Row::pack(vec![Datum::from(&*pretty)])];
                 send_immediate_rows(rows)
             }
