@@ -1528,23 +1528,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metastore"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "failure",
- "futures",
- "lazy_static",
- "linked-hash-map",
- "log",
- "ore",
- "serde",
- "slog",
- "tokio",
- "tokio-zookeeper",
-]
-
-[[package]]
 name = "metrics"
 version = "0.1.0"
 dependencies = [
@@ -3467,19 +3450,6 @@ dependencies = [
  "tokio-codec",
  "tokio-io",
  "tokio-reactor",
-]
-
-[[package]]
-name = "tokio-zookeeper"
-version = "0.1.3"
-source = "git+https://github.com/jonhoo/tokio-zookeeper.git#6b1cf4dc7beea97d2bdb496ccbccefea81fd3209"
-dependencies = [
- "byteorder 1.3.2",
- "failure",
- "futures",
- "lazy_static",
- "slog",
- "tokio",
 ]
 
 [[package]]
