@@ -2093,9 +2093,9 @@ dependencies = [
 
 [[package]]
 name = "pretty"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a56d86bc49febc96f6490313636a7ba6acc75d8f9fed502b6fb790e24a172890"
+checksum = "fe67bfadf1c0ec6324ab057901bf3ee96a4bcca1f130281dbfa292ab074cf706"
 dependencies = [
  "typed-arena",
 ]

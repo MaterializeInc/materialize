@@ -9,7 +9,6 @@ use std::fmt;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use ordered_float::OrderedFloat;
-use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
 use repr::decimal::Significand;
@@ -526,11 +525,5 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
         }
-    }
-}
-
-impl<'a> From<&'a AggregateFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    fn from(f: &'a AggregateFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        Doc::text(f.to_string())
     }
 }

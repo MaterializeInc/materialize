@@ -12,7 +12,6 @@ use std::fmt::Write;
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use encoding::label::encoding_from_whatwg_label;
 use encoding::DecoderTrap;
-use pretty::{BoxDoc, Doc};
 use serde::{Deserialize, Serialize};
 
 pub use crate::like::build_like_regex_from_string;
@@ -1032,12 +1031,6 @@ impl fmt::Display for BinaryFunc {
     }
 }
 
-impl<'a> From<&'a BinaryFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    fn from(f: &'a BinaryFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        Doc::text(f.to_string())
-    }
-}
-
 pub fn is_null<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a == Datum::Null)
 }
@@ -1338,12 +1331,6 @@ impl fmt::Display for UnaryFunc {
     }
 }
 
-impl<'a> From<&'a UnaryFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    fn from(f: &'a UnaryFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        Doc::text(f.to_string())
-    }
-}
-
 pub fn coalesce<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     datums
         .iter()
@@ -1478,12 +1465,6 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::Length => f.write_str("length"),
             VariadicFunc::Replace => f.write_str("replace"),
         }
-    }
-}
-
-impl<'a> From<&'a VariadicFunc> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    fn from(f: &'a VariadicFunc) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        Doc::text(f.to_string())
     }
 }
 

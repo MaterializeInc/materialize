@@ -6,13 +6,13 @@
 use std::collections::HashSet;
 use std::mem;
 
-use pretty::{BoxDoc, Doc};
+use pretty::{DocAllocator, DocBuilder};
 use repr::regex::Regex;
 use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 use serde::{Deserialize, Serialize};
 
 use self::func::{BinaryFunc, UnaryFunc, VariadicFunc};
-use crate::pretty::to_tightly_braced_doc;
+use crate::pretty::DocBuilderExt;
 
 pub mod func;
 
@@ -418,32 +418,34 @@ impl ScalarExpr {
         }
     }
 
-    /// Converts this [`ScalarExpr`] to a [`Doc`] or document for pretty
-    /// printing. See [`RelationExpr::to_doc`](crate::RelationExpr::to_doc)
-    /// for details on the approach.
-    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
+    /// Converts this [`ScalarExpr`] to a document for pretty printing. See
+    /// [`RelationExpr::to_doc`](crate::RelationExpr::to_doc) for details on the
+    /// approach.
+    pub fn to_doc<'a, A>(&'a self, alloc: &'a A) -> DocBuilder<'a, A>
+    where
+        A: DocAllocator<'a>,
+        A::Doc: Clone,
+    {
         use ScalarExpr::*;
 
-        fn needs_wrap(expr: &ScalarExpr) -> bool {
-            match expr {
-                Column(_) | Literal(_, _) | CallUnary { .. } | CallVariadic { .. } => false,
-                CallBinary { .. } | If { .. } | MatchCachedRegex { .. } => true,
-            }
-        }
+        let needs_wrap = |expr: &ScalarExpr| match expr {
+            Column(_) | Literal(_, _) | CallUnary { .. } | CallVariadic { .. } => false,
+            CallBinary { .. } | If { .. } | MatchCachedRegex { .. } => true,
+        };
 
-        fn maybe_wrap(expr: &ScalarExpr) -> Doc<BoxDoc<()>> {
+        let maybe_wrap = |expr| {
             if needs_wrap(expr) {
-                to_tightly_braced_doc("(", expr, ")")
+                expr.to_doc(alloc).tightly_embrace("(", ")")
             } else {
-                expr.to_doc()
+                expr.to_doc(alloc)
             }
         };
 
         match self {
-            Column(n) => Doc::text("#").append(n.to_string()),
-            Literal(..) => self.as_literal().unwrap().into(),
+            Column(n) => alloc.text("#").append(n.to_string()),
+            Literal(..) => alloc.text(self.as_literal().unwrap().to_string()),
             CallUnary { func, expr } => {
-                let mut doc = Doc::from(func);
+                let mut doc = alloc.text(func.to_string());
                 if !func.display_is_symbolic() && !needs_wrap(expr) {
                     doc = doc.append(" ");
                 }
@@ -451,49 +453,49 @@ impl ScalarExpr {
             }
             CallBinary { func, expr1, expr2 } => maybe_wrap(expr1)
                 .group()
-                .append(Doc::space())
-                .append(func)
-                .append(Doc::space())
+                .append(alloc.line())
+                .append(func.to_string())
+                .append(alloc.line())
                 .append(maybe_wrap(expr2).group()),
-            CallVariadic { func, exprs } => Doc::from(func).append(to_tightly_braced_doc(
-                "(",
-                Doc::intersperse(exprs, Doc::text(",").append(Doc::space())),
-                ")",
-            )),
-            If { cond, then, els } => Doc::text("if")
-                .append(Doc::space().append(cond).nest(2))
-                .append(Doc::space())
+            CallVariadic { func, exprs } => alloc.text(func.to_string()).append(
+                alloc
+                    .intersperse(
+                        exprs.iter().map(|e| e.to_doc(alloc)),
+                        alloc.text(",").append(alloc.line()),
+                    )
+                    .tightly_embrace("(", ")"),
+            ),
+            If { cond, then, els } => alloc
+                .text("if")
+                .append(alloc.line().append(cond.to_doc(alloc)).nest(2))
+                .append(alloc.line())
                 .append("then")
-                .append(Doc::space().append(then).nest(2))
-                .append(Doc::space())
+                .append(alloc.line().append(then.to_doc(alloc)).nest(2))
+                .append(alloc.line())
                 .append("else")
-                .append(Doc::space().append(els).nest(2)),
+                .append(alloc.line().append(els.to_doc(alloc)).nest(2)),
             ScalarExpr::MatchCachedRegex { expr, regex } => maybe_wrap(expr)
                 .group()
-                .append(Doc::space())
-                .append(&BinaryFunc::MatchRegex)
-                .append(Doc::space())
+                .append(alloc.line())
+                .append(BinaryFunc::MatchRegex.to_string())
+                .append(alloc.line())
                 .append(regex.as_str()),
         }
         .group()
     }
 }
 
-impl<'a> From<&'a ScalarExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    fn from(s: &'a ScalarExpr) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        s.to_doc()
-    }
-}
-
-impl<'a> From<&'a Box<ScalarExpr>> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    fn from(s: &'a Box<ScalarExpr>) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        s.to_doc()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use pretty::RcDoc;
+
     use super::*;
+
+    impl ScalarExpr {
+        fn into_doc(&self) -> RcDoc {
+            self.to_doc(&pretty::RcAllocator).into_doc()
+        }
+    }
 
     #[test]
     fn test_pretty_scalar_expr() {
@@ -502,7 +504,7 @@ mod tests {
         let int64_lit = |n| ScalarExpr::literal(Datum::Int64(n), col_type(Int64));
 
         let plus_expr = int64_lit(1).call_binary(int64_lit(2), BinaryFunc::AddInt64);
-        assert_eq!(plus_expr.to_doc().pretty(72).to_string(), "1 + 2");
+        assert_eq!(plus_expr.into_doc().pretty(72).to_string(), "1 + 2");
 
         let regex_expr = ScalarExpr::literal(Datum::cow_from_str("foo"), col_type(String))
             .call_binary(
@@ -510,12 +512,12 @@ mod tests {
                 BinaryFunc::MatchRegex,
             );
         assert_eq!(
-            regex_expr.to_doc().pretty(72).to_string(),
+            regex_expr.into_doc().pretty(72).to_string(),
             r#""foo" ~ "f?oo""#
         );
 
         let neg_expr = int64_lit(1).call_unary(UnaryFunc::NegInt64);
-        assert_eq!(neg_expr.to_doc().pretty(72).to_string(), "-1");
+        assert_eq!(neg_expr.into_doc().pretty(72).to_string(), "-1");
 
         let bool_expr = ScalarExpr::literal(Datum::True, col_type(Bool))
             .call_binary(
@@ -524,7 +526,7 @@ mod tests {
             )
             .call_unary(UnaryFunc::Not);
         assert_eq!(
-            bool_expr.to_doc().pretty(72).to_string(),
+            bool_expr.into_doc().pretty(72).to_string(),
             "!(true && false)"
         );
 
@@ -534,7 +536,7 @@ mod tests {
             plus_expr.clone(),
         );
         assert_eq!(
-            cond_expr.to_doc().pretty(72).to_string(),
+            cond_expr.into_doc().pretty(72).to_string(),
             "if true then -1 else 1 + 2"
         );
 
@@ -543,7 +545,7 @@ mod tests {
             exprs: vec![ScalarExpr::Column(7), plus_expr, neg_expr.clone()],
         };
         assert_eq!(
-            variadic_expr.to_doc().pretty(72).to_string(),
+            variadic_expr.into_doc().pretty(72).to_string(),
             "coalesce(#7, 1 + 2, -1)"
         );
 
@@ -556,18 +558,18 @@ mod tests {
         .call_unary(UnaryFunc::Not)
         .call_binary(bool_expr, BinaryFunc::Or);
         assert_eq!(
-            mega_expr.to_doc().pretty(72).to_string(),
+            mega_expr.into_doc().pretty(72).to_string(),
             "!isnull(coalesce(if true then -1 else 1 + 2) % -1) || !(true && false)"
         );
-        println!("{}", mega_expr.to_doc().pretty(64).to_string());
+        println!("{}", mega_expr.into_doc().pretty(64).to_string());
         assert_eq!(
-            mega_expr.to_doc().pretty(64).to_string(),
+            mega_expr.into_doc().pretty(64).to_string(),
             "!isnull(coalesce(if true then -1 else 1 + 2) % -1)
 ||
 !(true && false)"
         );
         assert_eq!(
-            mega_expr.to_doc().pretty(16).to_string(),
+            mega_expr.into_doc().pretty(16).to_string(),
             "!isnull(
   coalesce(
     if
@@ -582,6 +584,6 @@ mod tests {
 )
 ||
 !(true && false)"
-        )
+        );
     }
 }

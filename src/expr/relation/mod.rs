@@ -7,16 +7,17 @@
 // Clippy is wrong.
 #![allow(clippy::op_ref, clippy::len_zero)]
 
+use std::fmt;
+
 use failure::ResultExt;
-use pretty::{BoxDoc, Doc};
+use pretty::{DocAllocator, DocBuilder};
 use serde::{Deserialize, Serialize};
 
-use self::func::AggregateFunc;
-use crate::pretty::{
-    compact_intersperse_doc, tighten_outputs, to_braced_doc, to_tightly_braced_doc,
-};
-use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 use repr::{ColumnType, Datum, RelationType, Row};
+
+use self::func::AggregateFunc;
+use crate::pretty::{tighten_outputs, DocAllocatorExt, DocBuilderExt};
+use crate::{GlobalId, Id, IdHumanizer, LocalId, ScalarExpr};
 
 pub mod func;
 
@@ -630,145 +631,154 @@ impl RelationExpr {
     /// ```
     /// identifies the outputs for `Project` and the scalars for `Map` by name, whereas the
     /// sole inputs are nameless.
-    pub fn to_doc(&self, id_humanizer: &impl IdHumanizer) -> Doc<BoxDoc<()>> {
-        let doc = match self {
-            RelationExpr::Constant { rows, .. } => {
-                let rows = Doc::intersperse(
+    pub fn to_doc<'a, A>(
+        &'a self,
+        alloc: &'a A,
+        id_humanizer: &impl IdHumanizer,
+    ) -> DocBuilder<'a, A>
+    where
+        A: DocAllocator<'a>,
+        A::Doc: Clone,
+    {
+        match self {
+            RelationExpr::Constant { rows, .. } => alloc
+                .intersperse(
                     rows.iter().map(|(row, diff)| {
-                        let row = Doc::intersperse(row, Doc::text(",").append(Doc::space()));
-                        let row = to_tightly_braced_doc("[", row, "]").group();
-                        if *diff != 1 {
-                            row.append("*").append(diff.to_string())
-                        } else {
-                            row
-                        }
+                        alloc
+                            .intersperse(
+                                row.iter().map(|d| alloc.text(d.to_string())),
+                                alloc.text(",").append(alloc.line()),
+                            )
+                            .tightly_embrace("[", "]")
+                            .append(if *diff != 1 {
+                                alloc.text("*").append(diff.to_string())
+                            } else {
+                                alloc.nil()
+                            })
                     }),
-                    Doc::text(",").append(Doc::space()),
-                );
-                to_tightly_braced_doc("Constant [", rows, "]")
-            }
+                    alloc.text(",").append(alloc.line()),
+                )
+                .tightly_embrace("Constant [", "]"),
             RelationExpr::Get { id, typ: _ } => {
                 let id = match id_humanizer.humanize_id(*id) {
                     Some(s) => format!("{} ({})", s, id),
                     None => id.to_string(),
                 };
-                to_braced_doc("Get {", id, "}")
+                alloc.text(id).embrace("Get {", "}")
             }
             RelationExpr::Let { id, value, body } => {
-                let value = value.to_doc(id_humanizer);
-                let body = body.to_doc(id_humanizer);
-                // NB: We don't include the body inside the curly braces, so that recursively
-                // nested Let expressions do *not* increase the indentation.
-                let binding = to_braced_doc(
-                    "Let {",
-                    Doc::text(id.to_string()).append(" = ").append(value),
-                    "} in",
-                )
-                .group();
-                binding.append(Doc::space()).append(body)
+                alloc
+                    .text(id.to_string())
+                    .append(" = ")
+                    .append(value.to_doc(alloc, id_humanizer))
+                    .embrace("Let {", "} in")
+                    .append(alloc.line())
+                    // NB: We don't include the body inside the curly braces, so
+                    // that recursively nested Let expressions do *not* increase
+                    // the indentation.
+                    .append(body.to_doc(alloc, id_humanizer))
+                    .group()
             }
-            RelationExpr::Project { input, outputs } => {
-                let input = input.to_doc(id_humanizer);
-                let outputs = compact_intersperse_doc(
+            RelationExpr::Project { input, outputs } => alloc
+                .compact_intersperse(
                     tighten_outputs(outputs),
-                    Doc::text(",").append(Doc::space()),
-                );
-                let outputs = to_tightly_braced_doc("outputs: [", outputs, "]").group();
-                to_braced_doc(
-                    "Project {",
-                    outputs.append(",").append(Doc::space()).append(input),
-                    "}",
+                    alloc.text(",").append(alloc.line()),
                 )
-            }
-            RelationExpr::Map { input, scalars } => {
-                let input = input.to_doc(id_humanizer);
-                let scalars = Doc::intersperse(scalars.iter(), Doc::text(",").append(Doc::space()));
-                let scalars = to_tightly_braced_doc("scalars: [", scalars, "]").group();
-                to_braced_doc(
-                    "Map {",
-                    scalars.append(",").append(Doc::space()).append(input),
-                    "}",
+                .tightly_embrace("outputs: [", "]")
+                .append(",")
+                .append(alloc.line())
+                .append(input.to_doc(alloc, id_humanizer))
+                .embrace("Project {", "}"),
+            RelationExpr::Map { input, scalars } => alloc
+                .intersperse(
+                    scalars.iter().map(|s| s.to_doc(alloc)),
+                    alloc.text(",").append(alloc.line()),
                 )
-            }
-            RelationExpr::Filter { input, predicates } => {
-                let input = input.to_doc(id_humanizer);
-                let predicates = Doc::intersperse(predicates, Doc::text(",").append(Doc::space()));
-                let predicates = to_tightly_braced_doc("predicates: [", predicates, "]").group();
-                to_braced_doc(
-                    "Filter {",
-                    predicates.append(",").append(Doc::space()).append(input),
-                    "}",
+                .tightly_embrace("scalars: [", "]")
+                .append(",")
+                .append(alloc.line())
+                .append(input.to_doc(alloc, id_humanizer))
+                .embrace("Map {", "}"),
+            RelationExpr::Filter { input, predicates } => alloc
+                .intersperse(
+                    predicates.iter().map(|p| p.to_doc(alloc)),
+                    alloc.text(",").append(alloc.line()),
                 )
-            }
+                .tightly_embrace("predicates: [", "]")
+                .append(",")
+                .append(alloc.line())
+                .append(input.to_doc(alloc, id_humanizer))
+                .embrace("Filter {", "}"),
             RelationExpr::Join {
                 inputs, variables, ..
             } => {
-                fn pair_to_doc(p: &(usize, usize)) -> Doc<BoxDoc<()>, ()> {
-                    Doc::text("(")
-                        .append(p.0.to_string())
+                let pair_to_doc = |pair: &(usize, usize)| {
+                    alloc
+                        .text("(")
+                        .append(pair.0.to_string())
                         .append(",")
-                        .append(Doc::space())
-                        .append(p.1.to_string())
+                        .append(alloc.line())
+                        .append(pair.1.to_string())
                         .append(")")
-                }
+                };
 
-                let variables = Doc::intersperse(
-                    variables.iter().map(|ps| {
-                        let ps = Doc::intersperse(
-                            ps.iter().map(pair_to_doc),
-                            Doc::text(",").append(Doc::space()),
-                        );
-                        to_tightly_braced_doc("[", ps, "]").group()
-                    }),
-                    Doc::text(",").append(Doc::space()),
+                let variables = alloc
+                    .intersperse(
+                        variables.iter().map(|ps| {
+                            alloc
+                                .intersperse(
+                                    ps.iter().map(pair_to_doc),
+                                    alloc.text(",").append(alloc.line()),
+                                )
+                                .tightly_embrace("[", "]")
+                        }),
+                        alloc.text(",").append(alloc.line()),
+                    )
+                    .tightly_embrace("variables: [", "]");
+
+                let inputs = alloc.intersperse(
+                    inputs.iter().map(|inp| inp.to_doc(alloc, id_humanizer)),
+                    alloc.text(",").append(alloc.line()),
                 );
-                let variables = to_tightly_braced_doc("variables: [", variables, "]").group();
 
-                let inputs = Doc::intersperse(
-                    inputs.iter().map(|inp| inp.to_doc(id_humanizer)),
-                    Doc::text(",").append(Doc::space()),
-                );
-
-                to_braced_doc(
-                    "Join {",
-                    variables.append(",").append(Doc::space()).append(inputs),
-                    "}",
-                )
+                variables
+                    .append(",")
+                    .append(alloc.line())
+                    .append(inputs)
+                    .embrace("Join {", "}")
             }
             RelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
             } => {
-                let input = input.to_doc(id_humanizer);
-                let keys = compact_intersperse_doc(
-                    tighten_outputs(group_key),
-                    Doc::text(",").append(Doc::space()),
-                );
-                let keys = to_tightly_braced_doc("group_key: [", keys, "]").group();
-
+                let input = input.to_doc(alloc, id_humanizer);
+                let keys = alloc
+                    .compact_intersperse(
+                        tighten_outputs(group_key),
+                        alloc.text(",").append(alloc.line()),
+                    )
+                    .tightly_embrace("group_key: [", "]");
                 if aggregates.is_empty() {
-                    to_braced_doc(
-                        "Distinct {",
-                        keys.append(",").append(Doc::space()).append(input),
-                        "}",
-                    )
+                    keys.append(",")
+                        .append(alloc.line())
+                        .append(input)
+                        .embrace("Distinct {", "}")
                 } else {
-                    let aggregates =
-                        Doc::intersperse(aggregates, Doc::text(",").append(Doc::space()));
-                    let aggregates =
-                        to_tightly_braced_doc("aggregates: [", aggregates, "]").group();
+                    let aggregates = alloc
+                        .intersperse(
+                            aggregates.iter().map(|agg| agg.to_doc(alloc)),
+                            alloc.text(",").append(alloc.line()),
+                        )
+                        .tightly_embrace("aggregates: [", "]");
 
-                    to_braced_doc(
-                        "Reduce {",
-                        keys.append(",")
-                            .append(Doc::space())
-                            .append(aggregates)
-                            .append(",")
-                            .append(Doc::space())
-                            .append(input),
-                        "}",
-                    )
+                    keys.append(",")
+                        .append(alloc.line())
+                        .append(aggregates)
+                        .append(",")
+                        .append(alloc.line())
+                        .append(input)
+                        .embrace("Reduce {", "}")
                 }
             }
             RelationExpr::TopK {
@@ -778,82 +788,69 @@ impl RelationExpr {
                 limit,
                 offset,
             } => {
-                let input = input.to_doc(id_humanizer);
-                let group_keys = compact_intersperse_doc(
-                    tighten_outputs(group_key),
-                    Doc::text(",").append(Doc::space()),
-                );
-                let group_keys = to_tightly_braced_doc("group_key: [", group_keys, "]").group();
-                let order_keys =
-                    compact_intersperse_doc(order_key, Doc::text(",").append(Doc::space()));
-                let order_keys = to_tightly_braced_doc("order_key: [", order_keys, "]").group();
-                let limit_doc = format!(
-                    "limit: {}",
-                    if let Some(limit_num) = limit {
-                        limit_num.to_string()
+                let group_keys = alloc
+                    .compact_intersperse(
+                        tighten_outputs(group_key),
+                        alloc.text(",").append(alloc.line()),
+                    )
+                    .tightly_embrace("group_key: [", "]");
+                let order_keys = alloc
+                    .compact_intersperse(
+                        order_key.iter().map(|ok| alloc.text(ok.to_string())),
+                        alloc.text(",").append(alloc.line()),
+                    )
+                    .tightly_embrace("order_key: [", "]");
+                group_keys
+                    .append(",")
+                    .append(alloc.line())
+                    .append(order_keys)
+                    .append(",")
+                    .append(alloc.line())
+                    .append(if let Some(limit) = limit {
+                        alloc.text(format!("limit: {}", limit))
                     } else {
-                        "None".to_string()
-                    }
-                );
-                let offset_doc = format!("offset: {}", offset);
-                to_braced_doc(
-                    "TopK {",
-                    group_keys
-                        .append(",")
-                        .append(Doc::space())
-                        .append(order_keys)
-                        .append(",")
-                        .append(Doc::space())
-                        .append(limit_doc)
-                        .append(",")
-                        .append(Doc::space())
-                        .append(offset_doc)
-                        .append(",")
-                        .append(Doc::space())
-                        .append(input),
-                    "}",
-                )
+                        alloc.text("limit: none")
+                    })
+                    .append(",")
+                    .append(alloc.line())
+                    .append(format!("offset: {}", offset))
+                    .append(",")
+                    .append(alloc.line())
+                    .append(input.to_doc(alloc, id_humanizer))
+                    .embrace("TopK {", "}")
             }
             RelationExpr::Negate { input } => {
-                to_braced_doc("Negate {", input.to_doc(id_humanizer), "}")
+                input.to_doc(alloc, id_humanizer).embrace("Negate {", "}")
             }
-            RelationExpr::Threshold { input } => {
-                to_braced_doc("Threshold {", input.to_doc(id_humanizer), "}")
-            }
-            RelationExpr::Union { left, right } => {
-                let left = left.to_doc(id_humanizer);
-                let right = right.to_doc(id_humanizer);
-                to_braced_doc(
-                    "Union {",
-                    left.append(",").append(Doc::space()).append(right),
-                    "}",
-                )
-            }
-            RelationExpr::ArrangeBy { input, keys } => {
-                let input = input.to_doc(id_humanizer);
-                let keys = compact_intersperse_doc(
-                    tighten_outputs(keys),
-                    Doc::text(",").append(Doc::space()),
-                );
-                let keys = to_tightly_braced_doc("columns: [", keys, "]").group();
-                to_braced_doc(
-                    "ArrangeBy {",
-                    keys.append(",").append(Doc::space()).append(input),
-                    "}",
-                )
-            }
-        };
-
-        // INVARIANT: RelationExpr's document is grouped. Much of the code above depends on this!
-        doc.group()
+            RelationExpr::Threshold { input } => input
+                .to_doc(alloc, id_humanizer)
+                .embrace("Threshold {", "}"),
+            RelationExpr::Union { left, right } => left
+                .to_doc(alloc, id_humanizer)
+                .append(",")
+                .append(alloc.line())
+                .append(right.to_doc(alloc, id_humanizer))
+                .embrace("Union {", "}"),
+            RelationExpr::ArrangeBy { input, keys } => alloc
+                .compact_intersperse(tighten_outputs(keys), alloc.text(",").append(alloc.line()))
+                .tightly_embrace("columns: [", "]")
+                .append(",")
+                .append(alloc.line())
+                .append(input.to_doc(alloc, id_humanizer))
+                .embrace("ArrangeBy {", "}"),
+        }
     }
 
     /// Pretty-print this RelationExpr to a string with 70 columns maximum.
     ///
-    /// This method allows an additional IdHumanizer which can annotate identifiers with additional
-    /// information, perhaps human-meaningful names for the identifiers.
+    /// This method allows an additional IdHumanizer which can annotate
+    /// identifiers with additional information, perhaps human-meaningful names
+    /// for the identifiers.
     pub fn pretty_humanized(&self, id_humanizer: &impl IdHumanizer) -> String {
-        format!("{}", self.to_doc(id_humanizer).pretty(70))
+        self.to_doc(&pretty::RcAllocator, id_humanizer)
+            .into_doc()
+            .pretty(70)
+            .to_string()
     }
 
     /// Pretty-print this RelationExpr to a string with 70 columns maximum.
@@ -968,22 +965,23 @@ impl RelationExpr {
     }
 }
 
-///Specification for an order by column
+/// Specification for an ordering by a column.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ColumnOrder {
-    /// the column number
+    /// The column index.
     pub column: usize,
-    /// Whether to sort in descending order
+    /// Whether to sort in descending order.
     pub desc: bool,
 }
 
-impl<'a> From<&'a ColumnOrder> for Doc<'a, BoxDoc<'a, ()>> {
-    fn from(column_order: &'a ColumnOrder) -> Doc<'a, BoxDoc<'a, ()>> {
-        Doc::text(format!(
+impl fmt::Display for ColumnOrder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
             "#{} {}",
-            column_order.column.to_string(),
-            if column_order.desc { "desc" } else { "asc" }
-        ))
+            self.column.to_string(),
+            if self.desc { "desc" } else { "asc" }
+        )
     }
 }
 
@@ -1019,33 +1017,41 @@ impl AggregateExpr {
         self.func.output_type(self.expr.typ(relation_type))
     }
 
-    /// Converts this [`AggregateExpr`] to a [`Doc`] or document for pretty
-    /// printing. See [`RelationExpr::to_doc`] for details on the approach.
-    pub fn to_doc(&self) -> Doc<BoxDoc<()>> {
-        let args = if self.distinct {
-            Doc::text("distinct")
-                .append(Doc::space())
-                .append(&self.expr)
-        } else {
-            self.expr.to_doc()
-        };
-        let call = to_tightly_braced_doc("(", args, ")").group();
-        Doc::from(&self.func).append(call)
-    }
-}
-
-impl<'a> From<&'a AggregateExpr> for Doc<'a, BoxDoc<'a, ()>, ()> {
-    fn from(s: &'a AggregateExpr) -> Doc<'a, BoxDoc<'a, ()>, ()> {
-        s.to_doc()
+    /// Converts this [`AggregateExpr`] to a document for pretty printing. See
+    /// [`RelationExpr::to_doc`] for details on the approach.
+    pub fn to_doc<'a, A>(&'a self, alloc: &'a A) -> DocBuilder<'a, A>
+    where
+        A: DocAllocator<'a>,
+        A::Doc: Clone,
+    {
+        alloc.text(self.func.to_string()).append(
+            if self.distinct {
+                alloc.text("distinct").append(alloc.line())
+            } else {
+                alloc.nil()
+            }
+            .append(self.expr.to_doc(alloc))
+            .tightly_embrace("(", ")")
+            .group(),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use pretty::RcDoc;
+
     use repr::ScalarType;
 
     use super::*;
     use crate::DummyHumanizer;
+
+    impl RelationExpr {
+        fn into_doc(&self) -> RcDoc {
+            self.to_doc(&pretty::RcAllocator, &DummyHumanizer)
+                .into_doc()
+        }
+    }
 
     fn constant(rows: Vec<Vec<i64>>) -> RelationExpr {
         let rows = rows
@@ -1071,47 +1077,35 @@ mod tests {
     #[test]
     fn test_pretty_constant() {
         assert_eq!(
-            constant(vec![])
-                .to_doc(&DummyHumanizer)
-                .pretty(72)
-                .to_string(),
+            constant(vec![]).into_doc().pretty(72).to_string(),
             "Constant []"
         );
         assert_eq!(
-            constant(vec![vec![]])
-                .to_doc(&DummyHumanizer)
-                .pretty(72)
-                .to_string(),
+            constant(vec![vec![]]).into_doc().pretty(72).to_string(),
             "Constant [[]]"
         );
 
         assert_eq!(
-            constant(vec![vec![1]])
-                .to_doc(&DummyHumanizer)
-                .pretty(72)
-                .to_string(),
+            constant(vec![vec![1]]).into_doc().pretty(72).to_string(),
             "Constant [[1]]"
         );
 
         assert_eq!(
             constant(vec![vec![1], vec![2]])
-                .to_doc(&DummyHumanizer)
+                .into_doc()
                 .pretty(72)
                 .to_string(),
             "Constant [[1], [2]]"
         );
 
         assert_eq!(
-            constant(vec![vec![1, 2]])
-                .to_doc(&DummyHumanizer)
-                .pretty(72)
-                .to_string(),
+            constant(vec![vec![1, 2]]).into_doc().pretty(72).to_string(),
             "Constant [[1, 2]]"
         );
 
         assert_eq!(
             constant(vec![vec![1, 2], vec![1, 2]])
-                .to_doc(&DummyHumanizer)
+                .into_doc()
                 .pretty(72)
                 .to_string(),
             "Constant [[1, 2], [1, 2]]"
@@ -1119,7 +1113,7 @@ mod tests {
 
         assert_eq!(
             constant(vec![vec![1, 2], vec![1, 2]])
-                .to_doc(&DummyHumanizer)
+                .into_doc()
                 .pretty(16)
                 .to_string(),
             "Constant [
@@ -1145,12 +1139,12 @@ mod tests {
         };
 
         assert_eq!(
-            binding.to_doc(&DummyHumanizer).pretty(100).to_string(),
+            binding.into_doc().pretty(100).to_string(),
             r#"Let { l1 = Let { l2 = Constant [[13]] } in Constant [[42]] } in Constant [[665]]"#
         );
 
         assert_eq!(
-            binding.to_doc(&DummyHumanizer).pretty(28).to_string(),
+            binding.into_doc().pretty(28).to_string(),
             r#"Let {
   l1 = Let {
     l2 = Constant [[13]]
@@ -1169,12 +1163,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            project.to_doc(&DummyHumanizer).pretty(82).to_string(),
+            project.into_doc().pretty(82).to_string(),
             "Project { outputs: [0 .. 4], Constant [] }",
         );
 
         assert_eq!(
-            project.to_doc(&DummyHumanizer).pretty(14).to_string(),
+            project.into_doc().pretty(14).to_string(),
             "Project {
   outputs: [
     0 .. 4
@@ -1192,12 +1186,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            map.to_doc(&DummyHumanizer).pretty(82).to_string(),
+            map.into_doc().pretty(82).to_string(),
             "Map { scalars: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            map.to_doc(&DummyHumanizer).pretty(16).to_string(),
+            map.into_doc().pretty(16).to_string(),
             "Map {
   scalars: [
     #0,
@@ -1216,12 +1210,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            filter.to_doc(&DummyHumanizer).pretty(82).to_string(),
+            filter.into_doc().pretty(82).to_string(),
             "Filter { predicates: [#0, #1], Constant [] }",
         );
 
         assert_eq!(
-            filter.to_doc(&DummyHumanizer).pretty(20).to_string(),
+            filter.into_doc().pretty(20).to_string(),
             "Filter {
   predicates: [
     #0,
@@ -1240,12 +1234,12 @@ Constant [[665]]"#
         );
 
         assert_eq!(
-            join.to_doc(&DummyHumanizer).pretty(82).to_string(),
+            join.into_doc().pretty(82).to_string(),
             "Join { variables: [[(0, 0), (1, 0)], [(0, 1), (1, 1)]], Constant [], Constant [] }",
         );
 
         assert_eq!(
-            join.to_doc(&DummyHumanizer).pretty(48).to_string(),
+            join.into_doc().pretty(48).to_string(),
             "Join {
   variables: [
     [(0, 0), (1, 0)],
@@ -1277,12 +1271,12 @@ Constant [[665]]"#
         };
 
         assert_eq!(
-            reduce.to_doc(&DummyHumanizer).pretty(84).to_string(),
+            reduce.into_doc().pretty(84).to_string(),
             "Reduce { group_key: [1, 2], aggregates: [sum(#0), max(distinct #1)], Constant [] }",
         );
 
         assert_eq!(
-            reduce.to_doc(&DummyHumanizer).pretty(16).to_string(),
+            reduce.into_doc().pretty(16).to_string(),
             "Reduce {
   group_key: [
     1, 2
