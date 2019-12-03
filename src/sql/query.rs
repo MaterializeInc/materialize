@@ -2537,13 +2537,13 @@ where
         (Decimal(_, s), Float32) => {
             let factor = 10_f32.powi(i32::from(s));
             let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastDecimalToFloat32)
+            expr.call_unary(CastSignificandToFloat32)
                 .call_binary(factor, BinaryFunc::DivFloat32)
         }
         (Decimal(_, s), Float64) => {
             let factor = 10_f64.powi(i32::from(s));
             let factor = ScalarExpr::literal(Datum::from(factor), ColumnType::new(to_scalar_type));
-            expr.call_unary(CastDecimalToFloat64)
+            expr.call_unary(CastSignificandToFloat64)
                 .call_binary(factor, BinaryFunc::DivFloat64)
         }
         (Decimal(_, s1), Decimal(_, s2)) => rescale_decimal(expr, s1, s2),

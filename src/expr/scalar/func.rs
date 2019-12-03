@@ -182,19 +182,21 @@ pub fn cast_decimal_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal().as_i128() as i64)
 }
 
-pub fn cast_decimal_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_significand_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
+    // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f32)
 }
 
-pub fn cast_decimal_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+pub fn cast_significand_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+    // The second half of this function is defined in plan_cast_internal
     Datum::from(a.unwrap_decimal().as_i128() as f64)
 }
 
-pub fn cast_decimal_to_string<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+pub fn cast_decimal_to_string<'a>(decimal: Datum<'a>, scale: Datum<'a>) -> Datum<'a> {
     // TODO(benesch): a better way to pass the scale into the dataflow layer.
-    let scale = b.unwrap_int32() as u8;
+    let scale = scale.unwrap_int32() as u8;
     Datum::String(Cow::Owned(
-        a.unwrap_decimal().with_scale(scale as u8).to_string(),
+        decimal.unwrap_decimal().with_scale(scale as u8).to_string(),
     ))
 }
 
@@ -1089,8 +1091,8 @@ pub enum UnaryFunc {
     CastFloat64ToString,
     CastDecimalToInt32,
     CastDecimalToInt64,
-    CastDecimalToFloat32,
-    CastDecimalToFloat64,
+    CastSignificandToFloat32,
+    CastSignificandToFloat64,
     CastStringToBytes,
     CastStringToFloat64,
     CastDateToTimestamp,
@@ -1158,8 +1160,8 @@ impl UnaryFunc {
             UnaryFunc::CastFloat64ToString => cast_float64_to_string,
             UnaryFunc::CastDecimalToInt32 => cast_decimal_to_int32,
             UnaryFunc::CastDecimalToInt64 => cast_decimal_to_int64,
-            UnaryFunc::CastDecimalToFloat32 => cast_decimal_to_float32,
-            UnaryFunc::CastDecimalToFloat64 => cast_decimal_to_float64,
+            UnaryFunc::CastSignificandToFloat32 => cast_significand_to_float32,
+            UnaryFunc::CastSignificandToFloat64 => cast_significand_to_float64,
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64,
             UnaryFunc::CastStringToBytes => cast_string_to_bytes,
             UnaryFunc::CastDateToTimestamp => cast_date_to_timestamp,
@@ -1234,14 +1236,15 @@ impl UnaryFunc {
             | CastIntervalToString
             | CastBytesToString => ColumnType::new(ScalarType::String).nullable(in_nullable),
 
-            CastInt32ToFloat32 | CastInt64ToFloat32 | CastDecimalToFloat32 => {
+            CastInt32ToFloat32 | CastInt64ToFloat32 | CastSignificandToFloat32 => {
                 ColumnType::new(ScalarType::Float32).nullable(in_nullable)
             }
 
-            CastInt32ToFloat64 | CastInt64ToFloat64 | CastFloat32ToFloat64
-            | CastDecimalToFloat64 | CastStringToFloat64 => {
-                ColumnType::new(ScalarType::Float64).nullable(in_nullable)
-            }
+            CastInt32ToFloat64
+            | CastInt64ToFloat64
+            | CastFloat32ToFloat64
+            | CastSignificandToFloat64
+            | CastStringToFloat64 => ColumnType::new(ScalarType::Float64).nullable(in_nullable),
 
             CastInt64ToInt32 | CastDecimalToInt32 => {
                 ColumnType::new(ScalarType::Int32).nullable(in_nullable)
@@ -1330,8 +1333,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
             UnaryFunc::CastDecimalToInt32 => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64 => f.write_str("dectoi64"),
-            UnaryFunc::CastDecimalToFloat32 => f.write_str("dectof32"),
-            UnaryFunc::CastDecimalToFloat64 => f.write_str("dectof64"),
+            UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),
+            UnaryFunc::CastSignificandToFloat64 => f.write_str("dectof64"),
             UnaryFunc::CastStringToBytes => f.write_str("strtobytes"),
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastDateToTimestamp => f.write_str("datetots"),
