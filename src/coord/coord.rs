@@ -32,14 +32,14 @@ use dataflow::logging::materialized::MaterializedEvent;
 use dataflow::{SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    compare_columns, DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source,
-    SourceConnector, TailSinkConnector, Timestamp, Update, View,
+    DataflowDesc, PeekResponse, PeekWhen, Sink, SinkConnector, Source, SourceConnector,
+    TailSinkConnector, Timestamp, Update, View,
 };
 use expr::{GlobalId, Id, IdHumanizer, RelationExpr};
 use ore::collections::CollectionExt;
 use ore::future::FutureExt;
 use ore::option::OptionExt;
-use repr::{ColumnName, Datum, QualName, RelationDesc, Row, RowPacker, RowUnpacker};
+use repr::{ColumnName, Datum, QualName, RelationDesc, Row};
 use sql::PreparedStatement;
 use sql::{MutationKind, ObjectType, Plan, Session};
 
@@ -420,143 +420,127 @@ where
 
                 self.optimizer.optimize(&mut source);
 
-                let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
-
-                // Choose a timestamp for all workers to use in the peek.
-                // We minimize over all participating views, to ensure that the query will not
-                // need to block on the arrival of further input data.
-                let timestamp = self.determine_timestamp(&source, when);
-
-                let (project, filter) = Self::plan_peek(&mut source);
-
-                // Create a transient view if the peek is not of a base relation.
-                if let RelationExpr::Get {
-                    id: Id::Global(mut id),
-                    typ: _,
-                } = source
-                {
-                    // If `name` is a source, we'll need to rename it.
-                    if let Some((_source, rename)) = self.sources.get(&id) {
-                        if let Some(rename) = rename {
-                            id = *rename;
+                // If this optimizes to a constant expression, we can immediately return the result.
+                if let RelationExpr::Constant { rows, typ: _ } = source {
+                    let mut results = Vec::new();
+                    for (row, count) in rows {
+                        assert!(
+                            count >= 0,
+                            "Negative multiplicity in constant result: {}",
+                            count
+                        );
+                        for _ in 0..count {
+                            results.push(row.clone());
                         }
                     }
-
-                    // Fast path. We can just look at the existing dataflow directly.
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::Peek {
-                            id,
-                            conn_id,
-                            tx: rows_tx,
-                            timestamp,
-                            finishing: finishing.clone(),
-                            project,
-                            filter,
-                        },
-                    );
+                    finishing.finish(&mut results);
+                    send_immediate_rows(results)
                 } else {
-                    // Slow path. We need to perform some computation, so build
-                    // a new transient dataflow that will be dropped after the
-                    // peek completes.
-                    let typ = source.typ();
-                    let ncols = typ.column_types.len();
-                    // Cheat a little bit here to get a relation description. A
-                    // relation description is just a relation type with column
-                    // names, but we don't know the column names for `source`
-                    // here. Nothing in the dataflow layer cares about column
-                    // names, so just set them all to `None`. The column names
-                    // will ultimately be correctly transmitted to the client
-                    // because they are safely stashed in the connection's
-                    // session.
-                    let desc = RelationDesc::new(
-                        typ,
-                        iter::repeat::<Option<ColumnName>>(None).take(ncols),
-                    );
-                    let view_id = self.catalog.allocate_id();
-                    let view = View {
-                        raw_sql: "<none>".into(),
-                        relation_expr: source,
-                        desc,
-                    };
-                    let dataflow = DataflowDesc::new(format!("temp-view-{}", view_id))
-                        .add_view(view_id, view)
-                        .as_of(Some(vec![timestamp.clone()]));
+                    let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
 
-                    self.create_dataflows(vec![dataflow]);
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::Peek {
-                            id: view_id,
-                            conn_id,
-                            tx: rows_tx,
-                            timestamp,
-                            finishing: finishing.clone(),
-                            project: None,
-                            filter: Vec::new(),
-                        },
-                    );
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::DropViews(vec![view_id]),
-                    );
+                    // Choose a timestamp for all workers to use in the peek.
+                    // We minimize over all participating views, to ensure that the query will not
+                    // need to block on the arrival of further input data.
+                    let timestamp = self.determine_timestamp(&source, when);
+
+                    let (project, filter) = Self::plan_peek(&mut source);
+
+                    // Create a transient view if the peek is not of a base relation.
+                    if let RelationExpr::Get {
+                        id: Id::Global(mut id),
+                        typ: _,
+                    } = source
+                    {
+                        // If `name` is a source, we'll need to rename it.
+                        if let Some((_source, rename)) = self.sources.get(&id) {
+                            if let Some(rename) = rename {
+                                id = *rename;
+                            }
+                        }
+
+                        // Fast path. We can just look at the existing dataflow directly.
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::Peek {
+                                id,
+                                conn_id,
+                                tx: rows_tx,
+                                timestamp,
+                                finishing: finishing.clone(),
+                                project,
+                                filter,
+                            },
+                        );
+                    } else {
+                        // Slow path. We need to perform some computation, so build
+                        // a new transient dataflow that will be dropped after the
+                        // peek completes.
+                        let typ = source.typ();
+                        let ncols = typ.column_types.len();
+                        // Cheat a little bit here to get a relation description. A
+                        // relation description is just a relation type with column
+                        // names, but we don't know the column names for `source`
+                        // here. Nothing in the dataflow layer cares about column
+                        // names, so just set them all to `None`. The column names
+                        // will ultimately be correctly transmitted to the client
+                        // because they are safely stashed in the connection's
+                        // session.
+                        let desc = RelationDesc::new(
+                            typ,
+                            iter::repeat::<Option<ColumnName>>(None).take(ncols),
+                        );
+                        let view_id = self.catalog.allocate_id();
+                        let view = View {
+                            raw_sql: "<none>".into(),
+                            relation_expr: source,
+                            desc,
+                        };
+                        let dataflow = DataflowDesc::new(format!("temp-view-{}", view_id))
+                            .add_view(view_id, view)
+                            .as_of(Some(vec![timestamp.clone()]));
+
+                        self.create_dataflows(vec![dataflow]);
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::Peek {
+                                id: view_id,
+                                conn_id,
+                                tx: rows_tx,
+                                timestamp,
+                                finishing: finishing.clone(),
+                                project: None,
+                                filter: Vec::new(),
+                            },
+                        );
+                        broadcast(
+                            &mut self.broadcast_tx,
+                            SequencedCommand::DropViews(vec![view_id]),
+                        );
+                    }
+
+                    let rows_rx = rows_rx
+                        .fold(PeekResponse::Rows(vec![]), |memo, resp| {
+                            match (memo, resp) {
+                                (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
+                                    memo.extend(rows);
+                                    let out: Result<_, bincode::Error> =
+                                        Ok(PeekResponse::Rows(memo));
+                                    out
+                                }
+                                _ => Ok(PeekResponse::Canceled),
+                            }
+                        })
+                        .map(move |mut resp| {
+                            if let PeekResponse::Rows(rows) = &mut resp {
+                                finishing.finish(rows)
+                            }
+                            resp
+                        })
+                        .from_err()
+                        .boxed();
+
+                    ExecuteResponse::SendRows(rows_rx)
                 }
-
-                let rows_rx = rows_rx
-                    .fold(PeekResponse::Rows(vec![]), |memo, resp| {
-                        match (memo, resp) {
-                            (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
-                                memo.extend(rows);
-                                let out: Result<_, bincode::Error> = Ok(PeekResponse::Rows(memo));
-                                out
-                            }
-                            _ => Ok(PeekResponse::Canceled),
-                        }
-                    })
-                    .map(move |mut resp| {
-                        if let PeekResponse::Rows(rows) = &mut resp {
-                            let mut left_unpacker = RowUnpacker::new();
-                            let mut right_unpacker = RowUnpacker::new();
-                            let mut sort_by = |left: &Row, right: &Row| {
-                                compare_columns(
-                                    &finishing.order_by,
-                                    &left_unpacker.unpack(left),
-                                    &right_unpacker.unpack(right),
-                                )
-                            };
-                            let offset = finishing.offset;
-                            if offset > rows.len() {
-                                *rows = Vec::new();
-                            } else {
-                                if let Some(limit) = finishing.limit {
-                                    let offset_plus_limit = offset + limit;
-                                    if rows.len() > offset_plus_limit {
-                                        pdqselect::select_by(rows, offset_plus_limit, &mut sort_by);
-                                        rows.truncate(offset_plus_limit);
-                                    }
-                                }
-                                if offset > 0 {
-                                    pdqselect::select_by(rows, offset, &mut sort_by);
-                                    rows.drain(..offset);
-                                }
-                                rows.sort_by(&mut sort_by);
-                                let mut unpacker = RowUnpacker::new();
-                                let mut packer = RowPacker::new();
-                                for row in rows {
-                                    let datums = unpacker.unpack(&*row);
-                                    let new_row =
-                                        packer.pack(finishing.project.iter().map(|i| &datums[*i]));
-                                    drop(datums);
-                                    *row = new_row;
-                                }
-                            }
-                        }
-                        resp
-                    })
-                    .from_err()
-                    .boxed();
-
-                ExecuteResponse::SendRows(rows_rx)
             }
 
             Plan::Tail(source) => {

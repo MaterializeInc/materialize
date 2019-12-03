@@ -100,8 +100,48 @@ pub struct RowSetFinishing {
 }
 
 impl RowSetFinishing {
+    /// True if the finishing does nothing to any result set.
     pub fn is_trivial(&self) -> bool {
         (self.limit == None) && self.order_by.is_empty() && self.offset == 0
+    }
+    /// Applies finishing actions to a row set.
+    pub fn finish(&self, rows: &mut Vec<Row>) {
+        use repr::{RowPacker, RowUnpacker};
+
+        let mut left_unpacker = RowUnpacker::new();
+        let mut right_unpacker = RowUnpacker::new();
+        let mut sort_by = |left: &Row, right: &Row| {
+            compare_columns(
+                &self.order_by,
+                &left_unpacker.unpack(left),
+                &right_unpacker.unpack(right),
+            )
+        };
+        let offset = self.offset;
+        if offset > rows.len() {
+            *rows = Vec::new();
+        } else {
+            if let Some(limit) = self.limit {
+                let offset_plus_limit = offset + limit;
+                if rows.len() > offset_plus_limit {
+                    pdqselect::select_by(rows, offset_plus_limit, &mut sort_by);
+                    rows.truncate(offset_plus_limit);
+                }
+            }
+            if offset > 0 {
+                pdqselect::select_by(rows, offset, &mut sort_by);
+                rows.drain(..offset);
+            }
+            rows.sort_by(&mut sort_by);
+            let mut unpacker = RowUnpacker::new();
+            let mut packer = RowPacker::new();
+            for row in rows {
+                let datums = unpacker.unpack(&*row);
+                let new_row = packer.pack(self.project.iter().map(|i| &datums[*i]));
+                drop(datums);
+                *row = new_row;
+            }
+        }
     }
 }
 
