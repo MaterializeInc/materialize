@@ -1,12 +1,12 @@
 ---
-title: "FLOAT Data Type"
+title: "float Data Type"
 description: "Expresses a signed variable-precision, inexact number"
 menu:
   main:
     parent: 'sql-types'
 ---
 
-`FLOAT` data expresses a variable-precision, inexact number.
+`float` data expresses a variable-precision, inexact number.
 
 Detail | Info
 -------|------
@@ -20,14 +20,33 @@ Detail | Info
 
 ## Details
 
-- Materialize assumes untyped numeric literals containing decimal points are `DECIMAL`; to use `FLOAT`, you must explicitly cast them as we've done below.
+- Materialize assumes untyped numeric literals containing decimal points are [`decimal`](../decimal); to use `float`, you must explicitly cast them as we've done below.
+
+## Details
+
+### Valid casts
+
+#### From `float`
+
+You can [cast](../../functions/cast) `float` to:
+
+- [`int`](../int)
+- [`decimal`](../float)
+- [`string`](../string)
+
+#### To `float`
+
+You can [cast](../../functions/cast) the following types to `float`:
+
+- [`int`](../int)
+- [`decimal`](../float)
 
 ## Examples
 
 ```sql
-SELECT 1.23::FLOAT AS float_v;
+SELECT 1.23::float AS float_v;
 ```
-```shell
+```nofmt
  float_v
 ---------
     1.23

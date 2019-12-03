@@ -8,13 +8,13 @@ menu:
 
 `COALESCE` returns the first non-`NULL` element provided.
 
-## Parameters
+## Signatures
 
 Parameter | Type | Description
 ----------|------|------------
-val | Any | The values you want to check.
+val | [Any](../../types) | The values you want to check.
 
-## Return value
+### Return value
 
 All elements of the parameters for `coalesce` must be of the same type; `coalesce` returns that type, or _NULL_.
 
@@ -23,7 +23,7 @@ All elements of the parameters for `coalesce` must be of the same type; `coalesc
 ```sql
 SELECT coalesce(NULL, 3, 2, 1) AS coalesce_res;
 ```
-```bash
+```nofmt
  res
 -----
    3

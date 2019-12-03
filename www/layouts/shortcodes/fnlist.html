@@ -7,6 +7,8 @@
   <a name="{{ lower .type }}-func"></a>
 </h3>
 
+<p>{{ if .description }} {{ .description | markdownify }} {{ end }}</p>
+
 <table>
   <tr>
     <th>
@@ -19,7 +21,10 @@
   {{ range .functions }}
   <tr>
     <td>
-      {{ highlight .signature "rust" "" }}
+      {{/*  We use clojure highlighting simply because it looks best with the
+      components we want to highlight. In the future, this should be customized
+      in some way.  */}}
+      {{ highlight .signature "clojure" "" }}
     </td>
     <td>
 

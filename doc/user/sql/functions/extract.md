@@ -8,30 +8,24 @@ menu:
 
 `EXTRACT` returns some time component from a time-based value, such as the year from a Timestamp.
 
-## Parameters
-
-### func_extract
+## Signatures
 
 {{< diagram "func-extract.html" >}}
 
-### time_component
-
-{{< diagram "time-component.html" >}}
-
 Parameter | Type | Description
 ----------|------|------------
-_val_ | Time | The value from which you want to extract a component.
+_val_ | [`date`](../../types/date), [`timestamp`](../../types/timestamp), [`timestamptz`](../../types/timestamptz) | The value from which you want to extract a component.
 
-## Return value
+### Return value
 
-`extract` returns a Float value.
+`EXTRACT` returns a [`float`](../../types/float) value.
 
 ## Examples
 
 ```sql
 SELECT EXTRACT(SECOND FROM TIMESTAMP '2006-01-02 15:04:05.06') AS sec_extr;
 ```
-```bash
+```nofmt
  sec_extr
 ----------
      5.06

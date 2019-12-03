@@ -1,65 +1,69 @@
 [
     {
         "type": "Generic",
+        "description": "Generic functions can typically take arguments of any type.",
         "functions": [
             {
-                "signature": "CAST(cast_expr) -> T",
+                "signature": "CAST (cast_expr) -> T",
                 "description": "Value as type `T`",
                 "url": "cast"
             },
             {
-                "signature": "COALESCE(x: T...) -> T?",
+                "signature": "coalesce(x: T...) -> T?",
                 "description": "First non-_NULL_ arg, or _NULL_ if all are _NULL_"
             },
             {
-                "signature": "NULLIF(x: T, y: T) -> T?",
+                "signature": "nullif(x: T, y: T) -> T?",
                 "description": "_NULL_ if `x == y`, else `x`"
             }
         ]
     },
     {
         "type": "Aggregate",
+        "description": "Aggregate functions take one or more of the same element type as arguments.",
         "functions": [
             {
-                "signature": "COUNT(x: T) -> Int",
+                "signature": "count(x: T) -> int",
                 "description": "Number on non-_NULL_ inputs"
             },
             {
-                "signature": "MAX(x: T) -> T",
+                "signature": "max(x: T) -> T",
                 "description": "Maximum value among `T`"
             },
             {
-                "signature": "MIN(x: T) -> T",
+                "signature": "min(x: T) -> T",
                 "description": "Minimum value among `T`"
             },
             {
-                "signature": "SUM(x: T) -> T",
+                "signature": "sum(x: T) -> T",
                 "description": "Sum of `T`'s values"
             }
         ]
     },
     {
         "type": "Column",
+        "description": "Column functions take column name arguments.",
         "functions": [
             {
-                "signature": "lhs bool_op ALL(c: C) -> Bool",
+                "signature": "lhs bool_op ALL(c: C) -> bool",
                 "description": "`true` if applying [bool_op](#boolean) to `lhs` and every value of `C` evaluates to `true`"
             },
             {
-                "signature": "lhs bool_op ANY(c: C) -> Bool",
+                "signature": "lhs bool_op ANY(c: C) -> bool",
                 "description": "`true` if applying [bool_op](#boolean) to `lhs` and any value of `C` evaluates to `true`"
             }
         ]
     },
     {
         "type": "Numbers",
+        "description": "Number functions take number-like arguments, e.g. [`int`](../types/int), [`float`](../types/float), [`decimal`](../decimal).",
         "functions": [
             {
-                "signature": "ABS(x: N) -> N",
+                "signature": "abs(x: N) -> N",
                 "description": "The absolute value of `x`"
             },
             {
-                "signature": "MOD(x: N, y: N) -> N",
+                "signature": "mod(x: N, y: N) -> N",
                 "description": "`x % y`"
             }
         ]
@@ -68,26 +72,26 @@
         "type": "String",
         "functions": [
             {
-                "signature": "ASCII(s: Str) -> Int",
+                "signature": "ascii(s: str) -> int",
                 "description": "The ASCII value of `s`'s left-most character"
             },
             {
-                "signature": "LENGTH(s: Str) -> Int",
+                "signature": "length(s: str) -> int",
                 "description": "Number of graphemes in `s`",
                 "url": "length"
             },
             {
-                "signature": "LENGTH(s: Str, encoding_name: Str) -> Int",
+                "signature": "length(s: str, encoding_name: str) -> int",
                 "description": "Number of graphemes in `s` using `encoding_name`",
                 "url": "length"
             },
             {
-                "signature": "SUBSTRING(s: Str, start_pos: Int) -> Str",
+                "signature": "substring(s: str, start_pos: int) -> str",
                 "description": "Substring of `s` starting at `start_pos`",
                 "url": "substring"
             },
             {
-                "signature": "SUBSTRING(s: Str, start_pos: Int, l: Int) -> Str",
+                "signature": "substring(s: str, start_pos: int, l: int) -> str",
                 "description": "Substring starting at `start_pos` of length `l`",
                 "url": "substring"
             }
@@ -95,15 +99,16 @@
     },
     {
         "type": "Time",
+        "description": "Time functions take a time-like type, e.g. [`date`](../types/date), [`timestamp`](../types/timestamp), [`timestamptz`](../types/timestamptz).",
         "functions": [
             {
-                "signature": "EXTRACT(extract_expr) -> Float",
+                "signature": "EXTRACT(extract_expr) -> float",
                 "description": "Specified time component from value",
                 "url": "extract"
             },
             {
-                "signature": "NOW() -> TimestampTZ",
-                "description": "The TimestampTZ representing the time at which this dataflow was created."
+                "signature": "now() -> timestamptz",
+                "description": "The `timestamptz` representing the time at which this dataflow was created."
             }
         ]
     }

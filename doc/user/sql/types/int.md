@@ -1,12 +1,12 @@
 ---
-title: "INT Data Type"
+title: "int Data Type"
 description: "Expresses a signed integer"
 menu:
   main:
     parent: 'sql-types'
 ---
 
-`INT` data expresses a signed integer.
+`int` data expresses a signed integer.
 
 Detail | Info
 -------|------
@@ -14,12 +14,31 @@ Detail | Info
 **Min value** | -9223372036854775808
 **Max value** | 9223372036854775807
 
+## Details
+
+### Valid casts
+
+#### From `int`
+
+You can [cast](../../functions/cast) `int` to:
+
+- [`decimal`](../decimal)
+- [`float`](../float)
+- [`string`](../string)
+
+#### To `int`
+
+You can [cast](../../functions/cast) the following types to `int`:
+
+- [`decimal`](../decimal)
+- [`float`](../float)
+
 ## Examples
 
 ```sql
-SELECT 123::INT AS int_v;
+SELECT 123::int AS int_v;
 ```
-```shell
+```nofmt
  int_v
 -------
    123
@@ -28,9 +47,9 @@ SELECT 123::INT AS int_v;
 <hr/>
 
 ```sql
-SELECT 1.23::INT AS int_v;
+SELECT 1.23::int AS int_v;
 ```
-```shell
+```nofmt
  int_v
 -------
      1

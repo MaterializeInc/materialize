@@ -1,2 +1,2 @@
 func_length ::=
-  'LENGTH' '(' str (',' encoding_name)? ')'
+  'length' '(' str (',' encoding_name)? ')'

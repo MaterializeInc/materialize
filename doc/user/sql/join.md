@@ -58,7 +58,7 @@ For these examples, we'll use a small data set:
 
 **Employees**
 
-```shell
+```nofmt
  id |  name
 ----+--------
   1 | Frank
@@ -69,7 +69,7 @@ For these examples, we'll use a small data set:
 
 **Managers**
 
-```shell
+```nofmt
  id | name  | manages
 ----+-------+---------
   1 | Arjun |       4
@@ -97,8 +97,7 @@ FROM employees
 INNER JOIN managers
   ON employees.id = managers.manages;
 ```
-
-```shell
+```nofmt
  employee | manager
 ----------+---------
  Cuong    | Arjun
@@ -123,8 +122,7 @@ FROM employees
 LEFT OUTER JOIN managers
   ON employees.id = managers.manages;
 ```
-
-```shell
+```nofmt
  employee | manager
 ----------+---------
  Cuong    | Arjun
@@ -153,8 +151,7 @@ FROM employees
 RIGHT OUTER JOIN managers
   ON employees.id = managers.manages;
 ```
-
-```shell
+```nofmt
  employee | manager
 ----------+---------
  Cuong    | Arjun
@@ -181,8 +178,7 @@ FROM employees
 FULL OUTER JOIN managers
   ON employees.id = managers.manages;
 ```
-
-```shell
+```nofmt
  employee | manager
 ----------+---------
  Cuong    | Arjun

@@ -8,16 +8,16 @@ menu:
 
 `LENGTH` returns the graphemes (which is roughly equivalent to printed characters) in a string.
 
-## Parameters
+## Signatures
 
 {{< diagram "func-length.html" >}}
 
 Parameter | Type | Description
 ----------|------|------------
-_str_ | String | The string whose length you want.
-_encoding&lowbar;name_ | String | The [encoding](#encoding-details) you want to use for calculating the string's length. _Defaults to UTF-8_.
+_str_ | [`string`](../../types/string) | The string whose length you want.
+_encoding&lowbar;name_ | [`string`](../../types/string) | The [encoding](#encoding-details) you want to use for calculating the string's length. _Defaults to UTF-8_.
 
-## Return value
+### Return value
 
 `length` returns an Int.
 
@@ -52,7 +52,7 @@ You can find any updates on this behavior in [this GitHub issue](https://github.
 ```sql
 SELECT length('你好') AS len;
 ```
-```bash
+```nofmt
  len
 -----
    2
@@ -63,7 +63,7 @@ SELECT length('你好') AS len;
 ```sql
 SELECT length('你好', 'big5') AS len;
 ```
-```bash
+```nofmt
  len
 -----
    3

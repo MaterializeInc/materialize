@@ -162,7 +162,7 @@ there are still a number of caveats.
 - File path must be prefixed with `file://`, and be the file's absolute path.
 - Every line of the CSV is treated as a row, i.e. there is no concept of
   headers.
-- All data in the CSV are treated as `STRING`.
+- All data in the CSV are treated as `string`.
 - Columns in the source are named `column1`, `column2`, etc.
 - You must specify the number of columns. Any row with a different number of
   columns gets discarded, though Materialize will log an error.

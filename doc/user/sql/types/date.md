@@ -1,12 +1,12 @@
 ---
-title: "DATE Data Type"
+title: "date Data Type"
 description: "Expresses a date without a specified time"
 menu:
   main:
     parent: 'sql-types'
 ---
 
-`DATE` data expresses a date without a specified time.
+`date` data expresses a date without a specified time.
 
 Detail | Info
 -------|------
@@ -20,12 +20,28 @@ Detail | Info
 
 {{< diagram "type-date.html" >}}
 
+## Details
+
+### Valid casts
+
+#### From `date`
+
+You can [cast](../../functions/cast) `date` to:
+
+- [`timestamp`](../timestamp)
+- [`timestamptz`](../timestamp)
+- [`string`](../string)
+
+#### To `date`
+
+You cannot cast any other type to `date`.
+
 ## Examples
 
 ```sql
 SELECT DATE '2007-02-01' AS date_v;
 ```
-```shell
+```nofmt
    date_v
 ------------
  2007-02-01

@@ -17,7 +17,7 @@ menu:
 ```sql
 SHOW VIEWS;
 ```
-```bash
+```nofmt
 my_view
 ```
 
