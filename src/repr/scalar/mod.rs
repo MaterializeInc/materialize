@@ -3,20 +3,21 @@
 // This file is part of Materialize. Materialize may not be used or
 // distributed without the express permission of Materialize, Inc.
 
-pub mod decimal;
-pub mod regex;
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
-use failure::format_err;
-use ordered_float::OrderedFloat;
-use pretty::{BoxDoc, Doc};
-use serde::{Deserialize, Serialize};
-use sqlparser::ast::Interval as SqlInterval;
+use std::borrow::Cow;
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use failure::format_err;
+use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
+use sqlparser::ast::Interval as SqlInterval;
+
 use self::decimal::Significand;
 use crate::ColumnType;
-use std::borrow::Cow;
+
+pub mod decimal;
+pub mod regex;
 
 /// A literal value.
 #[serde(rename_all = "snake_case")]
@@ -431,12 +432,6 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("\"")
             }
         }
-    }
-}
-
-impl<'a> From<Datum<'a>> for Doc<'static, BoxDoc<'static, ()>> {
-    fn from(datum: Datum<'a>) -> Doc<'static, BoxDoc<'static, ()>> {
-        Doc::text(datum.to_string())
     }
 }
 

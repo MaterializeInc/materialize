@@ -2093,8 +2093,9 @@ dependencies = [
 
 [[package]]
 name = "pretty"
-version = "0.5.3-alpha.0"
-source = "git+https://github.com/Marwes/pretty.rs.git?rev=7fb895eff160b8bfd6d28efb19bf24f0b9326109#7fb895eff160b8bfd6d28efb19bf24f0b9326109"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe67bfadf1c0ec6324ab057901bf3ee96a4bcca1f130281dbfa292ab074cf706"
 dependencies = [
  "typed-arena",
 ]
