@@ -19,12 +19,13 @@ use pretty::{BoxDoc, Doc};
 
 use ore::collections::CollectionExt;
 
-/// Embrace `doc` as the sequence `left`, `doc`, `right`. The resulting document has one
-/// of two layouts:
+/// Embrace `doc` as the sequence `left`, `doc`, `right`. The resulting document
+/// has one of two layouts:
 ///
-///   * It has a space after `left` and a space before `right`, if it fits onto a line;
-///   * It has a newline after `left` and a newline before `right` while indenting `doc`
-///     by 2 spaces, otherwise.
+///   * It has a space after `left` and a space before `right`, if it fits onto
+///     a line;
+///   * It has a newline after `left` and a newline before `right` while
+///     indenting `doc` by 2 spaces, otherwise.
 ///
 /// For example:
 /// ```text
@@ -53,12 +54,13 @@ where
         .append(right)
 }
 
-/// Tightly embrace `doc` as the sequence `left`, `doc`, `right`. The resulting document
-/// has one of two layouts:
+/// Tightly embrace `doc` as the sequence `left`, `doc`, `right`. The resulting
+/// document has one of two layouts:
 ///
-///   * It concatenates `left`, `doc`, and `right` without spacing, if it fits onto a line;
-///   * It has a newline after `left` and a newline before `right` while indenting `doc`
-///     by 2 spaces, otherwise.
+///   * It concatenates `left`, `doc`, and `right` without spacing, if it fits
+///     onto a line;
+///   * It has a newline after `left` and a newline before `right` while
+///     indenting `doc` by 2 spaces, otherwise.
 ///
 /// For example:
 /// ```text
@@ -172,7 +174,8 @@ where
 
 /// Converts sequences of integers into sequences that may contain ranges.
 ///
-/// A subsequence is converted to a range if it contains at least three consecutive increasing numbers.
+/// A subsequence is converted to a range if it contains at least three
+/// consecutive increasing numbers.
 ///
 /// # Example
 /// ```rust
