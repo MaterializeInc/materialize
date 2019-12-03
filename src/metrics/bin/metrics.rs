@@ -145,7 +145,10 @@ fn create_histogram(query: &str) -> Histogram {
         "mz_client_peek_seconds",
         "how long peeks took",
         &["query"],
-        vec![0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250, 0.500, 1.0]
+        vec![
+            0.000_250, 0.000_500, 0.001, 0.002, 0.004, 0.008, 0.016, 0.034, 0.067, 0.120, 0.250,
+            0.500, 1.0
+        ]
     )
     .expect("can create histogram");
     hist_vec.with_label_values(&[query])
